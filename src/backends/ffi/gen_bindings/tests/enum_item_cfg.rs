@@ -63,12 +63,21 @@ fn enum_free_carries_the_enum_items_own_cfg() {
         rendered.contains("#[cfg(feature = \"thumbnails\")]"),
         "a handle accessor for a cfg-gated enum must carry that enum's #[cfg], got:\n{rendered}"
     );
+    // The gate must precede the item it guards, but doc comments and other attributes may sit
+    // between them -- all of them attach to the same item, so pinning an exact line offset would
+    // fail on a purely cosmetic reordering. What must hold is: exactly one gate, and it comes
+    // before the function it guards. ~keep
+    assert_eq!(
+        rendered.matches("#[cfg(").count(),
+        1,
+        "exactly one gate, got:\n{rendered}"
+    );
     let cfg_line = rendered.lines().position(|l| l.contains("#[cfg(")).expect("cfg line");
     let fn_line = rendered
         .lines()
         .position(|l| l.contains("pub unsafe extern \"C\" fn"))
         .expect("fn line");
-    assert_eq!(cfg_line + 1, fn_line, "#[cfg] must sit immediately above the function, got:\n{rendered}");
+    assert!(cfg_line < fn_line, "#[cfg] must precede the function, got:\n{rendered}");
 }
 
 #[test]
