@@ -795,4 +795,22 @@ impl Backend for Pyo3Backend {
             post_build: vec![],
         })
     }
+
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<crate::core::backend::TraitBridgeRegistrationSurface> {
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("pyo3"))
+            .map(|bridge| crate::core::backend::TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: bridge.register_fn.clone(),
+                unregister_symbol: bridge.unregister_fn.clone(),
+                clear_symbol: bridge.clear_fn.clone(),
+            })
+            .collect()
+    }
 }

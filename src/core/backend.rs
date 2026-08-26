@@ -300,6 +300,29 @@ pub struct EmittedSignature {
     pub return_type: String,
 }
 
+/// One trait-implementation registration entry a backend actually emits for a configured
+/// `[[trait_bridges]]` entry — the API a host-language caller uses to register (and, where
+/// emitted, unregister/clear) an implementation of a Rust trait.
+///
+/// Captured for trait-bridge reference-doc rendering
+/// (`docs::language_pages::trait_bridge_render`). A backend reports only the symbols it
+/// actually generates; it must never fabricate a name it does not emit — see
+/// [`Backend::trait_bridge_registration_surface`]. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitBridgeRegistrationSurface {
+    /// The Rust trait this registers a host-language implementation of.
+    pub trait_name: String,
+    /// The symbol/function a host calls to register an implementation, when this backend
+    /// emits one.
+    pub register_symbol: Option<String>,
+    /// The symbol/function a host calls to unregister a previously registered
+    /// implementation, when this backend emits one.
+    pub unregister_symbol: Option<String>,
+    /// The symbol/function a host calls to clear all registered implementations of this
+    /// trait, when this backend emits one.
+    pub clear_symbol: Option<String>,
+}
+
 /// Capabilities supported by a backend.
 #[derive(Debug, Clone, Default)]
 pub struct Capabilities {
@@ -348,6 +371,20 @@ pub trait Backend: Send + Sync {
     /// uncovered backend silently detects nothing rather than erroring or fabricating
     /// signatures it did not actually render. ~keep
     fn public_function_signatures(&self, _api: &ApiSurface, _config: &ResolvedCrateConfig) -> Vec<EmittedSignature> {
+        Vec::new()
+    }
+
+    /// Trait-implementation registration surface this backend actually emits for each active
+    /// `[[trait_bridges]]` entry, for trait-bridge reference-doc rendering. Optional — default
+    /// returns empty, meaning this backend is not (yet) covered by trait-bridge reference
+    /// docs: an uncovered backend silently documents nothing rather than fabricating a
+    /// registration name it does not actually emit. Docs must call this method rather than
+    /// re-deriving the registration surface themselves. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        _config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
         Vec::new()
     }
 

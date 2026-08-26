@@ -484,6 +484,35 @@ impl Backend for ZigBackend {
             post_build: vec![],
         })
     }
+
+    /// Zig derives its `register_{trait_snake}`/`unregister_{trait_snake}` names from the
+    /// trait name itself (see `zig_trait_bridge_fn_names`) rather than honoring a configured
+    /// `register_fn`/`unregister_fn` — unlike backends (e.g. PyO3) whose registration symbol
+    /// is the configured name verbatim. Both names, along with `clear_fn`, are only emitted
+    /// when `bind_via = "function_param"` (see `emit_trait_bridge`); the `options_field` mode
+    /// emits a handle constructor instead, so it reports no registration surface here. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<crate::core::backend::TraitBridgeRegistrationSurface> {
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("zig"))
+            .filter(|bridge| matches!(bridge.bind_via, crate::core::config::BridgeBinding::FunctionParam))
+            .filter_map(|bridge| {
+                let trait_def = api.types.iter().find(|t| t.name == bridge.trait_name && t.is_trait)?;
+                let snake = heck::AsSnakeCase(&trait_def.name).to_string();
+                Some(crate::core::backend::TraitBridgeRegistrationSurface {
+                    trait_name: trait_def.name.clone(),
+                    register_symbol: Some(format!("register_{snake}")),
+                    unregister_symbol: Some(format!("unregister_{snake}")),
+                    clear_symbol: bridge.clear_fn.clone(),
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

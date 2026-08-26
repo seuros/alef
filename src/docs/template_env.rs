@@ -30,6 +30,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "reference_page_link.jinja",
         include_str!("templates/reference_page_link.jinja"),
     ),
+    (
+        "trait_bridge_row.jinja",
+        include_str!("templates/trait_bridge_row.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

@@ -3,6 +3,7 @@ mod error_render;
 pub(crate) mod excludes;
 mod function_render;
 mod streaming;
+mod trait_bridge_render;
 mod type_render;
 
 use crate::codegen::cfg::collect_cfg_features;
@@ -19,6 +20,7 @@ use enum_render::render_enum;
 use error_render::render_error;
 use excludes::language_excludes;
 use function_render::render_function;
+use trait_bridge_render::render_trait_bridges;
 use type_render::render_type;
 
 pub(super) fn generate_lang_doc(
@@ -118,6 +120,8 @@ pub(super) fn generate_lang_doc(
             out.push_str("\n---\n\n");
         }
     }
+
+    out.push_str(&render_trait_bridges(api, config, lang));
 
     let path = PathBuf::from(format!("{output_dir}/api-{lang_slug}.md"));
 
