@@ -631,7 +631,7 @@ pub fn gen_function_with_mutex(
             }
         };
 
-        let err_conv = func.error_type.is_some().then(|| match cfg.async_pattern {
+        let err_conv = func.error_type.is_some().then_some(match cfg.async_pattern {
             AsyncPattern::Pyo3FutureIntoPy => ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))",
             AsyncPattern::NapiNativeAsync => {
                 ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"

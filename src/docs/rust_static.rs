@@ -578,7 +578,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let with_empty_config = extract_mcp_surface(&[source.clone()], &[]).unwrap();
+        let with_empty_config = extract_mcp_surface(std::slice::from_ref(&source), &[]).unwrap();
         let with_no_config_field = extract_mcp_surface(&[source], &Vec::new()).unwrap();
         assert_eq!(with_empty_config.tools.len(), 1);
         assert_eq!(with_empty_config.tools[0].name, "do_work");

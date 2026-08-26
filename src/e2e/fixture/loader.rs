@@ -121,13 +121,13 @@ fn skip_docs_only_fixture(content: &str, path: &Path) -> Result<bool> {
     if docs_only::is_docs_only_marker(&peek) {
         return Ok(true);
     }
-    if let Some(array) = peek.as_array() {
-        if array.iter().any(docs_only::is_docs_only_marker) {
-            bail!(
-                "docs-only fixtures must be a single top-level JSON object, not inside a fixture array: {}",
-                path.display()
-            );
-        }
+    if let Some(array) = peek.as_array()
+        && array.iter().any(docs_only::is_docs_only_marker)
+    {
+        bail!(
+            "docs-only fixtures must be a single top-level JSON object, not inside a fixture array: {}",
+            path.display()
+        );
     }
     Ok(false)
 }

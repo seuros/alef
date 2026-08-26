@@ -322,6 +322,11 @@ fn trait_impl_is_external(path: &syn::Path, crate_name: &str, surface: &ApiSurfa
         && !surface.functions.iter().any(|f| local_root(&f.rust_path))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one extraction context threaded verbatim from the caller; bundling it would \
+              only move the same fields behind a struct used at a single call site"
+)]
 fn extract_trait_impl_methods(
     item: &syn::ItemImpl,
     crate_name: &str,
