@@ -1,4 +1,5 @@
 use super::dto_coercion::{coercible_field_init, coercible_payload};
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::generators::RustBindingConfig;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, TypeRef};
@@ -70,6 +71,7 @@ pub fn gen_pyo3_data_enum_with_coercion(
 ) -> String {
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let has_sanitized = enum_has_sanitized_fields(enum_def);
     // 1. A variant marked `#[default]` (`is_default = true`) — only emitted with
     //    `#[derive(Default)]`, surfaced in the IR as `EnumVariant::is_default`.
@@ -84,7 +86,7 @@ pub fn gen_pyo3_data_enum_with_coercion(
     );
 
     let mut variant_accessors = String::new();
-    write_pyo3_variant_accessors(&mut variant_accessors, enum_def, &core_path);
+    write_pyo3_variant_accessors(&mut variant_accessors, enum_def, &core_path, is_host_enum);
 
     let mut serde_tag_content = String::new();
     if let Some(tag_field) = &enum_def.serde_tag {
@@ -92,7 +94,9 @@ pub fn gen_pyo3_data_enum_with_coercion(
     }
 
     let variant_constructors_content = match mapper {
-        Some(m) => gen_pyo3_enum_variant_constructors_content(enum_def, &core_path, m, coercible_dto_names),
+        Some(m) => {
+            gen_pyo3_enum_variant_constructors_content(enum_def, &core_path, m, coercible_dto_names, is_host_enum)
+        }
         None => String::new(),
     };
 
@@ -301,6 +305,7 @@ fn gen_pyo3_enum_variant_constructors_content(
     core_path: &str,
     mapper: &dyn TypeMapper,
     coercible_dto_names: &AHashSet<&str>,
+    is_host_enum: bool,
 ) -> String {
     use crate::codegen::shared::{function_params, function_sig_defaults, is_promoted_optional};
 
@@ -322,6 +327,35 @@ fn gen_pyo3_enum_variant_constructors_content(
 
     let mut out = String::new();
     for ctor in &constructors {
+        // `VariantConstructor` doesn't carry the source variant's cfg -- it's a backend-agnostic
+        // struct shared by pyo3, magnus, rustler, php, and extendr's own emitters (see its doc
+        // comment) -- so this looks the original `EnumVariant` back up by name rather than
+        // widening that shared struct's surface for one backend's cfg policy. A factory
+        // constructor is a whole `#[staticmethod] fn`, not a match arm: a host-owned cfg gates
+        // the entire function; a variant merged in from a foreign `[[crates.source_crates]]`
+        // crate (whose cfg this pyo3 crate cannot declare as a Cargo feature) drops the
+        // constructor entirely instead, mirroring `write_pyo3_variant_accessors` above. ~keep
+        let source_cfg = enum_def
+            .variants
+            .iter()
+            .find(|v| v.name == ctor.variant_name)
+            .and_then(|v| v.cfg.as_deref());
+        let ctor_cfg = match source_cfg {
+            None => None,
+            Some(_) if is_host_enum => source_cfg,
+            Some(cfg) => {
+                tracing::warn!(
+                    enum_name = %enum_def.name,
+                    enum_rust_path = %enum_def.rust_path,
+                    variant_name = %ctor.variant_name,
+                    cfg = cfg,
+                    "dropping pyo3 variant-factory constructor for a foreign-crate variant \
+                     behind a #[cfg(...)] this crate cannot declare as a Cargo feature; the \
+                     constructor is unreachable"
+                );
+                continue;
+            }
+        };
         let needs_coercion = ctor.params.iter().any(|p| is_coercible(&p.ty));
         let params_str = function_params(&ctor.params, &map_fn);
         let params_str = if needs_coercion {
@@ -379,6 +413,7 @@ fn gen_pyo3_enum_variant_constructors_content(
                 params => params_str,
                 returns_result => needs_coercion,
                 body_lines => body_lines,
+                cfg => ctor_cfg,
             },
         ));
         out.push_str("\n\n");
@@ -504,7 +539,7 @@ const RUST_KEYWORDS: &[&str] = &[
 /// Generate variant accessor properties for a data enum.
 /// For single-tuple variants with a Named inner type, returns the typed binding struct directly.
 /// For all other variants, returns the variant data as a Python dict, or None if not active.
-pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef, core_path: &str) {
+pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef, core_path: &str, is_host_enum: bool) {
     use crate::core::ir::TypeRef;
 
     for variant in &enum_def.variants {
@@ -538,14 +573,40 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
                     },
                 ));
                 out.push_str("        match &self.inner {\n");
-                out.push_str(&crate::codegen::template_env::render(
-                    "generators/enums/match_variant.jinja",
-                    minijinja::context! {
-                        core_path => &core_path,
-                        variant_pascal => variant_pascal,
-                        clone_expr => &clone_expr,
-                    },
-                ));
+                // A cfg-gated variant's match arm must not reference `core_path::Variant`
+                // unconditionally: a host-owned cfg is safe to re-emit verbatim (the crate's own
+                // `[features]` table forwards it), but a variant merged in from a foreign
+                // `[[crates.source_crates]]` crate carries a cfg this crate never declares as a
+                // Cargo feature, so the arm is dropped entirely instead -- mirroring
+                // `codegen::conversions::enums::emit_cfg_gated_arm`. The `_ => None` fallback
+                // already covers the dropped case. ~keep
+                let keep_arm = match variant.cfg.as_deref() {
+                    None => true,
+                    Some(_) if is_host_enum => true,
+                    Some(cfg) => {
+                        tracing::warn!(
+                            enum_name = %enum_def.name,
+                            enum_rust_path = %enum_def.rust_path,
+                            variant_name = %variant.name,
+                            cfg = cfg,
+                            "dropping pyo3 variant-accessor match arm for a foreign-crate variant \
+                             behind a #[cfg(...)] this crate cannot declare as a Cargo feature; \
+                             the variant is unreachable from this accessor"
+                        );
+                        false
+                    }
+                };
+                if keep_arm {
+                    out.push_str(&crate::codegen::template_env::render(
+                        "generators/enums/match_variant.jinja",
+                        minijinja::context! {
+                            core_path => &core_path,
+                            variant_pascal => variant_pascal,
+                            clone_expr => &clone_expr,
+                            cfg => variant.cfg.as_deref(),
+                        },
+                    ));
+                }
                 out.push_str("            _ => None,\n");
                 out.push_str("        }\n");
                 out.push_str("    }\n");
@@ -643,3 +704,5 @@ pub(crate) fn write_pyo3_serde_tag_getter(out: &mut String, tag_field: &str) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod cfg_gate_tests;

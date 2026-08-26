@@ -1,4 +1,5 @@
-{%- for line in doc_lines %}
+{% if cfg %}    #[cfg({{ cfg }})]
+{% endif %}{%- for line in doc_lines %}
     /// {{ line }}
 {% endfor %}
 {%- if has_pyo3_name %}
