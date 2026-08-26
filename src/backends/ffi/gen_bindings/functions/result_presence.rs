@@ -30,7 +30,7 @@ use crate::codegen::c_consumer;
 use crate::codegen::conversions::core_type_path;
 use crate::core::ir::{CoreWrapper, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 
-use super::super::types::optional_leaf_needs_presence_signal;
+use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
 use super::orchestration::{named_handle_type, named_type_path};
 use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};

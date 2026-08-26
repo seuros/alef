@@ -1,6 +1,7 @@
 use super::super::FfiBackend;
-use super::super::types::{gen_field_accessor, gen_field_presence_accessor, optional_leaf_needs_presence_signal};
+use super::super::types::{gen_field_accessor, gen_field_presence_accessor};
 use super::common::*;
+use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
 use crate::core::backend::Backend;
 use crate::core::ir::*;
 

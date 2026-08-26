@@ -241,30 +241,6 @@ pub(super) fn gen_field_accessor(
     ))
 }
 
-/// True when an FFI getter cannot distinguish `None` from a legitimate zero-valued `Some` using
-/// its return value alone -- i.e. the C ABI has no null representation for the leaf type, so
-/// both collapse to the same sentinel in `null_return_value`. Pointer-shaped returns
-/// (String/Path/Json/Bytes/Vec/Map/Char) and handle-shaped returns (Named types, where handle
-/// `0` is reserved and `insert_handle` never allocates it) already carry a real null and are
-/// excluded. Recurses through a nested `Option<Option<T>>` (a struct field's "not touched"
-/// pattern, or a function/method returning `Option<Option<T>>` directly) because the outer
-/// getter still emits one sentinel for both `None` and `Some(None)`.
-///
-/// `ty` is the type with the outermost `Option` already stripped: callers pass `&field.ty` for
-/// an optional field (where `field.optional` already recorded the strip), or the inner of a
-/// `TypeRef::Optional` for a bare function/method return type. This one predicate backs both the
-/// struct-field presence companion (`gen_field_presence_accessor`) and the function/method
-/// return-value presence companion (`gen_method_result_presence_wrapper`,
-/// `gen_free_function_result_presence_wrapper`) -- a second, differently-shaped convention for
-/// the same "can this sentinel lie" question is its own defect. ~keep
-pub(super) fn optional_leaf_needs_presence_signal(ty: &TypeRef) -> bool {
-    match ty {
-        TypeRef::Primitive(_) | TypeRef::Duration => true,
-        TypeRef::Optional(inner) => optional_leaf_needs_presence_signal(inner),
-        _ => false,
-    }
-}
-
 /// Generate a companion `{prefix}_{type_snake}_has_{field_name}` presence accessor for an
 /// optional scalar field, so callers can distinguish `None` from a zero-valued `Some` before
 /// trusting the sibling getter's return value. Only call when

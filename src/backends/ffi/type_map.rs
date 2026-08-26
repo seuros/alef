@@ -224,6 +224,34 @@ pub fn optional_return_crosses_as_scalar(inner: &TypeRef) -> bool {
     }
 }
 
+/// True when an FFI getter -- a struct field accessor, or a bare `Optional<T>` function/method
+/// return -- cannot distinguish `None` from a legitimate zero-valued `Some` using its return
+/// value alone: the C ABI has no null representation for the leaf type, so both collapse to the
+/// same sentinel in `null_return_value`. Pointer-shaped returns (String/Path/Json/Bytes/Vec/Map/
+/// Char) and handle-shaped returns (Named types, where handle `0` is reserved and
+/// `insert_handle` never allocates it) already carry a real null and are excluded. Recurses
+/// through a nested `Option<Option<T>>` (a struct field's "not touched" pattern, or a
+/// function/method returning `Option<Option<T>>` directly) because the outer getter still emits
+/// one sentinel for both `None` and `Some(None)`.
+///
+/// This is the single source of truth every consumer of the presence-companion convention
+/// (`{prefix}_{type}_has_{field}` for fields, `{fn}_has_result` for functions/methods, and any
+/// host-language backend that has to decide whether to call the companion before trusting a
+/// scalar it received) must ask, instead of re-deriving the "which leaves are ambiguous"
+/// judgment independently -- see `two-generators-disagree` in the repo's skill set. Deliberately
+/// public (unlike the field/return codegen that consumes it) because Go's cgo wrapper needs the
+/// same answer to decide whether to call the companion before wrapping a raw scalar in a
+/// pointer. `ty` is the type with the outermost `Option` already stripped: pass `&field.ty` for
+/// an optional field, or the inner of a `TypeRef::Optional` for a bare function/method return
+/// type. ~keep
+pub fn optional_leaf_needs_presence_signal(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::Duration => true,
+        TypeRef::Optional(inner) => optional_leaf_needs_presence_signal(inner),
+        _ => false,
+    }
+}
+
 /// C FFI Optional return type — nullable-pointer logic.
 fn c_return_optional(inner: &TypeRef, core_import: &str) -> String {
     match inner {

@@ -4,6 +4,7 @@ use crate::backends::ffi::gen_bindings::functions::{
     gen_method_result_presence_wrapper, gen_method_wrapper, gen_streaming_method_wrapper,
     is_owned_default_constructor, returns_bytes_out_params, returns_c_char, should_skip_method_wrapper,
 };
+use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
 use crate::backends::ffi::gen_bindings::helpers;
 use crate::backends::ffi::gen_bindings::helpers::{
     gen_ffi_tokio_runtime, gen_free_bytes, gen_free_string, gen_last_error, gen_version,
@@ -16,7 +17,7 @@ use crate::backends::ffi::gen_bindings::types::{
     gen_enum_free, gen_enum_from_i32, gen_enum_from_i32_rs_helper, gen_enum_from_json, gen_enum_to_i32,
     gen_enum_to_json, gen_enum_to_string, gen_field_accessor, gen_field_presence_accessor,
     gen_opaque_static_constructor, gen_type_free, gen_type_from_json, gen_type_new, gen_type_to_json,
-    is_static_constructor, optional_leaf_needs_presence_signal,
+    is_static_constructor,
 };
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
