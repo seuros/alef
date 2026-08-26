@@ -1,1 +1,2 @@
-            "{{ wire }}" => {{ core_path }}::{{ variant_name }}({{ payload_expr }}),
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            "{{ wire }}" => {{ core_path }}::{{ variant_name }}({{ payload_expr }}),
