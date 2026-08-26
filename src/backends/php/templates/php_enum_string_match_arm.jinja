@@ -1,3 +1,6 @@
+{%- if cfg %}
+#[cfg({{ cfg }})]
+{%- endif %}
 {%- if variant_name != variant_name_lower %}
 "{{ variant_name }}" | "{{ variant_name_lower }}" => {{ expr }},
 {%- else %}

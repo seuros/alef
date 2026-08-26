@@ -343,7 +343,17 @@ pub(super) fn gen_string_to_enum_expr(
     let fallback_expr = if has_default_variant {
         "Default::default()".to_string()
     } else {
-        variant_expr(&core_enum_path, &enum_def.variants[0])
+        // A cfg-gated first variant may not exist in a build that doesn't satisfy its
+        // condition (E0599); prefer the first ungated variant so the fallback expression
+        // itself never names a variant this build might not have. If every variant is
+        // gated, there is no safe unconditional fallback left to pick -- keep the previous
+        // behavior (first variant) rather than silently changing shape for that edge case.
+        let fallback_variant = enum_def
+            .variants
+            .iter()
+            .find(|v| v.cfg.is_none())
+            .unwrap_or(&enum_def.variants[0]);
+        variant_expr(&core_enum_path, fallback_variant)
     };
     let mut match_arms = String::new();
     let mut valid_variants: Vec<String> = Vec::new();
@@ -358,12 +368,20 @@ pub(super) fn gen_string_to_enum_expr(
         // either convention without forcing the core to add `#[serde(rename_all)]`.
         let variant_lower = wire_name.to_lowercase();
         valid_variants.push(wire_name.clone());
+        // A variant behind `#[cfg(...)]` (e.g. `#[cfg(any(test, feature = "testkit"))]`) does
+        // not exist in a build that doesn't satisfy that condition; an unconditional match arm
+        // naming it is a hard E0599. The surrounding match already carries a catch-all `other
+        // =>` fallback arm (see php_enum_string_match_fallback_arm.jinja), so unlike an
+        // exhaustive Rust-enum match, dropping this arm from the string match needs no
+        // additional wildcard -- gating it with `#[cfg(...)]` is sufficient and keeps the
+        // arm live whenever the feature is actually on. ~keep
         match_arms.push_str(&crate::backends::php::template_env::render(
             "php_enum_string_match_arm.jinja",
             context! {
                 variant_name => &wire_name,
                 variant_name_lower => &variant_lower,
                 expr => &expr,
+                cfg => variant.cfg.as_deref(),
             },
         ));
     }
@@ -667,6 +685,86 @@ mod tests {
         assert!(
             expr.contains("RedactionStrategy"),
             "the enum name must be named in the thrown message for context; got:\n{expr}"
+        );
+    }
+
+    /// The regression this task fixes: a variant behind `#[cfg(...)]` (e.g.
+    /// `#[cfg(any(test, feature = "testkit"))]`) does not exist in a build that doesn't satisfy
+    /// that condition; before the fix, `gen_string_to_enum_expr` never read `variant.cfg` at
+    /// all, so its match arm named the variant unconditionally -- a hard E0599 in the real
+    /// failure this fixes. An ungated sibling variant in the same enum must be unaffected.
+    #[test]
+    fn cfg_gated_variant_carries_cfg_guard_on_its_match_arm() {
+        let enums = vec![EnumDef {
+            name: "RedactionStrategy".to_string(),
+            rust_path: "crate::RedactionStrategy".to_string(),
+            variants: vec![
+                unit_variant("Mask", true),
+                crate::core::ir::EnumVariant {
+                    cfg: Some(r#"feature = "testkit""#.to_string()),
+                    ..unit_variant("Hash", false)
+                },
+            ],
+            ..Default::default()
+        }];
+        let expr = gen_string_to_enum_expr("val.strategy", "RedactionStrategy", false, &enums, "crate", "strategy");
+
+        assert_eq!(
+            expr.matches("#[cfg(feature = \"testkit\")]").count(),
+            1,
+            "the cfg-gated variant's match arm must carry the guard exactly once, got:\n{expr}"
+        );
+        assert!(
+            expr.contains(r#""Mask" | "mask" => crate::RedactionStrategy::Mask,"#),
+            "the ungated sibling variant's arm must stay unconditional, got:\n{expr}"
+        );
+    }
+
+    /// Negative control: when no variant carries a cfg (`redaction_strategy_enum()` as-is),
+    /// the generated match must contain no `#[cfg(...)]` at all.
+    #[test]
+    fn ungated_enum_emits_no_cfg_in_string_match() {
+        let enums = vec![redaction_strategy_enum()];
+        let expr = gen_string_to_enum_expr("val.strategy", "RedactionStrategy", false, &enums, "crate", "strategy");
+
+        assert!(
+            !expr.contains("#[cfg("),
+            "an ungated enum must not emit #[cfg(...)] anywhere in the match, got:\n{expr}"
+        );
+    }
+
+    /// When the enum has no `is_default` variant, the unrecognised-value fallback expression
+    /// falls back to constructing `enum_def.variants[0]` -- but if that first variant is itself
+    /// cfg-gated, blindly picking it would name a possibly-nonexistent variant unconditionally
+    /// in the fallback branch too. The fix must skip cfg-gated variants when choosing a
+    /// fallback and prefer the first ungated one instead.
+    ///
+    /// Discriminating assertion: with no `is_default` variant, `Mask`'s own match arm and the
+    /// fallback expression are the only two places `RedactionStrategy::Mask` can appear, so a
+    /// correct fallback pick (skipping the gated `Hash`) produces exactly 2 occurrences. A
+    /// broken fix that still picks the gated first variant would produce only 1 (arm only),
+    /// with `RedactionStrategy::Hash` appearing twice instead.
+    #[test]
+    fn fallback_expr_skips_cfg_gated_first_variant_when_no_default_exists() {
+        let enums = vec![EnumDef {
+            name: "RedactionStrategy".to_string(),
+            rust_path: "crate::RedactionStrategy".to_string(),
+            variants: vec![
+                crate::core::ir::EnumVariant {
+                    cfg: Some(r#"feature = "testkit""#.to_string()),
+                    ..unit_variant("Hash", false)
+                },
+                unit_variant("Mask", false),
+            ],
+            ..Default::default()
+        }];
+        let expr = gen_string_to_enum_expr("val.strategy", "RedactionStrategy", false, &enums, "crate", "strategy");
+
+        assert_eq!(
+            expr.matches("crate::RedactionStrategy::Mask").count(),
+            2,
+            "the fallback expression must construct the first UNGATED variant (Mask), not the \
+             gated first variant (Hash), got:\n{expr}"
         );
     }
 
