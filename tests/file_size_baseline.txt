@@ -86,7 +86,7 @@ src/e2e/codegen/typescript/assertions.rs 1332
 src/e2e/codegen/typescript/test_file/tests.rs 1569
 src/e2e/codegen/zig/assertions.rs 1317
 src/e2e/field_access/tests.rs 1352
-src/e2e/fixture.rs 1712
+src/e2e/fixture.rs 1476
 src/e2e/validate.rs 1440
 src/readme/tests/template.rs 1371
 src/scaffold/languages/dart.rs 1358

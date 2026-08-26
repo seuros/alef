@@ -144,6 +144,26 @@ fn generate_e2e_with_extensions(
 
     info!("Loaded {} fixture(s) from {}", fixtures.len(), e2e_config.fixtures);
 
+    // Docs-only fixtures self-select out of `fixtures` above via their `"kind": "docs_only"`
+    // marker (see `fixture::docs_only`'s module doc) -- `load_fixtures` never returns them, so
+    // loading them is a second, independent walk of the same directory. Their API references
+    // are validated unconditionally, whether or not `[e2e.snippets]` is configured, so a
+    // reference to a renamed or removed type/method/field is caught even in a project that has
+    // not opted into publishing them yet.
+    let docs_only_fixtures = fixture::docs_only::load_docs_only_fixtures(fixtures_dir)
+        .with_context(|| format!("failed to load docs-only fixtures from {}", fixtures_dir.display()))?;
+    for docs_only_fixture in &docs_only_fixtures {
+        fixture::docs_only::validate_api_references(docs_only_fixture, type_defs, enums, errors, functions)
+            .context("docs-only fixture validation failed")?;
+    }
+    if !docs_only_fixtures.is_empty() {
+        info!(
+            "Loaded {} docs-only fixture(s) from {}",
+            docs_only_fixtures.len(),
+            e2e_config.fixtures
+        );
+    }
+
     // Validate `skip.languages` ids against the full configured target list
     // (not the possibly `--lang`-filtered set below) so the check is stable
     // regardless of which subset of languages this particular invocation
@@ -278,6 +298,20 @@ fn generate_e2e_with_extensions(
         functions,
         errors,
     );
+
+    // Docs-only fixtures render independently of `run_generators` and the snippet stage
+    // below: they carry no per-language cell and never enter
+    // `snippets::SnippetCoverageLedger`, so their output is appended here rather than folded
+    // into either. Rendering only happens when `[e2e.snippets]` names an output root -- a
+    // project that has not configured documentation publishing gets validation (above) but no
+    // output files, matching how the snippet stage itself is gated. ~keep
+    if let Some(snippet_config) = &e2e_config.snippets {
+        for docs_only_fixture in &docs_only_fixtures {
+            let file = fixture::docs_only::render_docs_only_fixture(docs_only_fixture, &snippet_config.output)
+                .with_context(|| format!("failed to render docs-only fixture `{}`", docs_only_fixture.id))?;
+            all_files.push(file);
+        }
+    }
 
     // A backend's codegen failure no longer turns this function into an `Err`: it travels
     // out alongside `all_files` in this slot instead, so the caller can still write every

@@ -178,6 +178,97 @@ fn generation_does_not_write_fixture_schema() {
     assert!(!directory.path().join("schema.json").exists());
 }
 
+fn write_docs_only_fixture(directory: &Path, filename: &str, references: serde_json::Value) {
+    std::fs::write(
+        directory.join(filename),
+        serde_json::json!({
+            "kind": "docs_only",
+            "id": "config_discovery",
+            "topic": "guides",
+            "content": "Configuration is discovered by walking up from the working directory.",
+            "references": references,
+        })
+        .to_string(),
+    )
+    .expect("write docs-only fixture");
+}
+
+/// A docs-only fixture referencing a field that does not exist in the extracted API surface
+/// must fail the real `generate_e2e` pipeline, not just the unit-level validator. This is the
+/// end-to-end shape of the coverage requirement: docs-only support is a validated capability,
+/// not a skip.
+#[test]
+fn docs_only_fixture_with_a_bad_reference_fails_generation_through_the_real_pipeline() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+    write_docs_only_fixture(
+        directory.path(),
+        "config_discovery.json",
+        serde_json::json!([{"kind": "field", "path": "ConfigSource.does_not_exist"}]),
+    );
+
+    let e2e_config = E2eConfig {
+        fixtures: directory.path().display().to_string(),
+        ..E2eConfig::default()
+    };
+
+    let error = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[], &[])
+        .expect_err("a docs-only fixture referencing a nonexistent field must fail generation");
+    let message = format!("{error:#}");
+    assert!(message.contains("config_discovery"), "{message}");
+    assert!(message.contains("does_not_exist"), "{message}");
+}
+
+/// The converse: a docs-only fixture whose references all resolve renders under its own
+/// `docs-only/` output slug and never enters the snippet coverage ledger -- proving both
+/// coverage guarantees end to end (validated, and structurally isolated from runtime
+/// coverage) rather than only at the unit level in `fixture::docs_only`'s own tests.
+#[test]
+fn docs_only_fixture_renders_under_its_own_slug_and_never_touches_snippet_coverage() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+    write_docs_only_fixture(directory.path(), "config_discovery.json", serde_json::json!([]));
+
+    let e2e_config = E2eConfig {
+        fixtures: directory.path().display().to_string(),
+        snippets: Some(crate::core::config::e2e::SnippetConfig {
+            output: "docs/snippets-generated".to_string(),
+            ..crate::core::config::e2e::SnippetConfig::default()
+        }),
+        ..E2eConfig::default()
+    };
+
+    let (files, deferred_error) = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[], &[])
+        .expect("a docs-only fixture with resolvable references must generate cleanly");
+    assert!(deferred_error.is_none(), "got: {deferred_error:?}");
+
+    let docs_only_file = files
+        .iter()
+        .find(|file| file.path.starts_with("docs/snippets-generated/docs-only"))
+        .expect("docs-only output file must be present");
+    assert_eq!(
+        docs_only_file.path,
+        Path::new("docs/snippets-generated/docs-only/guides/config_discovery.md")
+    );
+    assert!(docs_only_file.content.contains("kind: docs_only"));
+
+    let coverage_file = files
+        .iter()
+        .find(|file| file.path.ends_with(snippets::COVERAGE_MANIFEST))
+        .expect("coverage manifest must still be written");
+    let coverage: snippets::SnippetCoverageLedger =
+        serde_json::from_str(&coverage_file.content).expect("coverage manifest must parse");
+    for cell in coverage
+        .expected
+        .iter()
+        .chain(coverage.generated.iter())
+        .chain(coverage.missing.iter().map(|missing| &missing.key))
+    {
+        assert_ne!(
+            cell.fixture_id, "config_discovery",
+            "a docs-only fixture must never appear in the runtime snippet coverage ledger"
+        );
+    }
+}
+
 /// The real-world trigger behind the `adopt`/`verify` deadlock this crate's release
 /// blocker fixed: a fixture asserting on a field the availability oracle rejects, with
 /// no `skip` declared, must still fail strict mode by default -- proving the condition
