@@ -278,4 +278,58 @@ pub fn create_premium_backend_options_from_json(json: String) -> Result<String, 
              missing: {missing:?}"
         );
     }
+
+    /// The real facade shape both positive tests above skip: `#[cfg(...)]` immediately followed
+    /// by `#[frb]` before `pub fn` (see `frb_rewrite::cfg_gates::cfg_gated_free_functions`'s doc
+    /// for why this specific shape matters -- it is what
+    /// `backends::dart::templates::rust_from_json_bridge_fn.rs.jinja` always emits). Before that
+    /// scanner learned to skip an intervening attribute, this gate was never recorded, so the
+    /// function below was treated as ungated -- unconditionally expected in the bridge -- and
+    /// reported missing even though its feature is off and frb correctly never emitted it.
+    #[test]
+    fn missing_bridge_functions_ignores_an_inactive_gate_behind_an_intervening_frb_attribute() {
+        let lib_rs = "\
+#[cfg(feature = \"premium-tier\")]
+#[frb]
+pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {
+    Ok(json)
+}
+";
+        let bridge_dart = "";
+        let enabled: HashSet<&str> = HashSet::new();
+
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled));
+        assert!(
+            missing.is_empty(),
+            "a gate followed by an intervening #[frb] attribute must still be recognized and, \
+             being inactive, must not be reported missing: {missing:?}"
+        );
+    }
+
+    /// Negative control for the test above: with the SAME `#[cfg(...)]` / `#[frb]` / `pub fn`
+    /// shape, a function whose gate IS in the enabled set but is genuinely absent from the
+    /// bridge must still be reported. Without this control, a fix that made the scanner treat
+    /// every `#[frb]`-preceded gate as inactive (rather than correctly attaching and then
+    /// evaluating it) would pass the positive test above while silencing this exact shape's
+    /// coverage check entirely.
+    #[test]
+    fn missing_bridge_functions_still_reports_a_genuinely_missing_function_behind_an_intervening_frb_attribute() {
+        let lib_rs = "\
+#[cfg(feature = \"premium-tier\")]
+#[frb]
+pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {
+    Ok(json)
+}
+";
+        let bridge_dart = "";
+        let enabled: HashSet<&str> = ["premium-tier"].into_iter().collect();
+
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled));
+        assert_eq!(
+            missing,
+            vec!["create_premium_backend_options_from_json".to_string()],
+            "a function under an active gate behind an intervening #[frb] attribute must still \
+             be reported missing when absent from the bridge: {missing:?}"
+        );
+    }
 }
