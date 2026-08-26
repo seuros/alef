@@ -1,9 +1,10 @@
 //! WASM enum code generation.
 
-use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeRef};
 use ahash::AHashSet;
 
 use crate::backends::wasm::type_map::WasmMapper;
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::field_init::struct_field_init;
 use crate::codegen::naming::{to_node_name, wire_variant_value};
 use crate::codegen::type_mapper::TypeMapper;
@@ -427,11 +428,38 @@ fn mixed_field_binding_to_core_expr(field: &FieldDef, field_ident: &str, core_im
     }
 }
 
+/// Whether `variant`'s `#[cfg(...)]` is safe to re-emit verbatim on its match arm.
+///
+/// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's own
+/// cfg gate; this WASM crate never declares a Cargo feature for it (see
+/// `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(feature = "...")]` is
+/// an `unexpected cfg condition value` error. Such a variant is dropped entirely instead --
+/// named and counted via `tracing::warn!`, not silently -- mirroring
+/// `codegen::conversions::enums::emit_cfg_gated_arm`. A host-owned cfg keeps its arm and its
+/// `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
+fn wasm_tagged_variant_kept(enum_def: &EnumDef, variant: &EnumVariant, is_host_enum: bool, direction: &str) -> bool {
+    if variant.cfg.is_none() || is_host_enum {
+        return true;
+    }
+    tracing::warn!(
+        enum_name = %enum_def.name,
+        enum_rust_path = %enum_def.rust_path,
+        variant_name = %variant.name,
+        cfg = variant.cfg.as_deref().unwrap_or_default(),
+        direction = direction,
+        "dropping WASM tagged-enum conversion match arm for a foreign-crate variant behind a \
+         #[cfg(...)] this crate cannot declare as a Cargo feature; the variant is unreachable \
+         from this conversion"
+    );
+    false
+}
+
 pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &str, prefix: &str) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
     let tag_field_ident = escape_rust_keyword(tag_field);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mixed = mixed_type_fields(enum_def);
     let tuple_vec_fields: std::collections::BTreeSet<String> = enum_def
         .variants
@@ -446,6 +474,9 @@ pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &
     lines.push(format!("    fn from(val: {binding_name}) -> Self {{"));
     lines.push(format!("        match val.{tag_field_ident}.as_str() {{"));
     for variant in &enum_def.variants {
+        if !wasm_tagged_variant_kept(enum_def, variant, is_host_enum, "binding_to_core") {
+            continue;
+        }
         let tag_value = variant_tag_value(
             &variant.name,
             variant.serde_rename.as_deref(),
@@ -509,7 +540,16 @@ pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &
             ));
         }
     }
-    if let Some(first) = enum_def.variants.first() {
+    // Prefer the first variant with no cfg gate as the unconditional `_ =>` fallback: a
+    // cfg-gated variant (host-owned or foreign) may not exist in every build, so it cannot
+    // safely stand in as the always-available default. Falls back to the very first variant
+    // only when every variant carries a cfg. ~keep
+    let default_variant = enum_def
+        .variants
+        .iter()
+        .find(|v| v.cfg.is_none())
+        .or_else(|| enum_def.variants.first());
+    if let Some(first) = default_variant {
         if first.fields.is_empty() {
             lines.push(format!("            _ => Self::{},", first.name));
         } else if first.is_tuple {
@@ -540,6 +580,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
     let binding_name = format!("{prefix}{}", enum_def.name);
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
     let tag_field_ident = escape_rust_keyword(tag_field);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mixed = mixed_type_fields(enum_def);
     let tuple_vec_fields: std::collections::BTreeSet<String> = enum_def
         .variants
@@ -561,6 +602,9 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
     lines.push(format!("    fn from(val: {core_path}) -> Self {{"));
     lines.push("        match val {".to_string());
     for variant in &enum_def.variants {
+        if !wasm_tagged_variant_kept(enum_def, variant, is_host_enum, "core_to_binding") {
+            continue;
+        }
         let tag_value = variant_tag_value(
             &variant.name,
             variant.serde_rename.as_deref(),
@@ -744,3 +788,5 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
 }
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod cfg_gate_tests;
