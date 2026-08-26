@@ -204,6 +204,26 @@ fn c_param_optional(inner: &TypeRef, core_import: &str) -> String {
     }
 }
 
+/// True when `Optional<inner>` crosses the C ABI as a raw scalar in return position (a bare
+/// primitive/`u64`) rather than a pointer (`*mut c_char` / `AlefHandle`). This is the exact
+/// decision [`c_return_optional`] below makes; every C-ABI-consuming backend that has to declare
+/// a matching return type (C#'s `[DllImport]`, Go's cgo signature, ...) must ask this function
+/// instead of re-deriving its own copy of the branching — see `two-generators-disagree` in the
+/// repo's skill set for why that duplication is this codebase's dominant defect shape.
+///
+/// The nested-`Optional` case is deliberately narrower than the single-level case:
+/// `Option<Option<Duration>>` does NOT flatten to a scalar (only `Option<Duration>` does) —
+/// [`c_return_optional`]'s nested-optional arm only recurses into `Primitive`, never `Duration`.
+/// `should_agree_with_c_return_optional_on_every_shape` below pins this asymmetry so a future
+/// edit to either side that drifts is caught immediately rather than silently. ~keep
+pub fn optional_return_crosses_as_scalar(inner: &TypeRef) -> bool {
+    match inner {
+        TypeRef::Primitive(_) | TypeRef::Duration => true,
+        TypeRef::Optional(inner2) => matches!(inner2.as_ref(), TypeRef::Primitive(_)),
+        _ => false,
+    }
+}
+
 /// C FFI Optional return type — nullable-pointer logic.
 fn c_return_optional(inner: &TypeRef, core_import: &str) -> String {
     match inner {
@@ -465,6 +485,58 @@ mod tests {
             c_return_type(&TypeRef::Optional(Box::new(TypeRef::Named("Foo".to_string()))), CORE),
             "AlefHandle"
         );
+    }
+
+    /// `optional_return_crosses_as_scalar` is the fact every C-ABI-consuming backend asks instead
+    /// of re-deriving its own copy of `c_return_optional`'s scalar-vs-pointer branching. Walk a
+    /// representative shape for every `TypeRef` variant (including the nested-`Optional` shapes,
+    /// where `Duration` and `Primitive` deliberately disagree) and assert the predicate agrees
+    /// with what `c_return_optional` actually emits: a scalar answer must never come back as a
+    /// pointer spelling (`*mut ...` / `AlefHandle`), and a pointer answer must never come back as
+    /// a bare Rust primitive spelling.
+    #[test]
+    fn should_agree_with_c_return_optional_on_every_shape() {
+        let shapes: Vec<TypeRef> = vec![
+            TypeRef::Primitive(PrimitiveType::Bool),
+            TypeRef::Primitive(PrimitiveType::U8),
+            TypeRef::Primitive(PrimitiveType::U64),
+            TypeRef::Primitive(PrimitiveType::F64),
+            TypeRef::Duration,
+            TypeRef::String,
+            TypeRef::Char,
+            TypeRef::Path,
+            TypeRef::Json,
+            TypeRef::Bytes,
+            TypeRef::Named("Foo".to_string()),
+            TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U8))),
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::Primitive(PrimitiveType::U8))),
+            TypeRef::Unit,
+            // Nested Optional: Primitive flattens to scalar, Duration does not — the asymmetry
+            // this test exists to pin.
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U32))),
+            TypeRef::Optional(Box::new(TypeRef::Duration)),
+            TypeRef::Optional(Box::new(TypeRef::Named("Foo".to_string()))),
+        ];
+
+        for inner in shapes {
+            let c_type = c_return_optional(&inner, CORE);
+            let is_pointer_spelling = c_type == "AlefHandle" || c_type.starts_with("*mut ");
+            assert_eq!(
+                optional_return_crosses_as_scalar(&inner),
+                !is_pointer_spelling,
+                "optional_return_crosses_as_scalar({inner:?}) disagrees with c_return_optional's \
+                 actual output `{c_type}`"
+            );
+        }
+
+        // The nested-Optional asymmetry itself, spelled out directly rather than only inferred
+        // from the loop above.
+        assert!(optional_return_crosses_as_scalar(&TypeRef::Optional(Box::new(
+            TypeRef::Primitive(PrimitiveType::U32)
+        ))));
+        assert!(!optional_return_crosses_as_scalar(&TypeRef::Optional(Box::new(
+            TypeRef::Duration
+        ))));
     }
 
     #[test]
