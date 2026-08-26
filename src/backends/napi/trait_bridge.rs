@@ -97,6 +97,36 @@ mod tests {
         assert!(output.code.contains("displayName"));
     }
 
+    /// The object branch of a visitor result guarded `coerce_to_object` inside a second `if`
+    /// whose outer block held nothing else — `clippy::collapsible_if` in edition 2024, which the
+    /// generated napi crate is built with under `-D warnings`. It must be one let-chain. ~keep
+    #[test]
+    fn visitor_result_object_branch_uses_a_let_chain_not_a_nested_if() {
+        let (api, trait_type, bridge) = crate::codegen::visitor_context::test_support::neutral_visitor_fixture();
+        let output = super::gen_trait_bridge(
+            &trait_type,
+            &bridge,
+            "sample_core",
+            "SampleError",
+            "SampleError::Message { message: {msg} }",
+            &api,
+        )
+        .expect("visitor bridge should generate");
+
+        assert!(
+            output.code.contains(
+                "if val.get_type().ok() == Some(napi::bindgen_prelude::ValueType::Object)\n                    && let Ok(obj) = val.coerce_to_object()\n                {"
+            ),
+            "object branch must be a let-chain:\n{}",
+            output.code
+        );
+        assert!(
+            !output.code.contains("{\n                    if let Ok(obj) = val.coerce_to_object() {"),
+            "clippy::collapsible_if: the object branch must not stay a nested if:\n{}",
+            output.code
+        );
+    }
+
     #[test]
     fn plugin_trait_bridge_emits_dispose_method_on_rust_struct() {
         use crate::core::config::{BridgeBinding, TraitBridgeConfig};
