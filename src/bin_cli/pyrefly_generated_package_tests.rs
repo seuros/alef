@@ -238,6 +238,61 @@ pub fn describe_task(task: Task) -> String {
     };
     format!("{}: {priority}/{mode}", task.title)
 }
+
+// Three NON-`Option` enum fields, each carrying bare `#[serde(default)]`, on one config struct.
+// `Task` above covers the `Option<Enum>` form; this covers the form that still routed through the
+// `**({...} if x is not None else {})` omission trick. `options.py` renders each of these as the
+// enum's `#[default]` variant string and never as `None`, so the guard is statically always true
+// -- and pyrefly resolves an unpacked keyword against every remaining parameter, so N unpacks in
+// one constructor call cost N*(N-1) `[bad-argument-type]` errors. Three fields is the smallest
+// count that makes the cost visible as a cluster rather than a single pair. ~keep
+#[derive(Default, Clone, Copy)]
+pub enum Alignment {
+    #[default]
+    Start,
+    End,
+}
+
+#[derive(Default, Clone, Copy)]
+pub enum Density {
+    #[default]
+    Loose,
+    Tight,
+}
+
+#[derive(Default, Clone, Copy)]
+pub enum Casing {
+    #[default]
+    Lower,
+    Upper,
+}
+
+#[derive(Default)]
+pub struct LayoutSpec {
+    pub title: String,
+    #[serde(default)]
+    pub alignment: Alignment,
+    #[serde(default)]
+    pub density: Density,
+    #[serde(default)]
+    pub casing: Casing,
+}
+
+pub fn describe_layout(spec: LayoutSpec) -> String {
+    let alignment = match spec.alignment {
+        Alignment::Start => "start",
+        Alignment::End => "end",
+    };
+    let density = match spec.density {
+        Density::Loose => "loose",
+        Density::Tight => "tight",
+    };
+    let casing = match spec.casing {
+        Casing::Lower => "lower",
+        Casing::Upper => "upper",
+    };
+    format!("{}: {alignment}/{density}/{casing}", spec.title)
+}
 "#;
 
 const FIXTURE_ALEF_TOML: &str = r#"
