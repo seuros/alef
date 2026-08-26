@@ -753,7 +753,7 @@ pub(crate) fn gen_flat_data_enum_variant_constructors(
                     } else {
                         value
                     };
-                    format!("{}: {value}", p.name)
+                    crate::codegen::field_init::struct_field_init(&p.name, &value)
                 })
                 .collect();
             let core_variant = format!("{core_path}::{} {{ {} }}", variant.name, field_inits.join(", "));

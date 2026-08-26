@@ -73,7 +73,7 @@ mod variant_constructor_tests {
         assert!(code.contains(r#"#[php(name = "circle")]"#), "{code}");
         assert!(code.contains("pub fn _factory_circle(radius: f64) -> Self"), "{code}");
         assert!(
-            code.contains("test_lib::Shape::Circle { radius: radius }.into()"),
+            code.contains("test_lib::Shape::Circle { radius }.into()"),
             "{code}"
         );
         assert!(code.contains(r#"#[php(name = "rect")]"#), "{code}");
@@ -82,8 +82,14 @@ mod variant_constructor_tests {
             "{code}"
         );
         assert!(
-            code.contains("test_lib::Shape::Rect { width: width, height: height }.into()"),
+            code.contains("test_lib::Shape::Rect { width, height }.into()"),
             "{code}"
+        );
+        // The factory parameter is already named after the field, so spelling the initializer
+        // out is `clippy::redundant_field_names` in the consumer's generated PHP crate. ~keep
+        assert!(
+            !code.contains("radius: radius") && !code.contains("width: width"),
+            "core variant construction must not emit redundant field names:\n{code}"
         );
     }
 
@@ -265,7 +271,7 @@ mod variant_constructor_tests {
         assert!(!code.contains("_factory_pair"), "{code}");
         assert!(!code.contains("_factory_hidden"), "{code}");
         assert!(code.contains("pub fn _factory_real(value: String) -> Self"), "{code}");
-        assert!(code.contains("test_lib::Mixed::Real { value: value }.into()"), "{code}");
+        assert!(code.contains("test_lib::Mixed::Real { value }.into()"), "{code}");
     }
 
     /// Regression for the `ContentPart` bug: a hand-written inherent static method
@@ -285,7 +291,7 @@ mod variant_constructor_tests {
         };
         let code = run(&def, &mapper());
         assert!(
-            code.contains("test_lib::Shape::Circle { radius: radius }.into()"),
+            code.contains("test_lib::Shape::Circle { radius }.into()"),
             "Circle factory must stay reachable despite the colliding hand-written method: {code}"
         );
         assert!(code.contains(r#"#[php(name = "circle")]"#), "{code}");
