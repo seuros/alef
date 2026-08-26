@@ -13,7 +13,10 @@ pub fn gen_trait_bridge(
     error_constructor: &str,
     api: &ApiSurface,
 ) -> anyhow::Result<String> {
-    if bridge_cfg.exclude_languages.contains(&"ruby".to_string()) {
+    if !crate::codegen::generators::trait_bridge::bridge_targets_language(
+        bridge_cfg,
+        &crate::backends::magnus::trait_bridge::TARGET_SPELLINGS,
+    ) {
         return Ok(String::new());
     }
 

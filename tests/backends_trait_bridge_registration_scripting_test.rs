@@ -332,6 +332,28 @@ fn magnus_surface_names_the_module_functions_bound_under_the_configured_names() 
 }
 
 #[test]
+fn magnus_binds_no_module_function_when_the_bridged_trait_is_absent_from_the_api_surface() {
+    let config = minimal_config("ruby", "");
+    let api = api_without_the_trait();
+
+    let surfaces = MagnusBackend.trait_bridge_registration_surface(&api, &config);
+    let generated = generated_text_for(&MagnusBackend, &api, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "no trait means `gen_trait_bridge` never ran, so there is no registration API; \
+         got {surfaces:?}"
+    );
+    for ruby_name in [REGISTER_FN, UNREGISTER_FN, CLEAR_FN] {
+        assert!(
+            !generated.contains(&format!("define_module_function(\"{ruby_name}\"")),
+            "`ruby_init` would bind `{ruby_name}` to a `pub fn` no pass emitted"
+        );
+    }
+}
+
+#[test]
 fn php_surface_names_the_static_methods_on_the_public_wrapper_class() {
     let config = minimal_config("php", "");
     let surface = only_surface(&PhpBackend, &config);

@@ -13,6 +13,24 @@ pub use bridge_functions::gen_bridge_function;
 pub use bridge_generator::gen_trait_bridge;
 pub use options_field::{find_options_field_binding, gen_options_field_bridge_function};
 
+use crate::core::config::TraitBridgeConfig;
+use crate::core::ir::{ApiSurface, TypeDef};
+
+/// The `exclude_languages` spellings that name this target: the language (`"ruby"`) and the
+/// backend (`"magnus"`). Both are honoured so a consumer who names either one gets the same
+/// answer from every site that asks. ~keep
+pub const TARGET_SPELLINGS: [&str; 2] = ["ruby", "magnus"];
+
+/// The trait a bridge wraps, when Ruby emits that bridge at all.
+///
+/// `gen_module_init` binds `define_module_function("<register_fn>", …)` to the `pub fn` that
+/// `gen_trait_bridge` writes, and `gen_trait_bridge` runs only when the trait resolves in the
+/// `ApiSurface`. Asking here keeps the `#[magnus::init]` body from binding a function no pass
+/// generated. ~keep
+pub fn active_bridge_trait<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) -> Option<&'a TypeDef> {
+    crate::codegen::generators::trait_bridge::active_bridge_trait_def(bridge, api, &TARGET_SPELLINGS)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

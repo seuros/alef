@@ -290,7 +290,7 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
     }
 
     for bridge_cfg in &config.trait_bridges {
-        if bridge_cfg.exclude_languages.iter().any(|s| s == "ruby") {
+        if crate::backends::magnus::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
             continue;
         }
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {

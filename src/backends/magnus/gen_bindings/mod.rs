@@ -447,7 +447,7 @@ impl Backend for MagnusBackend {
         }
 
         for bridge_cfg in &config.trait_bridges {
-            if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+            if let Some(trait_type) = crate::backends::magnus::trait_bridge::active_bridge_trait(bridge_cfg, api) {
                 let bridge_code = crate::backends::magnus::trait_bridge::gen_trait_bridge(
                     trait_type,
                     bridge_cfg,
@@ -821,7 +821,7 @@ impl Backend for MagnusBackend {
 
     /// Ruby sees each registration function as a module function on the crate's module, bound
     /// under the configured name verbatim (`define_module_function` in
-    /// `functions::gen_module_init`, which is also the only gate: `exclude_languages` plus the
+    /// `functions::gen_module_init`, which gates on `trait_bridge::active_bridge_trait` plus the
     /// field being set). Ruby needs no case transform because these names are already snake. ~keep
     fn trait_bridge_registration_surface(
         &self,
@@ -833,7 +833,7 @@ impl Backend for MagnusBackend {
         config
             .trait_bridges
             .iter()
-            .filter(|bridge| bridge.is_active_for("ruby"))
+            .filter(|bridge| crate::backends::magnus::trait_bridge::active_bridge_trait(bridge, api).is_some())
             .filter(|bridge| {
                 bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
             })
