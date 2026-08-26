@@ -7,6 +7,7 @@
 pub mod codegen;
 pub mod config;
 mod coverage_cache;
+pub mod diagnostic_log;
 pub mod escape;
 pub mod field_access;
 pub mod fixture;
@@ -22,6 +23,7 @@ pub mod validate_call_module;
 pub mod validate_call_result_type;
 
 use crate::core::backend::GeneratedFile;
+use diagnostic_log::{DiagnosticLog, unreported};
 use crate::core::config::e2e::DependencyMode;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use anyhow::{Context, Result, bail};
@@ -103,8 +105,10 @@ pub fn known_e2e_target_names() -> Vec<String> {
 /// documentation-snippet path, so a call's result type resolves from the declared
 /// return type rather than from a PascalCased guess at the call name. Pass an empty
 /// slice when not available; generators fall back to the guess.
-/// Thin wrapper: reads the active extensions from the process-global registry and
-/// delegates to [`generate_e2e_with_extensions`]. Every production caller keeps calling
+/// Thin wrapper: opens a [`DiagnosticLog`] of its own -- so a lone render reports every
+/// diagnostic exactly as before -- and delegates through [`generate_e2e_with_log`], which reads
+/// the active extensions from the process-global registry and calls
+/// [`generate_e2e_with_extensions`]. Every production caller keeps calling
 /// this function unchanged -- the split below exists solely so tests can inject a
 /// synthetic extensions list instead of mutating `crate::EXTENSIONS`, which is a
 /// process-global `OnceLock` settable exactly once per test binary and therefore unsafe
@@ -120,9 +124,40 @@ pub fn generate_e2e(
     functions: &[crate::core::ir::FunctionDef],
     errors: &[crate::core::ir::ErrorDef],
 ) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
+    generate_e2e_with_log(
+        config,
+        e2e_config,
+        languages,
+        type_defs,
+        enums,
+        functions,
+        errors,
+        &DiagnosticLog::new(),
+    )
+}
+
+/// [`generate_e2e`] with the caller's own [`DiagnosticLog`], so several renders of one
+/// configuration report each validator finding once between them instead of once apiece.
+///
+/// Only a caller that renders the same crate more than once needs this -- today
+/// `bin_cli::helpers::collect_managed_surface` and `alef all`'s e2e stage, both of which
+/// render local and registry dep modes whose validators see identical input. The log carries no
+/// state a generator reads; it changes what is logged, never what is generated or which
+/// diagnostics abort the run. ~keep
+#[allow(clippy::too_many_arguments)]
+pub fn generate_e2e_with_log(
+    config: &ResolvedCrateConfig,
+    e2e_config: &E2eConfig,
+    languages: Option<&[String]>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
+    log: &DiagnosticLog,
+) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
     crate::with_extensions(|extensions| {
         generate_e2e_with_extensions(
-            config, e2e_config, languages, type_defs, enums, functions, errors, extensions,
+            config, e2e_config, languages, type_defs, enums, functions, errors, extensions, log,
         )
     })
 }
@@ -137,6 +172,7 @@ fn generate_e2e_with_extensions(
     functions: &[crate::core::ir::FunctionDef],
     errors: &[crate::core::ir::ErrorDef],
     extensions: &[Box<dyn crate::Extension>],
+    log: &DiagnosticLog,
 ) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
     let fixtures_dir = Path::new(&e2e_config.fixtures);
     let fixtures = load_fixtures(fixtures_dir)
@@ -197,7 +233,7 @@ fn generate_e2e_with_extensions(
     // empty-category check warns about the same languages we're about to
     // generate for.
     let diagnostics = validate::validate_fixtures_semantic(&fixtures, e2e_config, &resolved_languages);
-    for diag in &diagnostics {
+    for diag in unreported(&diagnostics, log) {
         // ~keep Both arms used to emit `warn!`, so a diagnostic that aborts the run two statements
         // later was indistinguishable in the log from one that changes nothing. The severity the
         // validator computed is the whole point of carrying it this far.
@@ -228,7 +264,7 @@ fn generate_e2e_with_extensions(
     // config line that caused it. Refusing here costs one regeneration; letting it through costs
     // a debugging session in the wrong tree. ~keep
     let classification_diagnostics = validate::validate_field_classifications(e2e_config, type_defs);
-    for diag in &classification_diagnostics {
+    for diag in unreported(&classification_diagnostics, log) {
         match diag.severity {
             Severity::Error => error!("{}: {}", diag.file, diag.message),
             Severity::Warning => warn!("{}: {}", diag.file, diag.message),
@@ -254,10 +290,23 @@ fn generate_e2e_with_extensions(
     // mismatch used to surface only as a wall of compile errors, or of "cannot find
     // symbol" / "call did not resolve" warnings, deep in generated code -- never at
     // config time. See each function's own doc comment for the failure it replaces.
-    validate_call_class::enforce_call_class_overrides(e2e_config, config, type_defs, enums, &resolved_languages)?;
-    validate_call_result_type::enforce_call_result_type_overrides(e2e_config, type_defs, enums, &resolved_languages)?;
-    validate_call_module::enforce_call_module_overrides(e2e_config, config, &resolved_languages)?;
-    validate_call_args::enforce_call_arg_signatures(&fixtures, e2e_config, functions, type_defs, &resolved_languages)?;
+    validate_call_class::enforce_call_class_overrides(e2e_config, config, type_defs, enums, &resolved_languages, log)?;
+    validate_call_result_type::enforce_call_result_type_overrides(
+        e2e_config,
+        type_defs,
+        enums,
+        &resolved_languages,
+        log,
+    )?;
+    validate_call_module::enforce_call_module_overrides(e2e_config, config, &resolved_languages, log)?;
+    validate_call_args::enforce_call_arg_signatures(
+        &fixtures,
+        e2e_config,
+        functions,
+        type_defs,
+        &resolved_languages,
+        log,
+    )?;
 
     let all_groups = group_fixtures(&fixtures);
 

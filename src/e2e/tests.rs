@@ -484,8 +484,10 @@ fn generate_e2e_with_extensions_defers_an_extension_failure_so_backend_output_su
     let config = ResolvedCrateConfig::default();
     let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FailingExtension)];
 
+    let log = crate::e2e::diagnostic_log::DiagnosticLog::new();
+
     let (files, deferred_error) =
-        generate_e2e_with_extensions(&config, &e2e_config, None, &[], &[], &[], &[], &extensions)
+        generate_e2e_with_extensions(&config, &e2e_config, None, &[], &[], &[], &[], &extensions, &log)
             .expect("an extension failure must defer through the `Option` slot, not propagate as a hard `Err`");
 
     let error = deferred_error.expect("the extension's failure must still be reported, not silently dropped");
@@ -530,4 +532,119 @@ fn ensure_no_generator_failures_names_every_failed_backend_and_the_total_count()
         "{message}"
     );
     assert!(message.contains("[go] simulated template error"), "{message}");
+}
+
+/// Two java `module` overrides that each look like a class, so this fixture has exactly two
+/// distinct validator diagnostics to account for -- enough that a dedup which silently dropped
+/// one would not look the same as a dedup which only removed the repetition. ~keep
+fn two_distinct_java_module_warnings() -> E2eConfig {
+    use crate::core::config::e2e::{CallConfig, CallOverride};
+
+    let java_class_module = |module: &str| {
+        let mut call = CallConfig::default();
+        call.overrides.insert(
+            "java".to_string(),
+            CallOverride {
+                module: Some(module.to_string()),
+                ..CallOverride::default()
+            },
+        );
+        call
+    };
+
+    E2eConfig {
+        call: java_class_module("io.sample.Alpha"),
+        calls: std::collections::HashMap::from([("beta".to_string(), java_class_module("io.sample.Beta"))]),
+        ..E2eConfig::default()
+    }
+}
+
+/// The pair `collect_managed_surface` renders for every crate: the same configuration in local
+/// and registry dep mode, which no e2e validator reads. Each render's log is a separate argument
+/// so a test can decide whether the two share one.
+fn render_dep_modes(fixtures: &Path, local_log: &DiagnosticLog, registry_log: &DiagnosticLog) {
+    let java = ["java".to_string()];
+    let local = E2eConfig {
+        fixtures: fixtures.display().to_string(),
+        ..two_distinct_java_module_warnings()
+    };
+    let registry = E2eConfig {
+        dep_mode: DependencyMode::Registry,
+        ..local.clone()
+    };
+    for (e2e_config, log) in [(&local, local_log), (&registry, registry_log)] {
+        generate_e2e_with_log(
+            &ResolvedCrateConfig::default(),
+            e2e_config,
+            Some(java.as_slice()),
+            &[],
+            &[],
+            &[],
+            &[],
+            log,
+        )
+        .expect("rendering an empty fixture set must not fail");
+    }
+}
+
+fn module_warning_counts(lines: &[&str]) -> (usize, usize) {
+    let count = |needle: &str| lines.iter().filter(|line| line.contains(needle)).count();
+    (count("io.sample.Alpha"), count("io.sample.Beta"))
+}
+
+/// PROOF THE DEDUP IS WIRED TO SOMETHING. Without a shared log the two renders are two
+/// independent invocations, so every diagnostic lands twice -- the 2x-per-crate log
+/// `collect_managed_surface` produced before it shared one. If this ever reports 1, the
+/// suppression asserted below is passing for some reason other than the one it claims. ~keep
+#[tracing_test::traced_test]
+#[test]
+fn separate_logs_report_the_same_diagnostic_once_per_render() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+
+    render_dep_modes(directory.path(), &DiagnosticLog::new(), &DiagnosticLog::new());
+
+    logs_assert(|lines: &[&str]| match module_warning_counts(lines) {
+        (2, 2) => Ok(()),
+        other => Err(format!("expected each diagnostic once per un-shared render, got {other:?}")),
+    });
+}
+
+/// One log across both dep modes halves the emitted count while leaving the distinct set whole:
+/// both `io.sample.Alpha` and `io.sample.Beta` must still be reported, each exactly once. A test
+/// that only asserted "fewer" would also pass if the second diagnostic had been dropped.
+#[tracing_test::traced_test]
+#[test]
+fn one_shared_log_reports_each_diagnostic_once_across_both_dep_modes() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+    let log = DiagnosticLog::new();
+
+    render_dep_modes(directory.path(), &log, &log);
+
+    logs_assert(|lines: &[&str]| match module_warning_counts(lines) {
+        (1, 1) => Ok(()),
+        other => Err(format!(
+            "the registry pass must repeat neither diagnostic and drop neither, got {other:?}"
+        )),
+    });
+}
+
+/// A later invocation is a new question, not a repeat of the answered one: suppression that
+/// outlived its log would silence a diagnostic the operator has not yet seen in this run. ~keep
+#[tracing_test::traced_test]
+#[test]
+fn a_later_invocations_identical_diagnostic_is_reported_again() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+
+    let first_invocation = DiagnosticLog::new();
+    let second_invocation = DiagnosticLog::new();
+
+    render_dep_modes(directory.path(), &first_invocation, &first_invocation);
+    render_dep_modes(directory.path(), &second_invocation, &second_invocation);
+
+    logs_assert(|lines: &[&str]| match module_warning_counts(lines) {
+        (2, 2) => Ok(()),
+        other => Err(format!(
+            "a fresh log must report what the previous one reported, got {other:?}"
+        )),
+    });
 }

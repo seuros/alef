@@ -56,13 +56,15 @@
 //! consumer fleets can be promoted once it is shown to have zero false positives against
 //! every consumer's current, working config — not zero opportunities to fire at all.)
 
+use super::diagnostic_log::{DiagnosticLog, unreported};
 use super::validate::{Severity, ValidationError};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::e2e::{CallConfig, E2eConfig};
 
 const CONFIG_FILE_LABEL: &str = "alef.toml";
 
-/// Run [`validate_call_module_overrides`] and log every diagnostic, then bail with every
+/// Run [`validate_call_module_overrides`], log every diagnostic `log` has not already reported,
+/// then bail with every
 /// [`Severity::Error`] diagnostic's message when any fired.
 ///
 /// A genuinely broken go `module` now aborts generation ([`check_go_module`] is `Error`);
@@ -73,9 +75,10 @@ pub fn enforce_call_module_overrides(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     languages: &[String],
+    log: &DiagnosticLog,
 ) -> anyhow::Result<()> {
     let diagnostics = validate_call_module_overrides(e2e_config, config, languages);
-    for diag in &diagnostics {
+    for diag in unreported(&diagnostics, log) {
         tracing::warn!("{}: {}", diag.file, diag.message);
     }
     let errors: Vec<_> = diagnostics
@@ -647,7 +650,7 @@ module = "{go_module}"
             ..E2eConfig::default()
         };
 
-        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()], &DiagnosticLog::new());
 
         let err = result.expect_err("a bare-word go module must abort generation");
         assert!(
@@ -667,7 +670,7 @@ module = "{go_module}"
             ..E2eConfig::default()
         };
 
-        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()], &DiagnosticLog::new());
 
         assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }
@@ -684,7 +687,7 @@ module = "{go_module}"
             ..E2eConfig::default()
         };
 
-        let result = enforce_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["java".to_string()], &DiagnosticLog::new());
 
         assert!(
             result.is_ok(),

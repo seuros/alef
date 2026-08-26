@@ -85,13 +85,15 @@
 //! previously had: a `binding_excluded` skip that hid a call the generator still
 //! emits, and an `.all()` over zero languages that returned `true` by construction).
 
+use super::diagnostic_log::{DiagnosticLog, unreported};
 use super::validate::{Severity, ValidationError};
 use crate::core::config::e2e::{ArgMapping, CallConfig, E2eConfig};
 use crate::core::ir::{FunctionDef, ParamDef, TypeDef};
 use crate::e2e::codegen::call_ir::{CallIr, binding_excluded_for_language, resolves_only_via_adapter_handled_method};
 use crate::e2e::fixture::Fixture;
 
-/// Run [`validate_call_arg_signatures`] and log every diagnostic, then bail with every
+/// Run [`validate_call_arg_signatures`], log every diagnostic `log` has not already reported,
+/// then bail with every
 /// [`Severity::Error`] diagnostic's message when any fired -- see this module's doc
 /// comment's "Severity" section for why every diagnostic here is `Error`.
 pub fn enforce_call_arg_signatures(
@@ -100,9 +102,10 @@ pub fn enforce_call_arg_signatures(
     functions: &[FunctionDef],
     type_defs: &[TypeDef],
     languages: &[String],
+    log: &DiagnosticLog,
 ) -> anyhow::Result<()> {
     let diagnostics = validate_call_arg_signatures(fixtures, e2e_config, functions, type_defs, languages);
-    for diag in &diagnostics {
+    for diag in unreported(&diagnostics, log) {
         tracing::warn!("{}: {}", diag.file, diag.message);
     }
     let errors: Vec<_> = diagnostics
@@ -671,7 +674,14 @@ mod tests {
         };
         let fixtures = vec![fixture_with_call("basic", None)];
 
-        let result = enforce_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
+        let result = enforce_call_arg_signatures(
+            &fixtures,
+            &e2e_config,
+            &functions,
+            &[],
+            &["rust".to_string()],
+            &DiagnosticLog::new(),
+        );
 
         let err = result.expect_err("a removed-parameter arg must abort generation");
         assert!(
@@ -708,7 +718,14 @@ mod tests {
             fixture_with_call("chat_basic", Some("chat")),
         ];
 
-        let result = enforce_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["python".to_string()]);
+        let result = enforce_call_arg_signatures(
+            &fixtures,
+            &e2e_config,
+            &functions,
+            &[],
+            &["python".to_string()],
+            &DiagnosticLog::new(),
+        );
 
         assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }

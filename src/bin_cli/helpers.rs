@@ -591,6 +591,13 @@ pub(crate) fn collect_managed_surface(
         }
         Ok((files, Vec::new()))
     });
+    // One diagnostic log across both e2e renders below. The two differ only in `dep_mode`,
+    // which no validator reads, so the registry pass recomputes a bit-identical diagnostic set;
+    // sharing the log reports each finding once per crate instead of twice. Scoped to this call,
+    // not a static, so a later invocation's identical finding is still reported -- see
+    // `crate::e2e::diagnostic_log`. ~keep
+    let diagnostic_log = crate::e2e::diagnostic_log::DiagnosticLog::new();
+
     // Both e2e modes, because they emit to different roots (`e2e.output` versus
     // `e2e.registry.output`) and a file can be frozen under either. `generate_e2e`
     // returns its per-backend generator failure alongside the files it did produce
@@ -603,7 +610,7 @@ pub(crate) fn collect_managed_surface(
         let Some(e2e_config) = &config.e2e else {
             return Ok((Vec::new(), Vec::new()));
         };
-        let (files, generator_error) = crate::e2e::generate_e2e(
+        let (files, generator_error) = crate::e2e::generate_e2e_with_log(
             config,
             e2e_config,
             None,
@@ -611,6 +618,7 @@ pub(crate) fn collect_managed_surface(
             &api.enums,
             &api.functions,
             &api.errors,
+            &diagnostic_log,
         )
         .context("failed to render the e2e stage of alef's managed output")?;
         Ok(stage_failure_for("e2e", generator_error, files))
@@ -621,7 +629,7 @@ pub(crate) fn collect_managed_surface(
         };
         let mut registry_config = e2e_config.clone();
         registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-        let (files, generator_error) = crate::e2e::generate_e2e(
+        let (files, generator_error) = crate::e2e::generate_e2e_with_log(
             config,
             &registry_config,
             None,
@@ -629,6 +637,7 @@ pub(crate) fn collect_managed_surface(
             &api.enums,
             &api.functions,
             &api.errors,
+            &diagnostic_log,
         )
         .context("failed to render the registry-mode test-app stage of alef's managed output")?;
         Ok(stage_failure_for("test-apps (registry mode)", generator_error, files))

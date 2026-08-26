@@ -23,6 +23,7 @@
 //! See `crate::e2e::validate_call_class` for the sibling check this mirrors, and its doc
 //! comment for why an empty IR licenses no claim either way.
 
+use super::diagnostic_log::{DiagnosticLog, unreported};
 use super::validate::{Severity, ValidationError};
 use super::validate_call_class::closest_candidates;
 use crate::core::config::e2e::{CallConfig, E2eConfig};
@@ -57,7 +58,8 @@ fn result_type_override_is_active(lang: &str, languages: &[String]) -> bool {
             .any(|resolved| CROSS_READING_LANGUAGES.contains(&resolved.as_str()))
 }
 
-/// Run [`validate_call_result_type_overrides`], log every diagnostic (warnings included,
+/// Run [`validate_call_result_type_overrides`], log every diagnostic `log` has not already
+/// reported (warnings included,
 /// matching `validate_call_class`'s sibling wiring in `crate::e2e::generate_e2e`), and turn
 /// any `Severity::Error` into a generation-aborting error naming every offending config key.
 ///
@@ -69,9 +71,10 @@ pub fn enforce_call_result_type_overrides(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     languages: &[String],
+    log: &DiagnosticLog,
 ) -> anyhow::Result<()> {
     let diagnostics = validate_call_result_type_overrides(e2e_config, type_defs, enums, languages);
-    for diag in &diagnostics {
+    for diag in unreported(&diagnostics, log) {
         tracing::warn!("{}: {}", diag.file, diag.message);
     }
     let errors: Vec<_> = diagnostics

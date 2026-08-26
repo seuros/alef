@@ -137,6 +137,11 @@ pub(crate) fn run(
         }
     };
 
+    // Both substages below render the same crate's fixtures, differing only in `dep_mode`,
+    // which no e2e validator reads -- so the second recomputes a bit-identical diagnostic set.
+    // One log between them reports each finding once per crate. ~keep
+    let diagnostic_log = crate::e2e::diagnostic_log::DiagnosticLog::new();
+
     run_e2e_substage(
         resolved_cfg,
         api,
@@ -153,6 +158,7 @@ pub(crate) fn run(
         refusals,
         current_gen_paths,
         deferred_formatting,
+        &diagnostic_log,
         &mut outcome,
     );
     run_test_apps_substage(
@@ -171,6 +177,7 @@ pub(crate) fn run(
         refusals,
         current_gen_paths,
         deferred_formatting,
+        &diagnostic_log,
         &mut outcome,
     );
 
@@ -210,6 +217,7 @@ fn run_e2e_substage(
     refusals: &mut pipeline::WriteReport,
     current_gen_paths: &mut HashSet<PathBuf>,
     deferred_formatting: &mut Vec<DeferredFormatting>,
+    diagnostic_log: &crate::e2e::diagnostic_log::DiagnosticLog,
     outcome: &mut E2eStageOutcome,
 ) {
     let e2e_stage_hash = cache::compute_stage_hash(ir_json, "e2e", config_toml, fixture_hash);
@@ -234,7 +242,7 @@ fn run_e2e_substage(
         } else {
             tracing::info!("Generating e2e test suites...");
             let previous_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-            let (files, generator_error) = crate::e2e::generate_e2e(
+            let (files, generator_error) = crate::e2e::generate_e2e_with_log(
                 resolved_cfg,
                 e2e_config,
                 None,
@@ -242,6 +250,7 @@ fn run_e2e_substage(
                 &api.enums,
                 &api.functions,
                 &api.errors,
+                diagnostic_log,
             )?;
             let e2e_report = pipeline::write_scaffold_files_report(&files, base_dir, true)?;
             refusals.absorb_refusals(&e2e_report);
@@ -305,6 +314,7 @@ fn run_test_apps_substage(
     refusals: &mut pipeline::WriteReport,
     current_gen_paths: &mut HashSet<PathBuf>,
     deferred_formatting: &mut Vec<DeferredFormatting>,
+    diagnostic_log: &crate::e2e::diagnostic_log::DiagnosticLog,
     outcome: &mut E2eStageOutcome,
 ) {
     let test_apps_stage_hash = cache::compute_stage_hash(ir_json, "test-apps", config_toml, fixture_hash);
@@ -332,7 +342,7 @@ fn run_test_apps_substage(
             registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
             let registry_e2e_ref = &registry_e2e_config;
 
-            let (files, generator_error) = crate::e2e::generate_e2e(
+            let (files, generator_error) = crate::e2e::generate_e2e_with_log(
                 resolved_cfg,
                 registry_e2e_ref,
                 None,
@@ -340,6 +350,7 @@ fn run_test_apps_substage(
                 &api.enums,
                 &api.functions,
                 &api.errors,
+                diagnostic_log,
             )?;
             let test_apps_report = pipeline::write_scaffold_files_report(&files, base_dir, true)?;
             refusals.absorb_refusals(&test_apps_report);

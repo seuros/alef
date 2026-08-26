@@ -9,6 +9,7 @@
 //! See `crate::e2e::validate` for the sibling checks this mirrors (unknown call
 //! references, field-classification-vs-IR mismatches).
 
+use super::diagnostic_log::{DiagnosticLog, unreported};
 use super::validate::{Severity, ValidationError};
 use crate::codegen::naming::{self, PublicIdentifierKind};
 use crate::core::config::e2e::{CallConfig, E2eConfig};
@@ -37,7 +38,8 @@ fn naming_language_for(lang: &str) -> Option<Language> {
         .map(|(_, language)| *language)
 }
 
-/// Run [`validate_call_class_overrides`], log every diagnostic, and turn any
+/// Run [`validate_call_class_overrides`], log every diagnostic `log` has not already reported,
+/// and turn any
 /// `Severity::Error` into a generation-aborting error naming every offending config key.
 ///
 /// Kept here rather than inlined at the `generate_e2e` call site for the same reason
@@ -50,9 +52,10 @@ pub fn enforce_call_class_overrides(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     languages: &[String],
+    log: &DiagnosticLog,
 ) -> anyhow::Result<()> {
     let diagnostics = validate_call_class_overrides(e2e_config, config, type_defs, enums, languages);
-    for diag in &diagnostics {
+    for diag in unreported(&diagnostics, log) {
         tracing::warn!("{}: {}", diag.file, diag.message);
     }
     let errors: Vec<_> = diagnostics

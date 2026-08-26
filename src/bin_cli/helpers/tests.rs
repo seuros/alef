@@ -148,6 +148,7 @@ fn both_consumers_build_their_managed_set_only_from_the_shared_surface() {
         "pipeline::scaffold(",
         "pipeline::readme(",
         "e2e::generate_e2e(",
+        "e2e::generate_e2e_with_log(",
         "docs::generate_docs_stage(",
     ];
     // Each region is the consumer's own code, cut so it excludes the shared collector
