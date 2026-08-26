@@ -1,3 +1,4 @@
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::field_init::struct_field_init;
 use crate::core::ir::{CoreWrapper, EnumDef, FieldDef, TypeRef};
 
@@ -8,6 +9,13 @@ pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, sour
     } else {
         en.rust_path.replace('-', "_")
     };
+    // A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's
+    // own cfg gate; this dart crate never declares a Cargo feature for it (see
+    // `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(...)]` produces an
+    // `unexpected cfg condition value` warning for a feature this crate cannot control. See
+    // `is_host_owned_rust_path`'s doc for why both halves must agree, and
+    // `swift::gen_rust_crate::enums` for the sibling fix this mirrors. ~keep
+    let is_host_enum = is_host_owned_rust_path(source_crate_name, &en.rust_path);
 
     out.push_str(&crate::backends::dart::template_env::render(
         "rust_from_mirror_enum_open.jinja",
@@ -23,6 +31,18 @@ pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, sour
     for variant in &en.variants {
         let vname = &variant.name;
         let cfg = variant.cfg.as_deref();
+        if cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %en.name,
+                enum_rust_path = %en.rust_path,
+                variant_name = %variant.name,
+                cfg = cfg.unwrap_or_default(),
+                "dropping Dart bridge From<Mirror>-impl arm for a foreign-crate enum variant \
+                 behind a #[cfg(...)] this crate cannot declare as a Cargo feature; the variant \
+                 is unreachable from this conversion"
+            );
+            continue;
+        }
         if let Some(condition) = cfg {
             out.push_str("            #[cfg(");
             out.push_str(condition);
@@ -228,6 +248,9 @@ pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_cra
     } else {
         en.rust_path.replace('-', "_")
     };
+    // See the sibling comment in `emit_from_mirror_to_core_enum`: a foreign-crate cfg cannot be
+    // forwarded as a Cargo feature this crate declares. ~keep
+    let is_host_enum = is_host_owned_rust_path(source_crate_name, &en.rust_path);
 
     out.push_str(&crate::backends::dart::template_env::render(
         "rust_from_core_enum_open.jinja",
@@ -260,6 +283,18 @@ pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_cra
     for variant in &en.variants {
         let vname = &variant.name;
         let cfg = variant.cfg.as_deref();
+        if cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %en.name,
+                enum_rust_path = %en.rust_path,
+                variant_name = %variant.name,
+                cfg = cfg.unwrap_or_default(),
+                "dropping Dart bridge From<CoreType>-impl arm for a foreign-crate enum variant \
+                 behind a #[cfg(...)] this crate cannot declare as a Cargo feature; the variant \
+                 is unreachable from this conversion"
+            );
+            continue;
+        }
         if let Some(condition) = cfg {
             out.push_str("            #[cfg(");
             out.push_str(condition);
@@ -563,6 +598,134 @@ mod tests {
         assert!(
             !out_mirror.contains("_ => unreachable!"),
             "unexpected catch-all in From<Mirror> impl for no-cfg enum:\n{out_mirror}"
+        );
+    }
+
+    /// The regression this task fixes: a whole enum gated behind a Cargo feature (`EnumDef::cfg`,
+    /// as opposed to a single variant's cfg) carries that gate through to both `impl From<...>`
+    /// blocks, which name the host path directly. Before the fix, `source_cfg` was passed to the
+    /// "open" templates but never used, so a wholly-gated enum's From impls were always emitted
+    /// unconditionally -- an E0433 in a build excluding the feature.
+    #[test]
+    fn whole_enum_cfg_gates_both_from_impls() {
+        let en = EnumDef {
+            name: "OcrMode".to_string(),
+            rust_path: "mylib::thumbnails::OcrMode".to_string(),
+            cfg: Some(r#"feature = "thumbnails""#.to_string()),
+            variants: vec![make_unit_variant("Fast", None), make_unit_variant("Accurate", None)],
+            ..Default::default()
+        };
+        let mut out_core = String::new();
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        assert_eq!(
+            out_core.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            1,
+            "the whole-enum gate must land on the From<CoreType> impl exactly once, got:\n{out_core}"
+        );
+
+        let mut out_mirror = String::new();
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        assert_eq!(
+            out_mirror.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            1,
+            "the whole-enum gate must land on the From<Mirror> impl exactly once, got:\n{out_mirror}"
+        );
+    }
+
+    /// Negative control: an ungated enum (`EnumDef::cfg` is `None`) must emit no `#[cfg(...)]`
+    /// on either impl header.
+    #[test]
+    fn ungated_enum_emits_no_cfg_on_either_impl_header() {
+        let en = EnumDef {
+            name: "PlainMode".to_string(),
+            rust_path: "mylib::PlainMode".to_string(),
+            variants: vec![make_unit_variant("A", None), make_unit_variant("B", None)],
+            ..Default::default()
+        };
+        let mut out_core = String::new();
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        assert!(
+            !out_core.contains("#[cfg("),
+            "ungated enum must not emit #[cfg(...)] in From<CoreType> impl, got:\n{out_core}"
+        );
+
+        let mut out_mirror = String::new();
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        assert!(
+            !out_mirror.contains("#[cfg("),
+            "ungated enum must not emit #[cfg(...)] in From<Mirror> impl, got:\n{out_mirror}"
+        );
+    }
+
+    /// A variant merged in from a foreign `[[crates.source_crates]]` crate (`rust_path` rooted
+    /// in a crate other than the host) carries that crate's own cfg. Forwarding it verbatim as
+    /// `#[cfg(...)]` names a feature this dart crate never declares -- an `unexpected cfg
+    /// condition value` warning (the second leak this task fixes) -- so the arm must be dropped
+    /// entirely instead, mirroring `swift::gen_rust_crate::enums`.
+    #[test]
+    fn foreign_cfg_variant_arm_is_dropped_not_gated_in_both_directions() {
+        let en = EnumDef {
+            name: "TierStrategy".to_string(),
+            rust_path: "dep_crate::TierStrategy".to_string(),
+            variants: vec![
+                make_unit_variant("Auto", None),
+                make_unit_variant("Tier1", Some(r#"feature = "testkit""#)),
+            ],
+            ..Default::default()
+        };
+
+        let mut out_core = String::new();
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        assert!(
+            !out_core.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out_core}"
+        );
+        assert!(
+            !out_core.contains("dep_crate::TierStrategy::Tier1 =>"),
+            "a foreign-crate cfg-gated variant must not be referenced in the From<CoreType> match, got:\n{out_core}"
+        );
+
+        let mut out_mirror = String::new();
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        assert!(
+            !out_mirror.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out_mirror}"
+        );
+        assert!(
+            !out_mirror.contains("Tier1 =>"),
+            "a foreign-crate cfg-gated variant must not be referenced in the From<Mirror> match, got:\n{out_mirror}"
+        );
+    }
+
+    /// A host-owned cfg-gated variant (`rust_path` rooted in the host crate) keeps its arm in
+    /// both directions and its `#[cfg(...)]` guard, since the feature is safely forwardable via
+    /// this crate's own `[features]` table.
+    #[test]
+    fn host_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
+        let en = EnumDef {
+            name: "ImageOutputFormat".to_string(),
+            rust_path: "mylib::ImageOutputFormat".to_string(),
+            variants: vec![
+                make_unit_variant("Jpeg", None),
+                make_unit_variant("Heif", Some(r#"feature = "heic""#)),
+            ],
+            ..Default::default()
+        };
+
+        let mut out_core = String::new();
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        assert_eq!(
+            out_core.matches("#[cfg(feature = \"heic\")]").count(),
+            1,
+            "the host-owned variant's From<CoreType> arm must keep its #[cfg] guard, got:\n{out_core}"
+        );
+
+        let mut out_mirror = String::new();
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        assert_eq!(
+            out_mirror.matches("#[cfg(feature = \"heic\")]").count(),
+            1,
+            "the host-owned variant's From<Mirror> arm must keep its #[cfg] guard, got:\n{out_mirror}"
         );
     }
 }
