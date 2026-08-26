@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Four independent trait-bridge stub defects, one per backend.** Go emitted a bare identifier as
+  an enum's default return, which is valid only for a constant-backed enum — a sealed-interface or
+  struct-shaped enum has no such constant, so the identifier named a *type* and the compiler
+  rejected it as "not an expression"; the default is now constructed according to the enum's real
+  Go representation. Java computed its excluded-type set with an empty enum registry, which cannot
+  tell a real enum from one the crate's own `exclude_types` marshals as `String`; it now passes the
+  IR enum names minus the configured exclusions. Swift skipped default-body methods when stubbing,
+  but the production backend declares every trait method as a required protocol member (alef cannot
+  carry a Rust default body through the IR), so the stub never conformed — and its
+  `import Foundation` heuristic matched only a constructor call, missing a bare type annotation.
+  TypeScript gated every import on a plain substring test, so an enum whose name is a *prefix* of
+  another correctly-used name was spuriously imported; import gating is now word-boundary aware.
+
 - **Zig snippet validation could not reach a debug-profile FFI library.** Zig snippets are built
   through `zig build` against the consumer's real `build.zig`, whose `ffi_path` build option
   defaults to the release profile. The synthesized snippet build only ever threaded

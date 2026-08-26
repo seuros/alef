@@ -252,23 +252,29 @@ pub(super) fn build_args_and_setup(
                     };
                 methods.extend(synthetic_super_trait_methods.iter());
 
-                // `trait_bridge_excluded_type_names` (the enum-blind wrapper) cannot tell an
-                // opaque/unexported type from a plain enum: enums live in `enums`, not
-                // `type_defs`, so `collect_hidden_named_types` sees no `TypeDef` for one and
-                // falls back to "unknown, therefore excluded". That forced every enum-typed
-                // trait method through `java_stub_type_with_context`'s excluded-type branch,
-                // which substitutes `String` for a type the real interface declares as the
-                // enum class itself — `is not abstract and does not override abstract
-                // method`. Passing the real enum names through `_with_enums` (mirroring
-                // `csharp::setup`) lets those methods fall through to the ordinary
-                // non-excluded `Named` branch instead, which already emits the correctly
-                // qualified type and a safe `null` default. ~keep
-                let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
+                // `trait_bridge_excluded_type_names` (no enum registry) treats every enum-typed
+                // signature as excluded by default -- enums live in `enums`, not `type_defs`, so
+                // `collect_hidden_named_types` sees no `TypeDef` for one and falls back to
+                // "unknown, therefore excluded". That cannot distinguish a real, non-excluded Java
+                // enum from one the crate's own `exclude_types` really does marshal as `String`.
+                // Passing the IR enum names, minus the ones this language's config excludes, is
+                // exactly what `trait_bridge_excluded_type_names_with_enums`'s `known_enum_names`
+                // parameter exists for -- see its doc comment. ~keep
+                let configured_excluded_types = crate::docs::language_pages::excludes::language_excludes(
+                    config,
+                    crate::core::config::Language::Java,
+                )
+                .1;
+                let known_enum_names: std::collections::HashSet<&str> = enums
+                    .iter()
+                    .map(|enum_def| enum_def.name.as_str())
+                    .filter(|name| !configured_excluded_types.contains(*name))
+                    .collect();
                 let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names_with_enums(
                     config,
                     type_defs,
                     &methods,
-                    &enum_names,
+                    &known_enum_names,
                 );
 
                 // Do NOT filter out methods that return excluded types. As of the trait method extraction

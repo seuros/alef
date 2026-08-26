@@ -154,6 +154,133 @@ fn java_visitor_arg_uses_trait_bridge_options_metadata() {
     assert!(!args.contains("DefaultOptions"));
 }
 
+/// Regression for the trait-bridge fixture failure where the Java stub named `OcrBackendType`
+/// (an enum `[crates.java].exclude_types` marshals as `String` at the trait-bridge boundary) as
+/// if it were an ordinary visible type, producing `io.xberg.OcrBackendType` -- a class the
+/// binding never emits, so `javac` failed with "cannot find symbol". The IR's enum registry
+/// (`enums`), not just `type_defs` (structs), must be consulted, and cross-checked against
+/// `[crates.java].exclude_types`, so an excluded enum still becomes `String` while a real one
+/// (not configured excluded) keeps its typed return.
+#[test]
+fn java_trait_bridge_stub_marshals_a_configured_excluded_enum_as_string_but_keeps_a_real_one_typed() {
+    use crate::core::config::{JavaConfig, TraitBridgeConfig};
+    use crate::core::ir::{EnumDef, EnumVariant, MethodDef, ReceiverKind, TypeDef, TypeRef};
+    use crate::e2e::config::ArgMapping;
+
+    let trait_type = TypeDef {
+        name: "SampleBackend".to_string(),
+        rust_path: "sample_crate::SampleBackend".to_string(),
+        is_trait: true,
+        methods: vec![
+            MethodDef {
+                name: "backend_type".to_string(),
+                return_type: TypeRef::Named("ExcludedBackendKind".to_string()),
+                error_type: Some("anyhow::Error".to_string()),
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            },
+            MethodDef {
+                name: "confidence_semantics".to_string(),
+                return_type: TypeRef::Named("RealEnumKind".to_string()),
+                error_type: Some("anyhow::Error".to_string()),
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let enums = vec![
+        EnumDef {
+            name: "ExcludedBackendKind".to_string(),
+            rust_path: "sample_crate::ExcludedBackendKind".to_string(),
+            variants: vec![EnumVariant {
+                name: "Custom".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        EnumDef {
+            name: "RealEnumKind".to_string(),
+            rust_path: "sample_crate::RealEnumKind".to_string(),
+            variants: vec![EnumVariant {
+                name: "Legibility".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    ];
+    let config = ResolvedCrateConfig {
+        trait_bridges: vec![TraitBridgeConfig {
+            trait_name: "SampleBackend".to_string(),
+            register_fn: Some("register_sample_backend".to_string()),
+            ..Default::default()
+        }],
+        java: Some(JavaConfig {
+            capsule_types: std::collections::HashMap::new(),
+            shares_native_runtime: false,
+            package: None,
+            group_id: None,
+            artifact_id: None,
+            ffi_style: "panama".to_string(),
+            features: None,
+            exclude_types: vec!["ExcludedBackendKind".to_string()],
+            exclude_functions: vec![],
+            serde_rename_all: None,
+            rename_fields: std::collections::HashMap::new(),
+            run_wrapper: None,
+            extra_lint_paths: vec![],
+            project_file: None,
+            dto: Default::default(),
+        }),
+        ..Default::default()
+    };
+    let args = vec![ArgMapping {
+        name: "backend".to_string(),
+        field: "backend".to_string(),
+        arg_type: "test_backend".to_string(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: Some("SampleBackend".to_string()),
+    }];
+    let fixture = make_fixture_with_input("register_sample_backend_trait_bridge", serde_json::Value::Null);
+    let mut teardown = String::new();
+
+    let (setup, _args_str) = build_args_and_setup(
+        &fixture.input,
+        &args,
+        JavaArgsContext {
+            class_name: "Sample",
+            options_type: None,
+            fixture: &fixture,
+            adapter_request_type: None,
+            owner_handle_is_receiver: false,
+            config: &config,
+            type_defs: std::slice::from_ref(&trait_type),
+            enums: &enums,
+            target_params: crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+            teardown_block: &mut teardown,
+        },
+    );
+
+    let rendered = setup.join("\n");
+    assert!(
+        rendered.contains("String backend_type()") || rendered.contains("String  backend_type()"),
+        "an enum [crates.java].exclude_types configures excluded must marshal as String, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("ExcludedBackendKind"),
+        "the excluded enum's own type name must never appear in the stub, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("RealEnumKind confidence_semantics()")
+            || rendered.contains("RealEnumKind  confidence_semantics()"),
+        "an enum NOT configured excluded must keep its real typed return, got:\n{rendered}"
+    );
+}
+
 #[test]
 fn test_java_harness_main_uses_default_port_not_random_probe() {
     use super::project::render_harness_main;

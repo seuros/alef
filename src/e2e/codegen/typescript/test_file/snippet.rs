@@ -187,7 +187,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     // exactly this reason. Non-wasm languages pass through unchanged.
     let import_name = |name: &str| wasm_prefixed_wrapped_type(lang, name, type_defs, enums, wasm_type_prefix);
     if let Some(name) = options_type.as_deref().map(import_name)
-        && referenced_code.contains(&name)
+        && references_identifier(&referenced_code, &name)
     {
         imports.insert(name);
     }
@@ -196,7 +196,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             .into_values()
             .chain(enum_fields.into_values())
             .map(|name| import_name(&name))
-            .filter(|name| referenced_code.contains(name)),
+            .filter(|name| references_identifier(&referenced_code, name)),
     );
     // WASM builder expressions construct nested classes recursively
     // (`ts_builder_expression_inner`): `_u0.config = (() => { const _u1 =
@@ -207,7 +207,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     // into the snippet body but never imported, failing at typecheck with "Cannot find
     // name". `render_test_file`'s import builder already walks the IR transitively for the
     // same reason (`collect_transitive_nested_types_for_wasm`); this standalone-snippet path
-    // lacked the same walk. Filtered by `referenced_code.contains`, matching every other
+    // lacked the same walk. Filtered by `references_identifier`, matching every other
     // entry in this list, so a reachable-but-unused class is never imported.
     //
     // The walk must also seed from every `json_object` arg's array `element_type`
@@ -234,7 +234,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
                 collect_transitive_nested_types_for_wasm(&seeds, type_defs, wasm_type_prefix)
                     .into_iter()
                     .map(|name| import_name(&name))
-                    .filter(|name| referenced_code.contains(name)),
+                    .filter(|name| references_identifier(&referenced_code, name)),
             );
         }
     }
@@ -248,7 +248,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         enums
             .iter()
             .map(|enum_def| import_name(&enum_def.name))
-            .filter(|name| referenced_code.contains(name)),
+            .filter(|name| references_identifier(&referenced_code, name)),
     );
     // The struct-typed twin of the enum sweep above: a trait-bridge stub method returning a
     // plain struct (e.g. `OcrBackend.processImage(): Promise<ExtractedDocument>`) annotates
@@ -261,14 +261,14 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         type_defs
             .iter()
             .map(|type_def| import_name(&type_def.name))
-            .filter(|name| referenced_code.contains(name)),
+            .filter(|name| references_identifier(&referenced_code, name)),
     );
     for arg in recipe.args {
         if arg.arg_type == "json_object"
             && let Some(type_name) = &arg.element_type
         {
             let type_name = import_name(&canonical_ts_type_name(lang, type_name, config));
-            if referenced_code.contains(&type_name) {
+            if references_identifier(&referenced_code, &type_name) {
                 imports.insert(type_name);
             }
         }
@@ -277,7 +277,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         }
     }
     if let Some(name) = handle_config_type
-        && referenced_code.contains(name)
+        && references_identifier(&referenced_code, name)
     {
         imports.insert(name.to_string());
     }
@@ -317,6 +317,30 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
 /// published snippet imposes no TypeScript version floor on the consumer's docs site. ~keep
 fn wasm_client_release(lang: &str, effective_factory: Option<&str>) -> Option<&'static str> {
     (lang == "wasm" && effective_factory.is_some()).then_some("client.free();")
+}
+
+/// Whether `code` uses `identifier` as a whole identifier, not merely as a substring of some
+/// longer one.
+///
+/// Every import above is gated on "does the rendered body mention this name" -- a plain
+/// `code.contains(identifier)` says yes whenever `identifier` is a *prefix* of a longer name the
+/// body legitimately uses, e.g. the wasm-prefixed `WasmOcrBackend` is a substring of
+/// `WasmOcrBackendType`. A crate-wide enum registry search (the trait-bridge enum-import loop
+/// below) can then add an import for a symbol the binding never exports, because some unrelated
+/// IR name happens to prefix-match a real one -- `import { ..., WasmOcrBackend, ... }` from a
+/// package that only exports `WasmOcrBackendType`. `wasm/snippet.rs` already has this exact
+/// check under the name `names_identifier`; this file needs its own copy rather than a
+/// cross-module `pub(crate)` reach, per this repo's third-repetition rule. ~keep
+pub(super) fn references_identifier(code: &str, identifier: &str) -> bool {
+    let is_identifier_char = |character: char| character.is_alphanumeric() || character == '_' || character == '$';
+    code.match_indices(identifier).any(|(start, matched)| {
+        let before_is_identifier = code[..start].chars().next_back().is_some_and(is_identifier_char);
+        let after_is_identifier = code[start + matched.len()..]
+            .chars()
+            .next()
+            .is_some_and(is_identifier_char);
+        !before_is_identifier && !after_is_identifier
+    })
 }
 
 fn infer_enum_fields(

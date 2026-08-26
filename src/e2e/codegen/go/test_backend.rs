@@ -204,9 +204,10 @@ pub fn emit_test_backend_with_context(
 ///
 /// Use `go_stub_default_with_context` with the same excluded/import-alias substitution as
 /// `stub_go_type_with_context` so the emitted zero-value matches the rendered return
-/// type. Excluded non-enum types become `json.RawMessage(nil)`, enums in excluded_types
-/// become their first variant constant (e.g., `import_alias.EnumTypeFirstVariant`),
-/// struct types qualified via `import_alias` use `alias.Type{}` (Go's struct zero-value),
+/// type. Excluded non-enum types become `json.RawMessage(nil)`; enums (excluded or not) name
+/// their first variant via `go_enum_variant_default_expression`, which is a package-level
+/// constant for a string-backed enum but a composite literal for a struct- or interface-backed
+/// one; struct types qualified via `import_alias` use `alias.Type{}` (Go's struct zero-value);
 /// and primitives/maps/slices/optionals fall back to `go_zero_value`.
 fn go_stub_default_with_context(
     ty: &crate::core::ir::TypeRef,
@@ -220,47 +221,22 @@ fn go_stub_default_with_context(
 
     match ty {
         TypeRef::Named(name) if excluded_types.contains(name.as_str()) && enum_names.contains(name.as_str()) => {
-            // Enum that's in excluded_types: emit the first variant constant.
-            // Find the enum definition to get the first variant name.
-            if let Some(enum_def) = enums.iter().find(|e| e.name == *name) {
-                if let Some(first_variant) = enum_def.variants.first() {
-                    let go_name = crate::codegen::naming::go_type_name(name);
-                    let variant_name = crate::codegen::naming::go_type_name(&first_variant.name);
-                    if !import_alias.is_empty() {
-                        format!("{import_alias}.{go_name}{variant_name}")
-                    } else {
-                        format!("{go_name}{variant_name}")
-                    }
-                } else {
-                    // Enum with no variants (shouldn't happen), fall back to nil
-                    "nil".to_string()
+            match enums.iter().find(|e| e.name == *name) {
+                Some(enum_def) if !enum_def.variants.is_empty() => {
+                    go_enum_variant_default_expression(name, enum_def, import_alias)
                 }
-            } else {
-                // Enum not found in definitions, fall back to nil
-                "nil".to_string()
+                // Enum with no variants (shouldn't happen) or not found: fall back to nil.
+                _ => "nil".to_string(),
             }
         }
         TypeRef::Named(name) if excluded_types.contains(name.as_str()) => "nil".to_string(),
-        TypeRef::Named(name) if enum_names.contains(name.as_str()) => {
-            // Non-excluded enum: emit the first variant constant.
-            if let Some(enum_def) = enums.iter().find(|e| e.name == *name) {
-                if let Some(first_variant) = enum_def.variants.first() {
-                    let go_name = crate::codegen::naming::go_type_name(name);
-                    let variant_name = crate::codegen::naming::go_type_name(&first_variant.name);
-                    if !import_alias.is_empty() {
-                        format!("{import_alias}.{go_name}{variant_name}")
-                    } else {
-                        format!("{go_name}{variant_name}")
-                    }
-                } else {
-                    // Enum with no variants (shouldn't happen), use empty string
-                    "\"\"".to_string()
-                }
-            } else {
-                // Enum not found in definitions, use empty string as fallback
-                "\"\"".to_string()
+        TypeRef::Named(name) if enum_names.contains(name.as_str()) => match enums.iter().find(|e| e.name == *name) {
+            Some(enum_def) if !enum_def.variants.is_empty() => {
+                go_enum_variant_default_expression(name, enum_def, import_alias)
             }
-        }
+            // Enum with no variants (shouldn't happen) or not found: fall back to an empty string.
+            _ => "\"\"".to_string(),
+        },
         TypeRef::Named(name) if !import_alias.is_empty() => {
             let go_name = crate::codegen::naming::go_type_name(name);
             format!("{import_alias}.{go_name}{{}}")
@@ -270,6 +246,55 @@ fn go_stub_default_with_context(
             format!("{go_name}{{}}")
         }
         _ => go_zero_value(ty),
+    }
+}
+
+/// Build a Go expression naming `enum_def`'s first variant, for use as a stub method's default
+/// return value.
+///
+/// A `UnitString`/`NewtypeTupleString` representation names each variant as a package-level
+/// constant (`alias.EnumTypeFirstVariant`), so the bare identifier is itself the expression. Every
+/// other representation (`DataInterface`, and the three struct-shaped tagged-union forms) has no
+/// such constant: `alias.EnumTypeFirstVariant` there names either nothing or, for `DataInterface`,
+/// the concrete variant *type* — which the Go compiler rejects as "not an expression" exactly like
+/// the trait-bridge fixture surfaced. Those representations must be *constructed*: a
+/// `DataInterface` needs the concrete variant struct's composite literal
+/// (`go_data_enum_variant_struct` — the interface itself has none), and the struct-shaped forms
+/// compile fine as the enum's own zero-value composite literal regardless of which variant is
+/// "first". ~keep
+fn go_enum_variant_default_expression(name: &str, enum_def: &crate::core::ir::EnumDef, import_alias: &str) -> String {
+    use crate::backends::go::{GoEnumRepresentation, go_data_enum_variant_struct, go_enum_representation};
+
+    let qualify = |type_name: String| {
+        if import_alias.is_empty() {
+            type_name
+        } else {
+            format!("{import_alias}.{type_name}")
+        }
+    };
+    // Callers already checked `!enum_def.variants.is_empty()`.
+    let first_variant = &enum_def.variants[0];
+    let representation = go_enum_representation(enum_def);
+    if representation.has_named_constants() {
+        let go_name = crate::codegen::naming::go_type_name(name);
+        let variant_name = crate::codegen::naming::go_type_name(&first_variant.name);
+        return qualify(format!("{go_name}{variant_name}"));
+    }
+    match representation {
+        GoEnumRepresentation::DataInterface => {
+            let struct_name = go_data_enum_variant_struct(enum_def, first_variant);
+            qualify(format!("{struct_name}{{}}"))
+        }
+        GoEnumRepresentation::AdjacentTaggedStruct
+        | GoEnumRepresentation::TupleTaggedStruct
+        | GoEnumRepresentation::ExternallyTaggedStruct
+        | GoEnumRepresentation::RawMessage => {
+            let go_name = crate::codegen::naming::go_type_name(name);
+            qualify(format!("{go_name}{{}}"))
+        }
+        GoEnumRepresentation::UnitString | GoEnumRepresentation::NewtypeTupleString => unreachable!(
+            "has_named_constants() already returned true for UnitString/NewtypeTupleString and returned above"
+        ),
     }
 }
 
@@ -568,3 +593,7 @@ pub(super) fn resolve_test_backend_emission(
 
 #[cfg(test)]
 mod trait_bridge_tests;
+
+#[cfg(test)]
+#[path = "test_backend/enum_default_tests.rs"]
+mod enum_default_tests;

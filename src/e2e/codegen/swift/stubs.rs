@@ -55,10 +55,14 @@ pub fn emit_test_backend(
 
     // Required methods: trait bridge protocols marshal excluded types as JSON strings.
     // Use concrete Swift types, converting Named types to String (JSON marshalling).
+    //
+    // A Rust default-body method is NOT skipped here: `gen_single_trait_bridge_file`
+    // (`src/backends/swift/gen_bindings/trait_bridge.rs`) declares every trait method on
+    // `Swift{Trait}Bridge` as a required protocol member, default body or not -- alef cannot
+    // carry a Rust default body through the IR, so the production protocol has no default to
+    // fall back on either (see that function's `~keep` doc comment, alef #258). A stub that
+    // skipped defaulted methods here would not conform to the real protocol. ~keep
     for method in methods {
-        if method.has_default_impl {
-            continue;
-        }
         let method_name = method.name.to_lower_camel_case();
 
         // Build parameter list. Named types (excluded/internal) are marshalled as String in trait bridges.
@@ -360,6 +364,29 @@ mod tests {
         assert!(
             output.contains("\"my-backend-name\""),
             "plugin name must come from fixture.input.name, got:\n{output}"
+        );
+    }
+
+    /// Regression: `src/backends/swift/gen_bindings/trait_bridge.rs` (`gen_single_trait_bridge_file`)
+    /// declares every trait method on `Swift{Trait}Bridge` as a required protocol member, even one
+    /// with a Rust default body -- alef cannot carry the default body through the IR, so the real
+    /// protocol has nothing to fall back on either. Before this fix, this generator skipped
+    /// default-body methods, so a stub compiled against that protocol failed with "does not conform
+    /// to protocol". Every method, default-body or not, must be stubbed.
+    #[test]
+    fn swift_stub_emits_a_default_impl_method_because_the_real_protocol_requires_it_too() {
+        let bridge = make_trait_bridge("TestTrait");
+        let required_method = make_method("do_work", true);
+        let defaulted_method = make_method("optional_hook", false);
+        let methods = [&required_method, &defaulted_method];
+        let fixture = make_fixture("my_test_fixture");
+
+        let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
+        let output = format!("{}\n{}", emission.setup_block, emission.arg_expr);
+
+        assert!(
+            output.contains("optionalHook"),
+            "a default-body trait method must still be stubbed, got:\n{output}"
         );
     }
 }

@@ -41,6 +41,8 @@ mod wasm;
 mod wasm_optional_chain_tests;
 #[cfg(test)]
 mod wasm_snippet_prefix_tests;
+#[cfg(test)]
+mod wasm_trait_bridge_import_tests;
 
 pub use render::render_test_file;
 pub(crate) use snippet::{SnippetContext, render_node_snippet_body, render_snippet_body};

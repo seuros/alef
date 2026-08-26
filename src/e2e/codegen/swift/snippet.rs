@@ -163,9 +163,10 @@ pub(super) fn render_with_ir(
     if !expects_error && !call.returns_void && presentation.is_empty() {
         body.push_str(&format!("\nprint({result_var})"));
     }
-    let needs_foundation = ["Data(", "URL(", "JSONDecoder", "JSONEncoder"]
-        .iter()
-        .any(|symbol| body.contains(symbol));
+    let needs_foundation = swift_body_references_type(&body, "Data")
+        || swift_body_references_type(&body, "URL")
+        || body.contains("JSONDecoder")
+        || body.contains("JSONEncoder");
     Ok(crate::e2e::template_env::render(
         "swift/snippet_body.jinja",
         minijinja::context! { module => module, body => body, needs_foundation => needs_foundation,
@@ -173,9 +174,119 @@ pub(super) fn render_with_ir(
     ))
 }
 
+/// Whether `body` references `type_name` as a standalone Swift identifier -- a type
+/// annotation (`: Data`), a bare return type (`-> Data`), or a constructor call
+/// (`Data(...)`) -- rather than merely as a substring of some other identifier
+/// (`WrappedData`).
+///
+/// A plain `body.contains("Data(")` only catches constructor calls. A trait-bridge test
+/// stub's parameter list writes the bare type annotation `imageBytes: Data,` with no
+/// following `(`, so that substring check silently dropped `import Foundation` and `swiftc`
+/// failed with "cannot find type 'Data' in scope". ~keep
+fn swift_body_references_type(body: &str, type_name: &str) -> bool {
+    let is_word_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bytes = body.as_bytes();
+    body.match_indices(type_name).any(|(start, matched)| {
+        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
+        let end = start + matched.len();
+        let after_ok = end == bytes.len() || !is_word_byte(bytes[end]);
+        before_ok && after_ok
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unit coverage for the word-boundary helper itself: a bare type annotation and a
+    /// return-type arrow must count as a reference, but the substring appearing inside a
+    /// longer identifier must not.
+    #[test]
+    fn body_references_type_finds_bare_annotations_but_not_substrings_of_other_identifiers() {
+        assert!(swift_body_references_type(
+            "func f(bytes: Data, config: String)",
+            "Data"
+        ));
+        assert!(swift_body_references_type("func f() -> Data { Data() }", "Data"));
+        assert!(!swift_body_references_type(
+            "let x: WrappedDataHolder = WrappedDataHolder()",
+            "Data"
+        ));
+    }
+
+    /// End-to-end regression through the real snippet entry point (`render`): a trait-bridge
+    /// stub whose parameter is `Bytes` maps to the bare Swift type annotation `imageBytes:
+    /// Data,` (no constructor call). Before this fix, `needs_foundation`'s `body.contains("Data(")`
+    /// check missed that annotation entirely and the snippet omitted `import Foundation`,
+    /// so `swiftc` failed with "cannot find type 'Data' in scope".
+    ///
+    /// `e2e.call.args` is deliberately left empty: the fixture's own `args` (not the
+    /// call-level list `render`'s test-backend guard inspects) is what
+    /// `Fixture::resolved_args` prefers, mirroring how the real crate's `[[e2e.calls]]`
+    /// entry has no `test_backend` arg of its own even though the fixture does.
+    #[test]
+    fn trait_bridge_snippet_imports_foundation_for_a_bare_data_typed_stub_param() {
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
+        use crate::e2e::config::ArgMapping;
+
+        let trait_type = TypeDef {
+            name: "SampleBackend".into(),
+            rust_path: "sample_crate::SampleBackend".into(),
+            is_trait: true,
+            methods: vec![MethodDef {
+                name: "process_image".into(),
+                params: vec![ParamDef {
+                    name: "image_bytes".into(),
+                    ty: TypeRef::Bytes,
+                    ..Default::default()
+                }],
+                return_type: TypeRef::String,
+                receiver: Some(ReceiverKind::Ref),
+                error_type: Some("anyhow::Error".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                register_fn: Some("register_sample_backend".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let fixture = Fixture {
+            id: "register_sample_backend_trait_bridge".into(),
+            description: "register_sample_backend: trait bridge".into(),
+            args: vec![ArgMapping {
+                name: "backend".into(),
+                field: "backend".into(),
+                arg_type: "test_backend".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: Some("SampleBackend".into()),
+            }],
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "registerSampleBackend".into();
+
+        let rendered =
+            render(&fixture, &e2e, &config, std::slice::from_ref(&trait_type), &[]).expect("snippet renders");
+
+        assert!(
+            rendered.contains("imageBytes: Data"),
+            "stub param must be typed Data, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("import Foundation"),
+            "a bare Data type annotation must still trigger the Foundation import, got:\n{rendered}"
+        );
+    }
 
     #[test]
     fn snippet_reuses_typed_call_without_xctest_harness() {
