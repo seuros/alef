@@ -480,6 +480,9 @@ pub struct DocsSnippetsConfig {
     /// Snippet validation timeout in seconds. Defaults to the snippet runner default.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// Timeout in seconds for a session's `before` hook. Defaults to `timeout_secs`.
+    #[serde(default)]
+    pub before_timeout_secs: Option<u64>,
     /// Stop snippet validation on the first failure.
     #[serde(default)]
     pub fail_fast: bool,
@@ -583,6 +586,9 @@ impl DocsSnippetsConfig {
             timeout_secs: krate
                 .and_then(|cfg| cfg.timeout_secs)
                 .or_else(|| workspace.and_then(|cfg| cfg.timeout_secs)),
+            before_timeout_secs: krate
+                .and_then(|cfg| cfg.before_timeout_secs)
+                .or_else(|| workspace.and_then(|cfg| cfg.before_timeout_secs)),
             fail_fast: krate
                 .map(|cfg| cfg.fail_fast)
                 .unwrap_or_else(|| workspace.map(|cfg| cfg.fail_fast).unwrap_or(false)),

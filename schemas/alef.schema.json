@@ -2051,6 +2051,16 @@
           },
           "type": "array"
         },
+        "before_timeout_secs": {
+          "default": null,
+          "description": "Timeout in seconds for a session's `before` hook. Defaults to `timeout_secs`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "cache_dir": {
           "default": null,
           "description": "Persistent validation cache directory. Defaults to `.alef/snippets`.",

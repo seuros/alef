@@ -651,6 +651,7 @@ fn validate_snippets(
         if let Some(timeout_secs) = snippet_cfg.timeout_secs {
             runner_cfg.timeout_secs = timeout_secs;
         }
+        runner_cfg.before_timeout_secs = snippet_cfg.before_timeout_secs;
         let registry = crate::snippets::validators::ValidatorRegistry::default();
         let summary = crate::snippets::runner::run_validation(snippets, &registry, &runner_cfg)?;
         // Write the report before any strict bail. A run that fails strict mode is precisely the

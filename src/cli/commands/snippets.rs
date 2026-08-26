@@ -286,6 +286,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         level,
         parallelism: std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get),
         timeout_secs: config.timeout_secs.unwrap_or(120),
+        before_timeout_secs: config.before_timeout_secs,
         fail_fast: config.fail_fast,
         deny_unclassified: resolved_deny_unclassified(config.deny_unclassified, strict),
         allowed_side_effects,

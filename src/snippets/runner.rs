@@ -28,6 +28,14 @@ pub struct RunnerConfig {
     pub level: ValidationLevel,
     pub parallelism: usize,
     pub timeout_secs: u64,
+    /// The budget for a session's `before` hook, when it must differ from `timeout_secs`.
+    ///
+    /// A hook builds a whole package -- `./gradlew assembleDebug`, `pnpm run build:all` -- while
+    /// `timeout_secs` bounds one snippet's compiler invocation. Sharing one number means the only
+    /// way to give a cold build the minutes it needs is to give every snippet compile the same
+    /// minutes, which is how a runaway hook got a half-hour ceiling to run out. `None` keeps the
+    /// single-number behaviour. ~keep
+    pub before_timeout_secs: Option<u64>,
     pub fail_fast: bool,
     pub deny_unclassified: bool,
     pub allowed_side_effects: Vec<SideEffectClass>,
@@ -42,6 +50,7 @@ impl Default for RunnerConfig {
             level: ValidationLevel::Syntax,
             parallelism: available_parallelism(),
             timeout_secs: 120,
+            before_timeout_secs: None,
             fail_fast: false,
             deny_unclassified: false,
             allowed_side_effects: Vec::new(),
@@ -49,6 +58,14 @@ impl Default for RunnerConfig {
             changed_only: false,
             sessions: HashMap::new(),
         }
+    }
+}
+
+impl RunnerConfig {
+    /// The budget a session's `before` hook actually runs under.
+    #[must_use]
+    pub fn resolved_before_timeout_secs(&self) -> u64 {
+        self.before_timeout_secs.unwrap_or(self.timeout_secs)
     }
 }
 
@@ -63,7 +80,7 @@ fn available_parallelism() -> usize {
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
     let sessions_to_prepare = sessions_needed_for_preparation(snippets, &config.sessions);
-    let preparation = prepare_sessions_isolated(&sessions_to_prepare, config.timeout_secs);
+    let preparation = prepare_sessions_isolated(&sessions_to_prepare, config.resolved_before_timeout_secs());
     let sessions = preparation.sessions;
     let session_errors = preparation.errors;
     let session_locks = sessions

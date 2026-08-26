@@ -600,3 +600,55 @@ fn a_single_differently_named_session_still_claims_a_target_less_snippet() {
         "the snippet must have reached the validator carrying the `node` session, not `None`: {outcome:?}"
     );
 }
+
+/// A `before` hook builds a whole package while `timeout_secs` bounds a single snippet's compiler
+/// invocation. While the two shared one number, giving a cold Gradle or pnpm build the minutes it
+/// needs meant handing every snippet compile the same minutes — which is how a runaway hook came
+/// to have half an hour to run out. This pins the hook to its own budget.
+///
+/// `timeout_secs` here is 600: if the hook were still bounded by it, `sleep 2` would finish, the
+/// session would prepare successfully, and `UnreachableValidator` would panic instead of this
+/// assertion failing. The test cannot pass without the hook budget being the one in effect. ~keep
+#[test]
+fn a_before_hook_is_bounded_by_its_own_budget_when_one_is_configured() {
+    let directory = tempfile::tempdir().expect("session directory");
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(UnreachableValidator));
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        timeout_secs: 600,
+        before_timeout_secs: Some(1),
+        sessions: timing_out_session(directory.path()),
+        fail_fast: false,
+        ..RunnerConfig::default()
+    };
+    let started = std::time::Instant::now();
+
+    let summary = run_validation(&[typescript_snippet()], &registry, &config).expect("validation completes");
+
+    assert_eq!(summary.unresolved_dependency, 1);
+    assert_eq!(summary.results[0].status, SnippetStatus::Unavailable);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the hook must be cut off at its own 1s budget, not at the 600s snippet budget"
+    );
+}
+
+/// The default must not change what a consumer already configured: with no hook budget set, the
+/// hook is bounded by `timeout_secs` exactly as before.
+#[test]
+fn an_unset_hook_budget_falls_back_to_the_snippet_timeout() {
+    let shared = RunnerConfig {
+        timeout_secs: 42,
+        ..RunnerConfig::default()
+    };
+    let separate = RunnerConfig {
+        timeout_secs: 42,
+        before_timeout_secs: Some(900),
+        ..RunnerConfig::default()
+    };
+
+    assert_eq!(shared.resolved_before_timeout_secs(), 42);
+    assert_eq!(separate.resolved_before_timeout_secs(), 900);
+}
