@@ -9,6 +9,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A host-owned `#[cfg]`-gated enum variant keeps its match arm and gains a matching
+  `#[cfg(...)]` guard.** Generated Rust glue named such a variant unconditionally, so a build with
+  the feature off failed with `E0599`. The shared
+  `codegen::conversions::{gen_enum_from_binding_to_core_cfg, gen_enum_from_core_to_binding_cfg}`
+  hard-coded `cfg => Option::<&str>::None` on every arm even though the
+  `enum_from_binding_to_core` / `enum_from_core_to_binding` templates already accepted a per-arm
+  gate, which broke napi, magnus, rustler and wasm at once. The same omission is fixed in napi's
+  `gen_tagged_enum_binding_to_core` / `gen_tagged_enum_core_to_binding`, rustler's
+  `gen_rustler_flat_data_enum_from_core` / `_to_core`, php's `gen_flat_data_enum_from_impls` and
+  `gen_string_to_enum_expr`, and pyo3's data-enum `#[getter]` accessors and `#[staticmethod]`
+  variant factories in `codegen::generators::enums` — pyo3 needs its own fix because
+  `enum_has_data_variants` short-circuits data enums out of the shared conversions path. The
+  trait-bridge visitor glue had the same hole one level down: `VisitorResultVariant` carried no
+  `cfg` field at all, so the magnus, napi, pyo3, rustler, wasm and php `visitor_method` templates
+  emitted an unguarded reference to a gated callback-result variant. Fallback selection is
+  corrected with it — a `_ =>` default arm and php's no-default-variant fallback no longer elect a
+  cfg-gated variant as the always-available stand-in, and a catch-all arm is now emitted whenever
+  any variant is gated so the match stays exhaustive with the feature off.
+- **A `#[cfg]`-gated enum variant merged in from a `[[crates.source_crates]]` crate has its arm
+  dropped entirely instead of gated.** The generated binding crate never declares a Cargo feature
+  for a foreign crate's cfg — `codegen::cfg::collect_cfg_gates` deliberately skips a non-host
+  `rust_path` when it builds the passthrough `[features]` table — so re-emitting the gate verbatim
+  produces `unexpected cfg condition value` for a feature the consumer cannot activate. Worse, a
+  gate of the `any(test, feature = "testkit")` shape is satisfied by `cfg(test)` under
+  `cargo clippy --all-targets`, so the arm still compiles and then fails `E0599` on a variant the
+  foreign crate was never built with; both were observed in a consumer's PHP crate.
+  `codegen::cfg::is_host_owned_rust_path` is the single authority that decides host versus foreign,
+  and every emitter now asks it rather than re-deriving the comparison: dart's `From<Mirror>` and
+  `From<CoreType>` enum impls, wasm's tagged-enum From impls (which already gated but never asked
+  about ownership), php's string-to-enum match, the shared `codegen::conversions::enums` arms, and
+  napi, rustler and the visitor-result metadata walk. pyo3 drops both shapes — the accessor arm,
+  covered by the existing `_ => None` fallback, and the whole `#[staticmethod]` factory, which has
+  no arm to gate around. Every drop is announced through `tracing::warn!`, and php no longer
+  advertises a dropped variant as an accepted string value.
+- **A type or enum wholly gated behind a Cargo feature carries that gate onto every generated item
+  that names its host path.** Dart's `rust_from_core_enum_open`, `rust_from_core_struct_open`,
+  `rust_from_mirror_enum_open`, `rust_from_mirror_struct_open`, `rust_opaque_wrapper_struct` and
+  `rust_from_json_bridge_fn` templates were each passed a `source_cfg` and each ignored it, so a
+  build excluding the feature hit `E0433` on a module path that does not exist. The mirror struct
+  and enum declarations stay unconditional, since their fields are widened FRB-native types rather
+  than the host path; only the impls and functions that name `core_ty` verbatim are gated. On the
+  FFI side, `gen_enum_free`, `gen_enum_to_json`, `gen_enum_to_string`, `gen_enum_from_json` and the
+  private `from_i32_rs` reconstruction helper never threaded `EnumDef::cfg` into their templates
+  the way `gen_type_free` / `gen_type_new` already threaded `TypeDef::cfg`, so an enum defined
+  inside a gated module got unconditional accessors — `E0433` for exactly the consumer that
+  declares the feature via `[crates.ffi].extra_features` without enabling it by default.
+- **A stripping Jinja tag no longer welds the following generated line onto a `//` comment.**
+  `trim_blocks` eats the newline after a tag and `{%-` eats the one before it, so a source line
+  followed directly by a stripping tag in `generators/enums/enum_definition.jinja` lost its line
+  ending and the next emitted line was appended to it. Where that line was a comment, the comment
+  swallowed an entire `if let ... {`, leaving its closing brace unmatched, and a consumer's
+  generated PyO3 crate did not parse. Every expected fragment was still textually present, just
+  commented out, so no `contains()` assertion could see the defect; the regression test parses the
+  output with `syn` instead.
+- **Generated e2e tests and doc snippets unwrap an `Option<Vec<T>>` field reached through an
+  array-projected path.** `FieldResolver::ir_field_sets` only ever proves a *bare* field name
+  optional, by unanimity across every declaration of that name in the crate, while the
+  `_with_optionals` accessor renderers key their per-segment unwrap check by the full cumulative
+  path walked so far. A bare name therefore never matched once the path crossed more than one
+  segment, so `entries[0].sections[0]` and `entries[0].sections.len()` rendered against the
+  `Option` unguarded — `E0608` and a missing method in Rust, an unguarded `.first()`/`.size` on a
+  nullable receiver in Kotlin, and the equivalent in the other backends. Every per-call resolver
+  now calls `with_anchored_optional_paths` over the fixture's own assertion field paths, resolving
+  them through the IR's real `(owner_type, field_name)` walk the way `presentation.rs` already did
+  for doc snippets: rust, dart, kotlin, php, csharp, java, swift, typescript and zig. Kotlin needed
+  a second wire as well — its resolver never called `with_ir_result_fields`, leaving
+  `ir_result_field_map.root_type` at `None`, which makes `with_anchored_optional_paths` an
+  unconditional no-op whatever paths it is handed.
+- **Swift trait-bridge protocols are visible to code that imports only the umbrella module.**
+  `Swift{Trait}Bridge` protocols are emitted into `Sources/RustBridge/`, so a doc snippet that
+  wrote `class Foo: SwiftEmbeddingBackendBridge` after `import <Umbrella>` alone failed with
+  "cannot find type ... in scope". `gen_bridge_registration_overloads_file` now emits a
+  `public typealias Swift{Trait}Bridge = RustBridge.Swift{Trait}Bridge` per configured bridge,
+  following the same per-symbol re-export idiom the main module file already uses for opaque handle
+  types rather than a blanket `@_exported import`. The SwiftPM compile gate gained a third
+  `DocsSnippet` target that depends only on the umbrella module, reproducing the failure under a
+  real `swift build`.
+- **wasm resolves a core type's real module path for static and instance calls.** `gen_method`
+  composed `{core_import}::{type_name}` from the bare IR name, which only works for a type
+  re-exported at the core crate root; a type living under a private module produced
+  `{core_import}::T::default()` and rustc rejected it with "cannot find `T`", even with the type's
+  gating feature enabled. It now uses `core_type_path`, the existing shared authority that walks
+  `TypeDef::rust_path`.
+- **magnus no longer synthesizes an `impl Default` it cannot satisfy.**
+  `gen_struct_default_impl_explicit` emitted a whole-struct `Default` as soon as any one field
+  carried its own default (a single `#[serde(default)]` was enough), then filled every remaining
+  required field through the untyped `default_value_for_field` fallback, which renders
+  `{Type}::default()` for a `Named` field whether or not that type implements `Default`. A struct
+  with a required field of a non-`Default` type failed to compile with "no function or associated
+  item named `default` found". The already-computed `default_types` set is now consulted per field,
+  and the whole impl is skipped when a required field cannot be satisfied.
+- **The Java e2e stub always implements a super-trait bridge's `name()` and `version()`.**
+  `trait_interface.jinja` declares both abstract unconditionally whenever a bridge configures
+  `super_trait`, but the e2e stub derived them by matching `TraitBridgeConfig::super_trait` against
+  the super-trait `TypeDef`'s `rust_path` and silently emitted neither when the lookup missed — as
+  it does for a super-trait declared in a private module and re-exported via `pub use`, whose
+  `rust_path` need not equal the configured value. Both sides now read the same
+  `trait_bridge_naming::SUPER_TRAIT_REQUIRED_METHODS` list.
+- **C doc snippets derive trait-bridge register/unregister/clear symbols even for a
+  fixture-level-skipped fixture.** `resolve_fixture_call_info` gated symbol derivation on
+  `fixture.skip.languages`, but that directive opts a fixture out of the executable harness only —
+  the docs-snippet generator renders a skipped fixture regardless — so the naive,
+  already-populated `call.function` config text was left uncorrected and the snippets called a
+  pluralized symbol the generated header never declares, without its trailing `out_error` param.
+  Derivation is now gated on the call-level `skip_languages`, the same authority the harness and
+  the docs generator's own inclusion filter already use for "this language cannot represent this
+  call at all".
+- **wasm doc snippets import nested classes the snippet body reaches only through the IR.** The
+  standalone snippet import builder considered only the manually configured `nested_types` map,
+  unlike `render_test_file`'s builder, which also derives nested classes transitively via
+  `collect_transitive_nested_types_for_wasm`. A call with no `nested_types` override — the common
+  case — could still emit a nested `SomeClass.default()` construction through
+  `ts_builder_expression_inner`'s own IR-derived lookup, leaving the snippet referencing an
+  undeclared symbol and failing to typecheck.
+- **Hand-authored `docs.shows` and `docs.presentation.operations` paths are validated against the
+  IR.** Only assertion-derived paths went through the existing existence check (`shows_on_result`),
+  so a stale or misspelled field name in authored docs config reached every snippet backend's
+  compiler identically. An iterate block's per-item fields are now checked against the collection's
+  own element type, resolved through a newly anchored `ir_collection_map`, rather than against the
+  call's result type, and `result_field_oracle_knows` refuses a path that continues past a field
+  the IR knows it cannot walk into as a struct (the tagged-union/enum shape) instead of falling
+  through to a permissive flat check. A field with no `Named` resolution at all — a
+  `serde_json::Value` or other scalar, where continuing the path is unjudgeable rather than
+  impossible — is tracked separately and still accepted, so a `document.payload.anything` accessor
+  keeps deriving as before. Only the IR may refute an authored path: the
+  `[e2e].result_fields` allow-list is incomplete by construction, so a `has_ir_result_evidence`
+  gate keeps it from dropping the deliberately-documented virtual and namespaced paths an author
+  writes `docs.shows` for in the first place.
+- **A failed pipeline command reports its own output, not just its exit status.**
+  `run_run_command` (post-build `RunCommand` steps, including the Swift `cargo build` step) and
+  `run_shell` (the per-language e2e format override, including the default rust `cargo fmt --all`)
+  both reported a bare exit code, so `'cargo' exited with status 101` gave no hint that the real
+  cause was a macOS linker fixup error and an e2e formatter failure carried no diagnostic at all.
+  `run_run_command` now tees both streams through `process::capture::output_reader_tee`, which
+  mirrors each chunk live so a long build still looks alive while capturing it, and quotes the last
+  ~4KB of each stream on failure; `run_shell` moves from `Command::status()` to `Command::output()`
+  and quotes both streams the same way `run_command_captured_with_env` already does.
+- **A snippet session key spelled exactly like its language wins claim resolution when another
+  candidate corroborates it as a deliberate alias.** `resolve_session_claim` reported a target-less
+  snippet as ambiguous whenever its language had a genuinely different-directory second session,
+  even when one candidate was a bare-language-named key aliased onto another, already-present
+  candidate's own working directory. `alias_default_claim` lets the exact name win only when a
+  differently-named candidate already shares its directory; a standalone exactly-named candidate
+  still resolves as ambiguous, unchanged.
+- **The Dart FRB bridge-coverage check no longer reports a `#[cfg]`-gated facade function as a
+  stale bridge.** `flutter_rust_bridge_codegen` expands against the dart Rust crate's own default
+  features, so a facade function behind a feature that is not in `default` is correctly absent from
+  the generated bridge — but `missing_bridge_functions` was a plain line scan with no `cfg`
+  awareness and counted every one of them as a function frb had failed to bridge, failing the dart
+  post-build stage on a bridge that was in fact freshly and correctly generated. It now filters on
+  `cfg_feature_satisfied` against the feature set read from the facade's sibling `Cargo.toml`
+  through the existing `codegen::cfg::read_default_enabled_cargo_features` seam, and falls back to
+  the old unfiltered check when that manifest cannot be read rather than suppressing coverage
+  silently.
+- **That check's failure message states what was observed instead of asserting one cause.** It
+  previously claimed `flutter_rust_bridge_codegen did not (re)generate this bridge`, which is one
+  of several explanations and was the wrong one in the case above. It now reports the facade
+  functions that have no bridge counterpart and lists the causes it cannot distinguish between.
 - **Hand-authored `docs.shows`/`docs.presentation.operations` field paths are now validated against
   the IR before rendering**, matching the check already applied to paths derived from `assertions`.
   A fixture-authored typo or stale field name now drops the operation (falling back to
