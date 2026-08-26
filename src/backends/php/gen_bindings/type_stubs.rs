@@ -474,6 +474,12 @@ pub(super) fn generate_type_stubs(
             ));
         }
         for bridge_cfg in &config.trait_bridges {
+            // The stub declares the `…Api` extension methods `rust_bindings` emits, and that
+            // emitter skips a bridge this returns `None` for — declaring one it skipped would
+            // describe an extension method PHP never receives. ~keep
+            if crate::backends::php::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
+                continue;
+            }
             if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
                 let method_name = register_fn.to_lower_camel_case();
                 let interface_name = php_type_fq(&TypeRef::Named(bridge_cfg.trait_name.clone()), &namespace);

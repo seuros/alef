@@ -1075,10 +1075,20 @@ fn test_rbs_includes_trait_registry_functions() {
         clear_fn: Some("clear_ocr_backends".to_string()),
         ..Default::default()
     }];
+    // The bridged trait has to be in the surface for the RBS to declare its registry functions —
+    // `gen_module_init` binds none for a bridge whose trait does not resolve. It is declared with
+    // no methods so no `interface _OcrBackend` is emitted and the `backend` param stays `untyped`,
+    // which is what this test pins. ~keep
     let api = ApiSurface {
         crate_name: "test_lib".to_string(),
         version: "0.1.0".to_string(),
-        types: vec![],
+        types: vec![TypeDef {
+            name: "OcrBackend".to_string(),
+            rust_path: "test_lib::OcrBackend".to_string(),
+            is_trait: true,
+            is_opaque: true,
+            ..Default::default()
+        }],
         functions: vec![],
         enums: vec![],
         errors: vec![],

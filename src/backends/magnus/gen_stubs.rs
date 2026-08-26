@@ -100,6 +100,12 @@ pub fn gen_stubs(
     let declared_function_names: std::collections::HashSet<&str> =
         api.functions.iter().map(|f| f.name.as_str()).collect();
     for bridge in trait_bridges {
+        // The RBS declares the module functions `gen_module_init` binds, and that emitter skips a
+        // bridge this returns `None` for — declaring one it skipped describes a method Ruby never
+        // receives. ~keep
+        if crate::backends::magnus::trait_bridge::active_bridge_trait(bridge, api).is_none() {
+            continue;
+        }
         if let Some(register_fn) = bridge.register_fn.as_deref()
             && !declared_function_names.contains(register_fn)
         {
