@@ -1125,4 +1125,6 @@ impl Backend for WasmBackend {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod trait_bridge_tests;
+#[cfg(test)]
 mod untagged_enum_tests;
