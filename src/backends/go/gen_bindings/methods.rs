@@ -337,7 +337,7 @@ pub(super) fn gen_method_wrapper(
         if let Some(gate) = result_presence_gate(
             &method.return_type,
             method.receiver.as_ref(),
-            &format!("{ffi_prefix}_{type_snake}_{method_snake}"),
+            &c_fn,
             &presence_args,
             method_can_return_error,
         ) {
