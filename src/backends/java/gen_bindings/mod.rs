@@ -1,6 +1,6 @@
 use crate::codegen::naming::field_uses_duration_map_wire;
 use crate::core::backend::{
-    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, TraitBridgeRegistrationSurface,
 };
 use crate::core::config::{BridgeBinding, JavaBuilderMode, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
@@ -701,7 +701,7 @@ impl Backend for JavaBackend {
             tool: "mvn",
             crate_suffix: "",
             build_dep: BuildDependency::Ffi,
-            post_build: vec![],
+            post_build: vec![PostBuildStep::StageFfiLibrary],
         })
     }
 

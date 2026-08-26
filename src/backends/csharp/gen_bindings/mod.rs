@@ -2,7 +2,7 @@ use crate::codegen::naming::{
     csharp_type_name, csharp_wrapper_class_name, field_uses_duration_map_wire, to_csharp_name,
 };
 use crate::codegen::shared::binding_fields;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
 use std::collections::{HashMap, HashSet};
@@ -681,7 +681,7 @@ impl Backend for CsharpBackend {
             tool: "dotnet",
             crate_suffix: "",
             build_dep: BuildDependency::Ffi,
-            post_build: vec![],
+            post_build: vec![PostBuildStep::StageFfiLibrary],
         })
     }
 

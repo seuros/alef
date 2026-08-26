@@ -91,6 +91,22 @@ pub enum PostBuildStep {
         /// The library stem (e.g., "sample_lib_dart" for libsample_lib_dart.dylib).
         lib_stem: String,
     },
+    /// Copy the just-built C FFI shared library (and its header, if present) into this
+    /// backend's native-library directory (`crate::publish::ffi_stage::stage_ffi`).
+    ///
+    /// Backends with `build_dep: BuildDependency::Ffi` (Go, Java, C#) link against a cdylib
+    /// their own build tool never places on disk itself — `cargo build` for the `-ffi` crate
+    /// does, into `target/{release,debug}/`, a location none of `go build`/`mvn`/`dotnet build`
+    /// know about. Without this step, that directory only ever gets staged by `alef test --e2e`
+    /// or `alef publish`, so a plain `alef build` reports success while the staged artifact
+    /// used by every other consumer of this package (IDEs, manual `go build`, CI steps that
+    /// don't run through alef) keeps rotting at whatever version was last staged by one of
+    /// those two commands, if any. Always attempted after a build, and always a fresh
+    /// overwrite (never skipped because the destination already exists), so a stale staged
+    /// copy can never survive a successful build silently. A missing built artifact (e.g. this
+    /// step ran from `alef generate`'s post-build pass, which never invokes `cargo build`) is
+    /// not an error — it is logged as a warning naming the destination, never a silent no-op. ~keep
+    StageFfiLibrary,
     /// Re-run the swift-bridge file materialization (copy the freshly-built
     /// glue/headers from target/*/out into Sources/RustBridge{,C}). Must run
     /// AFTER the cargo build RunCommand so it picks up current output, not stale.
@@ -249,6 +265,7 @@ impl PostBuildStep {
             | PostBuildStep::RunCommand { .. }
             | PostBuildStep::PostProcessFile { .. }
             | PostBuildStep::StageDartNatives { .. }
+            | PostBuildStep::StageFfiLibrary
             | PostBuildStep::CarryFrbCfgGates { .. }
             | PostBuildStep::RewriteWasmPackageName { .. }
             | PostBuildStep::VerifyFrbBridgeCoverage { .. }

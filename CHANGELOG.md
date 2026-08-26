@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef build` now restages the FFI shared library it just built.** Staging into the Go, Java and
+  C# native-library directories only ever ran from `alef test --e2e` and `alef publish`; `alef
+  build` rebuilt the cdylib, never copied it, and reported success, so the staged artifact rotted
+  silently until a consumer's cgo link failed on symbols that had been added weeks earlier. A
+  missing built artifact is now a `tracing::warn!` naming the destination instead of a silent
+  no-op. Separately, `find_built_artifact` (FFI staging plus Zig/Go/C#/CLI/C-FFI packaging) now
+  also searches each candidate directory's `deps/` subdirectory, because a crate compiled only as
+  another crate's path-dependency is never uplifted to `target/release/` and was therefore
+  reported absent while sitting in `target/release/deps/`.
+
 - **Generated Go docs snippets now name the error type the Go binding actually declares.** The
   snippet generator used the raw Rust-side `[crate] error_type` value, while the Go backend's own
   error generator strips a leading case-insensitive match of the package name from that same value

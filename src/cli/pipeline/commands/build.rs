@@ -23,6 +23,8 @@ use build_command::{build_command_for, output_path_for, resolve_crate_dir};
 mod build_command_tests;
 #[cfg(all(test, unix))]
 mod build_orchestration_tests;
+#[cfg(test)]
+mod ffi_stage_post_build_tests;
 #[cfg(all(test, unix))]
 mod napi_js_ownership_tests;
 #[cfg(all(test, unix))]
@@ -665,6 +667,35 @@ pub fn run_post_build(
                     crate::publish::dart_native::NativeLibraryStageStatus::Missing => {
                         debug!("No Dart native libraries available to stage for development stem '{lib_stem}'");
                     }
+                }
+            }
+            PostBuildStep::StageFfiLibrary => {
+                let target = crate::publish::platform::host_target()
+                    .with_context(|| format!("failed to detect host Rust target for {lang} FFI staging"))?;
+                // `ffi_artifact_built` (not a bare `stage_ffi` + match-on-error) so this step can
+                // tell "nothing was built this run" -- expected when this fires from `alef
+                // generate`'s post-build pass, which never invokes `cargo build` -- apart from a
+                // real copy failure once an artifact is known to exist. Only the latter is
+                // allowed to fail this backend's build; the former is always a warning, never a
+                // silent no-op. ~keep
+                if crate::publish::ffi_stage::ffi_artifact_built(config, &target, base_dir) {
+                    let dest = crate::publish::ffi_stage::stage_ffi(config, lang, &target, base_dir)
+                        .with_context(|| format!("failed to stage FFI library for {lang}"))?;
+                    info!("[{lang}] staged FFI library to {}", dest.display());
+                    match crate::publish::ffi_stage::stage_header(config, lang, &target, base_dir) {
+                        Ok(Some(header)) => debug!("[{lang}] staged FFI header to {}", header.display()),
+                        Ok(None) => {}
+                        Err(err) => warn!("[{lang}] failed to stage FFI header: {err:#}"),
+                    }
+                } else {
+                    let dest_description = crate::publish::ffi_stage::staging_dir(config, lang, &target, base_dir)
+                        .map(|dir| dir.display().to_string())
+                        .unwrap_or_else(|_| format!("{lang} native-library directory"));
+                    warn!(
+                        "[{lang}] no built FFI shared library found for target {}; skipping staging into {} \
+                         (run `alef build --release` to produce one)",
+                        target.triple, dest_description
+                    );
                 }
             }
             PostBuildStep::MaterializeSwiftBridge {

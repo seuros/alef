@@ -79,8 +79,20 @@ fn find_built_library(workspace_root: &Path, target: &RustTarget, shared_lib: &s
     crate::publish::package::find_built_artifact(workspace_root, target, shared_lib)
 }
 
+/// Whether a built FFI shared library for `target` exists on disk, without staging it.
+///
+/// Callers that run staging as a post-build step must distinguish "nothing was built this run"
+/// (a legitimate skip -- e.g. `alef generate`'s post-build pass reruns every backend's
+/// [`crate::core::backend::PostBuildStep`]s without ever invoking `cargo build`) from a genuine
+/// copy failure once staging is attempted against an artifact known to exist. ~keep
+pub fn ffi_artifact_built(config: &ResolvedCrateConfig, target: &RustTarget, workspace_root: &Path) -> bool {
+    let lib_name = config.ffi_lib_name();
+    let shared_lib = target.shared_lib_name(&lib_name);
+    find_built_library(workspace_root, target, &shared_lib).is_ok()
+}
+
 /// Determine the staging directory for a language + target combination.
-fn staging_dir(
+pub(crate) fn staging_dir(
     config: &ResolvedCrateConfig,
     lang: Language,
     target: &RustTarget,
@@ -245,6 +257,28 @@ namespace = "MyLib"
         let result = stage_ffi(&config, Language::Go, &target, root);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn ffi_artifact_built_true_when_release_artifact_present() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let config = minimal_config();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+
+        setup_built_ffi(root, "x86_64-unknown-linux-gnu");
+
+        assert!(ffi_artifact_built(&config, &target, root));
+    }
+
+    #[test]
+    fn ffi_artifact_built_false_when_nothing_built() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let config = minimal_config();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+
+        assert!(!ffi_artifact_built(&config, &target, root));
     }
 
     #[test]

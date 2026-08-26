@@ -1,7 +1,7 @@
 //! Rust target triple parsing and per-language platform name mapping.
 
 use crate::core::config::extras::Language;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::fmt;
 
 /// CPU architecture.
@@ -371,9 +371,91 @@ impl fmt::Display for RustTarget {
     }
 }
 
+/// Build the `rustc --version --verbose` command used by [`host_target`], pinned to
+/// [`std::env::temp_dir`] rather than left to inherit the ambient process working directory.
+///
+/// This crate's test binary runs every `#[test]` as a thread in one process, and other tests
+/// move the process-wide cwd into a tempdir that is later deleted (see
+/// `crate::test_support::CwdGuard`). An unpinned `rustc` spawn that races one of those inherits
+/// a deleted directory and fails with "Could not locate working directory" -- a failure with
+/// nothing to do with the code under test. `rustc --version --verbose` reads nothing relative to
+/// its cwd, so any directory guaranteed to exist for the process lifetime works; the system temp
+/// directory decouples this call from process-global state entirely, matching 22baa34ac's fix
+/// for the same race in the compile-harness tests. Split out from [`host_target`] so the pin can
+/// be asserted directly on the built [`std::process::Command`] (see
+/// `tests::rustc_version_command_is_pinned_to_a_stable_directory`) instead of by reproducing a
+/// deleted ambient cwd against the live process -- that reproduction corrupted
+/// `std::env::current_dir()` for every other thread in the shared test binary, not just this
+/// one, which is its own instance of the same race class this pin exists to prevent. ~keep
+pub fn rustc_version_command() -> std::process::Command {
+    let mut command = std::process::Command::new("rustc");
+    command
+        .arg("--version")
+        .arg("--verbose")
+        .current_dir(std::env::temp_dir());
+    command
+}
+
+/// Get the current host Rust target triple by parsing rustc output.
+///
+/// Parses `rustc --version --verbose` to extract the `host:` line, returning the target triple
+/// (e.g. `aarch64-apple-darwin`). Shared by every pipeline stage that stages a just-built host
+/// artifact (`alef build`'s FFI staging, `alef test --e2e`'s FFI staging) so they can never
+/// disagree about which platform "the build we just ran" means. ~keep
+pub fn host_target() -> Result<RustTarget> {
+    let output = rustc_version_command()
+        .output()
+        .context("failed to run rustc --version --verbose")?;
+
+    if !output.status.success() {
+        bail!("rustc --version --verbose exited with non-zero status");
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("rustc output is not valid UTF-8")?;
+
+    for line in stdout.lines() {
+        if let Some(triple) = line.strip_prefix("host:") {
+            let triple = triple.trim();
+            return RustTarget::parse(triple).with_context(|| format!("failed to parse host target triple: {triple}"));
+        }
+    }
+
+    bail!("rustc --version --verbose did not output a 'host:' line")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guards the fix for the exact race class fixed for the compile-harness tests in
+    /// 22baa34ac: an unpinned `rustc` spawn that inherits a deleted ambient cwd fails with
+    /// "Could not locate working directory", a failure with nothing to do with the code under
+    /// test.
+    ///
+    /// Asserts the pin directly on the built [`std::process::Command`] rather than by
+    /// reproducing a deleted ambient cwd against the live process (entering a tempdir as the
+    /// process cwd, deleting it out from under that cwd, then calling `host_target`, as an
+    /// earlier version of this test did). `std::env::set_current_dir` and
+    /// `std::env::current_dir` are process-global, not per-thread: deleting the directory that
+    /// backs the live process cwd makes `current_dir()` fail for *every* thread in this shared
+    /// test binary for as long as the deletion is in effect, not just the thread running this
+    /// test. `crate::test_support::CwdGuard`'s lock only serializes against other lock-holders;
+    /// it does not, and structurally cannot, protect the crate's many unguarded
+    /// `std::env::current_dir()` readers (for example
+    /// `commands::test_apps::start_mock_server`) from observing that corruption. The earlier
+    /// version of this test was therefore itself an instance of the very race class it existed
+    /// to guard against. Inspecting `Command::get_current_dir()` proves the same property --
+    /// that the spawn does not depend on the ambient cwd -- without ever mutating process-global
+    /// state. ~keep
+    #[test]
+    fn rustc_version_command_is_pinned_to_a_stable_directory() {
+        let command = rustc_version_command();
+        assert_eq!(
+            command.get_current_dir(),
+            Some(std::env::temp_dir().as_path()),
+            "the rustc spawn must be pinned to std::env::temp_dir(), not inherit the ambient cwd"
+        );
+    }
 
     #[test]
     fn parse_linux_gnu() {

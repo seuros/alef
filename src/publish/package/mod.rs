@@ -108,26 +108,96 @@ pub fn create_tar_gz_flat(staging_dir: &Path, output_path: &Path) -> Result<()> 
 
 /// Find a built artifact in the target directory.
 ///
-/// Searches `target/{triple}/release/` then `target/release/` for the given filename.
+/// Searches, in order: `target/{triple}/release/`, `target/release/`, then each of those two
+/// again with a trailing `deps/`.
+///
+/// Cargo only copies ("uplifts") an unhashed artifact into `target/{triple}/release/` or
+/// `target/release/` directly for a package that was an *explicit* root of that particular
+/// `cargo build` invocation (a `-p`/`--manifest-path` target, or a workspace default-member).
+/// A crate compiled only because something else path-depends on it — e.g. the `-ffi` crate
+/// pulled in by a `-swift`/`-jni` binding crate's own build — lands only in `target/.../deps/`,
+/// still unhashed for a `cdylib`/`staticlib` crate type, and never gets uplifted at all. Every
+/// caller here wants "the artifact this workspace most recently produced", not "the artifact a
+/// specific invocation shape happened to uplift", so `deps/` is checked last rather than skipped:
+/// it is the one location cargo unconditionally populates for any crate that was compiled at
+/// all, uplifted or not. ~keep
 pub fn find_built_artifact(
     workspace_root: &Path,
     target: &crate::publish::platform::RustTarget,
     filename: &str,
 ) -> Result<PathBuf> {
-    let cross = workspace_root
-        .join("target")
-        .join(&target.triple)
-        .join("release")
-        .join(filename);
-    if cross.exists() {
-        return Ok(cross);
-    }
-    let native = workspace_root.join("target/release").join(filename);
-    if native.exists() {
-        return Ok(native);
+    let cross_release = workspace_root.join("target").join(&target.triple).join("release");
+    let native_release = workspace_root.join("target/release");
+    for candidate_dir in [
+        cross_release.clone(),
+        native_release.clone(),
+        cross_release.join("deps"),
+        native_release.join("deps"),
+    ] {
+        let candidate = candidate_dir.join(filename);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
     }
     anyhow::bail!(
-        "{filename} not found in target/{}/release/ or target/release/",
+        "{filename} not found in target/{}/release/, target/release/, or either directory's deps/ subdirectory",
         target.triple
     )
+}
+
+#[cfg(test)]
+mod find_built_artifact_tests {
+    use super::find_built_artifact;
+    use crate::publish::platform::RustTarget;
+
+    /// Regression for alef #456's follow-up: a crate compiled only because another crate
+    /// path-depends on it (e.g. `-ffi` pulled in by a `-swift`/`-jni` binding crate's own
+    /// build) never gets uplifted to `target/release/` -- only `target/release/deps/` is
+    /// guaranteed to hold it. Without the `deps/` fallback, every caller of
+    /// `find_built_artifact` (FFI staging, Zig/Go/C#/CLI packaging) reports "not found" even
+    /// though cargo did compile the artifact this run.
+    #[test]
+    fn finds_artifact_that_only_landed_in_deps() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").expect("parse target");
+
+        let deps_dir = root.join("target/release/deps");
+        std::fs::create_dir_all(&deps_dir).expect("create deps dir");
+        std::fs::write(deps_dir.join("libsample_ffi.so"), b"deps-only-artifact").expect("write fixture");
+
+        let found = find_built_artifact(root, &target, "libsample_ffi.so").expect("must find deps-only artifact");
+        assert_eq!(found, deps_dir.join("libsample_ffi.so"));
+    }
+
+    /// An uplifted `target/release/` copy must still win over `deps/` when both exist --
+    /// `deps/` is a fallback of last resort, not preferred over the primary location.
+    #[test]
+    fn prefers_uplifted_artifact_over_deps_copy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").expect("parse target");
+
+        let release_dir = root.join("target/release");
+        std::fs::create_dir_all(&release_dir).expect("create release dir");
+        std::fs::write(release_dir.join("libsample_ffi.so"), b"uplifted").expect("write uplifted fixture");
+
+        let deps_dir = release_dir.join("deps");
+        std::fs::create_dir_all(&deps_dir).expect("create deps dir");
+        std::fs::write(deps_dir.join("libsample_ffi.so"), b"deps-copy").expect("write deps fixture");
+
+        let found = find_built_artifact(root, &target, "libsample_ffi.so").expect("must find uplifted artifact");
+        assert_eq!(found, release_dir.join("libsample_ffi.so"));
+    }
+
+    #[test]
+    fn still_errors_when_absent_everywhere_including_deps() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").expect("parse target");
+
+        let result = find_built_artifact(root, &target, "libsample_ffi.so");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
 }

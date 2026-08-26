@@ -9,7 +9,7 @@ pub(super) mod types;
 use binding_file::{find_options_bridge_function, format_go_code, gen_go_file, strip_trailing_whitespace};
 
 use crate::core::backend::{
-    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, TraitBridgeRegistrationSurface,
 };
 use crate::core::config::{AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::ApiSurface;
@@ -414,7 +414,7 @@ impl Backend for GoBackend {
             tool: "go",
             crate_suffix: "",
             build_dep: BuildDependency::Ffi,
-            post_build: vec![],
+            post_build: vec![PostBuildStep::StageFfiLibrary],
         })
     }
 
