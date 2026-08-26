@@ -154,13 +154,9 @@ pub(super) fn gen_pinvoke_for_method(
     let params = param_declarations(&visible_params, leading, is_bytes_result, scalar_named_types);
 
     let mut out = declaration(c_name, cs_name, return_type, &params);
-    if let Some(companion) = presence_declaration(
-        &method.return_type,
-        method.receiver.as_ref(),
-        c_name,
-        cs_name,
-        &params,
-    ) {
+    if let Some(companion) =
+        presence_declaration(&method.return_type, method.receiver.as_ref(), c_name, cs_name, &params)
+    {
         out.push_str(&companion);
     }
     out

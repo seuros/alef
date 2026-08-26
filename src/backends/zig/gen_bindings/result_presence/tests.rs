@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::backends::ffi::type_map::result_presence_companion_exists;
 use crate::backends::zig::gen_bindings::functions::emit_function;
 use crate::backends::zig::gen_bindings::opaque_handles::emit_opaque_handle;
-use crate::core::ir::{
-    CoreWrapper, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef,
-};
+use crate::core::ir::{CoreWrapper, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 
 const PREFIX: &str = "sample";
 
@@ -142,9 +140,7 @@ fn should_call_the_companion_before_the_primary_c_call() {
     let generated = render_free_function(&free_function("port", i64_option()));
 
     let companion_at = generated.find("c.sample_port_has_result(").expect("companion call");
-    let primary_at = generated
-        .find("const _result = c.sample_port(")
-        .expect("primary call");
+    let primary_at = generated.find("const _result = c.sample_port(").expect("primary call");
     assert!(
         companion_at < primary_at,
         "the presence gate must run before the primary call; got:\n{generated}"
@@ -163,9 +159,8 @@ fn should_surface_a_companion_failure_as_the_wrappers_error_when_it_is_fallible(
         .expect("presence gate");
     let after_gate = &generated[gate_at..];
     assert!(
-        after_gate.starts_with(
-            "if (c.sample_port_has_result() != 1) {\n        if (c.sample_last_error_code() != 0) {\n"
-        ),
+        after_gate
+            .starts_with("if (c.sample_port_has_result() != 1) {\n        if (c.sample_last_error_code() != 0) {\n"),
         "a fallible wrapper must report the companion's own failure rather than absence; \
          got:\n{generated}"
     );
@@ -234,7 +229,11 @@ fn zig_calls_a_companion_exactly_when_the_ffi_backend_exports_one() {
         TypeRef::String,
         TypeRef::Unit,
     ];
-    let receivers = [Some(ReceiverKind::Ref), Some(ReceiverKind::RefMut), Some(ReceiverKind::Owned)];
+    let receivers = [
+        Some(ReceiverKind::Ref),
+        Some(ReceiverKind::RefMut),
+        Some(ReceiverKind::Owned),
+    ];
 
     for shape in &shapes {
         let generated = render_free_function(&free_function("probe", shape.clone()));

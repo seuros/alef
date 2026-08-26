@@ -413,7 +413,14 @@ pub(super) fn gen_opaque_method(
             ));
         }
 
-        emit_presence_gate(&mut out, method, &cs_native_name, &call_args, "            ", exception_name);
+        emit_presence_gate(
+            &mut out,
+            method,
+            &cs_native_name,
+            &call_args,
+            "            ",
+            exception_name,
+        );
 
         if method.return_type != TypeRef::Unit {
             out.push_str("            var nativeResult = ");
@@ -473,7 +480,14 @@ pub(super) fn gen_opaque_method(
             ));
         }
 
-        emit_presence_gate(&mut out, method, &cs_native_name, &call_args, "        ", exception_name);
+        emit_presence_gate(
+            &mut out,
+            method,
+            &cs_native_name,
+            &call_args,
+            "        ",
+            exception_name,
+        );
 
         if method.return_type != TypeRef::Unit {
             out.push_str("        var nativeResult = ");

@@ -61,9 +61,7 @@ fn should_capture_the_companion_before_the_primary_call() {
     let generated = render(&free_function("port", i64_option()));
 
     let companion_at = generated.find("sample_port_has_result(").expect("companion call");
-    let primary_at = generated
-        .find("val _result = sample_port(")
-        .expect("primary call");
+    let primary_at = generated.find("val _result = sample_port(").expect("primary call");
     assert!(
         companion_at < primary_at,
         "the companion must run before the primary call; got:\n{generated}"

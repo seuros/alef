@@ -351,8 +351,15 @@ pub(super) fn gen_wrapper_function(
         out.push_str(lambda_indent);
         out.push_str("{\n");
 
-        function_native_call(func, &cs_native_name, &visible_params, true_opaque_types, body_indent, argument_indent)
-            .emit(&mut out);
+        function_native_call(
+            func,
+            &cs_native_name,
+            &visible_params,
+            true_opaque_types,
+            body_indent,
+            argument_indent,
+        )
+        .emit(&mut out);
 
         emit_return_marshalling_indented(
             &mut out,
@@ -390,8 +397,15 @@ pub(super) fn gen_wrapper_function(
             "            "
         };
 
-        function_native_call(func, &cs_native_name, &visible_params, true_opaque_types, call_indent, argument_indent)
-            .emit(&mut out);
+        function_native_call(
+            func,
+            &cs_native_name,
+            &visible_params,
+            true_opaque_types,
+            call_indent,
+            argument_indent,
+        )
+        .emit(&mut out);
 
         let body_indent = call_indent;
 
