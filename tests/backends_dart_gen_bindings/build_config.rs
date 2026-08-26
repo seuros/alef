@@ -154,6 +154,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             PostBuildStep::PatchFile { .. } => "PatchFile",
             PostBuildStep::CarryFrbCfgGates { .. } => "CarryFrbCfgGates",
             PostBuildStep::StageDartNatives { .. } => "StageDartNatives",
+            PostBuildStep::StageFfiLibrary => "StageFfiLibrary",
             PostBuildStep::MaterializeSwiftBridge { .. } => "MaterializeSwiftBridge",
             PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName",
             PostBuildStep::VerifyFrbBridgeCoverage { .. } => "VerifyFrbBridgeCoverage",
@@ -352,6 +353,7 @@ skip_frb = true
                 PostBuildStep::StageDartNatives { lib_stem } => {
                     format!("StageDartNatives({lib_stem})")
                 }
+                PostBuildStep::StageFfiLibrary => "StageFfiLibrary".to_string(),
                 PostBuildStep::MaterializeSwiftBridge { binding_crate_name, .. } => {
                     format!("MaterializeSwiftBridge({binding_crate_name})")
                 }

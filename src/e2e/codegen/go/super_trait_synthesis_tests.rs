@@ -66,7 +66,15 @@ fn synthesizes_all_four_plugin_methods_when_the_super_trait_lookup_finds_nothing
     };
     let fixture = fixture("synth_all_four");
 
-    let emission = resolve_test_backend_emission(&fixture, "SampleBackend", &trait_bridge, &config, &type_defs, &[], "pkg");
+    let emission = resolve_test_backend_emission(
+        &fixture,
+        "SampleBackend",
+        &trait_bridge,
+        &config,
+        &type_defs,
+        &[],
+        "pkg",
+    );
 
     assert!(
         emission.setup_block.contains("Name() string"),
@@ -109,7 +117,15 @@ fn synthesized_name_method_returns_the_fixture_id() {
     };
     let fixture = fixture("name_returns_fixture_id");
 
-    let emission = resolve_test_backend_emission(&fixture, "SampleBackend", &trait_bridge, &config, &type_defs, &[], "pkg");
+    let emission = resolve_test_backend_emission(
+        &fixture,
+        "SampleBackend",
+        &trait_bridge,
+        &config,
+        &type_defs,
+        &[],
+        "pkg",
+    );
 
     assert!(
         emission
@@ -128,7 +144,10 @@ fn no_super_trait_configured_synthesizes_nothing() {
     trait_bridge.super_trait = None;
     let type_defs = vec![own_trait_type_def(
         "SampleBackend",
-        vec![method("do_work", TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool))],
+        vec![method(
+            "do_work",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+        )],
     )];
     let config = ResolvedCrateConfig {
         trait_bridges: vec![trait_bridge.clone()],
@@ -136,11 +155,23 @@ fn no_super_trait_configured_synthesizes_nothing() {
     };
     let fixture = fixture("no_super_trait");
 
-    let emission = resolve_test_backend_emission(&fixture, "SampleBackend", &trait_bridge, &config, &type_defs, &[], "pkg");
+    let emission = resolve_test_backend_emission(
+        &fixture,
+        "SampleBackend",
+        &trait_bridge,
+        &config,
+        &type_defs,
+        &[],
+        "pkg",
+    );
 
     assert!(!emission.setup_block.contains("Initialize"), "{}", emission.setup_block);
     assert!(!emission.setup_block.contains("Shutdown"), "{}", emission.setup_block);
-    assert!(!emission.setup_block.contains("func (testStub_no_super_trait) Name"), "{}", emission.setup_block);
+    assert!(
+        !emission.setup_block.contains("func (testStub_no_super_trait) Name"),
+        "{}",
+        emission.setup_block
+    );
 }
 
 /// Negative control: when the trait already declares its own `version` method (an
@@ -151,7 +182,10 @@ fn does_not_duplicate_a_method_the_trait_already_declares() {
     let trait_bridge = plugin_bridge("SampleBackend");
     let type_defs = vec![own_trait_type_def(
         "SampleBackend",
-        vec![method("version", TypeRef::Primitive(crate::core::ir::PrimitiveType::I32))],
+        vec![method(
+            "version",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+        )],
     )];
     let config = ResolvedCrateConfig {
         trait_bridges: vec![trait_bridge.clone()],
@@ -159,10 +193,22 @@ fn does_not_duplicate_a_method_the_trait_already_declares() {
     };
     let fixture = fixture("no_duplicate_version");
 
-    let emission = resolve_test_backend_emission(&fixture, "SampleBackend", &trait_bridge, &config, &type_defs, &[], "pkg");
+    let emission = resolve_test_backend_emission(
+        &fixture,
+        "SampleBackend",
+        &trait_bridge,
+        &config,
+        &type_defs,
+        &[],
+        "pkg",
+    );
 
     let version_count = emission.setup_block.matches("Version(").count();
-    assert_eq!(version_count, 1, "Version() must appear exactly once:\n{}", emission.setup_block);
+    assert_eq!(
+        version_count, 1,
+        "Version() must appear exactly once:\n{}",
+        emission.setup_block
+    );
     // The real (int32) return type must win over the synthesized `string` fallback.
     assert!(
         emission.setup_block.contains("Version() int32"),
@@ -196,7 +242,15 @@ fn uses_the_real_super_trait_methods_when_the_lookup_succeeds() {
     };
     let fixture = fixture("lookup_succeeds");
 
-    let emission = resolve_test_backend_emission(&fixture, "SampleBackend", &trait_bridge, &config, &type_defs, &[], "pkg");
+    let emission = resolve_test_backend_emission(
+        &fixture,
+        "SampleBackend",
+        &trait_bridge,
+        &config,
+        &type_defs,
+        &[],
+        "pkg",
+    );
 
     // All four methods came from the real lookup; none of them must appear a second time
     // via the synthetic fallback.

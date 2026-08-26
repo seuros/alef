@@ -150,7 +150,10 @@ pub fn emit_test_backend_with_context(
         // generic empty-string default, matching the Java stub generator's equivalent
         // fallback (`java::stubs::emit_test_backend_with_context`). ~keep
         if method.name == "name" {
-            let _ = writeln!(setup, "func ({struct_name}) {go_method}() string {{ return \"{safe_id}\" }}");
+            let _ = writeln!(
+                setup,
+                "func ({struct_name}) {go_method}() string {{ return \"{safe_id}\" }}"
+            );
             continue;
         }
         emit_go_stub_method_body(
@@ -482,8 +485,12 @@ fn emit_go_stub_method_body(
 /// Mirrors `gen_plugin_trampolines` (`backends::go::trait_bridge::dispatch`), which
 /// unconditionally emits trampolines for exactly these four names — the actual
 /// interface contract, not a re-derivation of it. ~keep
-const SUPER_TRAIT_REQUIRED_METHODS: [(&str, bool); 4] =
-    [("name", false), ("version", false), ("initialize", true), ("shutdown", true)];
+const SUPER_TRAIT_REQUIRED_METHODS: [(&str, bool); 4] = [
+    ("name", false),
+    ("version", false),
+    ("initialize", true),
+    ("shutdown", true),
+];
 
 /// Resolve the full stub emission for a Go `test_backend` fixture argument.
 ///

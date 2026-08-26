@@ -725,7 +725,7 @@ pub fn go_package_name_from_module(module_path: &str) -> String {
     // ~keep `split` always yields at least one item, so a plain `next_back().unwrap_or(...)`
     // never reaches its fallback and an empty module path produced an empty (invalid) Go
     // package name. Filter empty segments so the fallback is reachable.
-    let last = module_path.split('/').filter(|segment| !segment.is_empty()).next_back();
+    let last = module_path.split('/').rfind(|segment| !segment.is_empty());
     match last {
         Some(segment) => segment.replace('-', "").to_lowercase(),
         None => "binding".to_string(),

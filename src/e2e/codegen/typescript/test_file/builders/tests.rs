@@ -335,9 +335,7 @@ fn wasm_typed_objects_lower_bytes_file_path_from_ir() {
         &mut Default::default(),
     );
     assert!(
-        expression.contains(
-            "_u0.bytes = await (await import(\"node:fs/promises\")).readFile(\"pdf/fake_memo.pdf\");"
-        ),
+        expression.contains("_u0.bytes = await (await import(\"node:fs/promises\")).readFile(\"pdf/fake_memo.pdf\");"),
         "{expression}"
     );
     // Reading the fixture file is async — the IIFE wrapping the setters must be declared

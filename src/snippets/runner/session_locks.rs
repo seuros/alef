@@ -19,7 +19,9 @@ pub(super) fn session_locks_by_fingerprint<'a>(
 ) -> HashMap<String, Mutex<()>> {
     let mut locks = HashMap::new();
     for session in sessions {
-        locks.entry(session.fingerprint.clone()).or_insert_with(|| Mutex::new(()));
+        locks
+            .entry(session.fingerprint.clone())
+            .or_insert_with(|| Mutex::new(()));
     }
     locks
 }

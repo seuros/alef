@@ -26,8 +26,10 @@ module = "github.com/test/test-lib"
 
 #[test]
 fn test_package_name_extracts_last_segment() {
-    assert_eq!(GoBackend::package_name("github.com/org/my-lib"), "mylib");
-    assert_eq!(GoBackend::package_name("binding"), "binding");
+    use crate::codegen::naming::go_package_name_from_module;
+
+    assert_eq!(go_package_name_from_module("github.com/org/my-lib"), "mylib");
+    assert_eq!(go_package_name_from_module("binding"), "binding");
 }
 
 #[test]

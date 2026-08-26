@@ -61,12 +61,14 @@ fn error_e2e_config() -> E2eConfig {
 /// never declares.
 #[test]
 fn snippet_typed_error_strips_the_package_prefix_like_the_go_backend_does() {
-    let mut config = ResolvedCrateConfig::default();
-    config.name = "samplecrate".into();
-    config.error_type = Some("SampleCrateError".into());
+    let config = ResolvedCrateConfig {
+        name: "samplecrate".into(),
+        error_type: Some("SampleCrateError".into()),
+        ..Default::default()
+    };
 
-    let body = render_snippet_body(&error_fixture(), &error_e2e_config(), &config, &[], &[], &[])
-        .expect("snippet renders");
+    let body =
+        render_snippet_body(&error_fixture(), &error_e2e_config(), &config, &[], &[], &[]).expect("snippet renders");
 
     assert!(body.contains("var typedError pkg.Error"), "{body}");
     assert!(!body.contains("pkg.SampleCrateError"), "{body}");
@@ -77,12 +79,14 @@ fn snippet_typed_error_strips_the_package_prefix_like_the_go_backend_does() {
 /// passing -- it pins that the fix is a targeted prefix-strip, not a blanket rename to `Error`.
 #[test]
 fn snippet_typed_error_keeps_an_unrelated_name_untouched() {
-    let mut config = ResolvedCrateConfig::default();
-    config.name = "converter".into();
-    config.error_type = Some("ConversionError".into());
+    let config = ResolvedCrateConfig {
+        name: "converter".into(),
+        error_type: Some("ConversionError".into()),
+        ..Default::default()
+    };
 
-    let body = render_snippet_body(&error_fixture(), &error_e2e_config(), &config, &[], &[], &[])
-        .expect("snippet renders");
+    let body =
+        render_snippet_body(&error_fixture(), &error_e2e_config(), &config, &[], &[], &[]).expect("snippet renders");
 
     assert!(body.contains("var typedError pkg.ConversionError"), "{body}");
 }

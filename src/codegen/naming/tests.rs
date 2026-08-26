@@ -305,7 +305,11 @@ fn go_package_name_from_module_takes_the_last_segment() {
         ("", "binding"),
     ];
     for (module_path, expected) in cases {
-        assert_eq!(go_package_name_from_module(module_path), expected, "module_path={module_path:?}");
+        assert_eq!(
+            go_package_name_from_module(module_path),
+            expected,
+            "module_path={module_path:?}"
+        );
     }
 }
 

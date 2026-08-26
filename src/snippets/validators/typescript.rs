@@ -521,7 +521,9 @@ mod tests {
         let files = value["files"].as_array().expect("files array");
         let ambient_path = scratch.path().join(NODE_AMBIENT_DECLARATION_FILE_NAME);
         assert!(
-            files.iter().any(|entry| entry.as_str() == Some(ambient_path.to_string_lossy().as_ref())),
+            files
+                .iter()
+                .any(|entry| entry.as_str() == Some(ambient_path.to_string_lossy().as_ref())),
             "project overlay must list the node ambient declaration: {files:?}"
         );
     }

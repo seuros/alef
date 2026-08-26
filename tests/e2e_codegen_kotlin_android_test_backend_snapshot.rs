@@ -92,7 +92,7 @@ fn snapshot_emit_test_backend_implements_interface() {
 
     let methods = [&extract];
     let fixture = make_fixture("test_extractor");
-    let emission = emit_test_backend(&bridge, &methods, &fixture);
+    let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
 
     assert!(
         emission
@@ -158,7 +158,7 @@ fn snapshot_emit_test_backend_no_super_trait_no_name_method() {
 
     let methods = [&recognize];
     let fixture = make_fixture("my_ocr_backend");
-    let emission = emit_test_backend(&bridge, &methods, &fixture);
+    let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
 
     assert!(
         !emission.setup_block.contains("override fun name()"),
@@ -198,7 +198,7 @@ fn snapshot_emit_test_backend_overrides_all_methods_including_defaults() {
 
     let methods = [&required, &optional];
     let fixture = make_fixture("my_fixture");
-    let emission = emit_test_backend(&bridge, &methods, &fixture);
+    let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
 
     assert!(
         emission.setup_block.contains("override fun requiredMethod()"),
@@ -234,7 +234,7 @@ fn snapshot_emit_test_backend_uses_fixture_input_name() {
     let mut fixture = make_fixture("internal_fixture_id");
     fixture.input = serde_json::json!({ "name": "custom-backend-name" });
 
-    let emission = emit_test_backend(&bridge, &methods, &fixture);
+    let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
 
     assert!(
         emission

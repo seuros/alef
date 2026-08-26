@@ -265,7 +265,10 @@ pub(super) fn build_args_and_setup(
                 // qualified type and a safe `null` default. ~keep
                 let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
                 let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names_with_enums(
-                    config, type_defs, &methods, &enum_names,
+                    config,
+                    type_defs,
+                    &methods,
+                    &enum_names,
                 );
 
                 // Do NOT filter out methods that return excluded types. As of the trait method extraction

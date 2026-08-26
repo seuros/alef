@@ -19,19 +19,6 @@ use std::path::PathBuf;
 
 pub struct GoBackend;
 
-impl GoBackend {
-    /// Extract the package name from module path (last segment).
-    /// Sanitize by removing hyphens and converting to lowercase.
-    ///
-    /// Delegates to [`crate::codegen::naming::go_package_name_from_module`], the single source
-    /// every Go-targeting generator derives the fallback package name from. Prefer
-    /// `config.go_package_name()` over calling this directly -- it also honors an explicit
-    /// `[go] package_name` override.
-    fn package_name(module_path: &str) -> String {
-        crate::codegen::naming::go_package_name_from_module(module_path)
-    }
-}
-
 /// Sanitize a crate name into a valid Go identifier fragment: non-alphanumeric bytes
 /// become `_`, and a leading digit is prefixed with `_` (Go identifiers can't start with
 /// a digit). Used to build the `cmd/setup`-generated shim's import alias for the binding

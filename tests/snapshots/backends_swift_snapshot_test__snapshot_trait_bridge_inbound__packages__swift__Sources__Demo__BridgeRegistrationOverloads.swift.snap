@@ -9,6 +9,12 @@ expression: "&file.content"
 import Foundation
 import RustBridge
 
+// MARK: - Bridge protocol re-exports
+// Re-exported so a conforming type can be declared with `import <Module>` alone; see
+// `gen_bridge_registration_overloads_file` in the alef swift backend.
+
+public typealias SwiftImageProcessorBridge = RustBridge.SwiftImageProcessorBridge
+
 // MARK: - Unregister name: label overloads
 
 public func unregisterImageProcessor(name: String) throws {

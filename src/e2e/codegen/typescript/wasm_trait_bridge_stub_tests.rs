@@ -124,7 +124,10 @@ fn emit_test_backend_ts_wasm_named_enum_return_uses_prefixed_enum_type() {
         ..Default::default()
     }];
 
-    let fixture = make_fixture("wasm_enum_return_fixture", serde_json::json!({ "name": "my-processor" }));
+    let fixture = make_fixture(
+        "wasm_enum_return_fixture",
+        serde_json::json!({ "name": "my-processor" }),
+    );
 
     let emission = emit_test_backend(&bridge, &methods, &fixture, &enums, "Wasm");
 

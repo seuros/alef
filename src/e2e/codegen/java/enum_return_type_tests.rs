@@ -112,7 +112,10 @@ fn enum_returning_method_keeps_its_real_type_not_string() {
     };
     let type_defs = [trait_type_def(
         "SampleBackend",
-        vec![method("sample_classification", TypeRef::Named("SampleClassification".to_string()))],
+        vec![method(
+            "sample_classification",
+            TypeRef::Named("SampleClassification".to_string()),
+        )],
     )];
     let enums = [unit_enum("SampleClassification", "Baseline")];
 
@@ -148,7 +151,10 @@ fn a_type_absent_from_the_enum_registry_still_gets_the_string_substitution() {
     };
     let type_defs = [trait_type_def(
         "SampleBackend",
-        vec![method("backend_kind", TypeRef::Named("ExcludedBackendKind".to_string()))],
+        vec![method(
+            "backend_kind",
+            TypeRef::Named("ExcludedBackendKind".to_string()),
+        )],
     )];
     // No `EnumDef` for "ExcludedBackendKind" -- as if this language's `exclude_types` config
     // already dropped it from the enum registry before this code ever sees it.

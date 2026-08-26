@@ -766,7 +766,11 @@ fn typescript_first_item(
             .map(|segment| segment.to_lower_camel_case())
             .collect::<Vec<_>>()
             .join(".");
-        return (format!("{source} ?? []"), "first".into(), format!("first?.{tail_camel}"));
+        return (
+            format!("{source} ?? []"),
+            "first".into(),
+            format!("first?.{tail_camel}"),
+        );
     }
     (
         String::new(),
