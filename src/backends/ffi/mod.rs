@@ -1,6 +1,6 @@
 //! C FFI binding generator backend for alef.
 
-mod gen_bindings;
+pub(crate) mod gen_bindings;
 pub mod gen_bridge_field;
 mod gen_visitor;
 /// Test-only: the shared handle-ABI stamp assertion every hand-declaring

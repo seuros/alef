@@ -268,6 +268,44 @@ fn should_declare_one_pointer_level_when_a_nested_option_returns_a_primitive() {
     );
 }
 
+/// `Option<Option<Named>>` collapses to the same handle `Option<Named>` returns, so `ptr` is a
+/// handle and the conversion is the `_to_json` round-trip — not a JSON `*mut c_char` to
+/// `GoString`. Both halves are asserted: the exact expression Go emits, and the C return type the
+/// FFI backend declares for the same shape. Asserting only the Go text would pass while Go read a
+/// pointer as an integer, which links and runs and yields a wrong value rather than failing. ~keep
+#[test]
+fn should_read_a_nested_optional_named_return_as_a_handle() {
+    let nested = TypeRef::Optional(Box::new(TypeRef::Optional(Box::new(TypeRef::Named(
+        "ReportData".to_string(),
+    )))));
+    let func = free_function("latest_report", nested.clone());
+    let generated = generate_function(&func);
+
+    assert_eq!(declared_return_type(&generated), "*ReportData");
+    assert_eq!(declared_return_type(&generated), expression_result_type(&generated));
+    assert!(
+        generated.contains(&format!(
+            "jsonPtr := C.{}(ptr)",
+            c_consumer::method_symbol(PREFIX, "ReportData", "to_json")
+        )),
+        "expected the handle-to-JSON round trip:\n{generated}"
+    );
+
+    assert_eq!(
+        crate::backends::ffi::type_map::c_return_type(&nested, "demo_core"),
+        "AlefHandle",
+        "Go reads `ptr` as a handle, so the FFI backend must declare one"
+    );
+    assert_eq!(
+        crate::backends::ffi::type_map::c_return_type(&nested, "demo_core"),
+        crate::backends::ffi::type_map::c_return_type(
+            &TypeRef::Optional(Box::new(TypeRef::Named("ReportData".to_string()))),
+            "demo_core"
+        ),
+        "the nested and single-level optional Named returns must cross the ABI the same way"
+    );
+}
+
 /// The nested-option collapse must not leak into the single-level case, which really is one
 /// pointer's worth of nullability and already agreed. ~keep
 #[test]

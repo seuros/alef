@@ -4,7 +4,7 @@ mod functions;
 mod helpers;
 mod lib_rs;
 mod lib_setup;
-mod service_api;
+pub(crate) mod service_api;
 mod types;
 
 use crate::core::backend::{
