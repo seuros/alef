@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef build` staged an FFI library from a profile it never built.** `find_built_artifact`
+  hardcoded the `release` profile, so a plain `alef build` — which runs `cargo build` and produces
+  the *debug* artifact — could not find what it had just built. It instead fell through to
+  `target/release/deps/`, whose contents come from whatever other cargo invocation happened to
+  compile that crate, under that invocation's feature unification. The staged library was fresh but
+  feature-incomplete: linking a consumer program against it failed with dozens of undefined symbols.
+  `find_built_artifact` now takes an explicit `BuildProfile` and searches only the two uplifted,
+  profile-scoped directories; `deps/` is consulted solely to *name* a rejected copy in the error.
+  `StageFfiLibrary` passes the profile the current invocation actually built. Callers with no build
+  of their own (`alef generate`'s post-build pass, `alef test`'s e2e staging) try release then debug
+  explicitly. Packaging passes `Release`, matching its always-release contract.
+
 - **A snippet run could report success while most of the corpus was never checked at the level it
   asked for.** `RunSummary` now tracks `fully_verified` — results that reached their requested level
   with no downgrade or capability cap — and the summary leads with `Checked at requested level:

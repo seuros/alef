@@ -41,15 +41,17 @@ pub fn package_go_ffi(
     fs::create_dir_all(&lib_dir)?;
     fs::create_dir_all(&include_dir)?;
 
+    // Packaging always ships a `--release` build -- nothing here is publishable in `debug`. ~keep
     let shared_lib = target.shared_lib_name(&lib_name);
-    let shared_src = super::find_built_artifact(workspace_root, target, &shared_lib)?;
+    let shared_src = super::find_built_artifact(workspace_root, target, &shared_lib, super::BuildProfile::Release)?;
     let shared_dst = lib_dir.join(&shared_lib);
     fs::copy(&shared_src, &shared_dst)?;
 
     super::util::fix_macos_dylib_id(target, &shared_dst, &shared_lib)?;
 
     let static_lib = target.static_lib_name(&lib_name);
-    if let Ok(static_src) = super::find_built_artifact(workspace_root, target, &static_lib) {
+    let static_result = super::find_built_artifact(workspace_root, target, &static_lib, super::BuildProfile::Release);
+    if let Ok(static_src) = static_result {
         fs::copy(&static_src, lib_dir.join(&static_lib))?;
     }
 

@@ -755,7 +755,14 @@ sources = ["src/lib.rs"]
         }],
     };
 
-    run_post_build(Language::Wasm, &build_config, &config, base_dir.path()).expect("post-build must succeed");
+    run_post_build(
+        Language::Wasm,
+        &build_config,
+        &config,
+        base_dir.path(),
+        StagingProfile::PreferOnDisk,
+    )
+    .expect("post-build must succeed");
 
     let rewritten =
         std::fs::read_to_string(pkg_dir.join("package.json")).expect("failed to read rewritten package.json");

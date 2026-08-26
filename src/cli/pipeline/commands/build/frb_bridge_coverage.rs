@@ -409,6 +409,7 @@ mod tests {
             &build_config,
             &ResolvedCrateConfig::default(),
             dir.path(),
+            crate::cli::pipeline::StagingProfile::PreferOnDisk,
         );
 
         let error = result.expect_err("a stale bridge behind a skipped frb run must fail the build");

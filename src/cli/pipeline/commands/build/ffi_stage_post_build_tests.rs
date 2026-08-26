@@ -58,7 +58,15 @@ fn run_post_build_stages_ffi_library_overwriting_a_stale_copy() {
     std::fs::create_dir_all(&dest_dir).expect("failed to create stale dest dir");
     std::fs::write(dest_dir.join(&shared_lib), b"STALE-PREVIOUS-BUILD").expect("failed to seed stale artifact");
 
-    run_post_build(Language::Go, &go_build_config(), &config, base_dir.path()).expect("post-build must succeed");
+    let just_built_release = StagingProfile::JustBuilt(crate::publish::package::BuildProfile::Release);
+    run_post_build(
+        Language::Go,
+        &go_build_config(),
+        &config,
+        base_dir.path(),
+        just_built_release,
+    )
+    .expect("post-build must succeed");
 
     let staged = std::fs::read(dest_dir.join(&shared_lib)).expect("failed to read staged artifact");
     assert_eq!(
@@ -77,7 +85,13 @@ fn run_post_build_skips_ffi_staging_without_error_when_artifact_is_absent() {
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let config = go_config();
 
-    let outcome = run_post_build(Language::Go, &go_build_config(), &config, base_dir.path());
+    let outcome = run_post_build(
+        Language::Go,
+        &go_build_config(),
+        &config,
+        base_dir.path(),
+        StagingProfile::PreferOnDisk,
+    );
     assert!(
         outcome.is_ok(),
         "a missing build artifact must be a warning, not a post-build failure: {outcome:?}"

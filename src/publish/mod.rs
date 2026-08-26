@@ -111,7 +111,14 @@ pub fn prepare(
                     info!("[dry-run] Would stage FFI artifacts for {lang} (platform: {platform})");
                 } else {
                     info!("Staging FFI artifacts for {lang}...");
-                    let dest = ffi_stage::stage_ffi(config, lang, target, Path::new(&workspace_root))?;
+                    // Publishing always ships a `--release` build. ~keep
+                    let dest = ffi_stage::stage_ffi(
+                        config,
+                        lang,
+                        target,
+                        Path::new(&workspace_root),
+                        crate::publish::package::BuildProfile::Release,
+                    )?;
                     info!("  staged to {}", dest.display());
                     if let Some(header) = ffi_stage::stage_header(config, lang, target, Path::new(&workspace_root))? {
                         info!("  header staged to {}", header.display());

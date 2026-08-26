@@ -32,7 +32,13 @@ pub fn package_java(
     let shared_lib = target.shared_lib_name(&lib_name);
     let classifier = jni_classifier(config, target);
 
-    let lib_src = crate::publish::package::find_built_artifact(workspace_root, target, &shared_lib)?;
+    // Packaging always ships a `--release` build -- nothing here is publishable in `debug`. ~keep
+    let lib_src = crate::publish::package::find_built_artifact(
+        workspace_root,
+        target,
+        &shared_lib,
+        crate::publish::package::BuildProfile::Release,
+    )?;
 
     let pkg_dir_str = config.package_dir(crate::core::config::extras::Language::Java);
     let natives_dir = workspace_root

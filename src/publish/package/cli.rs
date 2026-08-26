@@ -62,6 +62,7 @@ pub fn package_cli(
 }
 
 fn find_binary(workspace_root: &Path, target: &RustTarget, binary_name: &str) -> Result<PathBuf> {
-    super::find_built_artifact(workspace_root, target, binary_name)
+    // Packaging always ships a `--release` build -- nothing here is publishable in `debug`. ~keep
+    super::find_built_artifact(workspace_root, target, binary_name, super::BuildProfile::Release)
         .with_context(|| format!("CLI binary {binary_name} not found"))
 }

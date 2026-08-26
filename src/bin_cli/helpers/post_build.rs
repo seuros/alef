@@ -113,7 +113,16 @@ fn run_resolved_post_builds(
     for (language, build_config) in resolved {
         let language = *language;
         tracing::info!("  [{language}] running post-build...");
-        match crate::cli::pipeline::run_post_build(language, build_config, config, base_dir) {
+        // This pass never invokes `cargo build` itself (see `PostBuildStep::StageFfiLibrary`'s
+        // handler), so it cannot name a profile the way `alef build`'s own post-build dispatch
+        // can -- ask for whichever is already on disk instead. ~keep
+        match crate::cli::pipeline::run_post_build(
+            language,
+            build_config,
+            config,
+            base_dir,
+            crate::cli::pipeline::StagingProfile::PreferOnDisk,
+        ) {
             Ok(outcome) if outcome.skipped_missing_tools.is_empty() => {
                 tracing::info!("  [{language}] post-build processing complete");
             }

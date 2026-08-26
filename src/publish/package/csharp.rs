@@ -52,7 +52,13 @@ pub fn package_csharp(
     let namespace = config.csharp_namespace();
     let package_id = csharp_package_id(config);
 
-    let lib_src = crate::publish::package::find_built_artifact(workspace_root, target, &shared_lib)?;
+    // Packaging always ships a `--release` build -- nothing here is publishable in `debug`. ~keep
+    let lib_src = crate::publish::package::find_built_artifact(
+        workspace_root,
+        target,
+        &shared_lib,
+        crate::publish::package::BuildProfile::Release,
+    )?;
 
     let pkg_dir_str = config.package_dir(Language::Csharp);
     let pkg_dir = workspace_root.join(&pkg_dir_str);

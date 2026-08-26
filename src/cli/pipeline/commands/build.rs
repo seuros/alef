@@ -54,6 +54,14 @@ pub(crate) fn build_with_environment(
 ) -> anyhow::Result<()> {
     let crate_name = &config.name;
     let base_dir = std::env::current_dir()?;
+    // The profile this invocation's own `cargo build`s just produced -- `StageFfiLibrary` must
+    // look for exactly this profile's uplifted artifact, never the other one left over from an
+    // earlier, unrelated run. ~keep
+    let just_built_profile = StagingProfile::JustBuilt(if release {
+        crate::publish::package::BuildProfile::Release
+    } else {
+        crate::publish::package::BuildProfile::Debug
+    });
 
     let mut independent = Vec::new();
     let mut ffi_dependent = Vec::new();
@@ -254,7 +262,7 @@ pub(crate) fn build_with_environment(
                 }
                 record_post_build_outcome(
                     *lang,
-                    run_post_build(*lang, bc, config, &base_dir),
+                    run_post_build(*lang, bc, config, &base_dir, just_built_profile),
                     &mut failures,
                     &mut skipped_post_build_tools,
                 );
@@ -326,7 +334,7 @@ pub(crate) fn build_with_environment(
                 }
                 record_post_build_outcome(
                     *lang,
-                    run_post_build(*lang, bc, config, &base_dir),
+                    run_post_build(*lang, bc, config, &base_dir, just_built_profile),
                     &mut failures,
                     &mut skipped_post_build_tools,
                 );
@@ -547,12 +555,30 @@ fn record_post_build_outcome(
     }
 }
 
+/// Which build profile [`crate::core::backend::PostBuildStep::StageFfiLibrary`] should look for.
+///
+/// `run_post_build` runs from two kinds of caller with different guarantees about what was just
+/// built. `build_with_environment`'s own two dispatch loops call it immediately after running
+/// exactly one cargo profile for this invocation -- staging must look at that same profile
+/// (`JustBuilt`), because a stale artifact from the *other* profile existing on disk from an
+/// earlier, unrelated run must never silently satisfy this run's staging step. `alef generate`'s
+/// post-build pass and `alef test`'s e2e FFI staging never invoke `cargo build` at all, so neither
+/// can name a profile the way `JustBuilt` requires; they ask for whichever profile is already on
+/// disk, release preferred (`PreferOnDisk`). Neither variant ever consults `deps/` -- see
+/// [`crate::publish::package::find_built_artifact`]'s doc comment for why. ~keep
+#[derive(Debug, Clone, Copy)]
+pub enum StagingProfile {
+    JustBuilt(crate::publish::package::BuildProfile),
+    PreferOnDisk,
+}
+
 /// Run post-build processing steps (e.g., patching .d.ts files).
 pub fn run_post_build(
     lang: Language,
     bc: &crate::core::backend::BuildConfig,
     config: &ResolvedCrateConfig,
     base_dir: &Path,
+    staging_profile: StagingProfile,
 ) -> anyhow::Result<PostBuildOutcome> {
     use crate::core::backend::PostBuildStep;
 
@@ -672,16 +698,46 @@ pub fn run_post_build(
             PostBuildStep::StageFfiLibrary => {
                 let target = crate::publish::platform::host_target()
                     .with_context(|| format!("failed to detect host Rust target for {lang} FFI staging"))?;
-                // `ffi_artifact_built` (not a bare `stage_ffi` + match-on-error) so this step can
-                // tell "nothing was built this run" -- expected when this fires from `alef
+                // Which profile(s) to look for, and the matching build command to suggest in the
+                // warning below if none is found -- kept together so the two can never name
+                // different profiles. ~keep
+                let (profile_description, build_hint) = match staging_profile {
+                    StagingProfile::JustBuilt(profile) => {
+                        (profile.to_string(), format!("alef build{}", profile.cargo_flag()))
+                    }
+                    StagingProfile::PreferOnDisk => {
+                        ("release or debug".to_string(), "alef build --release".to_string())
+                    }
+                };
+                // `ffi_artifact_built*` (not a bare `stage_ffi*` + match-on-error) so this step
+                // can tell "nothing was built this run" -- expected when this fires from `alef
                 // generate`'s post-build pass, which never invokes `cargo build` -- apart from a
                 // real copy failure once an artifact is known to exist. Only the latter is
                 // allowed to fail this backend's build; the former is always a warning, never a
-                // silent no-op. ~keep
-                if crate::publish::ffi_stage::ffi_artifact_built(config, &target, base_dir) {
-                    let dest = crate::publish::ffi_stage::stage_ffi(config, lang, &target, base_dir)
-                        .with_context(|| format!("failed to stage FFI library for {lang}"))?;
-                    info!("[{lang}] staged FFI library to {}", dest.display());
+                // silent no-op. Deliberately does not fall back to `deps/`: see
+                // `crate::publish::package::find_built_artifact`'s doc comment. ~keep
+                let artifact_built = match staging_profile {
+                    StagingProfile::JustBuilt(profile) => {
+                        crate::publish::ffi_stage::ffi_artifact_built(config, &target, base_dir, profile)
+                    }
+                    StagingProfile::PreferOnDisk => {
+                        crate::publish::ffi_stage::ffi_artifact_built_preferring_release(config, &target, base_dir)
+                    }
+                };
+                if artifact_built {
+                    let stage_result = match staging_profile {
+                        StagingProfile::JustBuilt(profile) => {
+                            crate::publish::ffi_stage::stage_ffi(config, lang, &target, base_dir, profile)
+                        }
+                        StagingProfile::PreferOnDisk => {
+                            crate::publish::ffi_stage::stage_ffi_preferring_release(config, lang, &target, base_dir)
+                        }
+                    };
+                    let dest = stage_result.with_context(|| format!("failed to stage FFI library for {lang}"))?;
+                    info!(
+                        "[{lang}] staged FFI library ({profile_description}) to {}",
+                        dest.display()
+                    );
                     match crate::publish::ffi_stage::stage_header(config, lang, &target, base_dir) {
                         Ok(Some(header)) => debug!("[{lang}] staged FFI header to {}", header.display()),
                         Ok(None) => {}
@@ -692,8 +748,8 @@ pub fn run_post_build(
                         .map(|dir| dir.display().to_string())
                         .unwrap_or_else(|_| format!("{lang} native-library directory"));
                     warn!(
-                        "[{lang}] no built FFI shared library found for target {}; skipping staging into {} \
-                         (run `alef build --release` to produce one)",
+                        "[{lang}] no built FFI shared library found for target {} ({profile_description}); \
+                         skipping staging into {} (run `{build_hint}` to produce one)",
                         target.triple, dest_description
                     );
                 }

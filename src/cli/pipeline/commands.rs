@@ -8,7 +8,7 @@ mod update;
 
 pub(crate) use build::build_with_environment;
 pub(crate) use build::canonical_frb_generated;
-pub use build::{build, run_post_build};
+pub use build::{StagingProfile, build, run_post_build};
 pub use clean::clean;
 pub use lint::{fmt, fmt_post_generate, lint};
 pub use setup::setup;

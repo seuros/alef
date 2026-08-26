@@ -49,8 +49,9 @@ pub fn package_zig(
     fs::create_dir_all(&lib_dir)?;
     fs::create_dir_all(&include_dir)?;
 
+    // Packaging always ships a `--release` build -- nothing here is publishable in `debug`. ~keep
     let shared_lib = target.shared_lib_name(&lib_name);
-    let shared_src = super::find_built_artifact(workspace_root, target, &shared_lib)
+    let shared_src = super::find_built_artifact(workspace_root, target, &shared_lib, super::BuildProfile::Release)
         .with_context(|| format!("locating built FFI artifact `{shared_lib}` for Zig package"))?;
     let shared_dst = lib_dir.join(&shared_lib);
     fs::copy(&shared_src, &shared_dst).context("copying FFI .so into Zig package")?;

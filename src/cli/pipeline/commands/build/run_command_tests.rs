@@ -161,7 +161,13 @@ fn configured_build_command_timeout_reaches_the_post_build_run_command_step() {
     };
 
     let started = std::time::Instant::now();
-    let result = run_post_build(Language::Swift, &build_config, &config, directory.path());
+    let result = run_post_build(
+        Language::Swift,
+        &build_config,
+        &config,
+        directory.path(),
+        StagingProfile::PreferOnDisk,
+    );
     let elapsed = started.elapsed();
 
     let error = result.expect_err("a sleep 3 post-build step under a configured 1s ceiling must fail");

@@ -124,7 +124,9 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
             if bc.post_build.is_empty() {
                 continue;
             }
-            if let Err(e) = super::run_post_build(lang, &bc, config, &base_dir) {
+            // `alef test` never runs `cargo build` itself, so it cannot name a single profile the
+            // way `alef build`'s own post-build dispatch can -- ask for whichever is on disk. ~keep
+            if let Err(e) = super::run_post_build(lang, &bc, config, &base_dir, super::StagingProfile::PreferOnDisk) {
                 warn!("[{lang}] post-build processing failed before e2e tests: {e}");
                 return Err(e).with_context(|| format!("post-build failed for {lang}"));
             }
@@ -152,7 +154,9 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
                 }
             });
             if let Some(workspace_root) = workspace_root {
-                match ffi_stage::stage_ffi(config, lang, &host_target, &workspace_root) {
+                // No `cargo build` runs here either -- same reasoning as the `run_post_build`
+                // call above. ~keep
+                match ffi_stage::stage_ffi_preferring_release(config, lang, &host_target, &workspace_root) {
                     Ok(dest) => {
                         info!("[{lang}] staged FFI artifacts to {}", dest.display());
                     }
