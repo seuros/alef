@@ -104,6 +104,25 @@ pub fn method_symbol(prefix: &str, type_name: &str, method_name: &str) -> String
     format!("{prefix}_{}_{method_name}", pascal_to_snake(type_name))
 }
 
+/// Return the C symbol name of the presence companion for a free function or method whose
+/// return type is `Optional<T>` and whose `T` leaf collapses `None` into the same sentinel a
+/// legitimate `Some` can also produce (see
+/// `crate::backends::ffi::gen_bindings::types::optional_leaf_needs_presence_signal`).
+///
+/// Format: `{fn_symbol}_has_result`. Additive by construction -- it names a NEW exported symbol
+/// alongside the primary getter's existing one, so shipping it never changes an already-exported
+/// signature. Mirrors the struct-field convention's `{prefix}_{type}_has_{field}` shape (same
+/// disambiguation, applied where there is no struct field to hang the companion off).
+///
+/// # Example
+/// ```ignore
+/// let sym = result_presence_symbol(&free_function_symbol("cfg", "port"));
+/// assert_eq!(sym, "cfg_port_has_result");
+/// ```
+pub fn result_presence_symbol(fn_symbol: &str) -> String {
+    format!("{fn_symbol}_has_result")
+}
+
 /// Return the C symbol name of one operation of a generated streaming adapter.
 ///
 /// Format: `{prefix}_{owner_snake}_{adapter_name}_{operation}`, where `operation` is
@@ -212,6 +231,18 @@ sources = ["src/lib.rs"]
         assert_ne!(
             method_symbol("htm", "Converter", "convert"),
             free_function_symbol("htm", "convert"),
+        );
+    }
+
+    #[test]
+    fn result_presence_symbol_suffixes_has_result() {
+        assert_eq!(
+            result_presence_symbol(&free_function_symbol("cfg", "port")),
+            "cfg_port_has_result"
+        );
+        assert_eq!(
+            result_presence_symbol(&method_symbol("cfg", "Settings", "timeout")),
+            "cfg_settings_timeout_has_result"
         );
     }
 
