@@ -8,12 +8,26 @@ use crate::snippets::error::{Error, Result};
 use rayon::prelude::*;
 use std::path::Path;
 
-/// Directories whose contents are a build tool's own output or a vendored dependency tree, never
-/// an input the fingerprint needs to see. Everything here is derived from files that *are* hashed
-/// (sources, lockfiles, manifests), so dropping them changes no fingerprint that should have
-/// changed — while a package directory carrying a built `target/`, `dist/`, `Pods/` or
-/// `.gradle/` is hundreds of megabytes that were being walked and read in full, per session, per
-/// run. ~keep
+/// Directories whose contents are strictly a build tool's own scratch output -- artifacts a
+/// deterministic recompile from the source this fingerprint *does* hash reproduces byte-for-byte,
+/// with nothing filesystem-resident that isn't already covered. Dropping them changes no
+/// fingerprint that should have changed, while a package directory carrying a built `target/`,
+/// `dist/`, `Pods/` or `.gradle/` is hundreds of megabytes that were being walked and read in full,
+/// per session, per run. ~keep
+///
+/// `node_modules` and `vendor` are deliberately absent from this list. Both are commonly claimed
+/// to be "derived from files that are hashed (lockfiles, manifests)" -- true for an ordinary
+/// third-party dependency pinned by version, false for the one entry every binding session cares
+/// about most: a locally linked or locally vendored copy of the *consumer's own generated
+/// binding*. A `file:`/`link:`/`replace` dependency's resolved content can change with no lockfile
+/// line moving at all (same name, same version pin, different bytes on disk), so excluding these
+/// two names left every language whose toolchain resolves imports through them -- TypeScript,
+/// Node, WASM, PHP's Composer `vendor/`, Ruby's bundler `vendor/` -- unable to detect a changed
+/// binding surface at all: `ValidationCache` kept replaying a snippet's last verdict against
+/// whatever `node_modules`/`vendor` held the first time the fingerprint was computed, regardless of
+/// what a later `alef build` regenerated there. See
+/// `node_modules_and_vendor_contents_change_the_fingerprint` below for the regression this
+/// closes. ~keep
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".alef",
     ".dart_tool",
@@ -31,10 +45,8 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     "bin",
     "build",
     "dist",
-    "node_modules",
     "obj",
     "target",
-    "vendor",
 ];
 
 pub(super) fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
@@ -120,7 +132,7 @@ fn hash_working_tree_file(relative: &Path, path: &Path) -> Result<blake3::Hash> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snippets::types::Language;
+    use crate::snippets::types::{Language, ValidationLevel};
     use std::collections::BTreeMap;
 
     fn fingerprint_spec(working_directory: &Path) -> SessionSpec {
@@ -159,9 +171,11 @@ mod tests {
         assert_ne!(first, changed);
     }
 
-    /// Build output and vendored dependency trees are derived from files the fingerprint already
-    /// hashes, so reading them cost a full walk of hundreds of megabytes per session per run and
-    /// bought nothing. ~keep
+    /// A build tool's own scratch output is deterministically derived from files the fingerprint
+    /// already hashes, so reading it cost a full walk of hundreds of megabytes per session per run
+    /// and bought nothing. `node_modules` and `vendor` are deliberately not exercised here any
+    /// more -- see `node_modules_contents_change_the_fingerprint` below, which asserts the opposite
+    /// for exactly those two. ~keep
     #[test]
     fn build_output_directories_are_excluded_from_the_fingerprint() {
         let directory = tempfile::tempdir().expect("temp directory");
@@ -176,6 +190,39 @@ mod tests {
         }
 
         assert_eq!(session_fingerprint(&spec).expect("fingerprint after build"), baseline);
+    }
+
+    /// The regression this fix closes: a locally linked/vendored copy of the consumer's own
+    /// generated binding resolves through exactly these two directory names in practice --
+    /// `node_modules/<package>` for every npm-resolved TypeScript/Node/WASM session (see
+    /// `TypeScriptValidator`'s own tests, which build fixture sessions the same way), `vendor/` for
+    /// Composer/Bundler. Before this fix both names were in `IGNORED_DIRECTORIES`, so a real content
+    /// change to the generated binding underneath either one left `session_fingerprint` -- and
+    /// therefore `ValidationCache`'s key, which folds this fingerprint in -- completely unchanged.
+    /// A snippet that had already cached a `Pass` against the old binding surface kept replaying
+    /// that verdict forever, regardless of what the binding surface actually declared afterward.
+    /// ~keep
+    #[test]
+    fn node_modules_and_vendor_contents_change_the_fingerprint() {
+        for package_root in ["node_modules/sample-binding", "vendor/sample-binding"] {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let package = directory.path().join(package_root);
+            std::fs::create_dir_all(&package).expect("linked package directory");
+            std::fs::write(package.join("index.d.ts"), "export declare const maxChars: number;")
+                .expect("original binding surface");
+            let spec = fingerprint_spec(directory.path());
+            let before = session_fingerprint(&spec).expect("fingerprint before the binding surface changed");
+
+            std::fs::write(package.join("index.d.ts"), "export declare const maxCharacters: number;")
+                .expect("regenerated binding surface");
+            let after = session_fingerprint(&spec).expect("fingerprint after the binding surface changed");
+
+            assert_ne!(
+                before, after,
+                "a content change under {package_root} must change the session fingerprint, not be \
+                 silently ignored"
+            );
+        }
     }
 
     #[test]
@@ -197,6 +244,101 @@ mod tests {
         assert_ne!(
             session_fingerprint(&base).expect("base fingerprint"),
             session_fingerprint(&changed).expect("changed fingerprint")
+        );
+    }
+
+    fn cached_snippet(code: &str) -> crate::snippets::types::Snippet {
+        let path = std::path::PathBuf::from("example.md");
+        crate::snippets::types::Snippet {
+            id: None,
+            path: path.clone(),
+            language: Language::TypeScript,
+            title: None,
+            code: code.to_string(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: crate::snippets::types::SnippetMetadata::default(),
+            source_origin: crate::snippets::types::SourceOrigin {
+                path,
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
+    fn passing_result(snippet: &crate::snippets::types::Snippet) -> crate::snippets::types::ValidationResult {
+        crate::snippets::types::ValidationResult {
+            snippet: snippet.clone(),
+            status: crate::snippets::types::SnippetStatus::Pass,
+            level: ValidationLevel::Compile,
+            requested_level: ValidationLevel::Compile,
+            effective_level: ValidationLevel::Compile,
+            message: None,
+            duration_ms: 1,
+            capability_capped: false,
+            downgrade_reason: None,
+            unresolved_dependency: false,
+        }
+    }
+
+    /// The end-to-end regression this fix closes, chained through the real production types
+    /// instead of asserting on the fingerprint alone: a snippet that already has a cached `Pass`
+    /// from validating against binding surface A must miss the cache -- forcing the runner to
+    /// invoke the validator again, not replay the stale verdict -- once the linked binding package
+    /// changes to surface B. `ValidationCache::load` returning `None` is exactly the signal
+    /// `runner::cached_result` reads to fall through to a real validator invocation (see
+    /// `runner.rs::validate_one`), so a `None` here is not a proxy for re-validation, it is the
+    /// mechanism that causes it.
+    ///
+    /// Before this fix, `node_modules` was excluded from `IGNORED_DIRECTORIES`: `before_fingerprint`
+    /// and `after_fingerprint` were identical despite the package's content changing, so the second
+    /// `load` below returned `Some(passing)` instead of `None` -- a stale cached `Pass` served for a
+    /// snippet that had never been re-validated against the new binding surface at all. ~keep
+    #[test]
+    fn a_cached_pass_misses_once_the_linked_binding_package_changes() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let package = directory.path().join("node_modules/sample-binding");
+        std::fs::create_dir_all(&package).expect("linked package directory");
+        std::fs::write(package.join("index.d.ts"), "export declare function chunk(maxChars: number): void;")
+            .expect("original binding surface");
+        let spec = fingerprint_spec(directory.path());
+        let cache = crate::snippets::cache::ValidationCache::new(directory.path().join(".alef/snippets"));
+        let snippet = cached_snippet("chunk(10)");
+        let passing = passing_result(&snippet);
+
+        let before_fingerprint = session_fingerprint(&spec).expect("fingerprint before the binding surface changed");
+        cache
+            .store(&snippet, ValidationLevel::Compile, Some(before_fingerprint.as_str()), &passing)
+            .expect("store the passing result");
+
+        // Negative control: nothing about the snippet or the binding surface changed, so the exact
+        // same fingerprint must still be a cache hit. A "fix" that disabled caching outright (always
+        // returning `None` from `load`, or skipping `store` entirely) would make every run pay for a
+        // full re-validation regardless of whether anything changed -- turning a `changed_only` run
+        // across thousands of snippets back into a full run every time. This assertion is what would
+        // fail if someone "fixed" the bug that way. ~keep
+        assert_eq!(
+            cache
+                .load(&snippet, ValidationLevel::Compile, Some(before_fingerprint.as_str()))
+                .map(|result| result.status),
+            Some(crate::snippets::types::SnippetStatus::Pass),
+            "an unchanged snippet against an unchanged binding surface must still hit the cache"
+        );
+
+        std::fs::write(
+            package.join("index.d.ts"),
+            "export declare function chunk(maxCharacters: number): void;",
+        )
+        .expect("regenerated binding surface");
+        let after_fingerprint = session_fingerprint(&spec).expect("fingerprint after the binding surface changed");
+
+        assert!(
+            cache
+                .load(&snippet, ValidationLevel::Compile, Some(after_fingerprint.as_str()))
+                .is_none(),
+            "a cached Pass must not survive a change to the linked binding package it was validated \
+             against"
         );
     }
 }
