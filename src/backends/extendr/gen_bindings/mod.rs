@@ -9,13 +9,18 @@ mod trait_bridge_wrappers;
 mod type_mapping;
 
 use self::cfg_registration::{always_registered, apply_r_cfg_policy, effective_r_cfg_features, prepend_cfg};
-use self::trait_bridge_wrappers::{collect_trait_bridge_fn_names, collect_trait_bridge_functions};
+use self::trait_bridge_wrappers::{
+    bridge_targets_extendr, collect_trait_bridge_fn_names, collect_trait_bridge_functions,
+    extendr_registration_surface,
+};
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
 use crate::codegen::generators::trait_bridge::find_bridge_field;
 use crate::codegen::generators::type_paths::build_type_path_lookup;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
 use std::path::PathBuf;
@@ -566,7 +571,7 @@ impl Backend for ExtendrBackend {
         let active_bridges: Vec<_> = config
             .trait_bridges
             .iter()
-            .filter(|b| !b.exclude_languages.iter().any(|l| l == "r" || l == "extendr"))
+            .filter(|b| bridge_targets_extendr(b))
             .cloned()
             .collect();
 
@@ -773,6 +778,14 @@ impl Backend for ExtendrBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        extendr_registration_surface(config)
     }
 }
 

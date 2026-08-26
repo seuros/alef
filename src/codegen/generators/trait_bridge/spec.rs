@@ -5,6 +5,16 @@ use std::collections::{HashMap, HashSet};
 
 use super::bridge_wrapper_name;
 
+/// Snake-case form of a trait name, as every generated symbol that embeds the trait name spells
+/// it.
+///
+/// Exposed as a free function so a caller that has only the trait name — a backend building its
+/// `Backend::trait_bridge_registration_surface` — derives the same spelling as
+/// [`TraitBridgeSpec::trait_snake`], which is what the emitters use. ~keep
+pub fn trait_snake_of(trait_name: &str) -> String {
+    trait_name.to_snake_case()
+}
+
 pub struct TraitBridgeSpec<'a> {
     /// The trait definition from the IR.
     pub trait_def: &'a TypeDef,
@@ -53,7 +63,7 @@ impl<'a> TraitBridgeSpec<'a> {
 
     /// Snake-case version of the trait name (e.g., `"ocr_backend"`).
     pub fn trait_snake(&self) -> String {
-        self.trait_def.name.to_snake_case()
+        trait_snake_of(&self.trait_def.name)
     }
 
     /// Full Rust path to the trait (e.g., `sample_core::OcrBackend`).

@@ -7,7 +7,9 @@ mod lib_setup;
 mod service_api;
 mod types;
 
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, OutputLayout, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::path::PathBuf;
@@ -118,6 +120,14 @@ impl Backend for FfiBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        crate::backends::ffi::trait_bridge::registration_surface(api, config)
     }
 }
 

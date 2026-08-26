@@ -692,6 +692,17 @@ pub(super) fn emit_async_free_function_forwarder(
     out.push('\n');
 }
 
+/// The Swift-visible name of a trait-bridge forwarder for a configured
+/// `register_fn`/`unregister_fn`/`clear_fn`.
+///
+/// Must match the `swift_name` swift-bridge stamps on the matching `extern "Rust"` declaration
+/// (`gen_rust_crate::plugin_inbound::inbound_externs`), or the forwarder calls a `RustBridge`
+/// symbol that does not exist. `SwiftBackend::trait_bridge_registration_surface` reports through
+/// this helper so the reference docs cannot name a forwarder Swift never declares. ~keep
+pub(super) fn swift_trait_forwarder_name(configured_fn: &str) -> String {
+    configured_fn.to_lower_camel_case()
+}
+
 pub(super) fn emit_trait_bridge_forwarders(config: &ResolvedCrateConfig, out: &mut String) {
     let mut emitted_any = false;
     for bridge_cfg in &config.trait_bridges {
@@ -717,7 +728,7 @@ pub(super) fn emit_trait_bridge_forwarders(config: &ResolvedCrateConfig, out: &m
         let box_type = format!("Swift{trait_name}Box");
 
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
-            let camel = register_fn.to_lower_camel_case();
+            let camel = swift_trait_forwarder_name(register_fn);
             out.push_str(&crate::backends::swift::template_env::render(
                 "swift_trait_forwarder_register.swift.jinja",
                 minijinja::context! {
@@ -728,7 +739,7 @@ pub(super) fn emit_trait_bridge_forwarders(config: &ResolvedCrateConfig, out: &m
             ));
         }
         if let Some(unregister_fn) = bridge_cfg.unregister_fn.as_deref() {
-            let camel = unregister_fn.to_lower_camel_case();
+            let camel = swift_trait_forwarder_name(unregister_fn);
             out.push_str(&crate::backends::swift::template_env::render(
                 "swift_trait_forwarder_unregister.swift.jinja",
                 minijinja::context! {
@@ -738,7 +749,7 @@ pub(super) fn emit_trait_bridge_forwarders(config: &ResolvedCrateConfig, out: &m
             ));
         }
         if let Some(clear_fn) = bridge_cfg.clear_fn.as_deref() {
-            let camel = clear_fn.to_lower_camel_case();
+            let camel = swift_trait_forwarder_name(clear_fn);
             out.push_str(&crate::backends::swift::template_env::render(
                 "swift_trait_forwarder_clear.swift.jinja",
                 minijinja::context! {

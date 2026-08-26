@@ -19,9 +19,10 @@ mod helpers;
 mod registration;
 mod vtable;
 
-use crate::codegen::generators::trait_bridge::{TraitBridgeSpec, gen_bridge_plugin_impl};
+use crate::codegen::generators::trait_bridge::{TraitBridgeSpec, gen_bridge_plugin_impl, trait_snake_of};
 use crate::codegen::naming::{pascal_to_snake, to_class_name};
-use crate::core::config::TraitBridgeConfig;
+use crate::core::backend::TraitBridgeRegistrationSurface;
+use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::{ApiSurface, TypeDef, TypeRef};
 use std::collections::{HashMap, HashSet};
 
@@ -153,6 +154,36 @@ impl FfiBridgeGenerator {
 /// Generate the shared FFI error-setting helper function (once per module).
 pub fn gen_ffi_set_out_error_helper() -> String {
     crate::backends::ffi::template_env::render("ffi_set_out_error_helper.jinja", minijinja::context! {})
+}
+
+/// The C symbols a consumer calls to register, unregister, and clear implementations of each
+/// configured trait bridge.
+///
+/// Mirrors the two gates `gen_bindings::lib_rs` applies before calling [`gen_trait_bridge`]:
+/// the trait must resolve in the `ApiSurface` as a trait, and the whole registration block is
+/// emitted only when `register_fn` is configured — so an `unregister`/`clear` symbol is never
+/// reported without the `register` symbol that gates it. ~keep
+pub fn registration_surface(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<TraitBridgeRegistrationSurface> {
+    let prefix = config.ffi_prefix();
+    config
+        .trait_bridges
+        .iter()
+        .filter(|bridge| bridge.register_fn.is_some())
+        .filter_map(|bridge| {
+            let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge.trait_name)?;
+            let register_fn = bridge.register_fn.as_deref()?;
+            let trait_snake = trait_snake_of(&trait_def.name);
+            Some(TraitBridgeRegistrationSurface {
+                trait_name: trait_def.name.clone(),
+                register_symbol: Some(registration::ffi_register_symbol(&prefix, register_fn)),
+                unregister_symbol: Some(registration::ffi_unregister_symbol(&prefix, &trait_snake)),
+                clear_symbol: bridge
+                    .clear_fn
+                    .as_ref()
+                    .map(|_| registration::ffi_clear_symbol(&prefix, &trait_snake)),
+            })
+        })
+        .collect()
 }
 
 /// Generate all trait bridge code for a single `[[trait_bridges]]` entry.

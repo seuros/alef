@@ -1,6 +1,10 @@
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep,
+    TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{
-    AdapterConfig, AdapterPattern, Language, ResolvedCrateConfig, TraitBridgeConfig, resolve_output_dir,
+    AdapterConfig, AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, TraitBridgeConfig,
+    resolve_output_dir,
 };
 use crate::core::ir::{ApiSurface, TypeDef};
 use std::collections::BTreeSet;
@@ -699,6 +703,40 @@ impl Backend for SwiftBackend {
         });
 
         Some(build_config)
+    }
+
+    /// Swift's registration entry points are the top-level `public func` forwarders emitted by
+    /// `forwarders::emit_trait_bridge_forwarders`, not the protocol/adapter file — which
+    /// deliberately emits no register function. The forwarder loop is the authority for the
+    /// gates repeated here: `bind_via = "options_field"` bridges get a handle instead of a
+    /// registry, and a bridge with none of the three functions configured emits nothing. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.bind_via == BridgeBinding::FunctionParam)
+            .filter(|bridge| bridge.is_active_for("swift"))
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| {
+                let forwarder = |configured: &Option<String>| {
+                    configured
+                        .as_deref()
+                        .map(forwarders::swift_trait_forwarder_name)
+                };
+                TraitBridgeRegistrationSurface {
+                    trait_name: bridge.trait_name.clone(),
+                    register_symbol: forwarder(&bridge.register_fn),
+                    unregister_symbol: forwarder(&bridge.unregister_fn),
+                    clear_symbol: forwarder(&bridge.clear_fn),
+                }
+            })
+            .collect()
     }
 }
 

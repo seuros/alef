@@ -1,3 +1,4 @@
+use crate::core::backend::TraitBridgeRegistrationSurface;
 use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
 
@@ -19,6 +20,42 @@ use crate::core::ir::{ApiSurface, TypeRef};
 /// by `gen_trait_bridge` from `TraitBridgeConfig` rather than parsed from Rust source.
 /// Each entry records the name and the R-visible parameters so the R-side wrappers
 /// can call `.Call("wrap__<name>", <args>, PACKAGE = ...)` with a matching signature.
+/// Whether `bridge` is generated for the R/extendr target.
+///
+/// `exclude_languages` may name this backend either as the language (`"r"`) or as the backend
+/// (`"extendr"`), so both spellings must be honoured; every extendr site that decides whether a
+/// bridge exists — the emitted `#[extendr]` items, the `extendr_module!` entries, and
+/// `ExtendrBackend::trait_bridge_registration_surface` — goes through this one predicate. ~keep
+pub(super) fn bridge_targets_extendr(bridge: &TraitBridgeConfig) -> bool {
+    !bridge.exclude_languages.iter().any(|l| l == "r" || l == "extendr")
+}
+
+/// The R-visible register / unregister / clear functions the extendr trait-bridge generator
+/// emits for each configured bridge.
+///
+/// Registration additionally requires `registry_getter`: without it
+/// `ExtendrBridgeGenerator::gen_registration_fn` returns an empty body and no `#[extendr] pub fn`
+/// is written, so reporting the name there would document a function R never receives. ~keep
+pub(super) fn extendr_registration_surface(config: &ResolvedCrateConfig) -> Vec<TraitBridgeRegistrationSurface> {
+    config
+        .trait_bridges
+        .iter()
+        .filter(|bridge| bridge_targets_extendr(bridge))
+        .filter(|bridge| {
+            bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+        })
+        .map(|bridge| TraitBridgeRegistrationSurface {
+            trait_name: bridge.trait_name.clone(),
+            register_symbol: bridge
+                .register_fn
+                .clone()
+                .filter(|_| bridge.registry_getter.is_some()),
+            unregister_symbol: bridge.unregister_fn.clone(),
+            clear_symbol: bridge.clear_fn.clone(),
+        })
+        .collect()
+}
+
 pub(super) struct TraitBridgeFn {
     pub(super) name: String,
     /// Parameter names in R-visible order. R is dynamically typed so the type is
@@ -44,7 +81,7 @@ pub(super) struct TraitBridgeFn {
 pub(super) fn collect_trait_bridge_fn_names(config: &ResolvedCrateConfig) -> ahash::AHashSet<String> {
     let mut names = ahash::AHashSet::new();
     for bridge_cfg in &config.trait_bridges {
-        if bridge_cfg.exclude_languages.iter().any(|l| l == "r" || l == "extendr") {
+        if !bridge_targets_extendr(bridge_cfg) {
             continue;
         }
         if let Some(name) = bridge_cfg.register_fn.as_deref() {
@@ -68,7 +105,7 @@ pub(super) fn collect_trait_bridge_fn_names(config: &ResolvedCrateConfig) -> aha
 pub(super) fn collect_trait_bridge_functions(config: &ResolvedCrateConfig) -> Vec<TraitBridgeFn> {
     let mut out = Vec::new();
     for bridge_cfg in &config.trait_bridges {
-        if bridge_cfg.exclude_languages.iter().any(|l| l == "r" || l == "extendr") {
+        if !bridge_targets_extendr(bridge_cfg) {
             continue;
         }
         if let Some(name) = bridge_cfg.register_fn.as_deref() {
