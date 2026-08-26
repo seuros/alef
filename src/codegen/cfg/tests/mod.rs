@@ -424,6 +424,39 @@ fn collect_cfg_features_excludes_external_source_crate_cfgs() {
     );
 }
 
+/// [`is_host_owned_rust_path`] is the single authority `collect_cfg_gates` and backend arm/
+/// variant emitters (`gen_enum_from_i32_rs_helper`, the Swift enum wrapper) both call to decide
+/// whether a cfg-gated item's cfg is safe to re-emit verbatim. Pinning its own behavior here
+/// keeps `collect_cfg_features_excludes_external_source_crate_cfgs`'s coverage of the
+/// feature-collection side from silently diverging from the emitter side.
+#[test]
+fn is_host_owned_rust_path_matches_the_leading_path_segment() {
+    assert!(is_host_owned_rust_path("hostlib", "hostlib::Strategy"));
+    assert!(!is_host_owned_rust_path("hostlib", "otherlib::Strategy"));
+}
+
+#[test]
+fn is_host_owned_rust_path_normalises_dashes_in_the_host_crate_name() {
+    assert!(is_host_owned_rust_path("host-lib", "host_lib::Strategy"));
+}
+
+#[test]
+fn is_host_owned_rust_path_is_permissive_for_an_unknown_host_crate_name() {
+    assert!(
+        is_host_owned_rust_path("", "otherlib::Strategy"),
+        "an unknown (empty) host crate name must not falsely mark everything foreign"
+    );
+}
+
+/// An unqualified `rust_path` (no `::`) is only permissive by accident of comparing an empty
+/// first segment; a non-empty single segment is compared against the host crate name like any
+/// other leading segment, so it reads as foreign unless it happens to equal the host name.
+#[test]
+fn is_host_owned_rust_path_compares_a_bare_name_like_any_leading_segment() {
+    assert!(is_host_owned_rust_path("hostlib", "hostlib"));
+    assert!(!is_host_owned_rust_path("hostlib", "Strategy"));
+}
+
 fn api_with_gated_functions(names_and_cfgs: &[(&str, Option<&str>)]) -> ApiSurface {
     use crate::core::ir::FunctionDef;
     ApiSurface {

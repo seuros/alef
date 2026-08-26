@@ -66,6 +66,33 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     out
 }
 
+/// Whether `rust_path` names an item owned by `host_crate_name`, as opposed to one merged in
+/// from a foreign `[[crates.source_crates]]` crate.
+///
+/// This is the single authority for "host or foreign" that both halves of the cfg story must
+/// agree on: [`collect_cfg_gates`] uses it to decide which cfgs are safe to forward as Cargo
+/// feature declarations, and a backend emitter deciding whether to keep or drop a cfg-gated
+/// enum-variant arm/reference must ask the same question about the same `rust_path` -- a
+/// second, independently written comparison is exactly the kind of drift that shipped an
+/// invalid `#[cfg(feature = "...")]` (referencing a feature the emitting crate never declares)
+/// and, on the Swift path, an unguarded reference to a variant that may not even exist. ~keep
+///
+/// An empty `host_crate_name` (unknown host) is treated permissively as host-owned, matching
+/// the pre-existing behavior this was lifted from. A `rust_path` with no `::` segment is
+/// compared like any other leading segment (so `"Strategy"` reads as foreign against host
+/// `"hostlib"`) -- only a literal empty leading segment falls back to permissive.
+#[must_use]
+pub fn is_host_owned_rust_path(host_crate_name: &str, rust_path: &str) -> bool {
+    let host_crate = host_crate_name.replace('-', "_");
+    if host_crate.is_empty() {
+        return true;
+    }
+    match rust_path.split("::").next() {
+        Some(first) if !first.is_empty() => first == host_crate,
+        _ => true,
+    }
+}
+
 /// Walk the full [`ApiSurface`] and return every distinct `#[cfg(...)]` condition string
 /// attached to a type, field, method, enum variant, service, or top-level function.
 ///
@@ -113,18 +140,7 @@ pub fn collect_cfg_gates(api: &ApiSurface) -> BTreeSet<String> {
     // (e.g. a variant gated on a feature only the source crate defines); forwarding those to the ~keep
     // core dep references a feature the core crate does not define and breaks `cargo` resolution. ~keep
     // Skip any type/enum whose rust_path is not owned by the host crate. ~keep
-    let host_crate = api.crate_name.replace('-', "_");
-    let is_host = |rust_path: &str| -> bool {
-        // Unknown host (empty crate name) or an unqualified path → keep the old, permissive ~keep
-        // behavior; only skip a type whose leading path segment names a *different* crate. ~keep
-        if host_crate.is_empty() {
-            return true;
-        }
-        match rust_path.split("::").next() {
-            Some(first) if !first.is_empty() => first == host_crate,
-            _ => true,
-        }
-    };
+    let is_host = |rust_path: &str| -> bool { is_host_owned_rust_path(&api.crate_name, rust_path) };
     for typ in &api.types {
         if !is_host(&typ.rust_path) {
             continue;

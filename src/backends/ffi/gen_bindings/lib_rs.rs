@@ -175,7 +175,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         if ffi_param_enums.contains(&enum_def.name)
             && crate::codegen::conversions::can_generate_enum_conversion(enum_def)
         {
-            builder.add_item(&gen_enum_from_i32_rs_helper(enum_def, &core_import));
+            builder.add_item(&gen_enum_from_i32_rs_helper(enum_def, &core_import, &api.crate_name));
         }
     }
 

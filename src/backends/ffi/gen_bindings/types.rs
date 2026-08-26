@@ -455,12 +455,38 @@ pub(super) fn gen_enum_to_i32(enum_def: &EnumDef, prefix: &str, _core_import: &s
 /// This helper is used by generated FFI function bodies to reconstruct an enum value from its
 /// `i32` discriminant. It is `pub(crate)` to avoid unused-item warnings and is not exported
 /// to C. All FFI parameter-crossing enums need this helper regardless of their `Copy` status.
-pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str) -> String {
+///
+/// A variant's `#[cfg(...)]` is only safe to re-emit verbatim when `enum_def.rust_path` is
+/// owned by `host_crate_name` (see [`crate::codegen::cfg::is_host_owned_rust_path`], the same
+/// authority [`crate::codegen::cfg::collect_cfg_gates`] uses to decide which cfgs get a Cargo
+/// feature forwarded for them): a variant merged in from a foreign
+/// `[[crates.source_crates]]` crate carries that crate's own cfg gate, and this FFI crate's
+/// `Cargo.toml` never declares a feature for it, so an emitted `#[cfg(feature = "...")]`
+/// referencing it is an `unexpected cfg condition value` error. Such an arm is dropped
+/// entirely -- not silently, a `tracing::warn!` names the enum, variant, and cfg -- rather than
+/// emitting either an invalid attribute or, worse, an ungated reference to a variant that may
+/// not even exist in the linked build. The discriminant is still reserved, so numbering stays
+/// stable across feature subsets. A host-owned cfg keeps its arm and its `#[cfg(...)]`
+/// unchanged: forwarding already declared that feature, so the gate is valid. ~keep
+pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str, host_crate_name: &str) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let qualified = core_enum_path(enum_def, core_import);
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(host_crate_name, &enum_def.rust_path);
 
     let mut arms = String::new();
     for (i, variant) in enum_def.variants.iter().enumerate() {
+        if variant.cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %enum_def.name,
+                enum_rust_path = %enum_def.rust_path,
+                variant_name = %variant.name,
+                cfg = variant.cfg.as_deref().unwrap_or_default(),
+                "dropping from_i32 reconstruction arm for a foreign-crate enum variant behind a \
+                 #[cfg(...)] this FFI crate cannot declare as a Cargo feature; the discriminant \
+                 stays reserved but the variant is unreachable from this helper"
+            );
+            continue;
+        }
         arms.push_str(&crate::backends::ffi::template_env::render(
             "ffi_enum_from_i32_rs_arm.jinja",
             context! {
