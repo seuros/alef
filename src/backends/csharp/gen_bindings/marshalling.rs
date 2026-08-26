@@ -130,6 +130,8 @@ pub(super) fn zero_sentinel(ty: &TypeRef) -> &'static str {
 /// - Bool is marshalled as `int` (C FFI convention) — the wrapper compares != 0.
 /// - Named types (and `Optional<Named>`) come back as `ulong`, matching the `AlefHandle`
 ///   (`uint64_t`) scalar the FFI crate registers them behind — see `is_handle_type`.
+/// - `Optional<Primitive>` / `Optional<Duration>` come back as the bare primitive C# type — see
+///   [`optional_scalar_pinvoke_return_type`].
 /// - String / Vec / Map / Path / Json / Bytes all come back as `IntPtr` (real pointers).
 /// - Numeric primitives use their natural C# types (`nuint`, `int`, etc.).
 pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
@@ -150,15 +152,37 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         TypeRef::Primitive(PrimitiveType::Isize) => "long",
         TypeRef::Duration => "ulong",
         _ if is_handle_type(ty) => HANDLE_PINVOKE_TYPE,
+        TypeRef::Optional(inner) => optional_scalar_pinvoke_return_type(inner).unwrap_or("IntPtr"),
         TypeRef::String
         | TypeRef::Char
         | TypeRef::Bytes
-        | TypeRef::Optional(_)
         | TypeRef::Vec(_)
         | TypeRef::Map(_, _)
         | TypeRef::Named(_)
         | TypeRef::Path
         | TypeRef::Json => "IntPtr",
+    }
+}
+
+/// The P/Invoke return type for `Optional<inner>` when the FFI crate exports it as a raw
+/// primitive scalar rather than a pointer — mirrors
+/// `backends::ffi::type_map::c_return_optional`'s primitive/duration branches (including its one
+/// level of nested-`Optional` flattening) exactly, so this declaration can never diverge from the
+/// actual C symbol cbindgen emits for the same return position.
+///
+/// This is the fix for the memory-unsafe defect where `Option<u64>` (and every other
+/// `Optional<Primitive>`/`Optional<Duration>` return) was declared `IntPtr` here while the FFI
+/// crate exported the raw scalar — the C# wrapper then read the integer bit pattern as a pointer
+/// and freed it. Returns `None` when the FFI crate emits a pointer instead
+/// (String/Named/Vec/Map/Bytes/Json/Unit), in which case the caller falls back to `IntPtr`.
+fn optional_scalar_pinvoke_return_type(inner: &TypeRef) -> Option<&'static str> {
+    match inner {
+        TypeRef::Primitive(_) | TypeRef::Duration => Some(pinvoke_return_type(inner)),
+        TypeRef::Optional(inner2) => match inner2.as_ref() {
+            TypeRef::Primitive(_) | TypeRef::Duration => Some(pinvoke_return_type(inner2)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -254,16 +278,25 @@ pub(super) fn returns_string(ty: &TypeRef) -> bool {
 }
 
 /// Does the return type come back as a C int that should be converted to bool?
+///
+/// Includes `Optional<bool>`: `c_return_optional` maps it to a bare `i32` exactly like a
+/// non-optional bool (see [`optional_scalar_pinvoke_return_type`]), so the wrapper must convert
+/// via `!= 0` rather than fall through to a raw scalar assignment — `int` does not implicitly
+/// convert to `bool?`.
 pub(super) fn returns_bool_via_int(ty: &TypeRef) -> bool {
     matches!(ty, TypeRef::Primitive(PrimitiveType::Bool))
+        || matches!(ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Primitive(PrimitiveType::Bool)))
 }
 
 /// Does the return type need JSON deserialization from an IntPtr string?
+///
+/// `Optional<Primitive>` / `Optional<Duration>` are deliberately excluded: those cross the C ABI
+/// as a raw scalar (see [`optional_scalar_pinvoke_return_type`]), not a pointer, so treating them
+/// as a JSON object would read the scalar's bit pattern as an address — the exact memory-unsafe
+/// defect this predicate used to cause for `Option<u64>` returns.
 pub(super) fn returns_json_object(ty: &TypeRef) -> bool {
-    matches!(
-        ty,
-        TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Named(_) | TypeRef::Bytes | TypeRef::Optional(_)
-    )
+    matches!(ty, TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Named(_) | TypeRef::Bytes)
+        || matches!(ty, TypeRef::Optional(inner) if optional_scalar_pinvoke_return_type(inner).is_none())
 }
 
 /// Returns true if the FFI return type is a pointer (IntPtr), as opposed to a numeric value.
