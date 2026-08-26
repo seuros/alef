@@ -332,7 +332,8 @@ fn kotlin_jni_bridge_and_client(api: &ApiSurface) -> (String, String) {
 /// back from a function declared `Long?`, which is a Kotlin type error, not a runtime bug. ~keep
 #[test]
 fn an_optional_primitive_getter_deserializes_instead_of_passing_the_json_through() {
-    let api = api_with_client_getter("token_count", TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))));
+    let optional_u64 = TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64)));
+    let api = api_with_client_getter("token_count", optional_u64);
 
     let (bridge, client) = kotlin_jni_bridge_and_client(&api);
 
@@ -358,7 +359,8 @@ fn an_optional_primitive_getter_deserializes_instead_of_passing_the_json_through
 /// producing one, so the nullable arm must test before it decodes.
 #[test]
 fn an_optional_getter_returns_null_without_calling_the_json_mapper() {
-    let api = api_with_client_getter("token_count", TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))));
+    let optional_u64 = TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64)));
+    let api = api_with_client_getter("token_count", optional_u64);
 
     let (_bridge, client) = kotlin_jni_bridge_and_client(&api);
 
