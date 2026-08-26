@@ -35,7 +35,10 @@ pub(super) fn bridge_targets_extendr(bridge: &TraitBridgeConfig) -> bool {
 /// `extendr_module!` entries, the R wrappers and `NAMESPACE`, and
 /// `ExtendrBackend::trait_bridge_registration_surface` — enumerates this. ~keep
 fn active_bridges(config: &ResolvedCrateConfig) -> impl Iterator<Item = &TraitBridgeConfig> {
-    config.trait_bridges.iter().filter(|bridge| bridge_targets_extendr(bridge))
+    config
+        .trait_bridges
+        .iter()
+        .filter(|bridge| bridge_targets_extendr(bridge))
 }
 
 /// The R-visible register / unregister / clear functions the extendr trait-bridge generator

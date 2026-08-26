@@ -39,7 +39,10 @@ mod tests {
 
     #[test]
     fn trait_register_symbol_uses_the_configured_function_name() {
-        assert_eq!(trait_register_symbol("demo", "register_ocr_backend"), "demo_register_ocr_backend");
+        assert_eq!(
+            trait_register_symbol("demo", "register_ocr_backend"),
+            "demo_register_ocr_backend"
+        );
         assert_eq!(trait_register_symbol("demo", "install_backend"), "demo_install_backend");
     }
 
@@ -56,8 +59,14 @@ mod tests {
 
     #[test]
     fn trait_unregister_and_clear_symbols_snake_the_trait_name() {
-        assert_eq!(trait_unregister_symbol("demo", "OcrBackend"), "demo_unregister_ocr_backend");
+        assert_eq!(
+            trait_unregister_symbol("demo", "OcrBackend"),
+            "demo_unregister_ocr_backend"
+        );
         assert_eq!(trait_clear_symbol("demo", "OcrBackend"), "demo_clear_ocr_backend");
-        assert_eq!(trait_unregister_symbol("demo", "HTTPClient"), "demo_unregister_http_client");
+        assert_eq!(
+            trait_unregister_symbol("demo", "HTTPClient"),
+            "demo_unregister_http_client"
+        );
     }
 }

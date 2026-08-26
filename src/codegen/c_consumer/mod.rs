@@ -18,8 +18,7 @@ mod service;
 mod trait_bridge;
 
 pub use service::{
-    service_entrypoint_symbol, service_free_symbol, service_method_symbol, service_new_symbol,
-    service_register_symbol,
+    service_entrypoint_symbol, service_free_symbol, service_method_symbol, service_new_symbol, service_register_symbol,
 };
 pub use trait_bridge::{trait_clear_symbol, trait_register_symbol, trait_unregister_symbol};
 

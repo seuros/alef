@@ -43,7 +43,10 @@ fn wait_until_gone(pid: i32) -> bool {
 fn announced_pid(marker: &std::path::Path) -> i32 {
     let deadline = Instant::now() + SETTLE_LIMIT;
     loop {
-        assert!(Instant::now() < deadline, "no pid was ever announced in the marker file");
+        assert!(
+            Instant::now() < deadline,
+            "no pid was ever announced in the marker file"
+        );
         if let Ok(contents) = std::fs::read_to_string(marker)
             && let Ok(pid) = contents.trim().parse::<i32>()
             && pid > 0

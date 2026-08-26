@@ -89,7 +89,10 @@ mod tests {
     /// separates them from [`service_register_symbol`] and [`service_entrypoint_symbol`]. ~keep
     #[test]
     fn service_method_symbol_has_no_infix() {
-        assert_eq!(service_method_symbol("demo", "HttpRouter", "get"), "demo_http_router_get");
+        assert_eq!(
+            service_method_symbol("demo", "HttpRouter", "get"),
+            "demo_http_router_get"
+        );
         assert_ne!(
             service_method_symbol("demo", "HttpRouter", "get"),
             service_register_symbol("demo", "HttpRouter", "get")
