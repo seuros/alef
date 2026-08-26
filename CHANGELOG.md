@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Go now asks the FFI presence companion before trusting a scalar `Option` return.** A function
+  or method returning `Option<i64>` (or any `Option<scalar>`/`Option<Duration>`) crosses the C ABI
+  as a bare scalar, and Go's generated wrapper wrapped whatever arrived in a pointer that was never
+  `nil` — so a `None` reached the caller as a real `Some(0)`. The wrapper now calls the
+  `{fn}_has_result` companion first and returns `nil` when the result was absent. Whether a
+  companion exists is asked of `ffi::type_map::result_presence_companion_exists`, the same
+  predicate that decides whether the symbol is exported, so Go can never reference a companion the
+  FFI crate never emitted — including the deliberate owned-receiver exclusion, where the companion's
+  second call would find the handle already consumed.
+
 ## [0.69.0] - 2026-08-26
 
 ### Fixed

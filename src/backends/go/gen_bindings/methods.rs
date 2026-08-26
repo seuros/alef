@@ -1,4 +1,5 @@
 use super::functions::{is_bytes_result_method, params_require_marshal};
+use super::result_presence::result_presence_gate;
 use super::types::{cgo_type_for_primitive, emit_type_doc, go_return_expr, primitive_max_sentinel};
 use crate::backends::go::type_map::{go_optional_type, go_type, go_zero_value};
 use crate::codegen::naming::{go_param_name, go_type_name, to_go_name};
@@ -318,6 +319,19 @@ pub(super) fn gen_method_wrapper(
             }
         };
 
+        // The companion's C signature is the primary export's parameter list, so its argument
+        // expressions are built from the same receiver/param pieces `base_c_call` used. ~keep
+        let presence_args: Vec<String> = if method.is_static {
+            c_params.clone()
+        } else {
+            let receiver_arg = if typ.is_opaque {
+                format!("{receiver_name}.ptr")
+            } else {
+                "cRecv".to_string()
+            };
+            std::iter::once(receiver_arg).chain(c_params.iter().cloned()).collect()
+        };
+
         let c_call = if is_bytes_result {
             let base = base_c_call.trim_end_matches(')');
             if base.ends_with('(') {
@@ -341,6 +355,16 @@ pub(super) fn gen_method_wrapper(
         let is_builder_return = !method.is_static
             && typ.is_opaque
             && matches!(&method.return_type, TypeRef::Named(n) if n.as_str() == typ.name.as_str());
+
+        if let Some(gate) = result_presence_gate(
+            &method.return_type,
+            method.receiver.as_ref(),
+            &format!("{ffi_prefix}_{type_snake}_{method_snake}"),
+            &presence_args,
+            method_can_return_error,
+        ) {
+            out.push_str(&gate);
+        }
 
         if method_can_return_error {
             if matches!(method.return_type, TypeRef::Unit) {

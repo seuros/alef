@@ -2,6 +2,7 @@ mod binding_file;
 mod constructors;
 mod functions;
 mod methods;
+mod result_presence;
 mod service_api;
 pub(super) mod types;
 

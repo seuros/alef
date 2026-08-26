@@ -846,6 +846,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("embed_ffi.go.jinja", include_str!("templates/embed_ffi.go.jinja")),
     ("native_setup.go.jinja", include_str!("templates/native_setup.go.jinja")),
+    (
+        "result_presence_gate.jinja",
+        include_str!("templates/result_presence_gate.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

@@ -1,4 +1,5 @@
 use super::methods::gen_param_to_c;
+use super::result_presence::result_presence_gate;
 use super::types::{emit_type_doc, go_return_expr};
 use crate::backends::go::type_map::{alef_handle_c_type, go_optional_type, go_type};
 use crate::codegen::mut_writeback;
@@ -141,7 +142,8 @@ pub(super) fn gen_function_wrapper(
     };
 
     let func_snake = func.name.to_snake_case();
-    let ffi_name = format!("C.{}_{}", ffi_prefix, func_snake);
+    let ffi_symbol = format!("{}_{}", ffi_prefix, func_snake);
+    let ffi_name = format!("C.{ffi_symbol}");
 
     let mut param_strs: Vec<String> = Vec::new();
     for p in func.params.iter() {
@@ -265,6 +267,10 @@ pub(super) fn gen_function_wrapper(
             minijinja::Value::default(),
         ));
         return out;
+    }
+
+    if let Some(gate) = result_presence_gate(&func.return_type, None, &ffi_symbol, &c_params, can_return_error) {
+        out.push_str(&gate);
     }
 
     if can_return_error {
