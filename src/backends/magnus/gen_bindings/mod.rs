@@ -10,7 +10,9 @@ mod tagged_enums;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::ApiSurface;
@@ -815,6 +817,35 @@ impl Backend for MagnusBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    /// Ruby sees each registration function as a module function on the crate's module, bound
+    /// under the configured name verbatim (`define_module_function` in
+    /// `functions::gen_module_init`, which is also the only gate: `exclude_languages` plus the
+    /// field being set). Ruby needs no case transform because these names are already snake. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        let module = get_module_name(&api.crate_name);
+        let qualified = |configured: &Option<String>| {
+            configured.as_deref().map(|name| format!("{module}.{name}"))
+        };
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("ruby"))
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: qualified(&bridge.register_fn),
+                unregister_symbol: qualified(&bridge.unregister_fn),
+                clear_symbol: qualified(&bridge.clear_fn),
+            })
+            .collect()
     }
 }
 

@@ -12,7 +12,9 @@ mod tests;
 mod type_stubs;
 pub mod types;
 
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 
@@ -91,5 +93,37 @@ impl Backend for PhpBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    /// PHP consumers call the static methods on the public wrapper class emitted by
+    /// `generate_public_api`, which forward to the identically named methods on the `…Api`
+    /// extension class. Both are emitted straight off `config.trait_bridges` with no
+    /// `exclude_languages` or `ApiSurface` gate, so this reports the same. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        use crate::backends::php::naming::{php_bridge_method_name, php_public_class_name};
+
+        let class_name = php_public_class_name(&config.php_extension_name());
+        let qualified = |configured: &Option<String>| {
+            configured
+                .as_deref()
+                .map(|name| format!("{class_name}::{}", php_bridge_method_name(name)))
+        };
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: qualified(&bridge.register_fn),
+                unregister_symbol: qualified(&bridge.unregister_fn),
+                clear_symbol: qualified(&bridge.clear_fn),
+            })
+            .collect()
     }
 }

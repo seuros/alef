@@ -98,6 +98,17 @@ pub(in crate::backends::rustler::gen_bindings) struct TraitDelegateCtx<'a> {
     pub native_mod: &'a str,
 }
 
+/// The Elixir function name for a configured trait-bridge
+/// `register_fn`/`unregister_fn`/`clear_fn`.
+///
+/// Elixir functions are snake_case, so this is an identity transform for a well-formed
+/// config value; it exists so the emitted `def` and
+/// `RustlerBackend::trait_bridge_registration_surface` cannot disagree about a malformed
+/// one. ~keep
+pub(crate) fn elixir_delegate_name(configured_fn: &str) -> String {
+    configured_fn.to_snake_case()
+}
+
 pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
     content: &mut String,
     config: &ResolvedCrateConfig,
@@ -140,7 +151,7 @@ pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
         }
 
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
-            let func_name = register_fn.to_snake_case();
+            let func_name = elixir_delegate_name(register_fn);
             if !api_fn_names.contains(func_name.as_str()) {
                 content.push_str(&template_env::render(
                     "elixir_trait_register_delegate.ex.jinja",
@@ -155,7 +166,7 @@ pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
         }
 
         if let Some(unregister_fn) = bridge_cfg.unregister_fn.as_deref() {
-            let func_name = unregister_fn.to_snake_case();
+            let func_name = elixir_delegate_name(unregister_fn);
             if !api_fn_names.contains(func_name.as_str()) {
                 content.push_str(&template_env::render(
                     "elixir_trait_unregister_delegate.ex.jinja",
@@ -169,7 +180,7 @@ pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
         }
 
         if let Some(clear_fn) = bridge_cfg.clear_fn.as_deref() {
-            let func_name = clear_fn.to_snake_case();
+            let func_name = elixir_delegate_name(clear_fn);
             if !api_fn_names.contains(func_name.as_str()) {
                 content.push_str(&template_env::render(
                     "elixir_trait_clear_delegate.ex.jinja",

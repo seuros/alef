@@ -18,7 +18,10 @@ mod tests;
 use crate::backends::napi::type_map::NapiMapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators::{self, AsyncPattern, RustBindingConfig};
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep,
+    TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, NodeCapsuleTypeConfig, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
@@ -803,6 +806,50 @@ impl Backend for NapiBackend {
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
+    }
+
+    /// The JS names of the registration functions.
+    ///
+    /// `unregistration_fn.jinja` and `clear_fn.jinja` stamp an explicit
+    /// `#[napi(js_name = to_camel_case(...))]`; `registration_fn.jinja` does not, because the
+    /// Rust item already carries the configured name and napi-rs applies the same snake-to-camel
+    /// conversion itself. Routing all three through `to_camel_case` therefore reports what the
+    /// module actually exports in every case. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        use crate::codegen::generators::trait_bridge::to_camel_case;
+        config
+            .trait_bridges
+            .iter()
+            .filter_map(|bridge| {
+                let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge.trait_name)?;
+                // A visitor bridge takes `gen_visitor_bridge`, which emits no registry API. ~keep
+                let is_visitor_bridge = bridge.type_alias.is_some()
+                    && bridge.register_fn.is_none()
+                    && bridge.super_trait.is_none()
+                    && trait_def.methods.iter().all(|method| method.has_default_impl);
+                if is_visitor_bridge {
+                    return None;
+                }
+                let surface = TraitBridgeRegistrationSurface {
+                    trait_name: trait_def.name.clone(),
+                    register_symbol: bridge
+                        .register_fn
+                        .as_deref()
+                        .filter(|_| bridge.registry_getter.is_some())
+                        .map(to_camel_case),
+                    unregister_symbol: bridge.unregister_fn.as_deref().map(to_camel_case),
+                    clear_symbol: bridge.clear_fn.as_deref().map(to_camel_case),
+                };
+                let emits_nothing = surface.register_symbol.is_none()
+                    && surface.unregister_symbol.is_none()
+                    && surface.clear_symbol.is_none();
+                (!emits_nothing).then_some(surface)
+            })
+            .collect()
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

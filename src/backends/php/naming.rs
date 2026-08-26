@@ -36,6 +36,26 @@ pub fn php_autoload_namespace(config: &ResolvedCrateConfig) -> String {
 /// through the generated extension — including the php_ext e2e smoke-app generator — must go
 /// through `{php_autoload_namespace}\{php_ext_api_class_name}::{method}`, never a bare global
 /// function name.
+/// The PHP class holding the generated public static methods (e.g. `sample_crate` ->
+/// `SampleCrate`). Distinct from [`php_ext_api_class_name`]: this is the hand-facing wrapper the
+/// consumer calls, which forwards to the `…Api` extension class. ~keep
+pub fn php_public_class_name(extension_name: &str) -> String {
+    use heck::ToPascalCase;
+
+    extension_name.to_pascal_case()
+}
+
+/// The PHP method name for a configured trait-bridge `register_fn`/`unregister_fn`/`clear_fn`.
+///
+/// The same transform names the `#[php(name = "…")]` on the extension class and the static
+/// method on the public wrapper, so `PhpBackend::trait_bridge_registration_surface` reports
+/// through it rather than restating the casing rule. ~keep
+pub fn php_bridge_method_name(configured_fn: &str) -> String {
+    use heck::ToLowerCamelCase;
+
+    configured_fn.to_lower_camel_case()
+}
+
 pub fn php_ext_api_class_name(extension_name: &str) -> String {
     use heck::ToPascalCase;
 

@@ -13,7 +13,9 @@ mod service_api;
 mod tests;
 mod types;
 
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 
@@ -68,5 +70,38 @@ impl Backend for RustlerBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    /// Elixir consumers call the delegates on the generated app module, which forward to the
+    /// same-named NIFs on `<AppModule>.Native`. `exclude_languages` is honoured under both the
+    /// `elixir` and `rustler` spellings, matching `public_api_delegates`. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        use heck::ToPascalCase;
+        use public_api_delegates::elixir_delegate_name;
+
+        let app_module = config.elixir_app_name().to_pascal_case();
+        let qualified = |configured: &Option<String>| {
+            configured
+                .as_deref()
+                .map(|name| format!("{app_module}.{}", elixir_delegate_name(name)))
+        };
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("elixir") && bridge.is_active_for("rustler"))
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: qualified(&bridge.register_fn),
+                unregister_symbol: qualified(&bridge.unregister_fn),
+                clear_symbol: qualified(&bridge.clear_fn),
+            })
+            .collect()
     }
 }

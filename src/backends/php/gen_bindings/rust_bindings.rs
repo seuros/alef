@@ -23,7 +23,6 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig, detect_serde_available, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::{AHashMap, AHashSet};
-use heck::ToLowerCamelCase;
 use minijinja::context;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -501,7 +500,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
 
         for bridge_cfg in &config.trait_bridges {
             if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
-                let php_name = register_fn.to_lower_camel_case();
+                let php_name = crate::backends::php::naming::php_bridge_method_name(register_fn);
                 method_items.push(format!(
                         "#[php(name = \"{php_name}\")]\n\
                         pub fn {register_fn}(backend: &mut ext_php_rs::types::ZendObject) -> ext_php_rs::prelude::PhpResult<()> {{\n    \
@@ -510,7 +509,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     ));
             }
             if let Some(unregister_fn) = bridge_cfg.unregister_fn.as_deref() {
-                let php_name = unregister_fn.to_lower_camel_case();
+                let php_name = crate::backends::php::naming::php_bridge_method_name(unregister_fn);
                 method_items.push(format!(
                     "#[php(name = \"{php_name}\")]\n\
                         pub fn {unregister_fn}(name: String) -> ext_php_rs::prelude::PhpResult<()> {{\n    \
@@ -518,7 +517,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 ));
             }
             if let Some(clear_fn) = bridge_cfg.clear_fn.as_deref() {
-                let php_name = clear_fn.to_lower_camel_case();
+                let php_name = crate::backends::php::naming::php_bridge_method_name(clear_fn);
                 method_items.push(format!(
                     "#[php(name = \"{php_name}\")]\n\
                         pub fn {clear_fn}() -> ext_php_rs::prelude::PhpResult<()> {{\n    \

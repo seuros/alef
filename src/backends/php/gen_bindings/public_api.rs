@@ -9,7 +9,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
-use heck::{ToLowerCamelCase, ToPascalCase};
+use heck::ToLowerCamelCase;
 use minijinja::context;
 use std::path::PathBuf;
 
@@ -23,7 +23,7 @@ pub(super) fn generate_public_api(
     let escape_phpdoc_line = |s: &str| s.replace("*/", "* /");
 
     let extension_name = config.php_extension_name();
-    let class_name = extension_name.to_pascal_case();
+    let class_name = crate::backends::php::naming::php_public_class_name(&extension_name);
 
     let mut content = String::new();
     content.push_str(&crate::backends::php::template_env::render(
@@ -254,7 +254,7 @@ pub(super) fn generate_public_api(
 
     for bridge_cfg in &config.trait_bridges {
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
-            let method_name = register_fn.to_lower_camel_case();
+            let method_name = crate::backends::php::naming::php_bridge_method_name(register_fn);
             content.push_str(&crate::backends::php::template_env::render(
                 "php_phpdoc_block_start.jinja",
                 minijinja::Value::default(),
@@ -303,7 +303,7 @@ pub(super) fn generate_public_api(
             ));
         }
         if let Some(unregister_fn) = bridge_cfg.unregister_fn.as_deref() {
-            let method_name = unregister_fn.to_lower_camel_case();
+            let method_name = crate::backends::php::naming::php_bridge_method_name(unregister_fn);
             content.push_str(&crate::backends::php::template_env::render(
                 "php_phpdoc_block_start.jinja",
                 minijinja::Value::default(),
@@ -348,7 +348,7 @@ pub(super) fn generate_public_api(
             ));
         }
         if let Some(clear_fn) = bridge_cfg.clear_fn.as_deref() {
-            let method_name = clear_fn.to_lower_camel_case();
+            let method_name = crate::backends::php::naming::php_bridge_method_name(clear_fn);
             content.push_str(&crate::backends::php::template_env::render(
                 "php_phpdoc_block_start.jinja",
                 minijinja::Value::default(),
