@@ -22,13 +22,13 @@ pub struct GoBackend;
 impl GoBackend {
     /// Extract the package name from module path (last segment).
     /// Sanitize by removing hyphens and converting to lowercase.
+    ///
+    /// Delegates to [`crate::codegen::naming::go_package_name_from_module`], the single source
+    /// every Go-targeting generator derives the fallback package name from. Prefer
+    /// `config.go_package_name()` over calling this directly -- it also honors an explicit
+    /// `[go] package_name` override.
     fn package_name(module_path: &str) -> String {
-        module_path
-            .split('/')
-            .next_back()
-            .unwrap_or("binding")
-            .replace('-', "")
-            .to_lowercase()
+        crate::codegen::naming::go_package_name_from_module(module_path)
     }
 }
 
@@ -100,12 +100,7 @@ impl Backend for GoBackend {
         // Android, JNI already apply the same filter before their own codegen). ~keep
         let filtered_api = deduped_api.with_cfg_filtered_deep(&enabled_features);
         let api = &filtered_api;
-        let module_path = config.go_module();
-        let pkg_name = config
-            .go
-            .as_ref()
-            .and_then(|g| g.package_name.clone())
-            .unwrap_or_else(|| Self::package_name(&module_path));
+        let pkg_name = config.go_package_name();
         let ffi_prefix = config.ffi_prefix();
 
         let output_dir = {
@@ -403,12 +398,7 @@ impl Backend for GoBackend {
         // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
         let sorted_api = crate::backends::ir_order::with_sorted_items(api);
         let api = &sorted_api;
-        let module_path = config.go_module();
-        let pkg_name = config
-            .go
-            .as_ref()
-            .and_then(|g| g.package_name.clone())
-            .unwrap_or_else(|| Self::package_name(&module_path));
+        let pkg_name = config.go_package_name();
         let ffi_prefix = config.ffi_prefix();
 
         let go_features =

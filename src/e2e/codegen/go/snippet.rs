@@ -1,4 +1,4 @@
-use crate::codegen::naming::{go_free_function_name, go_type_name, to_go_name};
+use crate::codegen::naming::{go_error_type_name, go_free_function_name, go_type_name, to_go_name};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
 use crate::e2e::config::E2eConfig;
@@ -348,7 +348,7 @@ pub(super) fn render_snippet_body(
             call_expr => call_expr, result_var => call.effective_result_var(), returns_error => returns_error,
             returns_void => call.returns_void,
             expects_error => expects_error,
-            error_type => config.error_type_name(),
+            error_type => go_error_type_name(&config.error_type_name(), &config.go_package_name()),
             import_alias => import_alias,
             presentation => presentation,
         },

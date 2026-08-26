@@ -719,6 +719,34 @@ pub fn go_param_name(name: &str) -> String {
     }
 }
 
+/// Derive the Go package name from the last segment of a Go module path (fallback for when
+/// `[go] package_name` is unset; prefer `ResolvedCrateConfig::go_package_name`).
+pub fn go_package_name_from_module(module_path: &str) -> String {
+    // ~keep `split` always yields at least one item, so a plain `next_back().unwrap_or(...)`
+    // never reaches its fallback and an empty module path produced an empty (invalid) Go
+    // package name. Filter empty segments so the fallback is reachable.
+    let last = module_path.split('/').filter(|segment| !segment.is_empty()).next_back();
+    match last {
+        Some(segment) => segment.replace('-', "").to_lowercase(),
+        None => "binding".to_string(),
+    }
+}
+
+/// Derive the Go-exported error type name for a Rust error type: strips a leading
+/// case-insensitive match of the Go package name to avoid revive's stutter lint, e.g.
+/// `("SampleError", "sample")` -> `"Error"`. Every caller that names the Go error type
+/// (`gen_go_error_struct`, the e2e/docs snippet generator) must go through this, not re-derive
+/// the rule, so they can't drift from what the Go backend emits.
+pub fn go_error_type_name(error_name: &str, pkg_name: &str) -> String {
+    let type_lower = error_name.to_lowercase();
+    let pkg_lower = pkg_name.to_lowercase();
+    if type_lower.starts_with(&pkg_lower) && type_lower.len() > pkg_lower.len() {
+        error_name[pkg_lower.len()..].to_string()
+    } else {
+        error_name.to_string()
+    }
+}
+
 /// Convert a Rust snake_case name to Java lowerCamelCase convention.
 pub fn to_java_name(name: &str) -> String {
     name.to_lower_camel_case()

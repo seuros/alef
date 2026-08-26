@@ -934,3 +934,6 @@ mod go_mod_tests;
 #[cfg(test)]
 #[path = "go/tests/import_set_tests.rs"]
 mod import_set_tests;
+#[cfg(test)]
+#[path = "go/tests/error_type_prefix_tests.rs"]
+mod error_type_prefix_tests;

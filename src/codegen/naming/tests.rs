@@ -297,6 +297,52 @@ fn test_go_param_name_plain() {
 }
 
 #[test]
+fn go_package_name_from_module_takes_the_last_segment() {
+    let cases = [
+        ("github.com/org/my-lib", "mylib"),
+        ("binding", "binding"),
+        ("example.invalid/samplecrate", "samplecrate"),
+        ("", "binding"),
+    ];
+    for (module_path, expected) in cases {
+        assert_eq!(go_package_name_from_module(module_path), expected, "module_path={module_path:?}");
+    }
+}
+
+// Table-driven regression for the bug where the e2e/docs Go snippet generator referenced the
+// raw Rust-side error type name while the Go backend's own error generator
+// (`gen_go_error_struct`, which calls this exact function) strips the package prefix -- a
+// leading case-insensitive match of the Go package name is removed from the Rust error type
+// name to avoid revive's stutter lint. Any caller that re-derives this rule instead of calling
+// `go_error_type_name` can drift from what the Go backend actually declares; this test pins the
+// shared rule itself. ~keep
+#[test]
+fn go_error_type_name_strips_a_matching_package_prefix() {
+    let cases = [
+        // Real-world shape: crate `error_type = "SampleCrateError"`, Go package `samplecrate`.
+        ("SampleCrateError", "samplecrate", "Error"),
+        ("SampleLlmError", "samplellm", "Error"),
+        // No overlap between the error type and the package name: left untouched.
+        ("ConversionError", "converter", "ConversionError"),
+        // Negative control: an unrelated error name sharing no prefix with the package.
+        ("ParseError", "samplecrate", "ParseError"),
+        // Exact match (type name equals package name with no suffix) is not stripped -- the
+        // `len() > pkg_lower.len()` guard exists so a package literally named after its own
+        // error type is left with a non-empty identifier.
+        ("Error", "error", "Error"),
+        // Empty package name: nothing to strip.
+        ("Error", "", "Error"),
+    ];
+    for (error_name, pkg_name, expected) in cases {
+        assert_eq!(
+            go_error_type_name(error_name, pkg_name),
+            expected,
+            "error_name={error_name:?} pkg_name={pkg_name:?}"
+        );
+    }
+}
+
+#[test]
 fn pascal_to_snake_normal_case() {
     assert_eq!(pascal_to_snake("MyType"), "my_type");
 }

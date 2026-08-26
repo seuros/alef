@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated Go docs snippets now name the error type the Go binding actually declares.** The
+  snippet generator used the raw Rust-side `[crate] error_type` value, while the Go backend's own
+  error generator strips a leading case-insensitive match of the package name from that same value
+  to avoid revive's stutter lint — so a snippet referenced `pkg.SampleCrateError` against a binding
+  that declares `pkg.Error`. Both now derive the name through `go_error_type_name` in
+  `src/codegen/naming.rs`, alongside a new `go_package_name_from_module` whose empty-module-path
+  fallback is now reachable (the previous `split(..).next_back().unwrap_or("binding")` could never
+  return `None`, so an empty module path yielded an empty package name).
+
 - **Generated TypeScript no longer splices a raw fixture string or array literal into a
   `Uint8Array` field.** Two call sites each lowered a `bytes` fixture value independently and both
   got the string case wrong: the napi object-literal builder wrapped any value in

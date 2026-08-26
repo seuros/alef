@@ -77,7 +77,7 @@ pub fn go_error_sentinel_name(errors: &[ErrorDef], error_name: &str, variant_nam
 /// produces an exported struct field of the matching Go type plus a receiver
 /// method that returns that field.
 pub fn gen_go_error_struct(error: &ErrorDef, pkg_name: &str) -> String {
-    let go_type_name = strip_package_prefix(&error.name, pkg_name);
+    let go_type_name = crate::codegen::naming::go_error_type_name(&error.name, pkg_name);
 
     let methods: Vec<serde_json::Value> = error
         .methods
@@ -144,27 +144,6 @@ fn to_pascal_case(s: &str) -> String {
             }
         })
         .collect()
-}
-
-/// Strip the package-name prefix from a type name to avoid revive's stutter lint.
-///
-/// Revive reports `exported: type name will be used as pkg.PkgFoo by other packages,
-/// and that stutters` when a type name begins with the package name. This function
-/// removes the prefix when it matches (case-insensitively) so that the exported name
-/// does not repeat the package name.
-///
-/// Examples:
-/// - `("SampleLlmError", "samplellm")` → `"Error"` (lowercased `samplellm` is a prefix
-///   of lowercased `samplellmerror`)
-/// - `("ConversionError", "converter")` → `"ConversionError"` (no match)
-fn strip_package_prefix(type_name: &str, pkg_name: &str) -> String {
-    let type_lower = type_name.to_lowercase();
-    let pkg_lower = pkg_name.to_lowercase();
-    if type_lower.starts_with(&pkg_lower) && type_lower.len() > pkg_lower.len() {
-        type_name[pkg_lower.len()..].to_string()
-    } else {
-        type_name.to_string()
-    }
 }
 
 /// Generate Java exception sub-classes for each error variant.

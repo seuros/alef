@@ -57,6 +57,19 @@ impl ResolvedCrateConfig {
             .unwrap_or_else(|_| format!("example.invalid/{}", self.name))
     }
 
+    /// Get the Go package name (e.g. `"samplecrate"`).
+    ///
+    /// Returns `[go] package_name` if set, otherwise derives it from the last segment of
+    /// [`Self::go_module`]. This is the single source every Go-targeting generator (the Go
+    /// backend's binding file, the error-type generator, the e2e/docs snippet generator) must
+    /// call for the package name, so they can never disagree about it.
+    pub fn go_package_name(&self) -> String {
+        self.go
+            .as_ref()
+            .and_then(|g| g.package_name.clone())
+            .unwrap_or_else(|| crate::codegen::naming::go_package_name_from_module(&self.go_module()))
+    }
+
     /// Get the Java package name, returning an error when neither `[java].package`
     /// nor a derivable repository URL is configured.
     pub(crate) fn try_java_package(&self) -> Result<String, String> {
