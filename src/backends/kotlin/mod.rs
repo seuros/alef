@@ -13,7 +13,6 @@ mod template_env;
 pub(crate) mod type_map;
 
 pub use gen_bindings::KotlinBackend;
-pub use gen_bindings::trait_bridge::KotlinJvmBridgeGenerator;
 
 pub(crate) use gen_bindings::default_constructible_type_names;
 pub use gen_bindings::{

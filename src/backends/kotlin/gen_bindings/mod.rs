@@ -9,7 +9,6 @@ pub mod literal_normalizer;
 mod object_wrapper;
 pub mod service_api;
 mod shared;
-pub mod trait_bridge;
 mod traits;
 mod typealiases;
 

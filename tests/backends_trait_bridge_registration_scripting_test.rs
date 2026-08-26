@@ -332,9 +332,9 @@ fn kotlin_jvm_reports_no_registration_surface_because_it_emits_none() {
 
     assert!(
         surfaces.is_empty(),
-        "the Kotlin JVM target's `KotlinJvmBridgeGenerator` is never reached from \
-         `Backend::generate_bindings`, so no register/unregister/clear function is emitted for a \
-         consumer to call; got {surfaces:?}"
+        "`generate_jvm` emits no register/unregister/clear function of its own -- a Kotlin/JVM \
+         consumer calls the generated Java bridge class directly -- so there is no Kotlin symbol \
+         to document; got {surfaces:?}"
     );
 }
 
