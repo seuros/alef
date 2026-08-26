@@ -22,7 +22,7 @@ fn default_method(return_type_name: &str) -> MethodDef {
 }
 
 /// Regression coverage: a type whose `rust_path` nests it under a private module (mirroring
-/// `xberg::core::config::extraction::SvgOptions`, which is never re-exported at the crate root)
+/// a real consumer shape where the type is never re-exported at the crate root)
 /// must have its static core call built from that full module path, not from
 /// `{core_import}::{typ.name}`. Before the fix, `gen_method`'s static branch built the call as
 /// `format!("{core_import}::{type_name}::{method}(...)")`, ignoring `typ.rust_path` entirely —
