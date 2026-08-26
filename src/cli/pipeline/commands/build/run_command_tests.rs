@@ -146,3 +146,73 @@ fn configured_build_command_timeout_reaches_the_post_build_run_command_step() {
          would: {elapsed:?}"
     );
 }
+
+/// The ceiling is worth nothing if it kills only the direct child. `flutter_rust_bridge_codegen`
+/// -- the tool this timeout exists for -- drives cargo builds of its own, and those survived it.
+/// The grandchild's pid is asserted to stop existing rather than the kill branch being asserted
+/// entered: the orphaned tree that prompted this was produced by code that entered its kill
+/// branch. ~keep
+#[test]
+fn a_timed_out_run_command_kills_its_grandchild_too() {
+    let _guard = SkipCommandsGuard::set("");
+    let directory = tempfile::tempdir().expect("scratch directory");
+    let marker = directory.path().join("grandchild.pid");
+    let script = format!("sleep 300 & echo $! > {}; sleep 300", marker.display());
+
+    let grandchild = std::thread::scope(|scope| {
+        let running = scope.spawn(|| {
+            run_run_command(
+                "sh",
+                &["-c", &script],
+                directory.path(),
+                "sample",
+                std::time::Duration::from_secs(3),
+            )
+        });
+        let announced = wait_for_announced_pid(&marker);
+        let result = running.join().expect("the post-build step returns");
+        let error = result.expect_err("a 300s script under a 3s ceiling must time out");
+        assert!(error.to_string().contains("exceeded 3s timeout"), "got: {error:#}");
+        announced
+    });
+
+    assert!(
+        wait_until_gone(grandchild),
+        "grandchild {grandchild} survived the ceiling that killed its parent"
+    );
+}
+
+fn is_alive(pid: i32) -> bool {
+    // SAFETY: signal 0 performs error checking only and sends nothing.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Liveness is deliberately not part of this wait -- see the identical helper in
+/// `cli::pipeline::helpers::timeout_tests`; requiring it would race the kill under test. ~keep
+fn wait_for_announced_pid(marker: &Path) -> i32 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no pid was ever announced in the marker file"
+        );
+        if let Ok(contents) = std::fs::read_to_string(marker)
+            && let Ok(pid) = contents.trim().parse::<i32>()
+            && pid > 0
+        {
+            return pid;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn wait_until_gone(pid: i32) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if !is_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    !is_alive(pid)
+}

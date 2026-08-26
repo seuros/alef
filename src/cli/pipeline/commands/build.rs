@@ -3,6 +3,7 @@ use crate::cli::pipeline::helpers::{
 };
 use crate::cli::registry;
 use crate::core::config::{BuildCommandConfig, Language, ResolvedCrateConfig};
+use crate::process::timed::{Deadline, GroupChild};
 use anyhow::Context as _;
 use rayon::prelude::*;
 use std::path::Path;
@@ -764,16 +765,12 @@ fn rewrite_wasm_package_json_name(path: &Path, new_name: &str) -> anyhow::Result
 /// constant remains the ceiling whenever that field is unset. ~keep
 const RUN_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
-/// Interval between `try_wait()` polls. Short enough to react promptly to a
-/// finished child, long enough not to burn CPU in a tight loop.
-const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
-
 /// Execute a `RunCommand` post-build step.
 ///
 /// Spawns `cmd` with `args` in `base_dir`, streaming stdout/stderr through
 /// alef's own stdio so interactive subprocess progress is visible. Enforces `timeout` as a
-/// ceiling; on timeout the child is SIGKILL'd and the call returns an error. Returns an error
-/// on non-zero exit status.
+/// ceiling; on timeout the child's whole process group is SIGKILL'd and the call returns an
+/// error. Returns an error on non-zero exit status.
 ///
 /// Returns `Ok(true)` when `cmd` actually ran (and exited zero), `Ok(false)` when it was
 /// skipped -- either via the `ALEF_SKIP_COMMANDS` escape hatch below or because `cmd` isn't
@@ -807,7 +804,7 @@ fn run_run_command(
         .stderr(std::process::Stdio::inherit());
     frb_cache::configure(&mut command, cmd, cache_scope)?;
 
-    let mut child = match command.spawn() {
+    let mut child = match GroupChild::spawn(&mut command) {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             warn!(
@@ -818,22 +815,13 @@ fn run_run_command(
         Err(err) => return Err(anyhow::Error::new(err).context(format!("failed to spawn '{cmd}'"))),
     };
 
-    let started_at = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if started_at.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    anyhow::bail!("'{cmd}' exceeded {}s timeout; killed", timeout.as_secs());
-                }
-                std::thread::sleep(RUN_COMMAND_POLL_INTERVAL);
-            }
-            Err(err) => {
-                return Err(anyhow::Error::new(err).context(format!("failed to wait for '{cmd}'")));
-            }
-        }
+    // `flutter_rust_bridge_codegen` and the cargo builds it drives are trees, not processes:
+    // killing the direct child leaves whatever it started running past this ceiling. ~keep
+    let waited = child
+        .wait_within(timeout, &cmd)
+        .with_context(|| format!("failed to wait for '{cmd}'"))?;
+    let Deadline::Exited(status) = waited else {
+        anyhow::bail!("'{cmd}' exceeded {}s timeout; killed", timeout.as_secs());
     };
 
     if !status.success() {
