@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated Rust docs snippets no longer move out of a plain collection field, and no longer
+  `Display`-format a field that does not implement it.** The `Iterate` template appended a borrow
+  adapter only when the collection was `Option`-wrapped, so a plain `Vec` field behind an index
+  expression was moved out of (E0507); it now borrows in both cases. Separately the per-item
+  `println!` chose `{}` vs `{:?}` from the operation-level `display` flag with no reference to the
+  field's own type, so a field such as `Vec<Vec<String>>` was formatted with `Display`. Per-item
+  fields are now checked individually against an allowlist of `String`/`char`/numeric/`bool`
+  primitives and fall back to `{:?}` otherwise.
+
 - **`VerifyFrbBridgeCoverage` no longer passes silently on a gate naming an undeclared
   feature.** A `#[cfg(feature = "...")]` whose feature the sibling `Cargo.toml` never declares at
   all was treated exactly like one declared but left out of `default`, so the function was

@@ -19,6 +19,8 @@ mod assertion_synthetic;
 #[cfg(test)]
 mod collection_field_classification_tests;
 #[cfg(test)]
+mod iterate_display_safety_tests;
+#[cfg(test)]
 mod manifest_dependency_tests;
 #[cfg(test)]
 mod snippet_result_binding_tests;

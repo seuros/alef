@@ -193,8 +193,14 @@ fn presentation_templates_emit_idiomatic_python_rust_and_typescript() {
         rust_output.contains("for item in result.items.iter().flatten()"),
         "{rust_output}"
     );
+    // ~keep No `type_defs`/`functions` are passed to `resolve()` in this test, so
+    // `collection_element_type` cannot resolve `item`'s own type and the per-item-field
+    // `Display` allowlist has nothing to vouch for -- it falls back to `{:?}`, the same "cannot
+    // determine the type, so don't guess `{}`" default as an unresolved field on any other
+    // per-item field. This is not a loosened assertion: `println!("{:?}", ...)` always compiles,
+    // where `{}` does not, so the fallback direction is deliberate.
     assert!(
-        rust_output.contains("println!(\"{}\", item.metadata.heading);"),
+        rust_output.contains("println!(\"{:?}\", item.metadata.heading);"),
         "{rust_output}"
     );
     assert!(

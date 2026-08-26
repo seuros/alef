@@ -24,6 +24,13 @@ pub(crate) struct PresentationOperation {
     /// field expression evaluates to an optional. Parallel rather than a struct per field so the
     /// eighteen templates that read `operation.fields` as plain strings keep working unchanged. ~keep
     pub(crate) field_optionals: Vec<bool>,
+    /// Per-entry companion to [`Self::fields`], same length and order: whether each iterated
+    /// field is safe to format with Rust's `{}` rather than `{:?}`. Only Rust computes this from
+    /// the allowlist ([`FieldResolver::is_declared_field_display_safe`]); every other language
+    /// gets `*display` for every entry unchanged, matching the pre-existing per-operation flag,
+    /// because only the Rust snippet fails to compile against a `Display`-unsafe type. Parallel
+    /// rather than a struct per field for the same reason [`Self::field_optionals`] is. ~keep
+    pub(crate) field_displays: Vec<bool>,
 }
 
 /// Clamp every operation to a path the target binding can actually spell, dropping the ones with
@@ -317,6 +324,7 @@ pub(crate) fn resolve_with(
                 destructure_item: String::new(),
                 shown_optional: path_yields_optional(resolver, path),
                 field_optionals: Vec::new(),
+                field_displays: Vec::new(),
             },
             FixtureDocsOperation::Iterate {
                 path,
@@ -328,6 +336,7 @@ pub(crate) fn resolve_with(
                 let (destructure_source, destructure_item, expression) =
                     typescript_first_item(path, language, resolver, &result_root);
                 let item_root = root_variable(language, item);
+                let field_displays = iterate_field_displays(fields, *display, path, language, resolver, &fixture.id);
                 PresentationOperation {
                     kind: "iterate",
                     expression,
@@ -354,6 +363,7 @@ pub(crate) fn resolve_with(
                         .iter()
                         .map(|field| path_yields_optional(resolver, field))
                         .collect(),
+                    field_displays,
                 }
             }
         })
@@ -373,10 +383,11 @@ pub(crate) fn resolve_with(
 /// flag already gets.
 ///
 /// Only `Show` and a `fields`-less `Iterate` (which prints the raw item, not a per-item field)
-/// are checked. An `Iterate`'s per-item `fields` are rooted at the loop variable, not the
-/// anchored result type [`resolve_with`] built `resolver` against, so this map has no answer for
-/// them — downgrading only what it CAN judge keeps the same permissive "no answer, no warning"
-/// fallback [`FieldResolver::is_display_unsafe`] already uses. ~keep
+/// are checked here: an `Iterate`'s per-item `fields` are rooted at the loop variable, not the
+/// anchored result type [`resolve_with`] built `resolver` against, so [`FieldResolver::is_display_unsafe`]
+/// — which walks from the anchored result root — has no answer for them. [`iterate_field_displays`]
+/// is the separate, per-field answer for that case, computed where the loop item's own element
+/// type is in scope (`resolve_with`'s final `.map()`), not here. ~keep
 fn downgrade_display_unsafe_operations(
     operations: Vec<FixtureDocsOperation>,
     resolver: &FieldResolver,
@@ -420,6 +431,59 @@ fn warn_display_unsafe(fixture_id: &str, path: &str) {
          impls). Falling back to the debug formatter so the generated Rust snippet still \
          compiles -- if `{path}`'s type genuinely implements `Display`, this warning cannot be \
          resolved from the fixture alone."
+    );
+}
+
+/// Per-field companion to [`downgrade_display_unsafe_operations`]: whether each of an `Iterate`
+/// operation's per-item `fields` may render with Rust's `{}` rather than `{:?}`.
+///
+/// Only Rust computes this from the allowlist; a `display: true` fixture rendered for any other
+/// language keeps every entry `true` — the pre-existing per-operation behaviour — because only
+/// the Rust snippet fails to compile against a `Display`-unsafe type (see
+/// [`downgrade_display_unsafe_operations`]'s own gate on `language == "rust"`). When the
+/// operation itself did not request `display: true`, every entry is `false` without consulting
+/// the allowlist at all, matching the template's pre-existing behaviour of formatting every
+/// field with `{:?}` in that case.
+fn iterate_field_displays(
+    fields: &[String],
+    display: bool,
+    collection_path: &str,
+    language: &str,
+    resolver: &FieldResolver,
+    fixture_id: &str,
+) -> Vec<bool> {
+    if !display {
+        return fields.iter().map(|_| false).collect();
+    }
+    if language != "rust" {
+        return fields.iter().map(|_| true).collect();
+    }
+    let element_type = resolver.collection_element_type(collection_path);
+    fields
+        .iter()
+        .map(|field| {
+            let safe = element_type
+                .as_deref()
+                .is_some_and(|element_type| resolver.is_declared_field_display_safe(element_type, field));
+            if !safe {
+                warn_iterate_field_display_unsafe(fixture_id, collection_path, field);
+            }
+            safe
+        })
+        .collect()
+}
+
+fn warn_iterate_field_display_unsafe(fixture_id: &str, collection_path: &str, field: &str) {
+    tracing::warn!(
+        target: "alef::e2e::presentation",
+        fixture = fixture_id,
+        collection_path,
+        field,
+        "fixture `{fixture_id}` sets `display: true` while iterating `{collection_path}`, but \
+         per-item field `{field}` is not a `String`/`char`/numeric/`bool` primitive alef can \
+         positively confirm implements `Display`. Falling back to the debug formatter for this \
+         field so the generated Rust snippet still compiles -- if `{field}`'s type genuinely \
+         implements `Display`, this warning cannot be resolved from the fixture alone."
     );
 }
 
@@ -717,3 +781,7 @@ mod wasm_optional_leaf_field_tests;
 #[cfg(test)]
 #[path = "presentation/authored_operation_validation_tests.rs"]
 mod authored_operation_validation_tests;
+
+#[cfg(test)]
+#[path = "presentation/iterate_field_display_safety_tests.rs"]
+mod iterate_field_display_safety_tests;

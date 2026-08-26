@@ -133,6 +133,14 @@ pub struct FieldResolver {
 ///   stepping past them stays unjudgeable on purpose (map values and JSON blobs are legitimately
 ///   walkable further, just not through this map). Only a field that positively names another
 ///   user type the IR declined to treat as a struct member of belongs here.
+/// * `display_safe_fields[type_name]` — fields of `type_name` whose declared Rust type is a bare
+///   `String`, `char`, or numeric/`bool` primitive — an ALLOWLIST of the only shapes alef can
+///   positively confirm implement `Display`, per
+///   [`ir_result_fields::type_ref_is_display_safe`](super::super::ir_result_fields::type_ref_is_display_safe).
+///   Absence means either a genuinely `Display`-unsafe declared type (a collection, `Option<_>`,
+///   a `Named` struct/enum, or any other wrapped/opaque shape) or simply no evidence — the two are
+///   deliberately not distinguished, because a per-item field formatter that guesses "safe" wrong
+///   is a snippet that fails to compile.
 /// * `root_type` — the IR type name the call's declared return type resolves to, via
 ///   `codegen::call_ir::resolve_declared_result_type`. `None` disables every anchored answer.
 #[derive(Debug, Clone, Default)]
@@ -141,6 +149,7 @@ pub struct IrResultFieldMap {
     pub optional_fields: HashMap<String, HashSet<String>>,
     pub declared_fields: HashMap<String, HashSet<String>>,
     pub unresolvable_named_fields: HashMap<String, HashSet<String>>,
+    pub display_safe_fields: HashMap<String, HashSet<String>>,
     pub root_type: Option<String>,
 }
 

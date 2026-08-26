@@ -16,8 +16,8 @@ async fn main() {
 {% endif %}
 {% for operation in presentation %}
 {% if operation.kind == "show" %}    println!("{% if operation.display %}{}{% else %}{:?}{% endif %}", {{ operation.expression }});
-{% else %}    for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %}.iter().flatten(){% endif %} {
-{% for field in operation.fields %}        println!("{% if operation.display %}{}{% else %}{:?}{% endif %}", {{ field }});
+{% else %}    for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %}.iter().flatten(){% else %}.iter(){% endif %} {
+{% for field in operation.fields %}        println!("{% if operation.field_displays[loop.index0] %}{}{% else %}{:?}{% endif %}", {{ field }});
 {% endfor %}    }
 {% endif %}
 {% endfor %}{% endif %}

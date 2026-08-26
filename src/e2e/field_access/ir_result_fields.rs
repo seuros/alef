@@ -28,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::shared::binding_fields;
-use crate::core::ir::{FieldDef, TypeDef};
+use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 use crate::e2e::codegen::call_ir::named_type;
 
 use super::parse::{parse_path, segment_name};
@@ -79,6 +79,7 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
     let mut optional_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut declared_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut unresolvable_named_fields: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut display_safe_fields: HashMap<String, HashSet<String>> = HashMap::new();
 
     for type_def in type_defs {
         for field in binding_fields(&type_def.fields) {
@@ -88,6 +89,12 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
                 .insert(field.name.clone());
             if rule.applies_to(field, type_def) {
                 optional_fields
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone());
+            }
+            if type_ref_is_display_safe(&field.ty) {
+                display_safe_fields
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone());
@@ -118,8 +125,25 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
         optional_fields,
         declared_fields,
         unresolvable_named_fields,
+        display_safe_fields,
         root_type: None,
     }
+}
+
+/// Whether `ty` is a Rust type alef can positively vouch for as implementing `Display`: a bare
+/// `String`, `char`, or numeric/`bool` primitive, with no wrapping at all.
+///
+/// An ALLOWLIST, not the `field_types` denylist-shaped check [`leaf_is_named_type`] makes do
+/// with: guessing "safe" wrong here is a per-item snippet line that fails to compile, so every
+/// other shape is deliberately refused, including ones that might genuinely implement `Display`
+/// in a given crate. `Option<_>` never implements `Display` regardless of what it wraps (unlike
+/// [`named_type`]'s peeling, which exists to answer a reachability question, not this one), so it
+/// is refused here rather than unwrapped. `Vec<_>`, `Map<_, _>`, `Bytes` (`Vec<u8>`), a `Named`
+/// struct/enum (`extract` discards `impl Display` before it reaches the IR, same gap
+/// [`leaf_is_named_type`] documents), `Path`, `Json`, `Duration`, and `Unit` are refused for the
+/// same reason.
+pub(super) fn type_ref_is_display_safe(ty: &TypeRef) -> bool {
+    matches!(ty, TypeRef::String | TypeRef::Char | TypeRef::Primitive(_))
 }
 
 /// Walk `path` from `map.root_type` through the IR struct graph and answer whether the leaf
@@ -297,6 +321,89 @@ fn walk_to_owner<'a>(map: &'a IrResultFieldMap, path: &str) -> Option<(&'a str, 
         owner = map.field_types.get(owner)?.get(name)?.as_str();
     }
     Some((owner, segment_name(last)?.to_string()))
+}
+
+#[cfg(test)]
+mod display_safe_field_tests {
+    use super::*;
+    use crate::core::ir::PrimitiveType;
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    /// Table-driven allowlist check: only a bare `String`, `char`, or numeric/`bool` primitive is
+    /// vouched for. Every wrapped or opaque shape — including `Option<String>`, which never
+    /// implements `Display` no matter what it wraps — is refused, matching the task's explicit
+    /// allowlist-over-denylist requirement rather than trying to unwrap toward a "real" leaf type.
+    #[test]
+    fn type_ref_is_display_safe_only_for_bare_scalars() {
+        let cases: &[(&str, TypeRef, bool)] = &[
+            ("string", TypeRef::String, true),
+            ("char", TypeRef::Char, true),
+            ("bool", TypeRef::Primitive(PrimitiveType::Bool), true),
+            ("i32", TypeRef::Primitive(PrimitiveType::I32), true),
+            ("f64", TypeRef::Primitive(PrimitiveType::F64), true),
+            (
+                "option_of_string_is_unsafe",
+                TypeRef::Optional(Box::new(TypeRef::String)),
+                false,
+            ),
+            (
+                "vec_of_string_is_unsafe",
+                TypeRef::Vec(Box::new(TypeRef::String)),
+                false,
+            ),
+            (
+                "nested_vec_of_string_is_unsafe",
+                TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
+                false,
+            ),
+            (
+                "map_is_unsafe",
+                TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                false,
+            ),
+            ("bytes_is_unsafe", TypeRef::Bytes, false),
+            ("named_is_unsafe", TypeRef::Named("Widget".to_string()), false),
+            ("path_is_unsafe", TypeRef::Path, false),
+            ("json_is_unsafe", TypeRef::Json, false),
+            ("duration_is_unsafe", TypeRef::Duration, false),
+            ("unit_is_unsafe", TypeRef::Unit, false),
+        ];
+        for (name, ty, expected) in cases {
+            assert_eq!(
+                type_ref_is_display_safe(ty),
+                *expected,
+                "case `{name}` expected display-safe={expected}"
+            );
+        }
+    }
+
+    /// The builder wires the allowlist result into `display_safe_fields`, keyed by owner type —
+    /// the shape [`super::super::resolver::display_safety`] reads directly.
+    #[test]
+    fn build_ir_result_field_map_populates_display_safe_fields_per_owner_type() {
+        let type_defs = vec![TypeDef {
+            name: "Table".to_string(),
+            fields: vec![
+                field("name", TypeRef::String),
+                field("cells", TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String))))),
+            ],
+            ..TypeDef::default()
+        }];
+        let map = build_ir_result_field_map(&type_defs, OptionalityRule::DeclaredType);
+        assert!(map.display_safe_fields.get("Table").is_some_and(|f| f.contains("name")));
+        assert!(
+            !map.display_safe_fields
+                .get("Table")
+                .is_some_and(|f| f.contains("cells"))
+        );
+    }
 }
 
 #[cfg(test)]
