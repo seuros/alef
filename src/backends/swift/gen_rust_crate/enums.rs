@@ -4,6 +4,7 @@
 //! absorbed by a catch-all `Unknown` variant when present.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::enum_from_string_fn_name;
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::EnumDef;
 use std::collections::HashMap;
@@ -11,6 +12,11 @@ use std::collections::HashMap;
 pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &HashMap<String, String>) -> String {
     let mut out = String::new();
     let source_path = resolve_type_path(&en.name, source_crate, type_paths);
+    // `en.rust_path` (not `source_path`, which `type_paths` can remap) is the same fact
+    // `codegen::cfg::collect_cfg_gates` reads to decide whether a cfg is safe to forward as a
+    // Cargo feature; a variant's cfg is only safe to re-emit verbatim when this enum is owned
+    // by the host crate. See `is_host_owned_rust_path`'s doc for why both halves must agree. ~keep
+    let is_host_enum = is_host_owned_rust_path(source_crate, &en.rust_path);
 
     out.push_str(&crate::backends::swift::template_env::render(
         "enum_unit_header.jinja",
@@ -41,6 +47,25 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
     let has_cfg_variants = en.variants.iter().any(|v| v.cfg.is_some());
 
     for variant in &en.variants {
+        // A variant merged in from a foreign `[[crates.source_crates]]` crate carries that
+        // crate's own cfg gate; this swift-bridge crate never declares a Cargo feature for it
+        // (see `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim onto the match arm
+        // is an `unexpected cfg condition value` error. Drop the arm entirely instead -- named
+        // and counted via `tracing::warn!`, not silently -- and fall through to the `_ =>
+        // unreachable!()` catch-all below. ~keep
+        if variant.cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %en.name,
+                enum_rust_path = %en.rust_path,
+                variant_name = %variant.name,
+                cfg = variant.cfg.as_deref().unwrap_or_default(),
+                "dropping Swift bridge From-impl arm for a foreign-crate enum variant behind a \
+                 #[cfg(...)] this crate cannot declare as a Cargo feature; the variant is \
+                 unreachable from this conversion"
+            );
+            continue;
+        }
+
         let pattern = if variant.fields.is_empty() {
             variant.name.clone()
         } else if variant.is_tuple {
@@ -118,7 +143,32 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
     if is_unit_enum {
         let mut from_string_variants = String::new();
         for variant in &en.variants {
+            // This arm names `{{ source_path }}::{{ variant_name }}` directly, with no cfg
+            // guard at all until this fix -- a bug independent of host-vs-foreign: a host-owned
+            // cfg-gated variant (e.g. `Heif` under `#[cfg(feature = "heic")]`) referenced this
+            // way is just as unguarded a reference to a possibly-nonexistent variant as a
+            // foreign one is. A foreign cfg additionally cannot be forwarded as a Cargo feature
+            // (see the From-impl loop above and `codegen::cfg::collect_cfg_gates`), so that case
+            // drops the arm entirely instead of gating it. ~keep
+            if variant.cfg.is_some() && !is_host_enum {
+                tracing::warn!(
+                    enum_name = %en.name,
+                    enum_rust_path = %en.rust_path,
+                    variant_name = %variant.name,
+                    cfg = variant.cfg.as_deref().unwrap_or_default(),
+                    "dropping Swift bridge from-string reconstruction arm for a foreign-crate \
+                     enum variant behind a #[cfg(...)] this crate cannot declare as a Cargo \
+                     feature; the variant is unreachable from this helper"
+                );
+                continue;
+            }
+
             let serde_name = serde_variant_wire_name(variant, en.serde_rename_all.as_deref());
+            if let Some(condition) = variant.cfg.as_deref() {
+                from_string_variants.push_str("        #[cfg(");
+                from_string_variants.push_str(condition);
+                from_string_variants.push_str(")]\n");
+            }
             from_string_variants.push_str(&crate::backends::swift::template_env::render(
                 "rust_enum_from_string_variant.rs.jinja",
                 minijinja::context! {
@@ -334,6 +384,103 @@ mod tests {
         assert!(
             out.contains("_ => unreachable!"),
             "expected catch-all arm when excluded_variants is non-empty, got:\n{out}"
+        );
+    }
+
+    /// The regression this task fixes: a variant merged in from a foreign
+    /// `[[crates.source_crates]]` crate (`rust_path` rooted in a crate other than the host)
+    /// carries that crate's own cfg. Forwarding it verbatim onto the From-impl match arm names a
+    /// feature this swift-bridge crate never declares -- an `unexpected cfg condition value`
+    /// error -- so the arm must be dropped entirely instead of cfg-gated.
+    #[test]
+    fn foreign_cfg_variant_arm_is_dropped_not_gated_in_from_impl() {
+        let en = EnumDef {
+            name: "TierStrategy".to_string(),
+            rust_path: "dep_crate::TierStrategy".to_string(),
+            variants: vec![
+                make_unit_variant("Auto", None),
+                make_unit_variant("Tier1", Some(r#"feature = "testkit""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            !out.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out}"
+        );
+        assert!(
+            !out.contains("dep_crate::TierStrategy::Tier1 =>"),
+            "a foreign-crate cfg-gated variant must not be referenced in the From-impl match, got:\n{out}"
+        );
+        assert!(
+            out.contains("_ => unreachable!"),
+            "dropping the arm must still leave the match exhaustive via the catch-all, got:\n{out}"
+        );
+    }
+
+    /// Same regression, in the `__alef_{enum}_from_swift_string` reconstruction helper: before
+    /// this fix that helper never gated a cfg'd variant's arm at all (host or foreign), so a
+    /// foreign one is an outright compile error and even a host-owned one was an unguarded
+    /// reference. The foreign case drops the arm.
+    #[test]
+    fn foreign_cfg_variant_arm_is_dropped_from_from_string_helper() {
+        let en = EnumDef {
+            name: "TierStrategy".to_string(),
+            rust_path: "dep_crate::TierStrategy".to_string(),
+            variants: vec![
+                make_unit_variant("Auto", None),
+                make_unit_variant("Tier1", Some(r#"feature = "testkit""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            out.contains("fn __alef_tier_strategy_from_swift_string"),
+            "the helper is still emitted for the enum's remaining unit variants, got:\n{out}"
+        );
+        assert!(
+            !out.contains("dep_crate::TierStrategy::Tier1"),
+            "a foreign-crate cfg-gated variant must not be referenced in the from-string helper, got:\n{out}"
+        );
+    }
+
+    /// A host-owned cfg-gated variant (`rust_path` rooted in the host crate) keeps its arm in
+    /// both the From-impl match and the from-string helper, but the from-string helper's arm
+    /// must now carry the same `#[cfg(...)]` guard the From-impl arm already carried -- omitting
+    /// it is an unguarded reference to a variant that may not exist when the feature is off.
+    #[test]
+    fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_from_string_helper() {
+        let en = EnumDef {
+            name: "ImageOutputFormat".to_string(),
+            rust_path: "mylib::ImageOutputFormat".to_string(),
+            variants: vec![
+                make_unit_variant("Jpeg", None),
+                make_unit_variant("Heif", Some(r#"feature = "heic""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            out.contains("mylib::ImageOutputFormat::Heif => Self::Heif,"),
+            "the host-owned variant's From-impl arm must still be emitted, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"Heif\" => Ok(mylib::ImageOutputFormat::Heif),"),
+            "the host-owned variant's from-string arm must still be emitted, got:\n{out}"
+        );
+        assert_eq!(
+            out.matches("#[cfg(feature = \"heic\")]").count(),
+            2,
+            "both the From-impl arm and the from-string arm must carry the #[cfg] guard, got:\n{out}"
         );
     }
 }
