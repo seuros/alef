@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{PrimitiveType, TypeRef};
+use crate::core::ir::{PrimitiveType, ReceiverKind, TypeRef};
 use ahash::{AHashMap, AHashSet};
 
 /// TypeMapper for C FFI bindings — parameter position (input, `*const`).
@@ -250,6 +250,29 @@ pub fn optional_leaf_needs_presence_signal(ty: &TypeRef) -> bool {
         TypeRef::Optional(inner) => optional_leaf_needs_presence_signal(inner),
         _ => false,
     }
+}
+
+/// True when a function or method's `return_type` gets a `{fn}_has_result` presence companion.
+/// Combines [`optional_leaf_needs_presence_signal`] (is the leaf ambiguous) with the one other
+/// condition that rules a companion out: an owned receiver (`receiver == Some(ReceiverKind::Owned)`).
+/// The companion has to call the underlying method a second time to observe presence, and an
+/// owned receiver's first call already removes the handle from the registry -- a second call
+/// would not just risk re-running a side effect, it would fail outright. Pass `receiver: None`
+/// for a free function or a static method.
+///
+/// This is THE eligibility predicate `gen_method_result_presence_wrapper` /
+/// `gen_free_function_result_presence_wrapper` use to decide whether to emit the companion, and
+/// every host-language backend that has to decide whether to declare/call it (Go's cgo wrapper,
+/// ...) must ask the same question through this function -- not re-derive "is this eligible"
+/// independently, or it will reference a companion the FFI crate never exported. ~keep
+pub fn result_presence_companion_exists(return_type: &TypeRef, receiver: Option<&ReceiverKind>) -> bool {
+    let TypeRef::Optional(inner) = return_type else {
+        return false;
+    };
+    if !optional_leaf_needs_presence_signal(inner) {
+        return false;
+    }
+    receiver != Some(&ReceiverKind::Owned)
 }
 
 /// C FFI Optional return type — nullable-pointer logic.

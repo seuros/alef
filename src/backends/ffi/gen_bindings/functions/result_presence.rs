@@ -30,7 +30,7 @@ use crate::codegen::c_consumer;
 use crate::codegen::conversions::core_type_path;
 use crate::core::ir::{CoreWrapper, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 
-use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
+use crate::backends::ffi::type_map::result_presence_companion_exists;
 use super::orchestration::{named_handle_type, named_type_path};
 use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
@@ -352,13 +352,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_result_presence_wrapper
     path_map: &AHashMap<String, String>,
     enum_names: &AHashSet<String>,
 ) -> Option<String> {
-    let TypeRef::Optional(inner) = &method.return_type else {
-        return None;
-    };
-    if !optional_leaf_needs_presence_signal(inner) {
-        return None;
-    }
-    if method.receiver.as_ref() == Some(&ReceiverKind::Owned) {
+    if !result_presence_companion_exists(&method.return_type, method.receiver.as_ref()) {
         return None;
     }
 
@@ -476,10 +470,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_result_presence_
     path_map: &AHashMap<String, String>,
     enum_names: &AHashSet<String>,
 ) -> Option<String> {
-    let TypeRef::Optional(inner) = &func.return_type else {
-        return None;
-    };
-    if !optional_leaf_needs_presence_signal(inner) {
+    if !result_presence_companion_exists(&func.return_type, None) {
         return None;
     }
 
