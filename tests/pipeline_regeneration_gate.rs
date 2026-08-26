@@ -721,7 +721,6 @@ fn drive_pipeline(root: &Path, config_path: &Path, resolved: &ResolvedCrateConfi
     run.ledger.completed("stubs", stub_report.changed_count());
     absorb(run, &stub_report);
 
-    // --- public API --------------------------------------------------------
     let public_api = stage!(
         run,
         "public-api",

@@ -419,7 +419,6 @@ mod enum_variant_named_field {
         Quad { points: Vec<BindingPoint> },
     }
 
-    // Mirrors `enum_arms::core_to_binding_match_arm_ext_cfg` / `binding_to_core_match_arm_ext_cfg`.
     impl From<CoreGeometry> for BindingGeometry {
         fn from(v: CoreGeometry) -> Self {
             match v {
