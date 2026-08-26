@@ -1,1 +1,2 @@
-            {{ core_path }}::{{ variant_pascal }}(data) => Some({{ clone_expr }}),
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            {{ core_path }}::{{ variant_pascal }}(data) => Some({{ clone_expr }}),
