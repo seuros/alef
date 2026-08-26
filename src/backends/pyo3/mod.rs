@@ -4,6 +4,8 @@
 // from_json eligibility gate. ~keep
 pub(crate) mod gen_bindings;
 mod gen_stubs;
+#[cfg(test)]
+mod kwarg_unpack_tests;
 mod py_signature;
 #[cfg(test)]
 mod signature_agreement_tests;

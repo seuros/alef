@@ -61,6 +61,7 @@ pub(super) fn emit_converters(
     dto: &DtoConfig,
     reexported_types: &[String],
     config: &crate::core::config::ResolvedCrateConfig,
+    field_defaults: &crate::backends::pyo3::gen_bindings::types::OptionsFieldDefaults<'_>,
 ) {
     let output_style = dto.python_output_style();
     let reexported_names: AHashSet<&str> = reexported_types.iter().map(|s| s.as_str()).collect();
@@ -497,6 +498,13 @@ pub(super) fn emit_converters(
                         // the same call (alef bug: two `Option<Enum>` fields on one constructor
                         // reproduced `[bad-argument-type]` with the errors swapped between the two
                         // parameters). ~keep
+                        //
+                        // `#[serde(default)]` alone does not make the omission trick sound either:
+                        // `options.py` renders such an enum field as `= "start"` (the enum's
+                        // `#[default]` variant), never `None`, so `if value.x is not None` is
+                        // statically always true and the unpack buys nothing while still costing
+                        // one `[bad-argument-type]` per other unpack in the same call. Only a field
+                        // `options.py` actually defaults to `None` can be absent. ~keep
                         let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
 
                         if is_optional || is_typeddict {
@@ -508,7 +516,7 @@ pub(super) fn emit_converters(
                                     accessor => &accessor,
                                 },
                             ));
-                        } else if defers_to_rust_default(field) {
+                        } else if defers_to_rust_default(field) && field_defaults.admits_none(field) {
                             out.push_str(&crate::backends::pyo3::template_env::render(
                                 "simple_enum_dict_coerce_optional_default.jinja",
                                 minijinja::context! {
@@ -668,7 +676,7 @@ pub(super) fn emit_converters(
             let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
             let is_named_type = matches!(field.ty, TypeRef::Named(_));
 
-            if defers_to_rust_default(field) && !is_optional && is_named_type {
+            if defers_to_rust_default(field) && !is_optional && is_named_type && field_defaults.admits_none(field) {
                 // For Named fields with #[serde(default)] that are non-optional in the binding,
                 let raw_field_accessor = field_access(&field.name);
                 out.push_str(&crate::backends::pyo3::template_env::render(

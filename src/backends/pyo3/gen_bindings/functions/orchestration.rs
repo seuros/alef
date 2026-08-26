@@ -358,6 +358,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         dto,
         reexported_types,
         config,
+        &crate::backends::pyo3::gen_bindings::types::OptionsFieldDefaults::new(api),
     );
 
     emit_function_wrappers(

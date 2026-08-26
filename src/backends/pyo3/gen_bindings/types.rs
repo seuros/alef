@@ -59,7 +59,6 @@ pub(super) fn gen_options_py(
     reexported_types: &[String],
 ) -> String {
     use crate::core::ir::TypeRef;
-    use heck::ToSnakeCase;
     let reexported_names: AHashSet<&str> = reexported_types.iter().map(String::as_str).collect();
 
     let enum_names: AHashSet<&str> = api.enums.iter().map(|e| e.name.as_str()).collect();
@@ -243,15 +242,7 @@ pub(super) fn gen_options_py(
     }
     out.push_str("\n\n");
 
-    // Uses the variant with is_default=true (#[default] attr), falls back to first variant.
-    let enum_defaults: AHashMap<String, String> = api
-        .enums
-        .iter()
-        .filter_map(|e| {
-            let default_v = e.variants.iter().find(|v| v.is_default).or(e.variants.first());
-            default_v.map(|v| (e.name.clone(), v.name.to_snake_case()))
-        })
-        .collect();
+    let field_defaults = OptionsFieldDefaults::new(api);
 
     // Unit enums (needed_enums) live as #[pyclass] in the native module. Each variant is
     // already exposed as UPPER_SNAKE_CASE via #[pyo3(name = "UPPER_SNAKE_CASE")] in the
@@ -374,33 +365,17 @@ pub(super) fn gen_options_py(
                     EmitContext::OptionsModule,
                 );
 
-                let (type_hint_with_none, default) = if let Some(td) = &field.typed_default {
-                    let default = if field.optional && matches!(td, crate::core::ir::DefaultValue::Empty) {
-                        "None".to_string()
-                    } else {
-                        typed_default_to_python(td, &field.ty, &enum_defaults, &data_enum_names)
-                    };
-                    let hint = if default == "None" && !type_hint.contains("None") {
+                let default = field_defaults.literal(field);
+                let type_hint_with_none = if field.typed_default.is_none() && field.optional {
+                    if !type_hint.contains("None") && matches!(&field.ty, TypeRef::Named(_)) {
                         format!("{} | None", type_hint)
                     } else {
                         type_hint.clone()
-                    };
-                    (hint, default)
-                } else if field.optional {
-                    let final_hint = if !type_hint.contains("None") && matches!(&field.ty, TypeRef::Named(_)) {
-                        format!("{} | None", type_hint)
-                    } else {
-                        type_hint.clone()
-                    };
-                    (final_hint, "None".to_string())
+                    }
+                } else if default == "None" && !type_hint.contains("None") {
+                    format!("{} | None", type_hint)
                 } else {
-                    let default = python_zero_value(&field.ty, &enum_names, &data_enum_names);
-                    let hint = if default == "None" && !type_hint.contains("None") {
-                        format!("{} | None", type_hint)
-                    } else {
-                        type_hint.clone()
-                    };
-                    (hint, default)
+                    type_hint.clone()
                 };
 
                 let safe_name = crate::core::keywords::python_ident(&field.name);
@@ -592,6 +567,64 @@ pub(super) fn python_field_type(
         TypeRef::Duration => "int".to_string(),
     };
     if optional { format!("{} | None", base) } else { base }
+}
+
+/// The default literal `options.py` writes for each field of a public config type.
+///
+/// `gen_options_py` emits the literal; `functions::converters` asks whether it is `None` to
+/// decide whether a field genuinely admits `None`. Both must read one set of enum names,
+/// data-enum names and per-enum default variants, or the two answers drift: `converters`'
+/// own `data_enum_names` excludes sanitized data enums while `options.py`'s does not, and a
+/// field that renders `= "start"` there but resolves as nullable here is exactly how the
+/// unnecessary `**({...} if x is not None else {})` unpacks reached the emitted code. ~keep
+pub(in crate::backends::pyo3) struct OptionsFieldDefaults<'a> {
+    enum_names: AHashSet<&'a str>,
+    data_enum_names: AHashSet<&'a str>,
+    enum_defaults: AHashMap<String, String>,
+}
+
+impl<'a> OptionsFieldDefaults<'a> {
+    pub(in crate::backends::pyo3) fn new(api: &'a ApiSurface) -> Self {
+        use heck::ToSnakeCase;
+        Self {
+            enum_names: api.enums.iter().map(|e| e.name.as_str()).collect(),
+            data_enum_names: api
+                .enums
+                .iter()
+                .filter(|e| generators::enum_has_data_variants(e))
+                .map(|e| e.name.as_str())
+                .collect(),
+            // Uses the variant with is_default=true (#[default] attr), falls back to first variant.
+            enum_defaults: api
+                .enums
+                .iter()
+                .filter_map(|e| {
+                    let default_v = e.variants.iter().find(|v| v.is_default).or(e.variants.first());
+                    default_v.map(|v| (e.name.clone(), v.name.to_snake_case()))
+                })
+                .collect(),
+        }
+    }
+
+    /// The Python expression `options.py` assigns as this field's default.
+    pub(in crate::backends::pyo3) fn literal(&self, field: &crate::core::ir::FieldDef) -> String {
+        if let Some(td) = &field.typed_default {
+            if field.optional && matches!(td, crate::core::ir::DefaultValue::Empty) {
+                return "None".to_string();
+            }
+            return typed_default_to_python(td, &field.ty, &self.enum_defaults, &self.data_enum_names);
+        }
+        if field.optional {
+            return "None".to_string();
+        }
+        python_zero_value(&field.ty, &self.enum_names, &self.data_enum_names)
+    }
+
+    /// True when the emitted public field can hold `None` — the only case in which omitting a
+    /// keyword argument (rather than passing it) is meaningful at the native constructor call.
+    pub(in crate::backends::pyo3) fn admits_none(&self, field: &crate::core::ir::FieldDef) -> bool {
+        self.literal(field) == "None"
+    }
 }
 
 /// Convert a typed default value to Python literal.
