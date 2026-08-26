@@ -150,3 +150,89 @@ fn build_magnus_arg(p: &crate::core::ir::ParamDef, bridge_cfg: &TraitBridgeConfi
     }
     p.name.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::gen_visitor_method_magnus;
+    use crate::codegen::visitor_result::VisitorResultVariant;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::core::ir::MethodDef;
+
+    fn variant(name: &str, wire_name: &str, cfg: Option<&str>) -> VisitorResultVariant {
+        VisitorResultVariant {
+            name: name.to_string(),
+            wire_name: wire_name.to_string(),
+            code: 0,
+            cfg: cfg.map(str::to_string),
+        }
+    }
+
+    /// The regression this task fixes: `visitor_method.rs.jinja` referenced
+    /// `{{ return_type }}::{{ variant.name }}` for every `unit_result_variants`/
+    /// `payload_result_variants` entry with no `#[cfg(...)]` guard at all -- E0599 in a build
+    /// excluding a gated variant's feature, once `codegen::visitor_result` started carrying
+    /// `VisitorResultVariant::cfg`. A gated variant (already filtered to host-owned-only by
+    /// `visitor_result_metadata_from_enum_checked`) must render with its guard, in both the
+    /// payload (`if let`) and unit (`match` arm) positions.
+    #[test]
+    fn gated_variant_renders_cfg_guard_in_both_positions() {
+        use crate::codegen::visitor_result::VisitorResultMetadata;
+
+        let metadata = VisitorResultMetadata {
+            default_variant: variant("Continue", "continue", None),
+            unit_variants: vec![
+                variant("Continue", "continue", None),
+                variant("Thumbnail", "thumbnail", Some(r#"feature = "thumbnails""#)),
+            ],
+            string_payload_variants: vec![variant("Custom", "custom", Some(r#"feature = "thumbnails""#))],
+        };
+        let method = MethodDef {
+            name: "visit".to_string(),
+            ..Default::default()
+        };
+        let bridge_cfg = TraitBridgeConfig::default();
+        let type_paths = std::collections::HashMap::new();
+
+        let generated = gen_visitor_method_magnus(&method, &bridge_cfg, &type_paths, &metadata);
+
+        assert_eq!(
+            generated.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            2,
+            "the gated unit variant's match arm AND the gated payload variant's if-let must \
+             each carry the guard exactly once, got:\n{generated}"
+        );
+        assert!(
+            generated.contains("Thumbnail"),
+            "the gated unit variant must still be referenced, got:\n{generated}"
+        );
+        assert!(
+            generated.contains("Custom"),
+            "the gated payload variant must still be referenced, got:\n{generated}"
+        );
+    }
+
+    /// Negative control: metadata with no gated variants renders no `#[cfg(...)]` at all.
+    #[test]
+    fn ungated_metadata_renders_no_cfg() {
+        use crate::codegen::visitor_result::VisitorResultMetadata;
+
+        let metadata = VisitorResultMetadata {
+            default_variant: variant("Continue", "continue", None),
+            unit_variants: vec![variant("Continue", "continue", None)],
+            string_payload_variants: vec![],
+        };
+        let method = MethodDef {
+            name: "visit".to_string(),
+            ..Default::default()
+        };
+        let bridge_cfg = TraitBridgeConfig::default();
+        let type_paths = std::collections::HashMap::new();
+
+        let generated = gen_visitor_method_magnus(&method, &bridge_cfg, &type_paths, &metadata);
+
+        assert!(
+            !generated.contains("#[cfg("),
+            "ungated metadata must not emit #[cfg(...)], got:\n{generated}"
+        );
+    }
+}

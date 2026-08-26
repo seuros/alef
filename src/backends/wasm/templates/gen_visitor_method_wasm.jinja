@@ -27,17 +27,25 @@ fn {{ name }}({{ sig }}) -> {{ ret_ty }} {
             if let Some(s) = val.as_string() {
                 match s.as_str() {
 {%- for variant in unit_result_variants %}
+    {%- if variant.cfg %}
+                    #[cfg({{ variant.cfg }})]
+    {%- endif %}
                     "{{ variant.wire_name }}" => {{ ret_ty }}::{{ variant.name }},
 {%- endfor %}
                     _ => {{ unknown_string_result_expr }},
                 }
             } else if val.is_object() {
 {%- for variant in payload_result_variants %}
+    {%- if variant.cfg %}
+                #[cfg({{ variant.cfg }})]
+    {%- endif %}
+                {
                 let payload_key_{{ loop.index0 }} = wasm_bindgen::JsValue::from_str("{{ variant.wire_name }}");
                 if let Ok(cv) = js_sys::Reflect::get(&val, &payload_key_{{ loop.index0 }})
                     && let Some(s) = cv.as_string()
                 {
                     return {{ ret_ty }}::{{ variant.name }}(s);
+                }
                 }
 {%- endfor %}
                 {{ default_result_expr }}

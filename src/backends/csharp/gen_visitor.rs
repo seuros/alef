@@ -51,7 +51,7 @@ pub fn gen_visitor_files(
     if let Some(result_type) = bridge_cfg.result_type.as_deref() {
         if trait_returns_named_type(trait_def, result_type) {
             if let Some(enum_def) = api.enums.iter().find(|enum_def| enum_def.name == result_type) {
-                match gen_visit_result(namespace, enum_def, &bridge_cfg.trait_name) {
+                match gen_visit_result(namespace, enum_def, &bridge_cfg.trait_name, &api.crate_name) {
                     Ok(content) => files.push((
                         format!("{}.cs", crate::codegen::naming::csharp_type_name(result_type)),
                         content,
@@ -189,13 +189,21 @@ fn gen_node_context(namespace: &str, context_def: &crate::core::ir::TypeDef) -> 
     )
 }
 
-fn gen_visit_result(namespace: &str, enum_def: &crate::core::ir::EnumDef, trait_name: &str) -> anyhow::Result<String> {
+fn gen_visit_result(
+    namespace: &str,
+    enum_def: &crate::core::ir::EnumDef,
+    trait_name: &str,
+    host_crate_name: &str,
+) -> anyhow::Result<String> {
     use crate::backends::csharp::template_env::render;
     use crate::codegen::naming::{csharp_type_name, to_csharp_name, wire_variant_value};
     use minijinja::Value;
 
-    let result_metadata =
-        crate::codegen::visitor_result::visitor_result_metadata_from_enum_checked(enum_def, trait_name)?;
+    let result_metadata = crate::codegen::visitor_result::visitor_result_metadata_from_enum_checked(
+        enum_def,
+        trait_name,
+        host_crate_name,
+    )?;
     let result_type = csharp_type_name(&enum_def.name);
     let unit_variants = enum_def
         .variants

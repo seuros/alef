@@ -14,6 +14,9 @@
             Some(s) => {
                 match s.as_str() {
 {%- for variant in unit_result_variants %}
+    {%- if variant.cfg %}
+                    #[cfg({{ variant.cfg }})]
+    {%- endif %}
                     "{{ variant.wire_name }}" => {{ ret_ty }}::{{ variant.name }},
 {%- endfor %}
                     _ => {{ unknown_string_result_expr }},

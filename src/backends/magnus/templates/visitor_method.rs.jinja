@@ -17,7 +17,8 @@
                 if let Some(hash) = magnus::RHash::from_value(val) {
                     let ruby = unsafe { magnus::Ruby::get_unchecked() };
 {%- for variant in payload_result_variants %}
-                    if let Some(custom_val) = hash.get(ruby.to_symbol("{{ variant.wire_name }}")) {
+{% if variant.cfg %}                    #[cfg({{ variant.cfg }})]
+{% endif %}                    if let Some(custom_val) = hash.get(ruby.to_symbol("{{ variant.wire_name }}")) {
                         return {{ return_type }}::{{ variant.name }}(custom_val.to_string());
                     }
 {%- endfor %}
@@ -25,7 +26,8 @@
                 let s: String = val.to_string();
                 match s.as_str() {
 {%- for variant in unit_result_variants %}
-                    "{{ variant.wire_name }}" => {{ return_type }}::{{ variant.name }},
+{% if variant.cfg %}                    #[cfg({{ variant.cfg }})]
+{% endif %}                    "{{ variant.wire_name }}" => {{ return_type }}::{{ variant.name }},
 {%- endfor %}
                     _ => {{ unknown_string_result_expr }},
                 }
