@@ -109,9 +109,11 @@ fn run_gradle_class_path(
         .map(PathBuf::from)
         .collect();
     if !success || entries.is_empty() {
+        // `entries` is parsed from the full output above; only the reported prose is bounded. ~keep
         return Err(Error::Other(format!(
-            "resolving Gradle classpath for {}: {output}",
-            root.display()
+            "resolving Gradle classpath for {}: {}",
+            root.display(),
+            crate::snippets::diagnostics::bounded_text(&output)
         )));
     }
     std::env::join_paths(entries)

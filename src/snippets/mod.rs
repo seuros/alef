@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod cache;
+pub(crate) mod diagnostics;
 pub mod discovery;
 pub mod error;
 pub mod gap_coverage;

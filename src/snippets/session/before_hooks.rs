@@ -94,7 +94,15 @@ fn run_before(source: &str, working_directory: &Path, env: &BTreeMap<String, Str
     if success {
         Ok(())
     } else {
-        Err(Error::Other(format!("before command failed: {output}")))
+        // A failing build hook is the largest diagnostic alef ever reports: it carries a whole
+        // build's output, and a hook in a pathological state repeats one warning for every file it
+        // wrongly crawled. The bound is applied here rather than in `run_command` because callers
+        // that parse a command's output -- Gradle classpath entries, dependency-error matching --
+        // must still see all of it. ~keep
+        Err(Error::Other(format!(
+            "before command failed: {}",
+            crate::snippets::diagnostics::bounded_text(&output)
+        )))
     }
 }
 

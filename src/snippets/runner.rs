@@ -865,6 +865,10 @@ fn finalize_result(
             || !(classification.status == SnippetStatus::Downgraded || classification.capability_capped),
         "a Downgraded or capability_capped result must always carry a downgrade_reason"
     );
+    // Bounded only here, after `is_dependency_error` and the reclassification wording have both
+    // read the validator's untruncated output: from this point the message is prose, printed and
+    // serialized, never matched against. ~keep
+    let message = message.map(|message| crate::snippets::diagnostics::bounded_text(&message));
     let mut result = result(snippet, status, config.level, effective_level, message, duration_ms);
     result.capability_capped = classification.capability_capped;
     result.downgrade_reason = classification.downgrade_reason;
