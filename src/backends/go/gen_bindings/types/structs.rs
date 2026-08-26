@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use heck::ToSnakeCase;
 use minijinja::context;
 
 use crate::backends::go::type_map::{go_field_type, go_optional_field_type, go_type};
@@ -12,7 +11,7 @@ use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 use super::helpers::{emit_type_doc, is_tuple_field, needs_omitempty_pointer};
 
 pub(in crate::backends::go::gen_bindings) fn gen_opaque_type(typ: &TypeDef, ffi_prefix: &str) -> String {
-    let type_snake = typ.name.to_snake_case();
+    let type_snake = crate::backends::go::c_symbols::type_component(&typ.name);
     let go_name = go_type_name(&typ.name);
     let c_type = format!("{}{}", ffi_prefix.to_uppercase(), typ.name);
 

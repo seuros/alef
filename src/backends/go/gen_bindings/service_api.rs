@@ -237,7 +237,7 @@ fn service_c_arg_expr_with_marshal(
                     (String::new(), format!("{param_name}.ptr"))
                 } else {
                     let var_name = format!("c_{param_name}");
-                    let type_name_snake = type_name.to_snake_case();
+                    let type_name_snake = crate::backends::go::c_symbols::type_component(type_name);
                     let mut preprocessing = format!(
                         "\t{var_name}JSON, err := json.Marshal({param_name})\n\
                         \tif err != nil {{\n\

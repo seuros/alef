@@ -1,5 +1,4 @@
-use heck::ToSnakeCase;
-
+use crate::backends::go::c_symbols;
 use crate::backends::go::type_map::go_type;
 use crate::codegen::naming::go_type_name;
 use crate::core::ir::TypeRef;
@@ -110,11 +109,19 @@ fn go_return_expr_inner(
                 format!("{go_ty}({var_name})")
             }
         },
+        // `c_return_type` maps `Duration` to a bare `u64` of milliseconds, so the value arrives
+        // as a scalar and converts like any other primitive. Falling through to the
+        // `unmarshal{TypeName}` catch-all instead emitted `unmarshalU64(ptr)`, a helper the Go
+        // package never declares. ~keep
+        TypeRef::Duration => {
+            let go_ty = go_type(ty);
+            format!("{go_ty}({var_name})")
+        }
         TypeRef::Named(name) => {
             if opaque_names.contains(name.as_str()) {
                 format!("&{go_type}{{ptr: {var_name}}}", go_type = name, var_name = var_name,)
             } else {
-                let type_snake = name.to_snake_case();
+                let type_snake = c_symbols::type_component(name);
                 let go_type = go_type_name(name);
                 format!(
                     "func() *{go_type} {{\n\
@@ -157,7 +164,10 @@ fn go_return_expr_inner(
             TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => {
                 format!("func() *bool {{ v := {var_name} != 0; return &v }}()")
             }
-            TypeRef::Primitive(_) => {
+            // `Option<Duration>` crosses the ABI exactly like `Option<primitive>` — a bare
+            // scalar, per `backends::ffi::type_map::optional_return_crosses_as_scalar` — so it
+            // takes the same pointer-wrapping conversion. ~keep
+            TypeRef::Primitive(_) | TypeRef::Duration => {
                 let go_ty = go_type(inner);
                 format!("func() *{go_ty} {{ v := {go_ty}({var_name}); return &v }}()")
             }

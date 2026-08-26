@@ -186,6 +186,25 @@ pub fn go_optional_type(ty: &TypeRef) -> Cow<'static, str> {
     }
 }
 
+/// Return-position counterpart of [`go_optional_type`].
+///
+/// A C function returns one value, so `Option<Option<T>>` reaches Go carrying a single level of
+/// nullability: `backends::ffi::type_map::c_return_optional` recurses straight into the inner
+/// option, which makes `None` and `Some(None)` indistinguishable at the boundary. The Go return
+/// *expression* (`gen_bindings::types::mapping::go_return_expr`) collapses the same way and
+/// yields one pointer, so declaring `**T` here would name a type nothing in the generated file
+/// can produce — the declaration and the expression would not even agree with each other. ~keep
+pub fn go_return_type(ty: &TypeRef) -> Cow<'static, str> {
+    go_optional_type(collapsed_return_shape(ty))
+}
+
+fn collapsed_return_shape(ty: &TypeRef) -> &TypeRef {
+    match ty {
+        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Optional(_)) => collapsed_return_shape(inner),
+        _ => ty,
+    }
+}
+
 /// Returns the Go zero-value expression for a return-type, used in `return <zero>, fmt.Errorf(...)`
 /// early exits.
 ///
@@ -301,6 +320,31 @@ mod tests {
     #[test]
     fn test_go_optional_type_non_optional() {
         assert_eq!(go_optional_type(&TypeRef::String), "*string");
+    }
+
+    #[test]
+    fn should_collapse_a_nested_option_to_one_pointer_in_return_position() {
+        let nested = TypeRef::Optional(Box::new(TypeRef::Optional(Box::new(TypeRef::Primitive(
+            PrimitiveType::I64,
+        )))));
+        assert_eq!(go_optional_type(&nested), "**int64");
+        assert_eq!(go_return_type(&nested), "*int64");
+
+        let triple = TypeRef::Optional(Box::new(nested));
+        assert_eq!(go_return_type(&triple), "*int64");
+    }
+
+    #[test]
+    fn should_leave_a_single_option_untouched_in_return_position() {
+        for ty in [
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
+            TypeRef::Optional(Box::new(TypeRef::Duration)),
+            TypeRef::Optional(Box::new(TypeRef::String)),
+            TypeRef::String,
+            TypeRef::Vec(Box::new(TypeRef::String)),
+        ] {
+            assert_eq!(go_return_type(&ty), go_optional_type(&ty), "{ty:?} was rewritten");
+        }
     }
 
     #[test]

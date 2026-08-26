@@ -1,7 +1,8 @@
 use super::methods::gen_param_to_c;
 use super::result_presence::result_presence_gate;
 use super::types::{emit_type_doc, go_return_expr};
-use crate::backends::go::type_map::{alef_handle_c_type, go_optional_type, go_type};
+use crate::backends::go::c_symbols;
+use crate::backends::go::type_map::{alef_handle_c_type, go_optional_type, go_return_type, go_type};
 use crate::codegen::mut_writeback;
 use crate::codegen::naming::{go_free_function_name, go_param_name, pascal_to_snake, to_go_name};
 use crate::core::config::TraitBridgeConfig;
@@ -128,7 +129,7 @@ pub(super) fn gen_function_wrapper(
         ) {
             format!("({}, error)", go_type(&func.return_type))
         } else {
-            format!("({}, error)", go_optional_type(&func.return_type))
+            format!("({}, error)", go_return_type(&func.return_type))
         }
     } else if matches!(func.return_type, TypeRef::Unit) {
         "".to_string()
@@ -138,11 +139,10 @@ pub(super) fn gen_function_wrapper(
     ) {
         go_type(&func.return_type).into_owned()
     } else {
-        go_optional_type(&func.return_type).into_owned()
+        go_return_type(&func.return_type).into_owned()
     };
 
-    let func_snake = func.name.to_snake_case();
-    let ffi_symbol = format!("{}_{}", ffi_prefix, func_snake);
+    let ffi_symbol = c_symbols::free_function_symbol(ffi_prefix, &func.name);
     let ffi_name = format!("C.{ffi_symbol}");
 
     let mut param_strs: Vec<String> = Vec::new();
@@ -230,7 +230,7 @@ pub(super) fn gen_function_wrapper(
 
     if let Some(wb) = writeback {
         let wb_type_name = mut_writeback::writeback_type_name(wb).unwrap_or_default();
-        let wb_type_snake = wb_type_name.to_snake_case();
+        let wb_type_snake = c_symbols::type_component(&wb_type_name);
         let wb_handle = go_param_name(&format!("c_{}", wb.name));
         out.push_str(&crate::backends::go::template_env::render(
             "c_call_simple.jinja",
@@ -309,7 +309,7 @@ pub(super) fn gen_function_wrapper(
                     out.push_str("\t\t}\n");
                 }
                 if let TypeRef::Named(name) = &func.return_type {
-                    let type_snake = name.to_snake_case();
+                    let type_snake = c_symbols::type_component(name);
                     out.push_str("\t\tif ptr != 0 {\n");
                     out.push_str(&crate::backends::go::template_env::render(
                         "free_type_on_error.jinja",
@@ -344,7 +344,7 @@ pub(super) fn gen_function_wrapper(
             if let TypeRef::Named(name) = &func.return_type
                 && !opaque_names.contains(name.as_str())
             {
-                let type_snake = name.to_snake_case();
+                let type_snake = c_symbols::type_component(name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "free_type.jinja",
                     minijinja::context! {
@@ -358,7 +358,7 @@ pub(super) fn gen_function_wrapper(
             if can_return_error {
                 if let TypeRef::Named(name) = &func.return_type {
                     if !opaque_names.contains(name.as_str()) {
-                        let type_snake = name.to_snake_case();
+                        let type_snake = c_symbols::type_component(name);
                         out.push_str(&crate::backends::go::template_env::render(
                             "c_json_to_json.jinja",
                             minijinja::context! {
@@ -476,7 +476,7 @@ pub(super) fn gen_function_wrapper(
         if let TypeRef::Named(name) = &func.return_type
             && !opaque_names.contains(name.as_str())
         {
-            let type_snake = name.to_snake_case();
+            let type_snake = c_symbols::type_component(name);
             out.push_str(&crate::backends::go::template_env::render(
                 "free_type.jinja",
                 minijinja::context! {
@@ -567,8 +567,7 @@ pub(super) fn gen_capsule_function_wrapper(
         ));
     }
 
-    let func_snake = func.name.to_snake_case();
-    let ffi_name = format!("C.{}_{}", ffi_prefix, func_snake);
+    let ffi_name = format!("C.{}", c_symbols::free_function_symbol(ffi_prefix, &func.name));
     let c_params: Vec<String> = func
         .params
         .iter()
@@ -684,8 +683,7 @@ pub(super) fn gen_convert_with_visitor_wrapper(
         ));
     }
 
-    let func_snake = func.name.to_snake_case();
-    let ffi_name = format!("C.{}_{}", ffi_prefix, func_snake);
+    let ffi_name = format!("C.{}", c_symbols::free_function_symbol(ffi_prefix, &func.name));
 
     let mut c_args = Vec::new();
     for param in &func.params {

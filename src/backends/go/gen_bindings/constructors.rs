@@ -102,11 +102,11 @@ pub(super) fn go_ctor_param_setup(go_name: &str, rust_ty: &str, ffi_prefix: &str
 /// Generate a `func New<TypeName>(params...) (*<TypeName>, error)` constructor that
 /// wraps the `C.{ffi_prefix}_{type_snake}_new(...)` FFI symbol emitted by the FFI backend.
 pub(super) fn gen_go_opaque_constructor(typ: &TypeDef, ffi_prefix: &str, ctor: &ClientConstructorConfig) -> String {
+    use crate::backends::go::c_symbols;
     use crate::codegen::naming::go_type_name;
-    use heck::ToSnakeCase;
 
     let go_name = go_type_name(&typ.name);
-    let type_snake = typ.name.to_snake_case();
+    let new_fn = c_symbols::method_symbol(ffi_prefix, &typ.name, "new");
 
     let go_params: String = ctor
         .params
@@ -132,7 +132,7 @@ pub(super) fn gen_go_opaque_constructor(typ: &TypeDef, ffi_prefix: &str, ctor: &
         "// New{go_name} creates a new {go_name} handle via the FFI constructor.\n\
          func New{go_name}({go_params}) (*{go_name}, error) {{\n\
          {setup}\
-         \tptr := C.{ffi_prefix}_{type_snake}_new({c_call_args})\n\
+         \tptr := C.{new_fn}({c_call_args})\n\
          \tif ptr == 0 {{\n\
          \t\treturn nil, fmt.Errorf(\"new{go_name}: %s\", C.GoString(C.{ffi_prefix}_last_error_context()))\n\
          \t}}\n\

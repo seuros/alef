@@ -1,10 +1,10 @@
 use super::functions::{is_bytes_result_method, params_require_marshal};
 use super::result_presence::result_presence_gate;
 use super::types::{cgo_type_for_primitive, emit_type_doc, go_return_expr, primitive_max_sentinel};
-use crate::backends::go::type_map::{go_optional_type, go_type, go_zero_value};
+use crate::backends::go::c_symbols;
+use crate::backends::go::type_map::{go_optional_type, go_return_type, go_type, go_zero_value};
 use crate::codegen::naming::{go_param_name, go_type_name, to_go_name};
 use crate::core::ir::{MethodDef, ParamDef, TypeDef, TypeRef};
-use heck::ToSnakeCase;
 
 /// Generate a streaming wrapper for a method decorated with the `Streaming` adapter pattern.
 ///
@@ -90,22 +90,17 @@ pub(super) fn gen_streaming_method_wrapper(
         })
         .collect();
 
-    let type_snake = typ.name.to_snake_case();
-    let method_snake = method.name.to_snake_case();
-    let item_snake = item_type.to_snake_case();
+    let fn_start = c_symbols::stream_adapter_symbol(ffi_prefix, &typ.name, &method.name, "start");
+    let fn_next = c_symbols::stream_adapter_symbol(ffi_prefix, &typ.name, &method.name, "next");
+    let fn_free = c_symbols::stream_adapter_symbol(ffi_prefix, &typ.name, &method.name, "free");
+    let item_to_json_fn = c_symbols::method_symbol(ffi_prefix, item_type, "to_json");
+    let item_free_fn = c_symbols::method_symbol(ffi_prefix, item_type, "free");
 
     let c_receiver = format!("{}.ptr", receiver_name);
     let start_call = if c_params.is_empty() {
-        format!("C.{}_{}_{}_start({})", ffi_prefix, type_snake, method_snake, c_receiver)
+        format!("C.{}({})", fn_start, c_receiver)
     } else {
-        format!(
-            "C.{}_{}_{}_start({}, {})",
-            ffi_prefix,
-            type_snake,
-            method_snake,
-            c_receiver,
-            c_params.join(", "),
-        )
+        format!("C.{}({}, {})", fn_start, c_receiver, c_params.join(", "))
     };
 
     out.push_str(&crate::backends::go::template_env::render(
@@ -113,9 +108,11 @@ pub(super) fn gen_streaming_method_wrapper(
         minijinja::context! {
             start_call => &start_call,
             ffi_prefix => ffi_prefix,
-            type_snake => &type_snake,
-            method_snake => &method_snake,
-            item_snake => &item_snake,
+            method_name => &method.name,
+            fn_next => &fn_next,
+            fn_free => &fn_free,
+            item_to_json_fn => &item_to_json_fn,
+            item_free_fn => &item_free_fn,
             item_type => &item_go_type,
             item_is_sum_type => item_is_sum_type,
         },
@@ -158,7 +155,7 @@ pub(super) fn gen_method_wrapper(
             ) {
                 go_type(&method.return_type).into_owned()
             } else {
-                go_optional_type(&method.return_type).into_owned()
+                go_return_type(&method.return_type).into_owned()
             };
             format!("({}, error)", ret_go_type)
         }
@@ -170,7 +167,7 @@ pub(super) fn gen_method_wrapper(
     ) {
         go_type(&method.return_type).into_owned()
     } else {
-        go_optional_type(&method.return_type).into_owned()
+        go_return_type(&method.return_type).into_owned()
     };
 
     let receiver_name = if typ.is_opaque { "h" } else { "r" };
@@ -257,33 +254,20 @@ pub(super) fn gen_method_wrapper(
             })
             .collect();
 
-        let type_snake = typ.name.to_snake_case();
-        let method_snake = method.name.to_snake_case();
+        let type_snake = c_symbols::type_component(&typ.name);
+        let c_fn = c_symbols::method_symbol(ffi_prefix, &typ.name, &method.name);
         let base_c_call = if method.is_static {
             if c_params.is_empty() {
-                format!("C.{}_{}_{}()", ffi_prefix, type_snake, method_snake)
+                format!("C.{}()", c_fn)
             } else {
-                format!(
-                    "C.{}_{}_{}({})",
-                    ffi_prefix,
-                    type_snake,
-                    method_snake,
-                    c_params.join(", ")
-                )
+                format!("C.{}({})", c_fn, c_params.join(", "))
             }
         } else if typ.is_opaque {
             let c_receiver = format!("{}.ptr", receiver_name);
             if c_params.is_empty() {
-                format!("C.{}_{}_{}({})", ffi_prefix, type_snake, method_snake, c_receiver)
+                format!("C.{}({})", c_fn, c_receiver)
             } else {
-                format!(
-                    "C.{}_{}_{}({}, {})",
-                    ffi_prefix,
-                    type_snake,
-                    method_snake,
-                    c_receiver,
-                    c_params.join(", ")
-                )
+                format!("C.{}({}, {})", c_fn, c_receiver, c_params.join(", "))
             }
         } else {
             let err_prefix = if returns_value_and_error {
@@ -307,15 +291,9 @@ pub(super) fn gen_method_wrapper(
                 },
             ));
             if c_params.is_empty() {
-                format!("C.{}_{}_{}(cRecv)", ffi_prefix, type_snake, method_snake)
+                format!("C.{}(cRecv)", c_fn)
             } else {
-                format!(
-                    "C.{}_{}_{}(cRecv, {})",
-                    ffi_prefix,
-                    type_snake,
-                    method_snake,
-                    c_params.join(", ")
-                )
+                format!("C.{}(cRecv, {})", c_fn, c_params.join(", "))
             }
         };
 
@@ -435,7 +413,7 @@ pub(super) fn gen_method_wrapper(
                 if let TypeRef::Named(name) = &method.return_type
                     && !opaque_names.contains(name.as_str())
                 {
-                    let type_snake = name.to_snake_case();
+                    let type_snake = c_symbols::type_component(name);
                     out.push_str(&crate::backends::go::template_env::render(
                         "free_type.jinja",
                         minijinja::context! {
@@ -498,7 +476,7 @@ pub(super) fn gen_method_wrapper(
             if let TypeRef::Named(name) = &method.return_type
                 && !opaque_names.contains(name.as_str())
             {
-                let type_snake = name.to_snake_case();
+                let type_snake = c_symbols::type_component(name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "free_type.jinja",
                     minijinja::context! {
@@ -624,7 +602,7 @@ pub(super) fn gen_param_to_c(
                 ));
                 out.push('\n');
             } else if ffi_param_enum_names.contains(name) {
-                let enum_snake = name.to_snake_case();
+                let enum_snake = c_symbols::type_component(name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_enum_to_i32.jinja",
                     minijinja::context! {
@@ -636,7 +614,7 @@ pub(super) fn gen_param_to_c(
                 ));
                 out.push('\n');
             } else if enum_names.contains(name) {
-                let type_snake = name.to_snake_case();
+                let type_snake = c_symbols::type_component(name);
                 let err_action = if can_return_error {
                     format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
                 } else {
@@ -664,7 +642,7 @@ pub(super) fn gen_param_to_c(
                 ));
                 out.push('\n');
             } else {
-                let type_snake = name.to_snake_case();
+                let type_snake = c_symbols::type_component(name);
                 let err_action = if can_return_error {
                     format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
                 } else {
