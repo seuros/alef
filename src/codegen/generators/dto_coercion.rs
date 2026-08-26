@@ -44,32 +44,32 @@ fn __alef_apply_aliases(value: &mut serde_json::Value, aliases: &[__AlefAlias]) 
         return;
     };
     for alias in aliases {
-        if !alias.nested.is_empty() {
-            if let Some(child) = map.get_mut(alias.rust) {
-                match alias.kind {
-                    __AlefKind::Object => __alef_apply_aliases(child, alias.nested),
-                    __AlefKind::Seq => {
-                        if let serde_json::Value::Array(items) = child {
-                            for item in items.iter_mut() {
-                                __alef_apply_aliases(item, alias.nested);
-                            }
+        if !alias.nested.is_empty()
+            && let Some(child) = map.get_mut(alias.rust)
+        {
+            match alias.kind {
+                __AlefKind::Object => __alef_apply_aliases(child, alias.nested),
+                __AlefKind::Seq => {
+                    if let serde_json::Value::Array(items) = child {
+                        for item in items.iter_mut() {
+                            __alef_apply_aliases(item, alias.nested);
                         }
                     }
-                    __AlefKind::Map => {
-                        if let serde_json::Value::Object(entries) = child {
-                            for entry in entries.values_mut() {
-                                __alef_apply_aliases(entry, alias.nested);
-                            }
-                        }
-                    }
-                    __AlefKind::Leaf => {}
                 }
+                __AlefKind::Map => {
+                    if let serde_json::Value::Object(entries) = child {
+                        for entry in entries.values_mut() {
+                            __alef_apply_aliases(entry, alias.nested);
+                        }
+                    }
+                }
+                __AlefKind::Leaf => {}
             }
         }
-        if alias.rust != alias.wire {
-            if let Some(taken) = map.remove(alias.rust) {
-                map.insert(alias.wire.to_string(), taken);
-            }
+        if alias.rust != alias.wire
+            && let Some(taken) = map.remove(alias.rust)
+        {
+            map.insert(alias.wire.to_string(), taken);
         }
     }
 }

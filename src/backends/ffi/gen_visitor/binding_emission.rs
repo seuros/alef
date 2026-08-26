@@ -339,10 +339,10 @@ pub unsafe extern "C" fn {prefix}_visitor_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_visitor_free(visitor: AlefHandle) {{
     catch_ffi_panic((), || {{
-    if visitor != 0 {{
-        if let Err(error) = remove_handle::<{pascal_prefix}Visitor>(visitor) {{
-            set_handle_error(&error);
-        }}
+    if visitor != 0
+        && let Err(error) = remove_handle::<{pascal_prefix}Visitor>(visitor)
+    {{
+        set_handle_error(&error);
     }}
     }})
 }}

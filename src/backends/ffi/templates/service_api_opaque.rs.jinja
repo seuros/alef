@@ -38,10 +38,10 @@ pub extern "C" fn {{ new_fn_name }}() -> AlefHandle {
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ free_fn_name }}(handle: AlefHandle) {
     catch_ffi_panic((), || {
-    if handle != 0 {
-        if let Err(error) = remove_handle::<{{ opaque_name }}>(handle) {
-            set_handle_error(&error);
-        }
+    if handle != 0
+        && let Err(error) = remove_handle::<{{ opaque_name }}>(handle)
+    {
+        set_handle_error(&error);
     }
     })
 }

@@ -958,10 +958,10 @@ pub unsafe extern "C" fn {fn_next}(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {fn_free}(handle: AlefHandle) {{
     catch_ffi_panic((), || {{
-    if handle != 0 {{
-        if let Err(error) = remove_handle::<{handle_name}>(handle) {{
-            set_handle_error(&error);
-        }}
+    if handle != 0
+        && let Err(error) = remove_handle::<{handle_name}>(handle)
+    {{
+        set_handle_error(&error);
     }}
     }})
 }}"#,

@@ -46,20 +46,22 @@ impl {{ enum_name }} {
 {%- endif %}
         }
         // Try to extract as integer (by discriminant value)
-        if let Ok(n) = value.extract::<i32>() {
 {%- if variants | length == 1 %}
-            if n == {{ variants[0].idx }} {
-                return Ok(Self::{{ variants[0].name }});
-            }
+        if let Ok(n) = value.extract::<i32>()
+            && n == {{ variants[0].idx }}
+        {
+            return Ok(Self::{{ variants[0].name }});
+        }
 {%- else %}
+        if let Ok(n) = value.extract::<i32>() {
             match n {
 {%- for variant in variants %}
                 {{ variant.idx }} => return Ok(Self::{{ variant.name }}),
 {%- endfor %}
                 _ => {}
             }
-{%- endif %}
         }
+{%- endif %}
         let type_name = stringify!({{ enum_name }});
         Err(pyo3::exceptions::PyValueError::new_err(format!(
             "invalid value for {}: {:#?}. Expected variant name (str) or discriminant (int)",
