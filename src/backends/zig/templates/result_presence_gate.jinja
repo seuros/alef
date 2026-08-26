@@ -1,0 +1,3 @@
+{{ indent }}if (c.{{ symbol }}({{ args }}) != {{ present }}) {
+{{ failure_block }}{{ cleanup }}{{ indent }}    return null;
+{{ indent }}}

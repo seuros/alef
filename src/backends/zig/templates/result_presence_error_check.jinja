@@ -1,0 +1,3 @@
+{{ indent }}if (c.{{ prefix }}_last_error_code() != 0) {
+{{ indent }}    return _error_with_message({{ error_type }});
+{{ indent }}}

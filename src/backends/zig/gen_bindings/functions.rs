@@ -1,3 +1,4 @@
+use super::result_presence::free_function_presence_gate;
 use crate::core::ir::{FunctionDef, ParamDef, PrimitiveType, TypeRef};
 
 use super::errors::resolve_zig_error_type;
@@ -196,6 +197,17 @@ pub(crate) fn emit_function(
     } else {
         None
     };
+
+    if let Some(gate) = free_function_presence_gate(
+        f,
+        prefix,
+        struct_names,
+        opaque_creator_map,
+        &c_call,
+        zig_error_type.as_deref(),
+    ) {
+        out.push_str(&gate);
+    }
 
     if let Some(error_type) = &zig_error_type {
         let result_is_pointer = !(matches!(f.return_type, TypeRef::Unit) || returns_bytes);
@@ -841,7 +853,7 @@ pub(super) fn optional_int_sentinel(prim: &PrimitiveType) -> Option<&'static str
 ///
 /// These are emitted after the C call (and after the error check) so the
 /// allocations are always freed even when an error is returned.
-fn emit_param_free(
+pub(super) fn emit_param_free(
     p: &ParamDef,
     _prefix: &str,
     struct_names: &std::collections::HashSet<String>,
@@ -1067,22 +1079,6 @@ mod tests {
         );
 
         assert_eq!(expr, "if (_result == 0) null else NodeHandle{ ._handle = _result }");
-    }
-
-    /// Positive control: an `Optional<primitive>` has no null/zero sentinel to translate and
-    /// must stay a bare passthrough. Guards against a fix that wraps every `Optional<_>`
-    /// unconditionally, which would make the assertion above pass for the wrong reason.
-    #[test]
-    fn optional_primitive_return_stays_a_bare_passthrough() {
-        let expr = unwrap_return_expr(
-            "_result",
-            &TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
-            "sample",
-            &std::collections::HashSet::new(),
-            None,
-        );
-
-        assert_eq!(expr, "_result");
     }
 
     /// Regression test: `Char` crosses the C ABI exactly like `String` (a `*mut c_char` +

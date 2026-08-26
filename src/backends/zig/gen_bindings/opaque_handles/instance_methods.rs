@@ -11,6 +11,8 @@ use super::params::{
     emit_method_param_conversion, emit_method_param_free, method_c_arg_names, method_param_needs_alloc,
     method_param_needs_from_json, param_zig_type_with_enums,
 };
+use crate::backends::zig::gen_bindings::result_presence::{METHOD_INDENT, result_presence_gate};
+
 use super::render;
 use super::returns::method_unwrap_return_expr;
 use super::streaming::{StreamingContext, emit_opaque_streaming_method};
@@ -223,6 +225,21 @@ fn emit_method_body(
     zig_error_type: Option<&String>,
     out: &mut String,
 ) {
+    // Before the primary call, for the reason spelled out in `result_presence`: the companion
+    // clears the crate's last-error slot on entry. Method parameter teardown emits nothing, so
+    // the gate has no cleanup to carry. ~keep
+    if let Some(gate) = result_presence_gate(
+        &method.return_type,
+        method.receiver.as_ref(),
+        c_call,
+        prefix,
+        METHOD_INDENT,
+        "",
+        zig_error_type.map(String::as_str),
+    ) {
+        out.push_str(&gate);
+    }
+
     if let Some(err_ty) = zig_error_type {
         emit_fallible_method_body(
             method,

@@ -10,6 +10,7 @@ mod errors;
 mod functions;
 mod helpers;
 mod opaque_handles;
+mod result_presence;
 mod service_api;
 mod types;
 

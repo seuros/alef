@@ -44,15 +44,15 @@ const fn presence_channel_stance(language: Language) -> PresenceStance {
     match language {
         // Wired: the wrapper invokes `{fn}_has_result` before the primary call and reports
         // absence as the host's absent value.
-        Language::Go | Language::Java | Language::Csharp => PresenceStance::ConsumesCompanion,
+        Language::Go | Language::Java | Language::Csharp | Language::Zig => PresenceStance::ConsumesCompanion,
         // Kotlin/JVM emits no downcall of its own — it calls the Java facade and applies
         // `.orElse(null)`, so it consumes the companion transitively through Java.
         Language::Kotlin => PresenceStance::ConsumesCompanion,
-        // Audited and confirmed broken; the companion exists but these backends do not call it.
-        // Zig's `unwrap_return_expr` passes the raw scalar through and lets Zig coerce `i64` to
-        // `?i64`, which is never null. Dart's `ffi` style is broken one layer lower still: its
-        // `dart:ffi` typedef declares `Pointer<Void>` where the FFI crate returns `int64_t`.
-        Language::Zig | Language::Dart => PresenceStance::ConsumesCabiNotYetWired,
+        // Audited and confirmed broken; the companion exists but this backend does not call it.
+        // Dart's `ffi` style is broken one layer below the presence channel: its `dart:ffi`
+        // typedef declares `Pointer<Void>` where the FFI crate returns `int64_t`, so a gate over
+        // it would guard a call of the wrong width.
+        Language::Dart => PresenceStance::ConsumesCabiNotYetWired,
         // Real `Option<T>` into a macro framework: Python `None`, JS `null`, Ruby `nil`, PHP
         // `null`, Elixir `nil`, R `NULL`/`NA`.
         Language::Python | Language::Node | Language::Ruby | Language::Php | Language::Elixir | Language::R => {
@@ -100,7 +100,7 @@ fn the_unwired_c_abi_backends_are_exactly_the_known_gaps() {
 
     assert_eq!(
         unwired,
-        vec![Language::Dart, Language::Zig],
+        vec![Language::Dart],
         "the set of C-ABI backends still missing the presence companion changed"
     );
 }

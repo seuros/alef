@@ -100,6 +100,14 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("param_free.jinja", include_str!("templates/param_free.jinja")),
     (
+        "result_presence_gate.jinja",
+        include_str!("templates/result_presence_gate.jinja"),
+    ),
+    (
+        "result_presence_error_check.jinja",
+        include_str!("templates/result_presence_error_check.jinja"),
+    ),
+    (
         "param_optional_free.jinja",
         include_str!("templates/param_optional_free.jinja"),
     ),
