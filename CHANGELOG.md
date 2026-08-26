@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Trait-bridge test stubs now satisfy the interfaces they claim to implement, in four
+  backends.** Four independent causes, each a generator re-deriving or hardcoding a fact another
+  part of the pipeline already had:
+  - Go dropped all four required super-trait methods whenever the super trait was declared in a
+    private module and re-exported, because the lookup matched on the extracted `rust_path` rather
+    than the configured, publicly visible path. Java had already hit and fixed this; Go now has the
+    same synthetic fallback.
+  - Java forced every enum-returning method to `String`, because the exclusion helper it used
+    cannot see enums (they live in a separate registry). It now uses the enum-aware helper, as C#
+    already did.
+  - Kotlin-Android fell back to a hardcoded, project-specific variant table and otherwise called a
+    bare constructor, which is invalid for both of Kotlin's enum lowerings. It now reads the real
+    enum registry and emits `Type.CONSTANT` or `Type.Variant` as appropriate.
+  - Dart took the first variant unconditionally and naively lowercased it, producing a constructor
+    tear-off when that variant carried fields and the wrong casing regardless.
+  The dispatcher also passed an empty enum slice to the Dart and Swift emitters, so their existing
+  enum-default lookups could never succeed at all. Where no fieldless variant exists, the stub now
+  warns naming the type and language instead of guessing a value the target compiler rejects.
+
 - **Snippet session locks are keyed by fingerprint, not by config name.** `alef.toml` can point two
   differently-named sessions (a language fallback such as `typescript` and an explicit
   binding-package target such as `node`) at the same `cwd` and manifest. They resolve to one

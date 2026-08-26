@@ -216,7 +216,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
             kotlin_android_style: false,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
-            owner_handle_is_receiver: false,
+            owner_handle_is_receiver: false, enums: &[],
         },
     )
     .expect("args build succeeds");
@@ -268,7 +268,7 @@ fn json_object_arg_with_mock_url_placeholder_binds_once_at_runtime() {
             kotlin_android_style: false,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
-            owner_handle_is_receiver: false,
+            owner_handle_is_receiver: false, enums: &[],
         },
     )
     .expect("args build succeeds");
@@ -1330,7 +1330,7 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
             kotlin_android_style: false,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
-            owner_handle_is_receiver: false,
+            owner_handle_is_receiver: false, enums: &[],
         },
     )
     .expect("args build succeeds");
@@ -1351,7 +1351,7 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
             kotlin_android_style: true,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
-            owner_handle_is_receiver: false,
+            owner_handle_is_receiver: false, enums: &[],
         },
     )
     .expect("args build succeeds");
@@ -1415,7 +1415,7 @@ fn kotlin_android_batch_bytes_item_wraps_paths() {
             kotlin_android_style: true,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
-            owner_handle_is_receiver: false,
+            owner_handle_is_receiver: false, enums: &[],
         },
     )
     .expect("args build succeeds");

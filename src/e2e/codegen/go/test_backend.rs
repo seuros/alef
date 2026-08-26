@@ -144,6 +144,15 @@ pub fn emit_test_backend_with_context(
             continue;
         }
         let go_method = method_to_camel(&method.name);
+        // A synthesized `Plugin` method (see `resolve_test_backend_emission`) carries no
+        // `trait_source`, so it reaches this loop rather than the super-trait one above; give
+        // its `Name()` the same fixture-id body the super-trait branch emits instead of the
+        // generic empty-string default, matching the Java stub generator's equivalent
+        // fallback (`java::stubs::emit_test_backend_with_context`). ~keep
+        if method.name == "name" {
+            let _ = writeln!(setup, "func ({struct_name}) {go_method}() string {{ return \"{safe_id}\" }}");
+            continue;
+        }
         emit_go_stub_method_body(
             &mut setup,
             &struct_name,
@@ -462,6 +471,92 @@ fn emit_go_stub_method_body(
         out,
         "func ({struct_name}) {go_method}({param_str}) {return_type_str} {{ {return_expr} }}"
     );
+}
+
+/// Names of the four `Plugin` super-trait methods every Go trait-bridge interface
+/// requires, paired with whether the real interface declares them fallible (`error`).
+/// Go interfaces have no default-method mechanism (unlike Java's `default` methods), so
+/// a stub must implement all four regardless of which the Rust trait leaves at their
+/// default body.
+///
+/// Mirrors `gen_plugin_trampolines` (`backends::go::trait_bridge::dispatch`), which
+/// unconditionally emits trampolines for exactly these four names — the actual
+/// interface contract, not a re-derivation of it. ~keep
+const SUPER_TRAIT_REQUIRED_METHODS: [(&str, bool); 4] =
+    [("name", false), ("version", false), ("initialize", true), ("shutdown", true)];
+
+/// Resolve the full stub emission for a Go `test_backend` fixture argument.
+///
+/// Looks up the trait's own IR methods, merges in whatever `Plugin` super-trait methods
+/// the IR happens to expose under a matching `rust_path`, and synthesizes any of the
+/// four fixed `Plugin` methods still missing afterward.
+///
+/// The `rust_path` lookup below finds nothing when `Plugin` is declared in a private
+/// module and re-exported via `pub use` — its `rust_path` need not equal the configured
+/// `super_trait` value — silently leaving every Go trait-bridge stub without any of the
+/// four methods the real interface requires and failing to compile. Java hit and fixed
+/// the identical failure (`e2e::codegen::java::args`,
+/// `backends::java::gen_bindings::trait_bridge_naming::SUPER_TRAIT_REQUIRED_METHODS`);
+/// this synthesizes whichever required method the lookup did not already supply, instead
+/// of re-deriving the same convention a second way. ~keep
+pub(super) fn resolve_test_backend_emission(
+    fixture: &crate::e2e::fixture::Fixture,
+    trait_name: &str,
+    trait_bridge: &crate::core::config::TraitBridgeConfig,
+    config: &crate::core::config::ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    import_alias: &str,
+) -> super::super::TestBackendEmission {
+    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+        .iter()
+        .find(|t| t.name == *trait_name)
+        .map(|t| t.methods.iter().collect())
+        .unwrap_or_default();
+
+    if let Some(super_trait) = &trait_bridge.super_trait
+        && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
+    {
+        for method in &super_type.methods {
+            if !methods.iter().any(|m| m.name == method.name) {
+                methods.push(method);
+            }
+        }
+    }
+
+    let synthetic_super_trait_methods: Vec<crate::core::ir::MethodDef> = if trait_bridge.super_trait.is_some() {
+        SUPER_TRAIT_REQUIRED_METHODS
+            .iter()
+            .copied()
+            .filter(|(name, _)| !methods.iter().any(|m| m.name == *name))
+            .map(|(name, fallible)| crate::core::ir::MethodDef {
+                name: name.to_string(),
+                // Initialize/Shutdown are `() error`; Name/Version are `() string`.
+                return_type: if fallible {
+                    crate::core::ir::TypeRef::Unit
+                } else {
+                    crate::core::ir::TypeRef::String
+                },
+                error_type: fallible.then(|| "Error".to_string()),
+                ..Default::default()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    methods.extend(synthetic_super_trait_methods.iter());
+
+    let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
+    let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
+    emit_test_backend_with_context(
+        trait_bridge,
+        &methods,
+        fixture,
+        &excluded_named,
+        import_alias,
+        &enum_names,
+        enums,
+    )
 }
 
 #[cfg(test)]

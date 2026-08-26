@@ -30,6 +30,11 @@ pub(super) struct KotlinArgsContext<'a> {
     pub(super) kotlin_android_style: bool,
     pub(super) config: &'a ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
+    /// The IR enum registry. Needed so a `test_backend` stub can look up the real shape
+    /// (plain `enum class` vs. sealed class) and default variant of an enum-typed trait
+    /// method's return value, instead of guessing a bare `TypeName()` call that targets an
+    /// always-private (or, for a sealed class, always-protected) constructor. ~keep
+    pub(super) enums: &'a [crate::core::ir::EnumDef],
     /// True for a streaming `owner_type` adapter, where the facade exposes the
     /// call as an instance method on the handle rather than as a positional
     /// argument to a static/client call (`engine.streamItems(req)`, not
@@ -53,6 +58,7 @@ pub(super) fn build_args_and_setup(
         kotlin_android_style,
         config,
         type_defs,
+        enums,
         owner_handle_is_receiver,
     } = context;
     if args.is_empty() {
@@ -203,7 +209,7 @@ pub(super) fn build_args_and_setup(
             // `emit_test_backend` panics rather than return a placeholder when a
             // language has no real `test_backend` stub generator (e.g. Kotlin JVM
             // today) — see `TestBackendEmission`'s doc comment. ~keep
-            let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, &[], "");
+            let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, enums, "");
             setup_lines.push(emission.setup_block);
             parts.push(emission.arg_expr);
             continue;

@@ -926,6 +926,8 @@ mod file_dto_tests;
 #[cfg(test)]
 mod import_pruning_tests;
 #[cfg(test)]
+mod super_trait_synthesis_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

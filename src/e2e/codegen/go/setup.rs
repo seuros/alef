@@ -3,7 +3,6 @@
 use crate::e2e::escape::go_string_literal;
 
 use super::json_values::{convert_json_for_go, element_type_to_go_slice, json_to_go, json_to_go_yields_string_literal};
-use super::test_backend::emit_test_backend_with_context;
 
 fn json_object_go_type<'a>(arg: &'a crate::e2e::config::ArgMapping, options_type: Option<&'a str>) -> Option<&'a str> {
     arg.go_type.as_deref().or(arg.element_type.as_deref()).or(options_type)
@@ -568,33 +567,14 @@ pub(super) fn build_args_and_setup(
             if let Some(trait_name) = &arg.trait_name
                 && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
             {
-                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                    .iter()
-                    .find(|t| t.name == *trait_name)
-                    .map(|t| t.methods.iter().collect())
-                    .unwrap_or_default();
-
-                if let Some(super_trait) = &trait_bridge.super_trait
-                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
-                {
-                    for method in &super_type.methods {
-                        if !methods.iter().any(|m| m.name == method.name) {
-                            methods.push(method);
-                        }
-                    }
-                }
-
-                let excluded_named =
-                    crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
-                let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
-                let emission = emit_test_backend_with_context(
-                    trait_bridge,
-                    &methods,
+                let emission = super::test_backend::resolve_test_backend_emission(
                     fixture,
-                    &excluded_named,
-                    import_alias,
-                    &enum_names,
+                    trait_name,
+                    trait_bridge,
+                    config,
+                    type_defs,
                     enums,
+                    import_alias,
                 );
                 package_decls.push(emission.setup_block);
                 parts.push(emission.arg_expr);

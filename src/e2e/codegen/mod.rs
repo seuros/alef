@@ -830,7 +830,7 @@ pub fn emit_test_backend(
         "go" => go::emit_test_backend(trait_bridge, methods, fixture),
         "java" => java::emit_test_backend(trait_bridge, methods, fixture, ""),
         "kotlin" => kotlin::emit_test_backend(trait_bridge, methods, fixture),
-        "kotlin_android" => kotlin_android::emit_test_backend(trait_bridge, methods, fixture),
+        "kotlin_android" => kotlin_android::emit_test_backend(trait_bridge, methods, fixture, enums),
         "csharp" => csharp::emit_test_backend(trait_bridge, methods, fixture),
         "php" => php::emit_test_backend(trait_bridge, methods, fixture),
         "ruby" => ruby::emit_test_backend(trait_bridge, methods, fixture),
@@ -839,8 +839,11 @@ pub fn emit_test_backend(
         "r" => r::emit_test_backend(trait_bridge, methods, fixture),
         "c" => c::emit_test_backend(trait_bridge, methods, fixture),
         "zig" => zig::emit_test_backend(trait_bridge, methods, fixture),
-        "dart" => dart::emit_test_backend(trait_bridge, methods, fixture, &[]),
-        "swift" => swift::emit_test_backend(trait_bridge, methods, fixture, &[]),
+        // ~keep Both emitters resolve enum-typed method returns against this registry; passing
+        // `&[]` here meant that lookup could never succeed and every enum return fell through to
+        // the non-enum fallback (`throw UnimplementedError()` / Swift's equivalent).
+        "dart" => dart::emit_test_backend(trait_bridge, methods, fixture, enums),
+        "swift" => swift::emit_test_backend(trait_bridge, methods, fixture, enums),
         "brew" => brew::emit_test_backend(trait_bridge, methods, fixture),
         "php_ext" => php_ext::emit_test_backend(trait_bridge, methods, fixture),
         "homebrew" => homebrew::emit_test_backend(trait_bridge, methods, fixture),

@@ -252,8 +252,21 @@ pub(super) fn build_args_and_setup(
                     };
                 methods.extend(synthetic_super_trait_methods.iter());
 
-                let excluded_named =
-                    crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
+                // `trait_bridge_excluded_type_names` (the enum-blind wrapper) cannot tell an
+                // opaque/unexported type from a plain enum: enums live in `enums`, not
+                // `type_defs`, so `collect_hidden_named_types` sees no `TypeDef` for one and
+                // falls back to "unknown, therefore excluded". That forced every enum-typed
+                // trait method through `java_stub_type_with_context`'s excluded-type branch,
+                // which substitutes `String` for a type the real interface declares as the
+                // enum class itself — `is not abstract and does not override abstract
+                // method`. Passing the real enum names through `_with_enums` (mirroring
+                // `csharp::setup`) lets those methods fall through to the ordinary
+                // non-excluded `Named` branch instead, which already emits the correctly
+                // qualified type and a safe `null` default. ~keep
+                let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
+                let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names_with_enums(
+                    config, type_defs, &methods, &enum_names,
+                );
 
                 // Do NOT filter out methods that return excluded types. As of the trait method extraction
                 // fix, trait methods with excluded type signatures are now kept in the interface with type

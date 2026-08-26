@@ -380,6 +380,8 @@ mod assertion_union_enum_field_classification_tests;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod enum_return_type_tests;
+#[cfg(test)]
 mod loop_binding_tests;
 #[cfg(test)]
 mod not_error_bare_option_tests;

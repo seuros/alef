@@ -354,6 +354,7 @@ pub(super) fn render_test_method(
             kotlin_android_style,
             config,
             type_defs,
+            enums,
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
     )?;

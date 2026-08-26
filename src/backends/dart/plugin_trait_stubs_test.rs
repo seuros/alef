@@ -258,4 +258,175 @@ mod plugin_trait_stub_generation {
             emission.setup_block
         );
     }
+
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef};
+
+    fn unit_variant(name: &str, is_default: bool) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields: Vec::new(),
+            is_default,
+            ..Default::default()
+        }
+    }
+
+    fn data_variant(name: &str) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields: vec![FieldDef {
+                name: "scale_max".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::F64),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn emit_test_backend_dart_with_enums(
+        bridge: &TraitBridgeConfig,
+        methods: &[&MethodDef],
+        fixture: &Fixture,
+        enums: &[EnumDef],
+    ) -> crate::e2e::codegen::TestBackendEmission {
+        crate::e2e::codegen::emit_test_backend("dart", bridge, methods, fixture, enums, "")
+    }
+
+    /// The core regression: a Freezed-backed enum (any variant carries fields) must
+    /// reference its default unit variant through its factory constructor call
+    /// (`Type.variant()`), never a bare member reference -- which Dart parses as a
+    /// constructor tear-off, not a constructed value, where a `Future<T>` return is
+    /// required.
+    #[test]
+    fn sealed_class_enum_default_calls_the_factory_constructor() {
+        let bridge = make_trait_bridge("TestBackend", Some("Plugin"));
+        let method = make_method(
+            "sample_classification",
+            true,
+            TypeRef::Named("SampleClassification".to_string()),
+            vec![],
+        );
+        let methods = [&method];
+        let fixture = make_fixture("sealed_default_test", Some("test-backend"));
+        let enums = [EnumDef {
+            name: "SampleClassification".to_string(),
+            variants: vec![
+                data_variant("Scored"),
+                unit_variant("Baseline", true),
+                unit_variant("Unset", false),
+            ],
+            ..Default::default()
+        }];
+
+        let emission = emit_test_backend_dart_with_enums(&bridge, &methods, &fixture, &enums);
+
+        assert!(
+            emission.setup_block.contains("SampleClassification.baseline()"),
+            "must call the default unit variant's factory constructor, got:\n{}",
+            emission.setup_block
+        );
+        assert!(
+            !emission.setup_block.contains("SampleClassification.scored"),
+            "must not reference the data-carrying first variant, got:\n{}",
+            emission.setup_block
+        );
+    }
+
+    /// An all-unit enum lowers to a genuine Dart `enum`; its default member must be
+    /// referenced directly with lowerCamelCase casing and no call parentheses (it is not a
+    /// constructor). Pins both halves of the reported defect: the exact variant name
+    /// (`AutoCorrected` -> `autoCorrected`, not `autocorrected`) and the shape (no `()`).
+    #[test]
+    fn all_unit_enum_default_uses_lower_camel_case_member_with_no_parens() {
+        let bridge = make_trait_bridge("TestBackend", Some("Plugin"));
+        let method = make_method(
+            "sample_orientation",
+            true,
+            TypeRef::Named("SampleOrientation".to_string()),
+            vec![],
+        );
+        let methods = [&method];
+        let fixture = make_fixture("plain_enum_default_test", Some("test-backend"));
+        let enums = [EnumDef {
+            name: "SampleOrientation".to_string(),
+            variants: vec![
+                unit_variant("AutoCorrected", true),
+                unit_variant("PartiallyRotated", false),
+                unit_variant("RequiresManualFix", false),
+            ],
+            ..Default::default()
+        }];
+
+        let emission = emit_test_backend_dart_with_enums(&bridge, &methods, &fixture, &enums);
+
+        assert!(
+            emission.setup_block.contains("SampleOrientation.autoCorrected"),
+            "must reference the default variant in lowerCamelCase, got:\n{}",
+            emission.setup_block
+        );
+        assert!(
+            !emission.setup_block.contains("autocorrected"),
+            "must not use the raw-lowercased casing that does not exist on the generated \
+             type, got:\n{}",
+            emission.setup_block
+        );
+        assert!(
+            !emission.setup_block.contains("SampleOrientation.autoCorrected()"),
+            "a plain-enum member is not a constructor call and must not be parenthesized, \
+             got:\n{}",
+            emission.setup_block
+        );
+    }
+
+    /// Negative control: when no variant is marked `#[default]`, the first *fieldless*
+    /// variant wins -- proving the fallback does not simply take `variants[0]` (which here
+    /// carries fields and would need a real `scaleMax` value to compile).
+    #[test]
+    fn no_default_variant_falls_back_to_first_fieldless_variant() {
+        let bridge = make_trait_bridge("TestBackend", Some("Plugin"));
+        let method = make_method(
+            "sample_classification",
+            true,
+            TypeRef::Named("SampleClassification".to_string()),
+            vec![],
+        );
+        let methods = [&method];
+        let fixture = make_fixture("no_default_variant_test", Some("test-backend"));
+        let enums = [EnumDef {
+            name: "SampleClassification".to_string(),
+            variants: vec![data_variant("Scored"), unit_variant("Baseline", false)],
+            ..Default::default()
+        }];
+
+        let emission = emit_test_backend_dart_with_enums(&bridge, &methods, &fixture, &enums);
+
+        assert!(
+            emission.setup_block.contains("SampleClassification.baseline()"),
+            "must fall back to the first fieldless variant when none is marked default, \
+             got:\n{}",
+            emission.setup_block
+        );
+    }
+
+    /// Negative control: a plain scalar return type is unaffected by the enum-lookup
+    /// fallback.
+    #[test]
+    fn scalar_return_type_is_unaffected_by_enum_lookup() {
+        let bridge = make_trait_bridge("TestValidator", Some("Plugin"));
+        let method = make_method("priority", false, TypeRef::Primitive(PrimitiveType::I32), vec![]);
+        let methods = [&method];
+        let fixture = make_fixture("scalar_unaffected_test", Some("test-validator"));
+        let enums = [EnumDef {
+            name: "SampleClassification".to_string(),
+            variants: vec![unit_variant("Baseline", true)],
+            ..Default::default()
+        }];
+
+        let emission = emit_test_backend_dart_with_enums(&bridge, &methods, &fixture, &enums);
+
+        assert!(
+            emission.setup_block.contains("Future<int> priority()"),
+            "got:\n{}",
+            emission.setup_block
+        );
+    }
 }

@@ -281,12 +281,21 @@ pub(super) fn emit_dart_default_for_type(
     };
 
     if let TypeRef::Named(name) = &effective_ty {
-        // Check if this Named type is an enum in the IR; if so, return the first variant
-        if let Some(enum_def) = enums.iter().find(|e| &e.name == name)
-            && let Some(first_variant) = enum_def.variants.first()
-        {
-            let variant_name = first_variant.name.to_lowercase();
-            return format!("{name}.{variant_name}");
+        // Check if this Named type is an enum in the IR; if so, return a real default value
+        // for it rather than the struct/complex-type `UnimplementedError()` fallback below.
+        if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
+            if let Some(default_val) = dart_enum_default(enum_def) {
+                return default_val;
+            }
+            // Every variant carries fields (e.g. a Rust enum with no unit variant at
+            // all): there is no field-level default data to synthesize a compilable
+            // factory-constructor call from. Warn instead of guessing a value the
+            // Dart analyzer will reject. ~keep
+            tracing::warn!(
+                language = "dart",
+                r#type = %name,
+                "trait-bridge stub: enum has no fieldless variant to use as a default"
+            );
         }
         // For non-enum Named types, throw UnimplementedError (struct/complex type stubs
         // are registration-only and methods are never invoked).
@@ -302,4 +311,41 @@ pub(super) fn emit_dart_default_for_type(
         }
     }
     defaults.emit_default(&effective_ty).to_string()
+}
+
+/// A compilable default-value expression for `enum_def`, or `None` when every variant
+/// carries fields (no fieldless value exists to synthesize one from).
+///
+/// Mirrors the two shapes the Dart binding backend itself emits for a Rust enum
+/// (`backends::dart::gen_bindings::types::emit_enum`, and the FRB/Freezed codegen it
+/// orchestrates for the real published binding):
+///
+/// - An all-unit enum lowers to a genuine Dart `enum`, whose members are referenced
+///   directly (`SampleEnum.someVariant`) — no parentheses, since it is not a constructor
+///   call.
+/// - A mixed enum (any variant carries fields) lowers to a Freezed sealed class where
+///   EVERY variant, unit or not, is a `factory` constructor
+///   (`const factory SampleEnum.someUnitVariant() = ...;`) and so always needs the call
+///   parentheses, even for a zero-argument unit variant. Using the bare member form here
+///   previously produced a constructor tear-off (`SampleEnum Function({...})`) where a
+///   constructed value was required.
+///
+/// Prefers the enum's own `#[default]` variant when it carries no fields, falling back to
+/// the first fieldless variant otherwise — the value the real Rust bridge itself falls back
+/// to on a failed/uninitialised callback. ~keep
+fn dart_enum_default(enum_def: &crate::core::ir::EnumDef) -> Option<String> {
+    use heck::ToLowerCamelCase;
+
+    let all_unit = enum_def.variants.iter().all(|v| v.fields.is_empty());
+    let variant = enum_def
+        .variants
+        .iter()
+        .find(|v| v.is_default && v.fields.is_empty())
+        .or_else(|| enum_def.variants.iter().find(|v| v.fields.is_empty()))?;
+    let variant_name = crate::backends::dart::ident::dart_safe_ident(&variant.name.to_lower_camel_case());
+    Some(if all_unit {
+        format!("{}.{variant_name}", enum_def.name)
+    } else {
+        format!("{}.{variant_name}()", enum_def.name)
+    })
 }
