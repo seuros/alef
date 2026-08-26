@@ -550,8 +550,9 @@ fn test_wrap_bare_urls_trailing_punctuation() {
     let cases: &[(&str, &str)] = &[
         (
             // The exact consumer-reported corruption: a quoted URL followed by a comma.
+            // `socks5://` is intentionally left bare: `wrap_bare_urls` only wraps `http(s)`.
             "Proxy URL (e.g. \"http://proxy:8080\", \"socks5://proxy:1080\").",
-            "Proxy URL (e.g. \"<http://proxy:8080>\", \"<socks5://proxy:1080>\").",
+            "Proxy URL (e.g. \"<http://proxy:8080>\", \"socks5://proxy:1080\").",
         ),
         (
             "See http://example.com, for details.",

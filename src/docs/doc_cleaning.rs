@@ -9,10 +9,56 @@ pub(crate) use heading_levels::demote_headings_to_start_at;
 /// Rust doc section headers that should be stripped for all non-Rust output.
 const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];
 
+/// Trailing characters that terminate a URL when they appear at the very end of an
+/// otherwise-greedy match: prose punctuation that follows a URL far more often than it is
+/// actually part of one. Never trimmed from the *middle* of a match -- only repeatedly off
+/// the end, so a URL whose path or query legitimately ends differently keeps every byte up
+/// to the real terminator. ~keep
+const URL_TRAILING_PUNCTUATION: &[char] = &['.', ',', ';', ':', '!', '?', '"', '\''];
+
+/// Trim trailing punctuation from a matched URL that cannot legitimately be the last
+/// character of a URL, without disturbing punctuation that is genuinely part of it.
+///
+/// Two cases need different handling:
+/// - Quotes/commas/periods/semicolons/etc. are stripped unconditionally off the end, in a
+///   loop, since prose never ends a URL with them but a URL's path/query may contain them
+///   earlier (`/a,b,c` stays untouched; only a trailing `,` is prose punctuation).
+/// - A trailing `)` is only stripped when unbalanced against `(` earlier in the match, so a
+///   Wikipedia-style `Foo_(disambiguation)` link keeps its real closing paren while `(see
+///   https://example.com)` loses the parenthetical's closing paren.
+///
+/// A trailing `/` is never touched -- it is part of the URL, not punctuation.
+fn trim_trailing_url_punctuation(url: &str) -> &str {
+    let mut end = url.len();
+    loop {
+        let candidate = &url[..end];
+        let Some(last) = candidate.chars().next_back() else {
+            break;
+        };
+        if URL_TRAILING_PUNCTUATION.contains(&last) {
+            end -= last.len_utf8();
+            continue;
+        }
+        if last == ')' && candidate.matches(')').count() > candidate.matches('(').count() {
+            end -= 1;
+            continue;
+        }
+        break;
+    }
+    &url[..end]
+}
+
 /// Wrap bare `http://` and `https://` URLs in angle brackets to satisfy MD034.
 /// Skips URLs already inside markdown links `[...](url)` or angle brackets `<url>`.
+///
+/// The match itself is greedy up to whitespace/`<`/`>`/`]`/quote characters -- quotes are
+/// excluded from the match entirely (a URL is never legitimately quoted with no space
+/// before the closing quote), which is what previously let a closing quote and everything
+/// after it up to the next space get swallowed into the "URL". Trailing punctuation that
+/// survives the character class (comma, period, unbalanced paren, ...) is trimmed by
+/// [`trim_trailing_url_punctuation`] after the match. ~keep
 pub(crate) fn wrap_bare_urls(text: &str) -> String {
-    let url_re = regex::Regex::new(r"(https?://[^\s)>\]]+)").unwrap();
+    let url_re = regex::Regex::new(r#"(https?://[^\s>\]"']+)"#).unwrap();
     let mut result = String::with_capacity(text.len());
     let mut last_end = 0;
 
@@ -22,11 +68,15 @@ pub(crate) fn wrap_bare_urls(text: &str) -> String {
         if preceding == b'(' || preceding == b'<' {
             continue;
         }
+        let trimmed = trim_trailing_url_punctuation(mat.as_str());
+        if trimmed.is_empty() {
+            continue;
+        }
         result.push_str(&text[last_end..start]);
         result.push('<');
-        result.push_str(mat.as_str());
+        result.push_str(trimmed);
         result.push('>');
-        last_end = mat.end();
+        last_end = start + trimmed.len();
     }
     result.push_str(&text[last_end..]);
     result
