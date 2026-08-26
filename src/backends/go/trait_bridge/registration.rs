@@ -1,3 +1,4 @@
+use crate::backends::go::c_symbols;
 use crate::core::config::TraitBridgeConfig;
 
 /// Generate a config-driven unregistration wrapper.
@@ -12,7 +13,6 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
     let Some(fn_name) = bridge_cfg.unregister_fn.as_deref() else {
         return String::new();
     };
-    let trait_snake = heck::AsSnakeCase(trait_name).to_string();
     let standard_pascal_name = format!("Unregister{}", trait_name);
     let standard_snake_name = heck::AsSnakeCase(&standard_pascal_name).to_string();
 
@@ -20,7 +20,7 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
         return String::new();
     }
 
-    let c_function = format!("{}_unregister_{}", ffi_prefix, trait_snake);
+    let c_function = c_symbols::trait_unregister_symbol(ffi_prefix, trait_name);
     let go_fn_name = super::registration_surface::configured_unregister_fn_name(fn_name);
 
     let mut out = String::new();
@@ -54,7 +54,7 @@ pub(super) fn gen_clear_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: &str, tra
         return String::new();
     };
     let trait_snake = heck::AsSnakeCase(trait_name).to_string();
-    let c_function = format!("{}_clear_{}", ffi_prefix, trait_snake);
+    let c_function = c_symbols::trait_clear_symbol(ffi_prefix, trait_name);
     let go_fn_name = super::registration_surface::clear_fn_name(fn_name);
 
     let mut out = String::new();

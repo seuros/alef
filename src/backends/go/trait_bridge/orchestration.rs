@@ -2,6 +2,7 @@ use super::dispatch::{gen_plugin_trampolines, gen_trampoline};
 use super::helpers::{c_callback_return_type, c_trampoline_signature, method_with_excluded_substituted};
 use super::registration::{gen_clear_fn, gen_unregistration_fn};
 use super::wrapper::{gen_bridge_wrapper, gen_interface_method};
+use crate::backends::go::c_symbols;
 use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeDef};
@@ -135,8 +136,7 @@ pub fn gen_trait_bridges_file(
             && let Some(trait_def) = api.types.iter().find(|t| t.name == bridge_cfg.trait_name)
         {
             let trait_pascal = trait_def.name.to_pascal_case();
-            let trait_snake = heck::AsSnakeCase(&trait_def.name).to_string();
-            let vtable_constructor = format!("{}_{}_vtable_new", ffi_prefix, trait_snake);
+            let vtable_constructor = c_symbols::go_vtable_constructor_symbol(ffi_prefix, &trait_def.name);
             let crate_normalized = crate_name.replace('-', "_");
             let crate_upper = crate_normalized.to_uppercase();
             let crate_pascal = crate_normalized.to_pascal_case();
@@ -269,6 +269,21 @@ pub fn gen_trait_bridges_file(
     out
 }
 
+/// The C symbol `Register{Trait}` calls across the ABI.
+///
+/// The FFI backend names this symbol from the bridge's configured `register_fn`, appended to the
+/// prefix verbatim — it does *not* derive it from the trait name. Go composed
+/// `{prefix}_register_{trait_snake}` instead, which links against nothing whenever `register_fn`
+/// spells anything else. When no `register_fn` is configured the FFI backend exports no
+/// registration block at all; Go still emits its `Register{Trait}` wrapper, so the trait-derived
+/// spelling is kept for that case rather than silently emitting an empty symbol name. ~keep
+fn register_symbol(bridge_cfg: &TraitBridgeConfig, ffi_prefix: &str, trait_name: &str) -> String {
+    match bridge_cfg.register_fn.as_deref() {
+        Some(register_fn) => c_symbols::trait_register_symbol(ffi_prefix, register_fn),
+        None => c_symbols::trait_register_symbol(ffi_prefix, &format!("register_{}", heck::AsSnakeCase(trait_name))),
+    }
+}
+
 /// Generate one trait bridge: interface, trampolines, registration/unregistration functions.
 pub(super) fn gen_trait_bridge(
     out: &mut String,
@@ -385,7 +400,7 @@ pub(super) fn gen_trait_bridge(
         .map(|m| format!("go{}{}", trait_pascal, m.name.to_pascal_case()))
         .collect();
 
-    let vtable_constructor = format!("{}_{}_vtable_new", ffi_prefix, trait_snake);
+    let vtable_constructor = c_symbols::go_vtable_constructor_symbol(ffi_prefix, trait_name);
     out.push_str(&crate::backends::go::template_env::render(
         "vtable_allocation_via_c_helper.jinja",
         minijinja::context! {
@@ -397,7 +412,7 @@ pub(super) fn gen_trait_bridge(
     out.push_str(&crate::backends::go::template_env::render(
         "register_c_call.jinja",
         minijinja::context! {
-            c_function => format!("{}_register_{}", ffi_prefix, trait_snake),
+            c_function => register_symbol(bridge_cfg, ffi_prefix, trait_name),
             ffi_prefix => ffi_prefix,
             trait_name => trait_name,
             trait_snake => trait_snake,
@@ -417,7 +432,7 @@ pub(super) fn gen_trait_bridge(
     out.push_str(&crate::backends::go::template_env::render(
         "unregister_c_call.jinja",
         minijinja::context! {
-            c_function => format!("{}_unregister_{}", ffi_prefix, trait_snake),
+            c_function => c_symbols::trait_unregister_symbol(ffi_prefix, trait_name),
             ffi_prefix => ffi_prefix,
             trait_name => trait_name,
             trait_snake => trait_snake,

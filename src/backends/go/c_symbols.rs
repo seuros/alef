@@ -25,6 +25,62 @@ pub(crate) fn stream_adapter_symbol(ffi_prefix: &str, owner_type: &str, adapter_
     c_consumer::stream_adapter_symbol(ffi_prefix, owner_type, adapter_name, operation)
 }
 
+/// Cgo call target for a service constructor: `{prefix_lower}_{service_snake}_new`.
+pub(crate) fn service_new_symbol(ffi_prefix: &str, service_name: &str) -> String {
+    c_consumer::service_new_symbol(ffi_prefix, service_name)
+}
+
+/// Cgo call target for a service destructor: `{prefix_lower}_{service_snake}_free`.
+pub(crate) fn service_free_symbol(ffi_prefix: &str, service_name: &str) -> String {
+    c_consumer::service_free_symbol(ffi_prefix, service_name)
+}
+
+/// Cgo call target for a handler-registration entry point.
+pub(crate) fn service_register_symbol(ffi_prefix: &str, service_name: &str, method_name: &str) -> String {
+    c_consumer::service_register_symbol(ffi_prefix, service_name, method_name)
+}
+
+/// Cgo call target for a registration-variant shortcut or a configurator method.
+pub(crate) fn service_method_symbol(ffi_prefix: &str, service_name: &str, method_name: &str) -> String {
+    c_consumer::service_method_symbol(ffi_prefix, service_name, method_name)
+}
+
+/// Cgo call target for a run/finalize entry point.
+pub(crate) fn service_entrypoint_symbol(ffi_prefix: &str, service_name: &str, method_name: &str) -> String {
+    c_consumer::service_entrypoint_symbol(ffi_prefix, service_name, method_name)
+}
+
+/// Cgo call target for a trait bridge's `register` entry point.
+///
+/// The FFI backend names this symbol from the bridge's configured `register_fn`, not from the
+/// trait name, so Go must pass the configured name through rather than re-derive
+/// `register_{trait_snake}` — a bridge whose `register_fn` spells anything else links against
+/// nothing. ~keep
+pub(crate) fn trait_register_symbol(ffi_prefix: &str, register_fn: &str) -> String {
+    c_consumer::trait_register_symbol(ffi_prefix, register_fn)
+}
+
+/// Cgo call target for a trait bridge's `unregister` entry point.
+pub(crate) fn trait_unregister_symbol(ffi_prefix: &str, trait_name: &str) -> String {
+    c_consumer::trait_unregister_symbol(ffi_prefix, trait_name)
+}
+
+/// Cgo call target for a trait bridge's `clear` entry point.
+pub(crate) fn trait_clear_symbol(ffi_prefix: &str, trait_name: &str) -> String {
+    c_consumer::trait_clear_symbol(ffi_prefix, trait_name)
+}
+
+/// The name of the `static inline` cgo helper Go declares in its own preamble to heap-allocate a
+/// vtable struct: `{prefix}_{trait_snake}_vtable_new`.
+///
+/// Unlike everything else in this module this is **not** an FFI-exported symbol — nothing in
+/// `backends::ffi` emits it. It is private to the generated Go file, declared in
+/// `vtable_constructor_helper.jinja` and called from `vtable_allocation_via_c_helper.jinja`, and
+/// lives here so those two sites cannot spell it differently. ~keep
+pub(crate) fn go_vtable_constructor_symbol(ffi_prefix: &str, trait_name: &str) -> String {
+    format!("{ffi_prefix}_{}_vtable_new", heck::AsSnakeCase(trait_name))
+}
+
 /// The type component the FFI backend folds into a C symbol.
 ///
 /// Templates that compose `C.{{ ffi_prefix }}_{{ type_snake }}_...` themselves need the
