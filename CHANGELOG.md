@@ -7,17 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-08-26
+
+### Changed (BREAKING)
+
+- **`E2eCodegen::render_snippet_body_with_functions` no longer has a default implementation.** The
+  default discarded the function registry, and the one backend that never overrode it
+  (`kotlin_android`) silently dropped every field of a call's result as a result. Making the method
+  required turns forgetting it into a compile error. **Migration:** any out-of-tree `E2eCodegen`
+  implementation must now implement this method explicitly; the previous default's body is
+  equivalent to ignoring the `functions` argument.
+- **Generated Go and Java wrappers change shape for a function returning `Option<scalar>`.** They
+  now consult a presence companion before trusting the returned value (see below). Go call sites
+  that relied on the returned pointer being non-`nil` will now correctly receive `nil` for an
+  absent result; Java call sites will now correctly receive `Optional.empty()`. Code that treated
+  the old always-present value as meaningful was already reading a fabricated zero.
+
 ### Fixed
 
-- **Go now asks the FFI presence companion before trusting a scalar `Option` return.** A function
-  or method returning `Option<i64>` (or any `Option<scalar>`/`Option<Duration>`) crosses the C ABI
-  as a bare scalar, and Go's generated wrapper wrapped whatever arrived in a pointer that was never
-  `nil` — so a `None` reached the caller as a real `Some(0)`. The wrapper now calls the
-  `{fn}_has_result` companion first and returns `nil` when the result was absent. Whether a
-  companion exists is asked of `ffi::type_map::result_presence_companion_exists`, the same
-  predicate that decides whether the symbol is exported, so Go can never reference a companion the
-  FFI crate never emitted — including the deliberate owned-receiver exclusion, where the companion's
-  second call would find the handle already consumed.
+- **A direct `Option<scalar>` return can now distinguish `None` from `Some(0)`.** Such a return
+  crosses the C ABI as a bare scalar, so absence and a legitimate zero were the same bytes. The C
+  ABI now exports a `{fn}_has_result` presence companion, and Go, Java and Kotlin/JVM consult it
+  before trusting the value. Go's defect was worse than ambiguity: its wrapper built a pointer that
+  could never be `nil`, so every `None` arrived as a real `Some(0)`; Java's `Optional.of(result)`
+  could never be empty, so `None` reached the facade as `Optional[0]`. Whether a companion exists
+  is asked of `ffi::type_map::result_presence_companion_exists` — the same predicate that decides
+  whether the symbol is exported — so a host binding can never reference a companion the FFI crate
+  never emitted. This includes the deliberate owned-receiver exclusion, where the companion's second
+  call would find the handle already consumed. **C#, Zig and the opt-in Dart `ffi` style are
+  audited but not yet wired**; a stance ledger over every `Language` now pins that set so a new
+  backend cannot compile without declaring where it stands.
+- **A foreign crate's `#[cfg]` no longer leaks into generated code.** `codegen::cfg` deliberately
+  excludes foreign-crate features from Cargo feature forwarding — forwarding them names a feature
+  the core crate does not define and breaks resolution — while variant emission copied the same cfg
+  verbatim, so the two halves disagreed. Both now ask one authority,
+  `is_host_owned_rust_path`. A foreign-owned cfg-gated variant's arm is dropped with a named
+  warning rather than emitted behind an undeclared feature. Host-owned variants keep their gate
+  unchanged. Swift's `__alef_{enum}_from_swift_string` helper turned out to have carried no cfg
+  guard at all, for host or foreign variants — an unguarded reference to a variant that may not
+  exist — and now gates host variants and drops foreign ones.
+- **alef built only on Rust 1.95 or newer while advertising 1.85 and declaring 1.88.** Three e2e
+  assertion emitters used `if let` guards, stable only from 1.95, and `rust-toolchain.toml` pins a
+  far newer toolchain, so no CI job ever compiled the crate at its declared floor. Installing
+  0.68.0 from crates.io failed with `E0658` on any toolchain below 1.95. The guards are rewritten
+  (each was the first arm of its match with a `_` pattern and a returning body, so an early
+  `if let` is equivalent), the README now matches `Cargo.toml`, and a new `msrv` CI job compiles at
+  the version it reads from the manifest.
+- **Ownership records that predate the committed manifest are now migrated when queried, not only
+  when written.** A path whose ownership predates the committed `.alef-ownership.toml` and whose
+  content never changed could live only in the gitignored `.alef/scaffold-owned-paths.manifest`
+  indefinitely; clearing `.alef` then lost the record and alef refused to regenerate the file,
+  having no durable proof it had ever written it. One consumer hit this for 48 outputs. Every
+  ownership-gated write and `alef verify`'s frozen-file scan already query every unmarkable managed
+  path, so an ordinary run now migrates the whole legacy ledger before the cache can be cleared out
+  from under it.
+- **Compile validation is bounded.** A `before` hook that wandered into a pathological state ran
+  until a human killed it — one consumer interrupted a Gradle build after 34 minutes. Diagnostics
+  are now truncated head-and-tail with an explicit dropped count rather than streamed in full;
+  Swift's module-path resolution, which spawned `swift build --show-bin-path` with no deadline and
+  no process-group teardown while every sibling subprocess had both, is now bounded like the rest;
+  and a new `docs.snippets.before_timeout_secs` lets a package build have its own budget instead of
+  sharing one number with every individual snippet compile. Truncation is never silent.
+- **`alef adopt` no longer costs more than the problem it recovers from.** Recovering 48 paths
+  emitted ~124k tokens. Target matching compiled a fresh glob per candidate path, classification
+  and diff rendering repeated per target, and the ownership manifest was read-modify-written once
+  per target. One session is now shared across every target of an invocation, and under
+  `--converged-only` — where a drifted file cannot be adopted at all — diff bodies are bounded, with
+  the withheld files still named and counted. Without `--converged-only` nothing is bounded, because
+  there the diff is the consent document for a write the command performs. Which files are adopted
+  and which create-once seeds are refused is unchanged.
+- **Go generated the wrong C symbol for any name that defeats snake-casing.** Go composed
+  `{prefix}_{type_snake}_{method_snake}` while the FFI backend exports through
+  `c_consumer::method_symbol`, which leaves the method component verbatim — so `parseURLPath`,
+  `utf8Length` and `_Internal` linked against symbols that are exported nowhere. Go now asks
+  `c_consumer`. Separately, `Option<Duration>` had no arm at all in the return lowering and fell to
+  a catch-all emitting `unmarshalU64`, a helper the generated package never declares, and
+  `Option<Option<T>>` declared one more pointer level than its expression could produce.
+
+### Added
+
+- **Every language reference page now documents how to register a trait-bridge plugin.** `Backend`
+  gained `trait_bridge_registration_surface`, implemented by 16 backends, and the docs layer asks
+  the backend rather than restating naming. Six templates were parameterised so the emitted name
+  and the documented name come from one place and cannot drift; each backend has a test asserting
+  the reported surface names a symbol the generated output actually declares. Kotlin/JVM and JNI
+  deliberately report nothing — the former emits no registration function at all today, and the
+  latter's `Java_..._nativeRegister*` shims are an ABI the Kotlin/Java side links against rather
+  than an API a consumer calls.
+- **Docs-only e2e fixtures**, for documentation content with no single-call shape — configuration
+  discovery, standalone pipelines, multi-step handoffs. Every API reference in such a fixture is
+  resolved against the real surface, so a renamed field fails the run, but the fixture is never
+  executed or generated into test code. A docs-only fixture is structurally unable to be counted as
+  runtime coverage: it is a separate type with no conversion into `Fixture`, and it publishes under
+  its own slug.
+- The generated Android project enables the Gradle build cache. The configuration cache is emitted
+  commented out, with the reason: the generated `buildAndroidJniLibs` task reads `gradle.taskGraph`
+  from inside `onlyIf` and assigns `System.err` to `Exec.errorOutput`, both of which Gradle 9
+  rejects by failing the build rather than degrading.
+
+### Removed
+
+- Four enum conversion arm functions with no callers.
 
 ## [0.69.0] - 2026-08-26
 
