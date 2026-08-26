@@ -3,7 +3,7 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{SnippetValidator, all_error_lines_match, run_command};
 use std::io::Write;
 use std::path::Path;
 
@@ -473,22 +473,19 @@ impl SnippetValidator for RustValidator {
             "could not compile",
         ];
 
-        let diagnostics: Vec<&str> = output
-            .lines()
-            .map(str::trim_start)
-            .filter(|line| line.starts_with("error"))
-            .filter(|line| !SUMMARY_MARKERS.iter().any(|marker| line.contains(marker)))
-            .collect();
-
-        if diagnostics.is_empty() {
-            return false;
-        }
-        diagnostics.iter().all(|line| {
-            UNRESOLVED_DEPENDENCY_CODES.iter().any(|code| line.contains(code))
-                || line.contains("unresolved import")
-                || line.contains("can't find crate")
-                || line.contains("no matching package named")
-        })
+        all_error_lines_match(
+            output,
+            |line| {
+                let trimmed = line.trim_start();
+                trimmed.starts_with("error") && !SUMMARY_MARKERS.iter().any(|marker| trimmed.contains(marker))
+            },
+            |line| {
+                UNRESOLVED_DEPENDENCY_CODES.iter().any(|code| line.contains(code))
+                    || line.contains("unresolved import")
+                    || line.contains("can't find crate")
+                    || line.contains("no matching package named")
+            },
+        )
     }
 }
 

@@ -174,6 +174,43 @@ fn toolchain_missing_unavailable_still_bails_in_strict_mode() {
     );
 }
 
+/// Regression for task #488: a corpus that is entirely `unresolved_dependency`-unavailable must
+/// still warn loudly that nothing reached the requested level, even though (per task #186, just
+/// above) it must not bail -- `alef docs`/`alef all` cannot guarantee a fresh build ran in the
+/// same invocation, so this is an expected shape for this pipeline, not a defect, but it must
+/// never be silent either. ~keep
+#[traced_test]
+#[test]
+fn checked_nothing_warns_loudly_without_bailing_even_in_strict_mode() {
+    let summary = RunSummary::from_results(vec![ValidationResult {
+        status: SnippetStatus::Unavailable,
+        unresolved_dependency: true,
+        ..result("fixture_ts_import", SnippetStatus::Unavailable)
+    }]);
+
+    enforce_snippet_summary("fixture-crate", true, &summary).expect("must not bail, per task #186");
+
+    assert!(
+        logs_contain("NOT ONE reached the requested level"),
+        "a corpus that checked nothing must warn loudly regardless of the bail decision"
+    );
+}
+
+/// Negative control: a healthy run with at least one fully-verified result must never emit the
+/// "checked nothing" warning, strict or not.
+#[traced_test]
+#[test]
+fn a_healthy_run_never_warns_that_it_checked_nothing() {
+    let summary = RunSummary::from_results(vec![result("fixture_ok", SnippetStatus::Pass)]);
+
+    enforce_snippet_summary("fixture-crate", true, &summary).expect("a clean run must not bail");
+
+    assert!(
+        !logs_contain("NOT ONE reached the requested level"),
+        "a run with a real pass must not claim it checked nothing"
+    );
+}
+
 /// A mix of both causes must still bail on the toolchain-missing half -- the strict gate must
 /// not be silenced just because some of the batch was a build-artifact gap instead. ~keep
 #[test]

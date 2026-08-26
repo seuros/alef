@@ -864,9 +864,13 @@ fn finalize_result(
             config.level, effective_level, snippet.language, effective_level
         ))
     } else if unresolved_dependency {
+        // See task #470 and `dependency_reclassification::session_target_hint`'s doc comment: the
+        // actionable config-key hint must name the snippet's own resolved target, not its
+        // language.
         Some(unresolved_dependency_message(
             no_session_configured,
             snippet.language,
+            &dependency_reclassification::session_target_hint(snippet),
             effective_level,
             message.as_deref().unwrap_or("<no validator output>"),
         ))

@@ -28,7 +28,6 @@ src/backends/extendr/gen_bindings/tests/wrappers.rs 1319
 src/backends/ffi/gen_bindings/functions/orchestration.rs 1154
 src/backends/ffi/gen_bindings/helpers.rs 1041
 src/backends/ffi/gen_bindings/tests/regressions.rs 1907
-src/backends/go/gen_bindings/tests.rs 1034
 src/backends/go/gen_bindings/types/enums.rs 1260
 src/backends/go/gen_bindings/types/tests.rs 1802
 src/backends/go/gen_visitor.rs 1002

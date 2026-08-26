@@ -17,10 +17,13 @@ pub(super) fn adapter_param_python_type(rust_type: &str) -> &str {
 ///
 /// Both the `api.py` import list and the generated `yield` expression call this, so the module
 /// the yield type annotation resolves to and the module the yielded value comes from cannot
-/// drift apart.
+/// drift apart. `options_publishable_return_types` must be the union of `options.py`'s public
+/// input dataclasses AND its return-only `TypedDict`s (`orchestration.rs`'s
+/// `options_publishable_return_types`) — the item's own type is never itself a function param, so
+/// the narrower input-dataclass set alone would silently skip a return-only item type. ~keep
 pub(super) fn streaming_item_converter(
     adapter: &crate::core::config::AdapterConfig,
-    options_dataclass_types: &std::collections::HashSet<String>,
+    options_publishable_return_types: &std::collections::HashSet<String>,
 ) -> Option<String> {
     use heck::ToSnakeCase;
 
@@ -28,7 +31,7 @@ pub(super) fn streaming_item_converter(
         return None;
     }
     let item_type = adapter.item_type.as_deref()?;
-    if !options_dataclass_types.contains(item_type) {
+    if !options_publishable_return_types.contains(item_type) {
         return None;
     }
     Some(format!("_from_native_{}", item_type.to_snake_case()))
@@ -41,11 +44,14 @@ pub(super) fn streaming_item_converter(
 /// Mirrors `streaming_item_converter` for the non-streaming adapter pattern: the wrapper's
 /// `-> ReturnType` annotation names whatever `adapter.returns` says verbatim
 /// (`adapter_param_python_type` only maps a handful of primitives), so when that name is a
-/// public `options` dataclass the body must convert the engine's native pyclass return value
-/// into it — the engine has no idea the dataclass exists. ~keep
+/// public `options` type the body must convert the engine's native pyclass return value into it
+/// — the engine has no idea the public type exists. `options_publishable_return_types` must be
+/// the union described on `streaming_item_converter`, not the narrower input-dataclass set alone:
+/// a return type is routinely `is_return_type`-only (published as a `TypedDict`, never accepted
+/// as an input), and that shape used to leave this check unmatched. ~keep
 pub(super) fn adapter_return_converter(
     adapter: &crate::core::config::AdapterConfig,
-    options_dataclass_types: &std::collections::HashSet<String>,
+    options_publishable_return_types: &std::collections::HashSet<String>,
 ) -> Option<String> {
     use heck::ToSnakeCase;
 
@@ -53,7 +59,7 @@ pub(super) fn adapter_return_converter(
         return None;
     }
     let return_type = adapter.returns.as_deref()?;
-    if !options_dataclass_types.contains(return_type) {
+    if !options_publishable_return_types.contains(return_type) {
         return None;
     }
     Some(format!("_from_native_{}", return_type.to_snake_case()))
@@ -111,15 +117,24 @@ fn adapter_param_conversions(
 ///
 /// Any other pattern is silently skipped (not applicable to the Python layer).
 ///
-/// `options_dataclass_types` names the types that `options.py` emits as public dataclasses
-/// (and therefore also emits a `_from_native_<snake>` converter for). A streamed item whose
-/// type is in that set is annotated as the `options` dataclass, so the body must run the
-/// converter — the engine yields the native `_internal_bindings` pyclass. ~keep
+/// `options_input_types` names the types that `options.py` emits as public *input* dataclasses —
+/// used for an adapter param's `_to_rust_*` conversion, which only ever applies to a param, so
+/// the narrower input-only set is the right question to ask there.
+///
+/// `options_publishable_return_types` is the wider question a RETURN value (or a streaming
+/// adapter's item) has to answer: does `options.py` publish this name at all, whether as an input
+/// dataclass or as a return-only `TypedDict`. A streamed item or an `AsyncMethod` return whose
+/// type is in that set is annotated as the `options` public type, so the body must run the
+/// `_from_native_<snake>` converter — the engine yields/returns the native `_internal_bindings`
+/// pyclass. Passing the narrower `options_input_types` for this question used to leave a
+/// return-only type unconverted while its `-> ReturnType` annotation still resolved to the public
+/// `.options` name (see `orchestration.rs`'s `options_publishable_return_types` doc). ~keep
 pub(super) fn emit_adapter_wrapper(
     out: &mut String,
     adapter: &crate::core::config::AdapterConfig,
     types: &[crate::core::ir::TypeDef],
-    options_dataclass_types: &std::collections::HashSet<String>,
+    options_input_types: &std::collections::HashSet<String>,
+    options_publishable_return_types: &std::collections::HashSet<String>,
 ) {
     use crate::core::config::AdapterPattern;
     use heck::ToSnakeCase;
@@ -197,7 +212,7 @@ pub(super) fn emit_adapter_wrapper(
     let (params_list, param_conversions) = if request_construction.is_some() {
         ("req".to_string(), None)
     } else {
-        let (conversions, args) = adapter_param_conversions(&adapter.params, options_dataclass_types);
+        let (conversions, args) = adapter_param_conversions(&adapter.params, options_input_types);
         (
             args.join(", "),
             if conversions.is_empty() {
@@ -222,7 +237,8 @@ pub(super) fn emit_adapter_wrapper(
                     request_construction => request_construction.unwrap_or_default(),
                     param_conversions => param_conversions.unwrap_or_default(),
                     params_list => params_list,
-                    item_converter => streaming_item_converter(adapter, options_dataclass_types).unwrap_or_default(),
+                    item_converter =>
+                        streaming_item_converter(adapter, options_publishable_return_types).unwrap_or_default(),
                 },
             ));
         }
@@ -239,7 +255,8 @@ pub(super) fn emit_adapter_wrapper(
                     request_construction => request_construction.unwrap_or_default(),
                     param_conversions => param_conversions.unwrap_or_default(),
                     params_list => params_list,
-                    return_converter => adapter_return_converter(adapter, options_dataclass_types).unwrap_or_default(),
+                    return_converter =>
+                        adapter_return_converter(adapter, options_publishable_return_types).unwrap_or_default(),
                 },
             ));
         }

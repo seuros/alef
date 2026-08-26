@@ -209,6 +209,33 @@ impl Default for ValidatorRegistry {
     }
 }
 
+/// Shared narrowing every "all diagnostics must match" `is_dependency_error` implementation
+/// needs: reclassifying a `Fail` into `Unavailable` is safe only when EVERY error-severity line
+/// in `output` is unambiguously a missing-dependency shape, never when the output mixes one with
+/// a genuine code defect (task #130/#215 -- a mixed batch relabeled a real bug as an environment
+/// gap). Before this existed, `typescript.rs`, `csharp.rs` and `rust.rs` each hand-rolled the
+/// identical "collect the lines that are a diagnostic, bail on empty, then require `all()` to
+/// match one of a pattern list" loop -- the exact "two components decide one fact separately"
+/// shape this repo's tasks keep surfacing, just duplicated three times instead of two.
+/// `is_diagnostic_line` picks out the lines that carry an error-severity diagnostic at all
+/// (`": error: "` for javac/rustc-style compilers, `"error TS"` for `tsc`, ...); `matches` then
+/// decides whether one such line is a dependency shape. Both take a predicate rather than a fixed
+/// substring so a language whose diagnostic marker also needs excluding some lines (rustc's
+/// `aborting due to`/`could not compile` summary lines, which start with `error` too but carry no
+/// classification signal) can express that in the predicate instead of forcing every caller
+/// through one fixed `contains`. ~keep
+pub(crate) fn all_error_lines_match(
+    output: &str,
+    is_diagnostic_line: impl Fn(&str) -> bool,
+    matches: impl Fn(&str) -> bool,
+) -> bool {
+    let diagnostic_lines: Vec<&str> = output.lines().filter(|line| is_diagnostic_line(line)).collect();
+    if diagnostic_lines.is_empty() {
+        return false;
+    }
+    diagnostic_lines.iter().all(|line| matches(line))
+}
+
 pub fn run_script(
     snippet: &Snippet,
     level: ValidationLevel,
@@ -242,6 +269,40 @@ pub fn run_script(
     } else {
         (SnippetStatus::Fail, Some(output))
     })
+}
+
+#[cfg(test)]
+mod all_error_lines_match_tests {
+    use super::all_error_lines_match;
+
+    #[test]
+    fn empty_when_no_line_matches_the_diagnostic_predicate() {
+        assert!(!all_error_lines_match("nothing to see here\n", |line| line.contains("error"), |_| true));
+    }
+
+    #[test]
+    fn true_only_when_every_diagnostic_line_matches() {
+        let output = "a: error: X missing\nb: error: X missing\n";
+        assert!(all_error_lines_match(output, |line| line.contains("error"), |line| {
+            line.contains("missing")
+        }));
+    }
+
+    #[test]
+    fn false_when_one_diagnostic_line_does_not_match() {
+        let output = "a: error: X missing\nb: error: real defect\n";
+        assert!(!all_error_lines_match(output, |line| line.contains("error"), |line| {
+            line.contains("missing")
+        }));
+    }
+
+    #[test]
+    fn non_diagnostic_lines_are_never_consulted_by_the_match_predicate() {
+        let output = "a: error: X missing\nsome unrelated context line\n";
+        assert!(all_error_lines_match(output, |line| line.contains("error"), |line| {
+            line.contains("missing")
+        }));
+    }
 }
 
 #[cfg(all(test, unix))]

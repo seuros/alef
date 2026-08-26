@@ -72,6 +72,30 @@ import dev.sample.bindings.*;
 1 error
 ";
 
+/// Task #469: every subsequent use of a name the missing package would have declared cascades
+/// into its own `cannot find symbol` diagnostic, in the SAME file as the root `package ... does
+/// not exist` line -- javac, unlike `tsc`, never treats an unresolved import as `any` and moves
+/// on. Every one of a batch's otherwise-identical unbuilt-package snippets carried this shape and
+/// was counted `failed` before the classifier learned to recognize a cascade. ~keep
+const JAVA_MISSING_PACKAGE_WITH_CASCADE: &str = "\
+Example.java:1: error: package dev.sample.bindings does not exist
+import dev.sample.bindings.*;
+^
+Example.java:5: error: cannot find symbol
+        BindingClient client = new BindingClient();
+        ^
+  symbol:   class BindingClient
+  location: class Example
+3 errors
+";
+
+/// A root cause alongside a genuine, unrelated member-access defect (the `JAVA_MISSING_MEMBER`
+/// shape) in the same output must never be relabeled wholesale -- mirrors
+/// `rust_mixed_output_is_not_a_missing_dependency`. ~keep
+fn java_missing_package_mixed_with_a_real_defect() -> String {
+    format!("{JAVA_MISSING_PACKAGE}{JAVA_MISSING_MEMBER}")
+}
+
 #[test]
 fn rust_unbound_result_is_a_compile_error_not_a_missing_dependency() {
     assert!(
@@ -134,6 +158,46 @@ fn java_missing_package_is_still_a_missing_dependency() {
     assert!(
         JavaValidator.is_dependency_error(JAVA_MISSING_PACKAGE),
         "`package ... does not exist` is the genuine unbuilt-artifact shape: {JAVA_MISSING_PACKAGE}"
+    );
+}
+
+/// Regression for task #469: a `cannot find symbol` cascade from the SAME missing package must
+/// not keep the batch counted `failed` just because it is not itself a root-cause pattern.
+#[test]
+fn java_missing_package_cascade_is_still_a_missing_dependency() {
+    assert!(
+        JavaValidator.is_dependency_error(JAVA_MISSING_PACKAGE_WITH_CASCADE),
+        "a `cannot find symbol` cascade from an established missing package must reclassify too: \
+         {JAVA_MISSING_PACKAGE_WITH_CASCADE}"
+    );
+}
+
+/// A root cause must not launder an unrelated genuine defect in the same batch output.
+#[test]
+fn java_missing_package_mixed_with_a_real_member_defect_is_not_a_missing_dependency() {
+    let output = java_missing_package_mixed_with_a_real_defect();
+    assert!(
+        !JavaValidator.is_dependency_error(&output),
+        "a real member-access defect alongside a root cause must not be relabeled: {output}"
+    );
+}
+
+/// An isolated `cannot find symbol` cascade shape with no root-cause diagnostic anywhere in the
+/// output is exactly as ambiguous as Go's rejected bare `undefined: x` (task #130) and must stay
+/// `Fail`.
+#[test]
+fn java_symbol_cascade_shape_with_no_root_cause_is_not_a_missing_dependency() {
+    let output = "\
+Example.java:5: error: cannot find symbol
+        BindingClient client = new BindingClient();
+        ^
+  symbol:   class BindingClient
+  location: class Example
+1 error
+";
+    assert!(
+        !JavaValidator.is_dependency_error(output),
+        "no root-cause diagnostic is present, so this must not be relabeled: {output}"
     );
 }
 

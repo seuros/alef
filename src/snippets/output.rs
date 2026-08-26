@@ -82,6 +82,9 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
     }
 
     println!("{}", "-".repeat(100));
+    if let Some(line) = checked_vs_claimed_line(summary) {
+        println!("{line}");
+    }
     println!(
         "Total: {}  Passed: {}  Downgraded: {}  Failed: {}  Skipped: {}  Errors: {}  Unavailable: {}",
         summary.total,
@@ -96,6 +99,40 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
         println!("{line}");
     }
     println!();
+}
+
+/// The line task #488 exists for: how much of the corpus was actually checked at the level it
+/// requested, stated first and prominently, not left for a reader to reconstruct by subtracting
+/// `capability_capped`/`declared_capped`/`unavailable` from `passed` themselves. A run's own
+/// `passed` count includes every `capability_capped`/`declared_capped` `Pass` -- a snippet that
+/// never ran at the level it asked for -- so "1482 passed" alone cannot answer "how much of this
+/// was actually checked", and burying the answer in per-result `downgrade_reason` fields is
+/// exactly what let a run where 684 of 1985 results never validated at their requested level
+/// still read as a success. `None` only when there is nothing to report at all (`total == 0`);
+/// a fully clean run still prints "1985/1985 (100%)" rather than staying silent, so the absence
+/// of this line is never itself ambiguous between "nothing to report" and "the tool forgot". ~keep
+fn checked_vs_claimed_line(summary: &RunSummary) -> Option<String> {
+    if summary.total == 0 {
+        return None;
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a snippet corpus is well within f64's exact integer range; this is a display percentage"
+    )]
+    let percent = (summary.fully_verified as f64 / summary.total as f64) * 100.0;
+    Some(format!(
+        "Checked at requested level: {}/{} ({percent:.1}%) -- capability-capped {}, declared-capped {}, \
+         unavailable {}, downgraded {}, failed {}, skipped {}, errors {} did not fully verify",
+        summary.fully_verified,
+        summary.total,
+        summary.capability_capped,
+        summary.declared_capped,
+        summary.unavailable,
+        summary.downgraded,
+        summary.failed,
+        summary.skipped,
+        summary.errors
+    ))
 }
 
 /// Lines naming the languages whose results were reclassified as `unresolved_dependency`, or
@@ -215,7 +252,7 @@ pub fn write_report(summary: &RunSummary, path: &Path, show_code: bool) -> Resul
         return write_json(summary, path, show_code);
     }
     let mut output = format!(
-        "schema_version: {}\ntotal: {}\npassed: {}\ndowngraded: {}\nfailed: {}\nskipped: {}\nerrors: {}\nunavailable: {}\nresults[{}]:\n",
+        "schema_version: {}\ntotal: {}\npassed: {}\ndowngraded: {}\nfailed: {}\nskipped: {}\nerrors: {}\nunavailable: {}\nfully_verified: {}\nresults[{}]:\n",
         summary.schema_version,
         summary.total,
         summary.passed,
@@ -224,6 +261,7 @@ pub fn write_report(summary: &RunSummary, path: &Path, show_code: bool) -> Resul
         summary.skipped,
         summary.errors,
         summary.unavailable,
+        summary.fully_verified,
         summary.results.len()
     );
     for result in &summary.results {
@@ -321,6 +359,51 @@ mod tests {
         }
     }
 
+    /// Task #488's whole point: the prominent line must not silently disappear when nothing was
+    /// checked -- `total == 0` (nothing discovered) is the only case that suppresses it, so a
+    /// reader can never confuse "checked nothing because of a bug" with "no report line printed".
+    #[test]
+    fn checked_vs_claimed_line_is_absent_only_when_the_run_is_empty() {
+        let summary = RunSummary::from_results(vec![]);
+
+        assert_eq!(checked_vs_claimed_line(&summary), None);
+    }
+
+    /// The regression this line exists for: a run where most of the corpus was
+    /// `capability_capped`/`unavailable` must state that fraction plainly, not leave a reader to
+    /// infer it from `passed` alone -- `passed` includes every `capability_capped` result too. ~keep
+    #[test]
+    fn checked_vs_claimed_line_reports_the_verified_fraction_and_the_caveated_buckets() {
+        let mut capability_capped =
+            sample_result(SnippetStatus::Pass, Some(DowngradeReason::ValidatorCapability), None);
+        capability_capped.capability_capped = true;
+        let summary = RunSummary::from_results(vec![
+            sample_result(SnippetStatus::Pass, None, None),
+            capability_capped,
+            sample_result(SnippetStatus::Unavailable, None, None),
+        ]);
+
+        let line = checked_vs_claimed_line(&summary).expect("non-empty run reports the line");
+
+        assert!(line.starts_with("Checked at requested level: 1/3"), "{line}");
+        assert!(line.contains("capability-capped 1"), "{line}");
+        assert!(line.contains("unavailable 1"), "{line}");
+    }
+
+    /// Negative control: a fully clean run reports 100%, not silence -- the line's absence must
+    /// never be ambiguous with "everything passed".
+    #[test]
+    fn checked_vs_claimed_line_reports_full_coverage_on_a_clean_run() {
+        let summary = RunSummary::from_results(vec![
+            sample_result(SnippetStatus::Pass, None, None),
+            sample_result(SnippetStatus::Pass, None, None),
+        ]);
+
+        let line = checked_vs_claimed_line(&summary).expect("non-empty run reports the line");
+
+        assert!(line.starts_with("Checked at requested level: 2/2 (100.0%)"), "{line}");
+    }
+
     /// The regression this exists for: a `Pass` clamped by a snippet's own declared `level:`
     /// front matter used to print nothing at all — `print_summary`'s reason line only fired for
     /// `Downgraded` or `capability_capped` rows, so `docs.snippets.validation_level = "run"`
@@ -392,6 +475,7 @@ mod tests {
         let message = crate::snippets::runner::unresolved_dependency_message(
             true,
             language,
+            &language.to_string(),
             ValidationLevel::Compile,
             "cannot find package",
         );

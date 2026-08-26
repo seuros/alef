@@ -16,8 +16,8 @@ use std::fmt::Write as FmtWrite;
 /// `c/test_function.rs` cannot independently drift on the same question. ~keep
 use super::optional_arg::handle_param_type_name;
 use super::{
-    NestedLeafOutcome, c_optional_sentinel, is_primitive_c_type, is_skipped_c_field, json_to_c,
-    render_wildcard_assertion, try_emit_enum_accessor,
+    NestedLeafOutcome, is_primitive_c_type, is_skipped_c_field, json_to_c, render_wildcard_assertion,
+    resolve_optional_sentinel, try_emit_enum_accessor,
 };
 
 /// Emit chained FFI accessor calls for a nested resolved field path.
@@ -1253,7 +1253,9 @@ pub(super) fn build_args_string_c(
         match val {
             // ~keep Explicit null on optional arg → pass the type-appropriate "none"
             // sentinel: `0` for a scalar `AlefHandle` arg, `NULL` for a real pointer.
-            v if v.is_null() && arg.optional => parts.push(c_optional_sentinel(&arg.arg_type).to_string()),
+            v if v.is_null() && arg.optional => {
+                parts.push(resolve_optional_sentinel(target_params, &arg.name, index, &arg.arg_type).to_string())
+            }
             // Missing required fields resolve to null; skip them so malformed
             // fixture configuration does not crash generation.
             v if v.is_null() => {}

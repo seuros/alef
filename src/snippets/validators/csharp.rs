@@ -3,7 +3,7 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, all_error_lines_match, run_command};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -511,13 +511,11 @@ impl CsharpValidator {
     /// Line-scoped and all-must-match, like `typescript::is_dependency_error`, so a batch mixing
     /// one unresolved namespace with a genuine error is not relabeled wholesale.
     fn is_dependency_error_text(output: &str) -> bool {
-        let diagnostics: Vec<&str> = output.lines().filter(|line| line.contains(": error CS")).collect();
-        if diagnostics.is_empty() {
-            return false;
-        }
-        diagnostics
-            .iter()
-            .all(|line| line.contains("CS0246") || line.contains("CS0234"))
+        all_error_lines_match(
+            output,
+            |line| line.contains(": error CS"),
+            |line| line.contains("CS0246") || line.contains("CS0234"),
+        )
     }
 }
 

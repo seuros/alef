@@ -2,7 +2,9 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{BatchValidation, SnippetValidation, SnippetValidator, run_command};
+use crate::snippets::validators::{
+    BatchValidation, SnippetValidation, SnippetValidator, all_error_lines_match, run_command,
+};
 use std::io::Write;
 
 pub struct TypeScriptValidator;
@@ -453,14 +455,11 @@ impl SnippetValidator for TypeScriptValidator {
             "TS2580", // Cannot find name 'X'. Do you need to install type definitions for it?
         ];
 
-        let error_lines: Vec<&str> = output.lines().filter(|line| line.contains("error TS")).collect();
-        if error_lines.is_empty() {
-            return false;
-        }
-
-        error_lines
-            .iter()
-            .all(|line| patterns.iter().any(|pattern| line.contains(pattern)))
+        all_error_lines_match(
+            output,
+            |line| line.contains("error TS"),
+            |line| patterns.iter().any(|pattern| line.contains(pattern)),
+        )
     }
 }
 

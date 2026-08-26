@@ -34,6 +34,8 @@ use crate::e2e::codegen::call_ir::TargetParams;
 
 #[cfg(test)]
 mod batch_input_regression_tests;
+#[cfg(test)]
+mod free_function_sentinel_regression_tests;
 
 /// Sentinel for an arg described only by its configured `arg_type` label (`"handle"` /
 /// `"json_object"` cross as `AlefHandle`; everything else is a real pointer). Used as the

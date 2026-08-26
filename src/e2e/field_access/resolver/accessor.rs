@@ -4,6 +4,7 @@ use super::super::optional_renderers::{
     render_rust_with_optionals, render_typescript_with_optionals, render_zig_with_optionals,
 };
 use super::super::parse::parse_path;
+use super::super::python_renderer::render_python_with_optionals;
 use super::super::renderers::{render_accessor, render_swift_with_first_class_map};
 use super::super::types::{FieldResolver, PathSegment};
 
@@ -84,6 +85,7 @@ impl FieldResolver {
             "php" if !self.php_getter_map.is_empty() => {
                 render_php_with_getters(&segments, result_var, &self.php_getter_map, &self.optional_fields)
             }
+            "python" => render_python_with_optionals(&segments, result_var, &self.optional_fields),
             _ => render_accessor(&segments, language, result_var),
         }
     }

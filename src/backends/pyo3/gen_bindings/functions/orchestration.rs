@@ -60,12 +60,12 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         .map(|t| (t.name.clone(), t))
         .collect();
 
-    // Types `options.py` emits as public `@dataclass` DTOs. An adapter param or return value
-    // typed as one of these crosses the Python/native boundary at a different shape than the
-    // engine call actually produces/accepts, so both directions need the `_to_rust_*` /
-    // `_from_native_*` converters — the same requirement plain function wrappers already honor
-    // via `default_types`, scoped down to the subset that is genuinely a public dataclass
-    // (excludes native-pyclass return types, which pass straight through). ~keep
+    // Types `options.py` emits as public `@dataclass` DTOs. An adapter param typed as one of
+    // these crosses the Python/native boundary at a different shape than the engine call
+    // actually accepts, so it needs the `_to_rust_*` converter — the same requirement plain
+    // function wrappers already honor via `default_types`, scoped down to the subset that is
+    // genuinely a public *input* dataclass (excludes return types; see `options_return_types`
+    // and `options_publishable_return_types` below for those). ~keep
     let options_dataclass_types =
         crate::backends::pyo3::gen_bindings::types::options_dataclass_type_names(api, reexported_types);
 
@@ -73,6 +73,20 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     // public type and convert into it, not name the native `#[pyclass]` behind the same word.
     let options_return_types =
         crate::backends::pyo3::gen_bindings::types::options_return_typeddict_names(api, dto, reexported_types);
+
+    // The question an adapter's RETURN value (or a streaming adapter's item) has to answer is
+    // "does `options.py` publish this name", which is `options_dataclass_types` OR
+    // `options_return_types` -- not `options_dataclass_types` alone. A plain function wrapper
+    // already asks the union (`options_type_names` further below, and `function_return_converters`
+    // checks `options_return_types` directly); `adapter_return_converter`/`streaming_item_converter`
+    // used to be handed only the input-dataclass half, so an adapter whose return/item type was
+    // `is_return_type`-only (published as a `TypedDict`, never an input dataclass) never matched,
+    // never got its `_from_native_*` converter called, and never got imported from `.options` for
+    // one -- while `api.py`'s own import classification below (which DOES consult the union) still
+    // resolved the wrapper's bare `-> ReturnType` annotation to the `.options` name. The annotation
+    // named the public type; the `return` statement handed back the untouched native pyclass. ~keep
+    let options_publishable_return_types: std::collections::HashSet<String> =
+        options_dataclass_types.union(&options_return_types).cloned().collect();
 
     let enum_names: AHashSet<&str> = api.enums.iter().map(|e| e.name.as_str()).collect();
 
@@ -293,11 +307,11 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
 
     let streaming_item_converters: std::collections::BTreeSet<String> = adapters
         .iter()
-        .filter_map(|adapter| streaming_item_converter(adapter, &options_dataclass_types))
+        .filter_map(|adapter| streaming_item_converter(adapter, &options_publishable_return_types))
         .collect();
     let adapter_return_converters: std::collections::BTreeSet<String> = adapters
         .iter()
-        .filter_map(|adapter| adapter_return_converter(adapter, &options_dataclass_types))
+        .filter_map(|adapter| adapter_return_converter(adapter, &options_publishable_return_types))
         .collect();
 
     // A wrapper returning a type `options.py` publishes calls that type's `_from_native_*`
@@ -398,7 +412,13 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     );
 
     for adapter in adapters {
-        emit_adapter_wrapper(&mut out, adapter, &api.types, &options_dataclass_types);
+        emit_adapter_wrapper(
+            &mut out,
+            adapter,
+            &api.types,
+            &options_dataclass_types,
+            &options_publishable_return_types,
+        );
     }
 
     out

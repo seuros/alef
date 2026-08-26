@@ -177,6 +177,10 @@ fn extract_python_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)
 }
 
 #[cfg(test)]
+#[path = "snippet_iterate_empty_fields_tests.rs"]
+mod snippet_iterate_empty_fields_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
     use crate::core::ir::{ErrorDef, ErrorVariant};

@@ -269,6 +269,52 @@ impl JavaValidator {
             && (rest.starts_with("error") || rest.starts_with("warning"))
     }
 
+    /// Splits an already-attributed per-snippet failure message (the `messages.join("\n")` text
+    /// `batch_results` builds from one or more `JavaDiagnostic::text` blocks) back into its
+    /// individual diagnostic blocks, each still carrying its `symbol:`/`location:` continuation
+    /// lines. Unlike `split_diagnostics`, this does not need path attribution -- every block here
+    /// already belongs to one snippet -- so it only needs to find where each block starts. ~keep
+    fn error_diagnostic_blocks(output: &str) -> Vec<String> {
+        let mut blocks: Vec<String> = Vec::new();
+        for line in output.lines() {
+            if line.contains(": error: ") {
+                blocks.push(line.to_string());
+            } else if let Some(last) = blocks.last_mut() {
+                last.push('\n');
+                last.push_str(line);
+            }
+        }
+        blocks
+    }
+
+    /// The unambiguous unbuilt-artifact shapes: an import naming a package that does not exist on
+    /// the classpath, a type javac cannot access, or a `.class` file it could not locate at all.
+    fn is_root_cause_diagnostic(block: &str) -> bool {
+        let header = block.lines().next().unwrap_or_default();
+        (header.contains("package ") && header.contains("does not exist"))
+            || header.contains("cannot access")
+            || (header.contains("class file for") && header.contains("not found"))
+    }
+
+    /// A `cannot find symbol` diagnostic shaped like the cascade a missing import produces --
+    /// every subsequent reference to a name that package would have declared -- rather than
+    /// task #215's `JAVA_MISSING_MEMBER` shape: a member lookup that failed on a receiver whose
+    /// own type DID resolve (`location: variable result of type BatchObject`). javac only ever
+    /// emits `location: ... of type ...` for that resolved-receiver case; a name that never
+    /// resolved at all reports `location: class <EnclosingClass>` instead, with no `of type`.
+    /// Only called after `is_dependency_error` has already confirmed at least one unambiguous
+    /// `is_root_cause_diagnostic` is present in the same output, so this alone is never enough to
+    /// reclassify a result -- an isolated `cannot find symbol` with no root cause anywhere in the
+    /// batch stays exactly as ambiguous as Go's rejected bare `undefined: x` (task #130). ~keep
+    fn is_symbol_cascade_diagnostic(block: &str) -> bool {
+        let header = block.lines().next().unwrap_or_default();
+        header.contains("cannot find symbol")
+            && !block.lines().any(|line| {
+                let trimmed = line.trim_start();
+                trimmed.starts_with("location:") && trimmed.contains(" of type ")
+            })
+    }
+
     fn owning_units(units: &[JavaBatchUnit], path: &str) -> Vec<usize> {
         Path::new(path)
             .components()
@@ -520,25 +566,34 @@ impl SnippetValidator for JavaValidator {
         ValidationLevel::TypeCheck
     }
 
-    /// ~keep `cannot find symbol` used to be accepted here, and it is javac's diagnostic for
-    /// EVERY unresolved name — including a method that simply does not exist on a class that
+    /// ~keep `cannot find symbol` used to be accepted wholesale here, and it is javac's diagnostic
+    /// for EVERY unresolved name — including a method that simply does not exist on a class that
     /// resolved perfectly well. 51 generated consumer snippets calling `result.error()` on a
     /// `BatchObject` with no such accessor were therefore counted `unavailable` rather than
     /// failed (see `runner::finalize_result`). A classpath that was never built produces
-    /// `package X does not exist` on the import line instead, which is unambiguous and stays.
+    /// `package X does not exist` on the import line instead, which is unambiguous.
     ///
-    /// Mirrors `typescript::is_dependency_error` (task #130) in requiring EVERY diagnostic to be
-    /// a dependency diagnostic, so a mixed compile does not get relabeled.
+    /// Unlike `typescript`/`csharp`/`rust` (task #130/#215), a plain "every diagnostic must match
+    /// a root-cause pattern" narrowing (`all_error_lines_match`) still misclassifies javac output
+    /// as a real failure: javac, unlike `tsc`, does not treat an unresolved import as `any` and
+    /// move on -- every subsequent use of a name that package would have declared cascades into
+    /// its own `cannot find symbol`, in the SAME file as the root `package ... does not exist`
+    /// diagnostic. Requiring every line to itself be a root-cause pattern rejects that mix, so a
+    /// batch of otherwise-identical unbuilt-package snippets counted as `failed` instead of
+    /// `unavailable` (task #469: 191 of 217 in one consumer). `Self::is_symbol_cascade_diagnostic`
+    /// accepts a `cannot find symbol` diagnostic as a cascade of an established root cause, but
+    /// only when it is NOT the unambiguous member-access defect shape task #215 already excluded
+    /// (`location: ... of type ...`, naming a receiver that itself resolved) -- see
+    /// `JAVA_MISSING_MEMBER` in `dependency_error_classification_tests`.
     fn is_dependency_error(&self, output: &str) -> bool {
-        let diagnostics: Vec<&str> = output.lines().filter(|line| line.contains(": error:")).collect();
-        if diagnostics.is_empty() {
+        let blocks = Self::error_diagnostic_blocks(output);
+        if blocks.is_empty() {
             return false;
         }
-        diagnostics.iter().all(|line| {
-            (line.contains("package ") && line.contains("does not exist"))
-                || line.contains("cannot access")
-                || line.contains("class file for") && line.contains("not found")
-        })
+        blocks.iter().any(|block| Self::is_root_cause_diagnostic(block))
+            && blocks
+                .iter()
+                .all(|block| Self::is_root_cause_diagnostic(block) || Self::is_symbol_cascade_diagnostic(block))
     }
 }
 

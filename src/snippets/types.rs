@@ -491,6 +491,18 @@ pub struct RunSummary {
     /// `Unavailable` because the remediation differs: install a toolchain vs. run `alef build`. ~keep
     #[serde(default)]
     pub unresolved_dependency: usize,
+    /// `Pass` results that reached the requested level with nothing to caveat at all -- no
+    /// `capability_capped`, no `declared_capped`, no downgrade of any kind (`downgrade_reason`
+    /// is `None`). This is the "actually checked at the level you asked for" count task #488
+    /// exists for: `passed` alone cannot answer that question, because it also includes every
+    /// `capability_capped`/`declared_capped` `Pass` -- a `Pass` that never ran at the requested
+    /// level at all. A run where `total` is large and `fully_verified` is small is exactly the
+    /// shape that let a consumer see "1482 passed" and believe the corpus was checked, when 684
+    /// of 1985 results (`unavailable` + `capability_capped`) never validated at the level their
+    /// own front matter requested. Reported prominently in `output::print_summary` rather than
+    /// left for a reader to reconstruct from the other counts. ~keep
+    #[serde(default)]
+    pub fully_verified: usize,
     pub results: Vec<ValidationResult>,
 }
 
@@ -509,6 +521,7 @@ impl RunSummary {
             capability_capped: 0,
             declared_capped: 0,
             unresolved_dependency: 0,
+            fully_verified: 0,
             results,
         };
 
@@ -521,6 +534,9 @@ impl RunSummary {
             }
             if result.unresolved_dependency {
                 summary.unresolved_dependency += 1;
+            }
+            if result.status == SnippetStatus::Pass && result.downgrade_reason.is_none() {
+                summary.fully_verified += 1;
             }
             match result.status {
                 SnippetStatus::Pass => summary.passed += 1,
@@ -539,13 +555,29 @@ impl RunSummary {
     pub const fn has_failures(&self) -> bool {
         self.failed > 0 || self.errors > 0
     }
+
+    /// True when this run checked *nothing* at its requested level: every result was a failure,
+    /// an error, a skip, an unavailable environment gap, or a `Pass` capped below what was
+    /// requested. Distinct from `has_failures`: a run can have zero failures and still be this,
+    /// when the entire corpus fell into an exempted or unavailable bucket (task #488) -- exactly
+    /// the shape that let a run report overall success while validating almost nothing at the
+    /// level it claimed to check. Deliberately unconditional, not gated on `--strict`: a single
+    /// `capability_capped`/`unavailable` result can be a legitimate, unsatisfiable-by-design
+    /// outcome for one language, but a run where NOT ONE result reached its requested level is
+    /// never a legitimate mixed outcome to accept silently by default. `total > 0` guards an
+    /// empty run (nothing discovered) from reading as "checked nothing" -- that is a discovery
+    /// problem the caller already reports separately. ~keep
+    #[must_use]
+    pub const fn checked_nothing(&self) -> bool {
+        self.total > 0 && self.fully_verified == 0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Language, RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetMetadata, SnippetStatus,
-        SourceOrigin, ValidationLevel, ValidationResult,
+        DowngradeReason, Language, RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetMetadata,
+        SnippetStatus, SourceOrigin, ValidationLevel, ValidationResult,
     };
 
     fn result(status: SnippetStatus, unresolved_dependency: bool) -> ValidationResult {
@@ -606,6 +638,65 @@ mod tests {
                 + summary.unavailable
         );
         assert!(summary.has_failures());
+    }
+
+    /// A `capability_capped` `Pass` is still a `Pass` in the `passed` bucket, but must not count
+    /// as `fully_verified` -- it never reached the requested level at all. Task #488's whole
+    /// point: `passed` alone cannot tell a reader how much of the corpus was actually checked at
+    /// the level it claims. ~keep
+    #[test]
+    fn fully_verified_excludes_capability_capped_and_declared_capped_passes() {
+        let mut capability_capped = result(SnippetStatus::Pass, false);
+        capability_capped.capability_capped = true;
+        capability_capped.downgrade_reason = Some(DowngradeReason::ValidatorCapability);
+        let mut declared_capped = result(SnippetStatus::Pass, false);
+        declared_capped.downgrade_reason = Some(DowngradeReason::Declared);
+        let clean_pass = result(SnippetStatus::Pass, false);
+
+        let summary = RunSummary::from_results(vec![capability_capped, declared_capped, clean_pass]);
+
+        assert_eq!(summary.passed, 3, "all three are still Pass results");
+        assert_eq!(
+            summary.fully_verified, 1,
+            "only the uncapped Pass reached the requested level"
+        );
+    }
+
+    /// Negative control: a healthy run with real passes must never report `checked_nothing`, even
+    /// with unrelated failures and unavailable results mixed in. ~keep
+    #[test]
+    fn checked_nothing_is_false_when_anything_was_fully_verified() {
+        let summary = RunSummary::from_results(vec![
+            result(SnippetStatus::Pass, false),
+            result(SnippetStatus::Fail, false),
+            result(SnippetStatus::Unavailable, true),
+        ]);
+
+        assert!(!summary.checked_nothing());
+    }
+
+    /// The gate this whole field exists for: every result exempted or unavailable, and not one
+    /// that actually reached the requested level, must be visible as "checked nothing" even
+    /// though `has_failures()` alone reports a clean run. ~keep
+    #[test]
+    fn checked_nothing_is_true_when_the_whole_corpus_is_capped_or_unavailable() {
+        let mut capability_capped = result(SnippetStatus::Pass, false);
+        capability_capped.capability_capped = true;
+        capability_capped.downgrade_reason = Some(DowngradeReason::ValidatorCapability);
+
+        let summary = RunSummary::from_results(vec![capability_capped, result(SnippetStatus::Unavailable, true)]);
+
+        assert!(!summary.has_failures(), "sanity: nothing here is a Fail or an Error");
+        assert!(summary.checked_nothing());
+    }
+
+    /// An empty run (nothing discovered) is a discovery problem, not a "checked nothing" one --
+    /// `checked_nothing` must not fire on `total == 0`.
+    #[test]
+    fn checked_nothing_is_false_on_an_empty_run() {
+        let summary = RunSummary::from_results(vec![]);
+
+        assert!(!summary.checked_nothing());
     }
 
     /// Table-driven coverage for every rustdoc fence-info shape task #370 named, plus a

@@ -5,6 +5,8 @@
 pub(crate) mod gen_bindings;
 mod gen_stubs;
 #[cfg(test)]
+mod adapter_return_type_tests;
+#[cfg(test)]
 mod kwarg_unpack_tests;
 #[cfg(test)]
 mod public_return_type_tests;

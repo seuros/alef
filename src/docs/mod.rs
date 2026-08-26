@@ -686,6 +686,25 @@ fn enforce_snippet_summary(
     strict: bool,
     summary: &crate::snippets::types::RunSummary,
 ) -> anyhow::Result<()> {
+    // Reported first, and unconditionally, so it cannot be missed regardless of what the
+    // strict-gated checks below decide (task #488): not one result in this run reached its
+    // requested level. This does NOT bail outright, unlike `run_check`'s equivalent
+    // `RunSummary::checked_nothing` gate (`cli::commands::snippets`) -- `alef docs`/`alef all`
+    // structurally cannot guarantee a fresh build ran in the same invocation (see the
+    // `unresolved_dependency` comment just below, task #186), so a corpus that is entirely
+    // `unresolved_dependency`-unavailable is an expected shape for THIS pipeline, not a defect.
+    // Loud reporting, not a hard failure, is the correct answer for the same reason task #186's
+    // exemptions below are not bails either. ~keep
+    if summary.checked_nothing() {
+        tracing::warn!(
+            total = summary.total,
+            "docs.snippets for crate `{}` validated {} snippet(s) and NOT ONE reached the requested level -- \
+             every result was a failure, a skip, an unavailable environment gap, or capped below what was \
+             requested; the level this run claims to check was not actually checked anywhere in this corpus",
+            crate_name,
+            summary.total
+        );
+    }
     // `unresolved_dependency` is never a defect in the generated bindings: it is set only when a
     // real toolchain ran to completion and reported a missing import/link/build target (see
     // `finalize_result`'s doc comment in `snippets::runner`), and every caller of this function

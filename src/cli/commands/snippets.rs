@@ -362,7 +362,15 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
             return ExitCode::FAILURE;
         }
     };
+    // Unconditional, not gated on `strict` (task #488): a run where not one result reached its
+    // requested level is never a legitimate mixed outcome, unlike an individual
+    // `capability_capped`/`unavailable` result for one language among many, which can be. Without
+    // this a corpus that is entirely `capability_capped` (every validator structurally capped
+    // below the configured level) or entirely `unavailable` reports a clean `passed`/`unavailable`
+    // split and exits success, even though the requested level was satisfied nowhere at all. See
+    // `RunSummary::checked_nothing`'s doc comment for the full reasoning. ~keep
     if summary.has_failures()
+        || summary.checked_nothing()
         || strict_failure
         || strict && !missing_generated.is_empty()
         || audit_failure

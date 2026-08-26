@@ -64,16 +64,66 @@ impl PythonValidator {
             paths.push(path);
             file_names.push(file_name);
         }
+        // `pyrefly`'s own parser is not contractually identical to CPython's: a construct it
+        // tolerates or recovers from differently than `python -m py_compile` would (task #463 --
+        // a published snippet with an empty `for` loop body, a hard `IndentationError` in real
+        // Python) must still fail `typecheck`, not pass because `typecheck` never asked the real
+        // interpreter at all. Runs the same `Compile`-level batch checker
+        // `validate_batch_with_context` uses for `ValidationLevel::Compile`, ahead of `pyrefly`,
+        // and overrides any snippet it fails -- see `apply_compile_precheck`. ~keep
+        let compile_precheck = if level == ValidationLevel::TypeCheck {
+            Some(Self::batch_compile_precheck(&file_names, dir.path(), &paths, session, timeout_secs)?)
+        } else {
+            None
+        };
         let mut command = Self::batch_command(level, dir.path(), &paths)?;
         if let Some(session) = session {
             session.apply(&mut command);
             command.env("PYTHONPATH", &session.working_directory);
         }
         let (success, output) = run_command(&mut command, timeout_secs)?;
-        Ok(match level {
+        let results = match level {
             ValidationLevel::TypeCheck => Self::typecheck_results(&file_names, success, &output),
             _ => Self::checker_results(&file_names, &output),
+        };
+        Ok(match compile_precheck {
+            Some(compile_results) => Self::apply_compile_precheck(results, compile_results),
+            None => results,
         })
+    }
+
+    /// Runs the `Compile`-level batch checker over the same source files a `TypeCheck` batch is
+    /// about to hand to `pyrefly`, ahead of it -- see the `compile_precheck` comment in
+    /// `validate_batch_with_context` (task #463).
+    fn batch_compile_precheck(
+        file_names: &[String],
+        directory: &std::path::Path,
+        paths: &[std::path::PathBuf],
+        session: Option<&ValidationSession>,
+        timeout_secs: u64,
+    ) -> Result<BatchValidation> {
+        let mut command = Self::batch_command(ValidationLevel::Compile, directory, paths)?;
+        if let Some(session) = session {
+            session.apply(&mut command);
+            command.env("PYTHONPATH", &session.working_directory);
+        }
+        let (_success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::checker_results(file_names, &output))
+    }
+
+    /// Overrides a `typecheck` result with the real interpreter's own `Compile`-level failure
+    /// whenever the two disagree -- a file that does not even compile has nothing left for
+    /// `pyrefly` to usefully say, and its own diagnostic (or silence) must never let the snippet
+    /// through as `Pass`. Left untouched when the compile precheck passed: a real `pyrefly`
+    /// finding (a genuine type error `py_compile` cannot see at all) must still fail on its own
+    /// terms. ~keep
+    fn apply_compile_precheck(mut results: BatchValidation, compile_results: BatchValidation) -> BatchValidation {
+        for (result, compile_result) in results.iter_mut().zip(compile_results) {
+            if compile_result.0 == SnippetStatus::Fail {
+                *result = compile_result;
+            }
+        }
+        results
     }
 
     fn batch_command(
@@ -242,6 +292,11 @@ impl PythonValidator {
         std::fs::write(&snippet_path, &code)?;
         let python = Self::interpreter();
         let path = snippet_path.to_string_lossy().to_string();
+        if level == ValidationLevel::TypeCheck
+            && let Some(failure) = Self::compile_precheck(python, dir.path(), &path, session, timeout_secs)?
+        {
+            return Ok(failure);
+        }
         let mut command = Self::command(level, dir.path(), python, &path)?;
         if let Some(session) = session {
             session.apply(&mut command);
@@ -286,6 +341,26 @@ impl PythonValidator {
             }
         };
         Ok(command)
+    }
+
+    /// The single-snippet analogue of `batch_compile_precheck` -- see the `compile_precheck`
+    /// comment on `validate_batch_with_context` (task #463). Returns the real `py_compile`
+    /// failure when the file does not compile, so `pyrefly` never even runs in that case; `None`
+    /// when it compiles cleanly, letting the caller proceed to the requested `TypeCheck` command.
+    fn compile_precheck(
+        python: &str,
+        directory: &std::path::Path,
+        path: &str,
+        session: Option<&ValidationSession>,
+        timeout_secs: u64,
+    ) -> Result<Option<(SnippetStatus, Option<String>)>> {
+        let mut command = Self::command(ValidationLevel::Compile, directory, python, path)?;
+        if let Some(session) = session {
+            session.apply(&mut command);
+            command.env("PYTHONPATH", &session.working_directory);
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok((!success).then_some((SnippetStatus::Fail, Some(output))))
     }
 
     fn patch_code(code: &str) -> String {
@@ -482,407 +557,5 @@ impl SnippetValidator for PythonValidator {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{PYREFLY_UNAVAILABLE, PythonValidator};
-    use crate::snippets::session::ValidationSession;
-    use crate::snippets::types::{Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel};
-    use crate::snippets::validators::SnippetValidator;
-    use std::path::PathBuf;
-
-    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
-
-    fn python_snippet(code: &str) -> Snippet {
-        Snippet {
-            id: None,
-            path: PathBuf::from("guide.md"),
-            language: Language::Python,
-            title: None,
-            code: code.into(),
-            start_line: 1,
-            block_index: 0,
-            annotation: None,
-            metadata: SnippetMetadata::default(),
-            source_origin: SourceOrigin {
-                path: PathBuf::from("guide.md"),
-                line: 1,
-                block_index: 0,
-            },
-        }
-    }
-
-    #[test]
-    fn batch_declines_run_so_each_snippet_executes_on_its_own() {
-        let only = python_snippet("value = 1\n");
-
-        let declined = PythonValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
-
-        assert!(declined.is_none());
-    }
-
-    #[test]
-    fn batch_returns_one_result_per_snippet_in_input_order() {
-        if !PythonValidator.is_available() {
-            return;
-        }
-        let first = python_snippet("first = 1\n");
-        let second = python_snippet("second = 2\n");
-        let third = python_snippet("third = 3\n");
-
-        let results = PythonValidator::validate_batch_with_context(
-            &[&first, &second, &third],
-            ValidationLevel::Syntax,
-            TOOLCHAIN_TEST_TIMEOUT_SECS,
-            None,
-        )
-        .expect("batch validation runs");
-
-        assert_eq!(
-            results,
-            vec![
-                (SnippetStatus::Pass, None),
-                (SnippetStatus::Pass, None),
-                (SnippetStatus::Pass, None)
-            ]
-        );
-    }
-
-    #[test]
-    fn batch_syntax_fails_only_the_broken_snippet_and_passes_its_neighbours() {
-        if !PythonValidator.is_available() {
-            return;
-        }
-        let first = python_snippet("value = 1\n");
-        let broken = python_snippet("def broken(:\n    pass\n");
-        let third = python_snippet("value = 3\n");
-
-        let results = PythonValidator::validate_batch_with_context(
-            &[&first, &broken, &third],
-            ValidationLevel::Syntax,
-            TOOLCHAIN_TEST_TIMEOUT_SECS,
-            None,
-        )
-        .expect("batch validation runs");
-
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0], (SnippetStatus::Pass, None));
-        assert_eq!(results[2], (SnippetStatus::Pass, None));
-        assert_eq!(results[1].0, SnippetStatus::Fail);
-        assert!(
-            results[1]
-                .1
-                .as_deref()
-                .is_some_and(|message| message.contains("SyntaxError")),
-            "the failing snippet must carry its own diagnostic: {:?}",
-            results[1].1
-        );
-    }
-
-    #[test]
-    fn batch_compile_fails_only_the_broken_snippet() {
-        if !PythonValidator.is_available() {
-            return;
-        }
-        let first = python_snippet("value = 1\n");
-        let broken = python_snippet("return 1\n");
-        let third = python_snippet("value = 3\n");
-
-        let results = PythonValidator::validate_batch_with_context(
-            &[&first, &broken, &third],
-            ValidationLevel::Compile,
-            TOOLCHAIN_TEST_TIMEOUT_SECS,
-            None,
-        )
-        .expect("batch validation runs");
-
-        assert_eq!(results[0], (SnippetStatus::Pass, None));
-        assert_eq!(results[1].0, SnippetStatus::Fail);
-        assert_eq!(results[2], (SnippetStatus::Pass, None));
-    }
-
-    #[test]
-    fn batch_type_check_fails_only_the_snippet_pyrefly_names() {
-        if which::which("pyrefly").is_err() {
-            return;
-        }
-        let first = python_snippet("value: int = 1\nprint(value)\n");
-        let broken = python_snippet("undefined_batch_name()\n");
-        let third = python_snippet("other: int = 3\nprint(other)\n");
-
-        let results = PythonValidator::validate_batch_with_context(
-            &[&first, &broken, &third],
-            ValidationLevel::TypeCheck,
-            TOOLCHAIN_TEST_TIMEOUT_SECS,
-            None,
-        )
-        .expect("batch validation runs");
-
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
-        assert_eq!(results[1].0, SnippetStatus::Fail);
-        assert!(
-            results[1]
-                .1
-                .as_deref()
-                .is_some_and(|message| message.contains("undefined_batch_name")),
-            "{:?}",
-            results[1].1
-        );
-        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
-    }
-
-    #[test]
-    fn batch_type_check_reports_every_snippet_unavailable_when_pyrefly_is_missing() {
-        if which::which("pyrefly").is_ok() {
-            return;
-        }
-        let first = python_snippet("value = 1\n");
-        let second = python_snippet("value = 2\n");
-
-        let results =
-            PythonValidator::validate_batch_with_context(&[&first, &second], ValidationLevel::TypeCheck, 10, None)
-                .expect("batch validation runs");
-
-        assert_eq!(
-            results,
-            vec![
-                (SnippetStatus::Unavailable, Some(PYREFLY_UNAVAILABLE.to_string())),
-                (SnippetStatus::Unavailable, Some(PYREFLY_UNAVAILABLE.to_string())),
-            ]
-        );
-    }
-
-    /// A checker that dies before reporting on a snippet must fail that snippet carrying the real
-    /// output, never leave it passing by default. ~keep
-    #[test]
-    fn unreported_snippets_fail_with_the_real_output_when_the_checker_breaks() {
-        let file_names = vec!["snippet_batch_0.py".to_string(), "snippet_batch_1.py".to_string()];
-        let output = concat!(
-            r#"{"path": "/tmp/x/snippet_batch_0.py", "ok": true, "error": ""}"#,
-            "\nTraceback (most recent call last)\n"
-        );
-
-        let results = PythonValidator::checker_results(&file_names, output);
-
-        assert_eq!(results[0], (SnippetStatus::Pass, None));
-        assert_eq!(
-            results[1],
-            (
-                SnippetStatus::Fail,
-                Some("Traceback (most recent call last)".to_string())
-            )
-        );
-    }
-
-    #[test]
-    fn pyrefly_blocks_attach_to_the_file_named_on_their_location_line() {
-        let file_names = vec!["snippet_batch_0.py".to_string(), "snippet_batch_1.py".to_string()];
-        let output = concat!(
-            "ERROR Could not find name `missing` [unknown-name]\n",
-            " --> /tmp/x/snippet_batch_1.py:1:1\n",
-            "  |\n",
-            "1 | missing()\n",
-            " INFO 1 error\n"
-        );
-
-        let results = PythonValidator::typecheck_results(&file_names, false, output);
-
-        assert_eq!(results[0], (SnippetStatus::Pass, None));
-        assert_eq!(results[1].0, SnippetStatus::Fail);
-        assert!(
-            results[1]
-                .1
-                .as_deref()
-                .is_some_and(|message| message.contains("snippet_batch_1.py:1:1")),
-            "{:?}",
-            results[1].1
-        );
-    }
-
-    #[test]
-    fn a_type_checker_failure_naming_no_file_fails_every_snippet_with_the_real_output() {
-        let file_names = vec!["snippet_batch_0.py".to_string(), "snippet_batch_1.py".to_string()];
-        let output = "No `pyrefly.toml` found and the preset could not be resolved\n";
-
-        let results = PythonValidator::typecheck_results(&file_names, false, output);
-
-        assert_eq!(results.len(), 2);
-        for result in &results {
-            assert_eq!(result.0, SnippetStatus::Fail);
-            assert_eq!(
-                result.1.as_deref(),
-                Some("No `pyrefly.toml` found and the preset could not be resolved")
-            );
-        }
-    }
-
-    #[test]
-    fn pyrefly_command_matches_scaffolded_python_tooling() {
-        let command = PythonValidator::command(
-            ValidationLevel::TypeCheck,
-            std::path::Path::new("."),
-            "python3",
-            "snippet.py",
-        )
-        .expect("type-check command");
-        assert_eq!(command.get_program(), "pyrefly");
-        assert_eq!(command.get_args().collect::<Vec<_>>(), ["check", "snippet.py"]);
-    }
-
-    #[test]
-    fn unavailable_diagnostic_names_only_the_supported_checker() {
-        assert_eq!(PYREFLY_UNAVAILABLE, "pyrefly is not available for Python type-checking");
-        assert!(!PYREFLY_UNAVAILABLE.contains("mypy"));
-    }
-
-    #[test]
-    fn preserves_multiline_async_signature_lines() {
-        let code = r"class UserServiceHandler:
-    async def CreateUsers(
-        self, request_iterator
-    ) -> CreateUsersResponse:
-        created_users = []
-        return created_users
-";
-
-        let patched = PythonValidator::patch_code(code);
-        assert!(patched.contains(") -> CreateUsersResponse:"));
-        assert!(patched.contains("created_users = []"));
-    }
-
-    #[test]
-    fn syntax_validation_rejects_malformed_imports_and_indentation() {
-        let path = PathBuf::from("broken.py");
-        let snippet = Snippet {
-            id: None,
-            path: path.clone(),
-            language: Language::Python,
-            title: None,
-            code: "from sample import call    from sample.types import Request\n  result = call()".into(),
-            start_line: 1,
-            block_index: 0,
-            annotation: None,
-            metadata: SnippetMetadata::default(),
-            source_origin: SourceOrigin {
-                path,
-                line: 1,
-                block_index: 0,
-            },
-        };
-
-        let (status, _) = PythonValidator
-            .validate(&snippet, ValidationLevel::Syntax, 10)
-            .expect("syntax validator runs");
-        assert_eq!(status, SnippetStatus::Fail);
-    }
-
-    #[test]
-    fn run_session_resolves_local_binding_from_working_directory() {
-        if !PythonValidator.is_available() {
-            return;
-        }
-        let directory = tempfile::tempdir().expect("temp directory");
-        std::fs::write(directory.path().join("local_binding.py"), "VALUE = 42\n").expect("local binding");
-        let path = PathBuf::from("local.py");
-        let snippet = Snippet {
-            id: None,
-            path: path.clone(),
-            language: Language::Python,
-            title: None,
-            code: "import local_binding\nassert local_binding.VALUE == 42\n".into(),
-            start_line: 1,
-            block_index: 0,
-            annotation: None,
-            metadata: SnippetMetadata::default(),
-            source_origin: SourceOrigin {
-                path,
-                line: 1,
-                block_index: 0,
-            },
-        };
-        let session = ValidationSession {
-            language: Language::Python,
-            working_directory: directory.path().to_path_buf(),
-            manifest: None,
-            fingerprint: "test-binding".into(),
-            env: std::collections::BTreeMap::new(),
-            include_paths: Vec::new(),
-            rust_features: Vec::new(),
-            rust_dependencies: std::collections::BTreeMap::new(),
-        };
-
-        let (status, message) = PythonValidator
-            .validate_in_session(&snippet, ValidationLevel::Run, 10, Some(&session))
-            .expect("session validation runs");
-
-        assert_eq!(status, SnippetStatus::Pass, "{message:?}");
-    }
-
-    /// Regression: `validate_with_context` used to create its session-scoped scratch directory
-    /// directly inside `session.working_directory` via a bare `tempdir_in`, leaving a
-    /// `.alef-snippet-*/` directory loose in a tracked package source directory after every run.
-    /// It must nest under the session's own `.alef/snippets/tmp` cache root instead — and stay
-    /// gone whether the snippet passes or fails. ~keep
-    #[test]
-    fn session_scratch_resolves_under_the_cache_root_and_is_removed_on_pass_and_fail() {
-        if !PythonValidator.is_available() {
-            return;
-        }
-        let directory = tempfile::tempdir().expect("temp directory");
-        let session = ValidationSession {
-            language: Language::Python,
-            working_directory: directory.path().to_path_buf(),
-            manifest: None,
-            fingerprint: "scratch-shape-fixture".into(),
-            env: std::collections::BTreeMap::new(),
-            include_paths: Vec::new(),
-            rust_features: Vec::new(),
-            rust_dependencies: std::collections::BTreeMap::new(),
-        };
-        let passing = Snippet {
-            id: None,
-            path: "passing.py".into(),
-            language: Language::Python,
-            title: None,
-            code: "value = 1\n".into(),
-            start_line: 1,
-            block_index: 0,
-            annotation: None,
-            metadata: SnippetMetadata::default(),
-            source_origin: SourceOrigin {
-                path: "passing.py".into(),
-                line: 1,
-                block_index: 0,
-            },
-        };
-        let mut failing = passing.clone();
-        failing.code = "def broken(:\n".into();
-
-        let (pass_status, pass_message) = PythonValidator
-            .validate_in_session(&passing, ValidationLevel::Syntax, 10, Some(&session))
-            .expect("passing snippet validates");
-        assert_eq!(pass_status, SnippetStatus::Pass, "{pass_message:?}");
-        let (fail_status, _) = PythonValidator
-            .validate_in_session(&failing, ValidationLevel::Syntax, 10, Some(&session))
-            .expect("failing snippet validates");
-        assert_eq!(fail_status, SnippetStatus::Fail);
-
-        let top_level_entries: Vec<_> = std::fs::read_dir(directory.path())
-            .expect("read working directory")
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name())
-            .filter(|name| name != ".alef")
-            .collect();
-        assert!(
-            top_level_entries.is_empty(),
-            "no scratch entry may be left directly in working_directory: {top_level_entries:?}"
-        );
-        let scratch_root = directory.path().join(".alef/snippets/tmp");
-        let remaining = std::fs::read_dir(&scratch_root)
-            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
-            .unwrap_or(0);
-        assert_eq!(
-            remaining, 0,
-            "scratch left behind under the cache root after a passing and a failing snippet validation"
-        );
-    }
-}
+#[path = "python_tests.rs"]
+mod tests;
