@@ -1,4 +1,5 @@
 use super::context::{CliCommand, CliOption, CliSurface, McpItem, McpSurface};
+use crate::core::config::{DeclaredMcpItem, DeclaredMcpKind};
 use anyhow::Context as _;
 use heck::ToKebabCase;
 use quote::ToTokens;
@@ -44,7 +45,12 @@ pub fn extract_cli_surface(sources: &[PathBuf]) -> anyhow::Result<CliSurface> {
     Ok(CliSurface { commands })
 }
 
-pub fn extract_mcp_surface(sources: &[PathBuf]) -> anyhow::Result<McpSurface> {
+/// Extract the MCP surface from attribute-declared `#[tool]`/`#[prompt]`/`#[resource]` methods,
+/// then append `declared` — the config fallback for surfaces built at runtime (for example a
+/// `Prompt::new(...)` call) that carry no attribute for this scan to find. See
+/// [`crate::core::config::DocsMcpConfig::declared`] for the precedence rule: an attribute-derived
+/// item always wins over a declared entry with the same `(kind, name)`.
+pub fn extract_mcp_surface(sources: &[PathBuf], declared: &[DeclaredMcpItem]) -> anyhow::Result<McpSurface> {
     let parsed = parse_sources(sources)?;
     let mut surface = McpSurface::default();
 
@@ -89,10 +95,61 @@ pub fn extract_mcp_surface(sources: &[PathBuf]) -> anyhow::Result<McpSurface> {
         }
     }
 
+    merge_declared_items(&mut surface, declared);
+
     surface.tools.sort_by(|left, right| left.name.cmp(&right.name));
     surface.prompts.sort_by(|left, right| left.name.cmp(&right.name));
     surface.resources.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(surface)
+}
+
+/// Append `declared` config entries to the attribute-derived `surface`, one list per kind.
+///
+/// Precedence: an attribute-derived item always wins. When a declared entry's name collides
+/// with one already found by attribute scanning, the declared entry is dropped rather than
+/// appended — a collision means the source has since grown an attribute for that surface and
+/// the config entry is stale, not that the surface legitimately has two definitions. Dropped
+/// entries are reported once, as a single counted warning, so a consumer notices the drift
+/// without one log line per stale entry.
+fn merge_declared_items(surface: &mut McpSurface, declared: &[DeclaredMcpItem]) {
+    let mut skipped = Vec::new();
+    for entry in declared {
+        let (target, kind_label) = match entry.kind {
+            DeclaredMcpKind::Tool => (&mut surface.tools, "tool"),
+            DeclaredMcpKind::Prompt => (&mut surface.prompts, "prompt"),
+            DeclaredMcpKind::Resource => (&mut surface.resources, "resource"),
+        };
+        if target.iter().any(|item| item.name == entry.name) {
+            skipped.push(format!("{kind_label} `{}`", entry.name));
+            continue;
+        }
+        target.push(declared_to_mcp_item(entry));
+    }
+    if !skipped.is_empty() {
+        tracing::warn!(
+            skipped_count = skipped.len(),
+            skipped = %skipped.join(", "),
+            "docs.mcp.declared has {} entr{} that duplicate attribute-derived MCP surfaces; \
+             keeping the attribute-derived definition and ignoring the declared duplicate(s)",
+            skipped.len(),
+            if skipped.len() == 1 { "y" } else { "ies" },
+        );
+    }
+}
+
+fn declared_to_mcp_item(entry: &DeclaredMcpItem) -> McpItem {
+    let title = entry
+        .title
+        .clone()
+        .unwrap_or_else(|| entry.name.replace('_', " ").to_title_case());
+    McpItem {
+        name: entry.name.clone(),
+        title,
+        description: entry.description.clone().unwrap_or_default(),
+        handler: entry.name.clone(),
+        params_type: entry.params_type.clone(),
+        annotations: entry.annotations.clone(),
+    }
 }
 
 fn parse_sources(sources: &[PathBuf]) -> anyhow::Result<Vec<syn::File>> {
@@ -430,6 +487,139 @@ impl TitleCase for str {
 mod tests {
     use super::*;
 
+    fn empty_mcp_source(dir: &std::path::Path) -> PathBuf {
+        let source = dir.join("mcp.rs");
+        std::fs::write(&source, "struct Server;\n").unwrap();
+        source
+    }
+
+    #[test]
+    fn runtime_constructed_prompts_and_resources_are_invisible_to_attribute_extraction() {
+        // Proves the reported defect red first: a prompt/resource built at runtime via a
+        // constructor call (not a `#[prompt]`/`#[resource]` attribute) is not found by scanning
+        // method attributes, however many source files are pointed at it. ~keep
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("mcp.rs");
+        std::fs::write(
+            &source,
+            r#"
+            struct Server;
+            impl Server {
+                fn build_prompts(&self) -> Vec<Prompt> {
+                    vec![Prompt::new("summarize", "Summarize the input")]
+                }
+                fn build_resources(&self) -> Vec<Resource> {
+                    vec![Resource::new("config", "App configuration")]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let surface = extract_mcp_surface(&[source], &[]).unwrap();
+        assert!(surface.prompts.is_empty());
+        assert!(surface.resources.is_empty());
+    }
+
+    #[test]
+    fn declared_prompts_and_resources_fill_the_gap_attribute_extraction_misses() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = empty_mcp_source(dir.path());
+        let declared = vec![
+            DeclaredMcpItem {
+                kind: DeclaredMcpKind::Prompt,
+                name: "summarize".to_string(),
+                title: None,
+                description: Some("Summarize the input".to_string()),
+                params_type: None,
+                annotations: BTreeMap::new(),
+            },
+            DeclaredMcpItem {
+                kind: DeclaredMcpKind::Resource,
+                name: "config".to_string(),
+                title: Some("App Config".to_string()),
+                description: Some("App configuration".to_string()),
+                params_type: None,
+                annotations: BTreeMap::new(),
+            },
+        ];
+        let surface = extract_mcp_surface(&[source], &declared).unwrap();
+        assert_eq!(surface.prompts.len(), 1);
+        assert_eq!(surface.prompts[0].name, "summarize");
+        assert_eq!(surface.prompts[0].description, "Summarize the input");
+        assert_eq!(surface.prompts[0].title, "Summarize");
+        assert_eq!(surface.resources.len(), 1);
+        assert_eq!(surface.resources[0].name, "config");
+        assert_eq!(surface.resources[0].title, "App Config");
+
+        let page = crate::docs::render::generate_mcp_doc(&surface, PathBuf::from("mcp.md"));
+        assert!(page.content.contains("summarize"), "declared prompt must render into mcp.md");
+        assert!(page.content.contains("config"), "declared resource must render into mcp.md");
+    }
+
+    #[test]
+    fn attribute_declared_surfaces_render_identically_when_config_declares_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("mcp.rs");
+        std::fs::write(
+            &source,
+            r#"
+            struct Server;
+            #[tool_router]
+            impl Server {
+                #[tool(description = "Do work")]
+                async fn do_work(&self, Parameters(params): Parameters<crate::Params>) {}
+            }
+            "#,
+        )
+        .unwrap();
+        let with_empty_config = extract_mcp_surface(&[source.clone()], &[]).unwrap();
+        let with_no_config_field = extract_mcp_surface(&[source], &Vec::new()).unwrap();
+        assert_eq!(with_empty_config.tools.len(), 1);
+        assert_eq!(with_empty_config.tools[0].name, "do_work");
+        assert_eq!(with_empty_config.tools[0].name, with_no_config_field.tools[0].name);
+        assert_eq!(
+            with_empty_config.tools[0].description,
+            with_no_config_field.tools[0].description
+        );
+        assert_eq!(with_empty_config.tools[0].title, with_no_config_field.tools[0].title);
+    }
+
+    #[test]
+    fn declared_entry_duplicating_an_attribute_derived_tool_is_dropped_not_doubled() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("mcp.rs");
+        std::fs::write(
+            &source,
+            r#"
+            struct Server;
+            #[tool_router]
+            impl Server {
+                #[tool(description = "Do work")]
+                async fn do_work(&self, Parameters(params): Parameters<crate::Params>) {}
+            }
+            "#,
+        )
+        .unwrap();
+        let declared = vec![DeclaredMcpItem {
+            kind: DeclaredMcpKind::Tool,
+            name: "do_work".to_string(),
+            title: None,
+            description: Some("Stale declared description".to_string()),
+            params_type: None,
+            annotations: BTreeMap::new(),
+        }];
+        let surface = extract_mcp_surface(&[source], &declared).unwrap();
+        assert_eq!(
+            surface.tools.len(),
+            1,
+            "a declared entry duplicating an attribute-derived one must not double-list it"
+        );
+        assert_eq!(
+            surface.tools[0].description, "Do work",
+            "the attribute-derived definition must win over the declared duplicate"
+        );
+    }
+
     #[test]
     fn extracts_mcp_tool_attribute() {
         let dir = tempfile::tempdir().unwrap();
@@ -447,7 +637,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let surface = extract_mcp_surface(&[source]).unwrap();
+        let surface = extract_mcp_surface(&[source], &[]).unwrap();
         assert_eq!(surface.tools.len(), 1);
         assert_eq!(surface.tools[0].name, "do_work");
         assert_eq!(surface.tools[0].description, "Do work");

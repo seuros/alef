@@ -289,7 +289,7 @@ fn generate_docs_stage_extras(
         let explicit_sources = !mcp_cfg.sources.is_empty();
         let sources = docs_sources(config, &mcp_cfg.sources, workspace_root);
         warn_missing_explicit_sources("MCP", &mcp_cfg.sources, workspace_root);
-        let surface = rust_static::extract_mcp_surface(&sources)?;
+        let surface = rust_static::extract_mcp_surface(&sources, &mcp_cfg.declared)?;
         if surface.tools.is_empty() && surface.prompts.is_empty() && surface.resources.is_empty() {
             if explicit_sources {
                 tracing::warn!("docs.mcp was configured but no rmcp tools, prompts, or resources were discovered");

@@ -209,6 +209,79 @@ sources = ["src/lib.rs"]
 }
 
 #[test]
+fn docs_mcp_declared_entries_render_alongside_attribute_derived_ones_in_mcp_md() {
+    // Reproduces the reported gap end to end: a prompt/resource built at runtime via a
+    // constructor call (not a `#[prompt]`/`#[resource]` attribute) is invisible to static
+    // extraction. `docs.mcp.declared` is the config fallback for exactly that surface, and
+    // this proves it actually reaches the rendered `mcp.md` page, additively alongside the
+    // one attribute-derived tool. ~keep
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/mcp.rs"),
+        r#"
+        struct Server;
+        #[tool_router]
+        impl Server {
+            #[tool(description = "Run MCP work")]
+            async fn run_work(&self, Parameters(params): Parameters<crate::Params>) {}
+        }
+        impl Server {
+            fn build_prompts(&self) -> Vec<Prompt> {
+                vec![Prompt::new("summarize", "Summarize the input")]
+            }
+        }
+        "#,
+    )
+    .unwrap();
+
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.mcp]
+sources = ["src/mcp.rs"]
+
+[[workspace.docs.mcp.declared]]
+kind = "prompt"
+name = "summarize"
+description = "Summarize the input"
+
+[[workspace.docs.mcp.declared]]
+kind = "resource"
+name = "config"
+title = "App Config"
+description = "App configuration"
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    );
+    let api = make_minimal_api("1.0.0");
+
+    let (files, result) = generate_docs_stage(&api, &config, &[Language::Python], None, root);
+    result.unwrap();
+
+    let mcp_doc = files
+        .iter()
+        .find(|file| file.path == Path::new("docs/reference/mcp.md"))
+        .expect("mcp.md must be emitted");
+
+    assert!(mcp_doc.content.contains("run_work"), "attribute-derived tool must still render");
+    assert!(
+        mcp_doc.content.contains("summarize"),
+        "declared prompt built at runtime must render into mcp.md, not be silently omitted"
+    );
+    assert!(
+        mcp_doc.content.contains("config") && mcp_doc.content.contains("App Config"),
+        "declared resource built at runtime must render into mcp.md, not be silently omitted"
+    );
+}
+
+#[test]
 fn should_error_when_configured_docs_snippets_dir_does_not_exist() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();

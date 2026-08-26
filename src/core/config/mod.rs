@@ -52,11 +52,11 @@ pub use languages::{
 pub use legacy::{LegacyConfigError, LegacyKey, detect_legacy_keys};
 pub use new_config::{NewAlefConfig, ResolveError};
 pub use output::{
-    BuildCommandConfig, CitationAuthor, CitationConfig, CleanConfig, DocsConfig, DocsLlmsConfig,
-    DocsReferenceLinkStyle, DocsSkillTemplateConfig, DocsSkillsConfig, DocsSnippetsConfig, DocsSourceConfig,
-    ExcludeConfig, GeneratedHeaderConfig, IncludeConfig, LintConfig, OutputConfig, OutputTemplate, ReadmeConfig,
-    ScaffoldCargo, ScaffoldCargoEnvValue, ScaffoldCargoTargets, ScaffoldConfig, SetupConfig, SyncConfig, TestConfig,
-    TextReplacement, UpdateConfig,
+    BuildCommandConfig, CitationAuthor, CitationConfig, CleanConfig, DeclaredMcpItem, DeclaredMcpKind, DocsConfig,
+    DocsLlmsConfig, DocsMcpConfig, DocsReferenceLinkStyle, DocsSkillTemplateConfig, DocsSkillsConfig,
+    DocsSnippetsConfig, DocsSourceConfig, ExcludeConfig, GeneratedHeaderConfig, IncludeConfig, LintConfig,
+    OutputConfig, OutputTemplate, ReadmeConfig, ScaffoldCargo, ScaffoldCargoEnvValue, ScaffoldCargoTargets,
+    ScaffoldConfig, SetupConfig, SyncConfig, TestConfig, TextReplacement, UpdateConfig,
 };
 pub use package_metadata::PackageMetadataConfig;
 pub use poly::{PolyConfig, TyposConfig};
