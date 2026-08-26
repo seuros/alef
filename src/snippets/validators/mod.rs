@@ -29,7 +29,7 @@ use std::io::Write;
 mod process;
 mod termination;
 
-pub use process::{run_command, run_command_streams};
+pub use process::{CapturedStreams, run_command, run_command_streams};
 
 #[cfg(test)]
 #[path = "dependency_error_classification_tests.rs"]
