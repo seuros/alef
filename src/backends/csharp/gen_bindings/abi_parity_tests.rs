@@ -159,7 +159,7 @@ fn declared_param_types(declaration: &str) -> Vec<String> {
 }
 
 fn csharp_declaration(api: &ApiSurface) -> String {
-    super::functions::gen_pinvoke_for_func(
+    super::pinvoke::gen_pinvoke_for_func(
         "sample_ffi_build_report",
         &api.functions[0],
         &HashSet::new(),

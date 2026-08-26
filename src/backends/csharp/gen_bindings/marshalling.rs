@@ -301,21 +301,30 @@ pub(super) fn returns_json_object(ty: &TypeRef) -> bool {
     ) || matches!(ty, TypeRef::Optional(inner) if optional_scalar_pinvoke_return_type(inner).is_none())
 }
 
-/// Returns true if the FFI return type is a pointer (IntPtr), as opposed to a numeric value.
-/// Only pointer-returning functions use `IntPtr.Zero` as an error sentinel.
+/// Returns true if the FFI return value carries its own absent/failure sentinel — a real null
+/// pointer, or the reserved `AlefHandle` zero — as opposed to a bare numeric value.
+///
+/// The `Optional` arm asks [`crate::backends::ffi::type_map::optional_return_crosses_as_scalar`],
+/// the FFI layer that actually emits the symbol, rather than matching `Optional(_)`
+/// unconditionally. That unconditional match is the defect this replaces: `Option<i64>` crosses
+/// as a bare `i64`, so the wrapper emitted `if (nativeResult == 0) { return null; }` and reported
+/// a legitimate `Some(0)` — and `Some(false)`, and a zero-valued `Duration` — as absent. It also
+/// shadowed the wrapper's `else if error_type.is_some()` arm, so a genuine FFI failure on an
+/// optional-returning call surfaced as `null` rather than an exception. Absence for those shapes
+/// is recovered from the presence companion instead; see `gen_bindings::result_presence`. ~keep
 pub(super) fn returns_ptr(ty: &TypeRef) -> bool {
-    matches!(
-        ty,
+    match ty {
         TypeRef::String
-            | TypeRef::Char
-            | TypeRef::Path
-            | TypeRef::Json
-            | TypeRef::Named(_)
-            | TypeRef::Vec(_)
-            | TypeRef::Map(_, _)
-            | TypeRef::Bytes
-            | TypeRef::Optional(_)
-    )
+        | TypeRef::Char
+        | TypeRef::Path
+        | TypeRef::Json
+        | TypeRef::Named(_)
+        | TypeRef::Vec(_)
+        | TypeRef::Map(_, _)
+        | TypeRef::Bytes => true,
+        TypeRef::Optional(inner) => !crate::backends::ffi::type_map::optional_return_crosses_as_scalar(inner),
+        _ => false,
+    }
 }
 
 /// Returns the argument expression to pass to the native method for a given parameter.
@@ -390,6 +399,36 @@ pub(super) fn bytes_len_arg(cast: &str, param_name: &str, optional: bool) -> Str
     } else {
         format!("{cast}{param_name}.Length")
     }
+}
+
+/// The positional argument expressions a wrapper passes to its P/Invoke stub, in order.
+///
+/// Built once per wrapper and consumed twice: by the primary call, and by the presence
+/// companion's gate (`gen_bindings::result_presence`). The companion's C signature *is* the
+/// primary's parameter list, so constructing the list a second time for the gate is exactly how
+/// the two calls drift into disagreeing about arity. `receiver` is the receiver argument for an
+/// instance method and `None` for a free function or a static method — the same distinction the
+/// FFI backend makes when it decides whether the companion takes a leading handle. ~keep
+pub(super) fn native_call_args(
+    receiver: Option<&str>,
+    params: &[crate::core::ir::ParamDef],
+    true_opaque_types: &HashSet<String>,
+    bytes_len_cast: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = receiver.into_iter().map(str::to_string).collect();
+    for param in params {
+        let param_name = param.name.to_lower_camel_case();
+        args.push(native_call_arg(
+            &param.ty,
+            &param_name,
+            param.optional,
+            true_opaque_types,
+        ));
+        if matches!(param.ty, TypeRef::Bytes) {
+            args.push(bytes_len_arg(bytes_len_cast, &param_name, param.optional));
+        }
+    }
+    args
 }
 
 /// Returns true when wrapper setup allocates a temporary handle that must be

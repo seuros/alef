@@ -1,13 +1,11 @@
 //! C# NativeMethods (P/Invoke) code generation.
 
-use super::{
-    FfiEmitter, HANDLE_PINVOKE_TYPE, StreamingMethodMeta, is_bridge_param, pinvoke_param_type_with_scalars,
-    pinvoke_return_type_with_capsules,
-};
+use super::pinvoke::{gen_pinvoke_for_func, gen_pinvoke_for_method, is_bytes_result_func, is_bytes_result_method};
+use super::{HANDLE_PINVOKE_TYPE, StreamingMethodMeta};
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::config::workspace::ClientConstructorConfig;
-use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, TypeRef};
+use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
@@ -642,170 +640,6 @@ pub(super) fn gen_native_methods(
         crate::core::hash::HANDLE_ABI_STAMP_KEY,
         crate::core::template_versions::abi::HANDLE_ABI_VERSION,
     ))
-}
-
-/// Returns true when a function returns bytes — uses the owned out-param convention:
-/// `(args..., out IntPtr, out UIntPtr, out UIntPtr) -> int`.
-pub(super) fn is_bytes_result_func(func: &FunctionDef) -> bool {
-    matches!(func.return_type, TypeRef::Bytes)
-}
-
-/// Same check for MethodDef.
-pub(super) fn is_bytes_result_method(method: &MethodDef) -> bool {
-    matches!(method.return_type, TypeRef::Bytes)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn gen_pinvoke_for_func(
-    c_name: &str,
-    func: &FunctionDef,
-    bridge_param_names: &HashSet<String>,
-    bridge_type_aliases: &HashSet<String>,
-    capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
-    scalar_named_types: &ahash::AHashSet<String>,
-) -> String {
-    use crate::backends::csharp::template_env::render;
-
-    let cs_name = to_csharp_name(&func.name);
-    let is_bytes_result = is_bytes_result_func(func);
-
-    let mut out = render("dll_import_attr.jinja", minijinja::context! { entry_point => c_name });
-    out.push_str("    internal static extern ");
-
-    if is_bytes_result {
-        out.push_str("int");
-    } else {
-        out.push_str(pinvoke_return_type_with_capsules(
-            &func.return_type,
-            capsule_types,
-            FfiEmitter::FreeFunction,
-        ));
-    }
-
-    out.push(' ');
-    out.push_str(&cs_name);
-    out.push('(');
-
-    let visible_params: Vec<_> = func
-        .params
-        .iter()
-        .filter(|p| !is_bridge_param(p, bridge_param_names, bridge_type_aliases))
-        .collect();
-
-    if visible_params.is_empty() && !is_bytes_result {
-        out.push_str(");\n\n");
-    } else {
-        out.push('\n');
-        for param in visible_params.iter() {
-            out.push_str("        ");
-            let pinvoke_ty = pinvoke_param_type_with_scalars(&param.ty, scalar_named_types);
-            if pinvoke_ty == "string" {
-                out.push_str("[MarshalAs(UnmanagedType.LPUTF8Str)] ");
-            }
-            let param_name = param.name.to_lower_camel_case();
-            out.push_str(
-                render("pinvoke_param.jinja", minijinja::context! { pinvoke_ty, param_name }).trim_end_matches('\n'),
-            );
-            out.push_str(",\n");
-            if matches!(param.ty, TypeRef::Bytes) {
-                let len_param_name = format!("{param_name}Len");
-                out.push_str(&render(
-                    "pinvoke_bytes_len_param.jinja",
-                    minijinja::context! { len_param_name },
-                ));
-            }
-        }
-        if is_bytes_result {
-            out.push_str("        out IntPtr outPtr,\n");
-            out.push_str("        out UIntPtr outLen,\n");
-            out.push_str("        out UIntPtr outCap\n");
-        } else {
-            let trim_len = ",\n".len();
-            out.truncate(out.len() - trim_len);
-            out.push('\n');
-        }
-        out.push_str("    );\n\n");
-    }
-
-    out
-}
-
-/// `capsule_types` is threaded in so this emitter derives its return type from the same
-/// authority as [`gen_pinvoke_for_func`] instead of from a map that cannot see capsules at all.
-/// It resolves to [`FfiEmitter::Method`], which for a capsule return deliberately keeps the
-/// `AlefHandle` declaration — see [`FfiEmitter`] for the FFI-side reason. ~keep
-pub(super) fn gen_pinvoke_for_method(
-    c_name: &str,
-    cs_name: &str,
-    method: &MethodDef,
-    capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
-    scalar_named_types: &ahash::AHashSet<String>,
-) -> String {
-    use crate::backends::csharp::template_env::render;
-
-    let is_bytes_result = is_bytes_result_method(method);
-
-    let mut out = render("dll_import_attr.jinja", minijinja::context! { entry_point => c_name });
-    out.push_str("    internal static extern ");
-
-    if is_bytes_result {
-        out.push_str("int");
-    } else {
-        out.push_str(pinvoke_return_type_with_capsules(
-            &method.return_type,
-            capsule_types,
-            FfiEmitter::Method,
-        ));
-    }
-
-    out.push(' ');
-    out.push_str(cs_name);
-    out.push('(');
-
-    let has_receiver = !method.is_static && method.receiver.is_some();
-
-    let needs_params = has_receiver || !method.params.is_empty() || is_bytes_result;
-    if !needs_params {
-        out.push_str(");\n\n");
-    } else {
-        out.push('\n');
-        if has_receiver {
-            // The receiver crosses the C ABI as `AlefHandle` (`uint64_t`), not a pointer —
-            // `ReceiverKind::{Ref,RefMut,Owned}` all map to `AlefHandle` in the FFI backend. ~keep
-            out.push_str("        ulong handle,\n");
-        }
-        for param in method.params.iter() {
-            out.push_str("        ");
-            let pinvoke_ty = pinvoke_param_type_with_scalars(&param.ty, scalar_named_types);
-            if pinvoke_ty == "string" {
-                out.push_str("[MarshalAs(UnmanagedType.LPUTF8Str)] ");
-            }
-            let param_name = param.name.to_lower_camel_case();
-            out.push_str(
-                render("pinvoke_param.jinja", minijinja::context! { pinvoke_ty, param_name }).trim_end_matches('\n'),
-            );
-            out.push_str(",\n");
-            if matches!(param.ty, TypeRef::Bytes) {
-                let len_param_name = format!("{param_name}Len");
-                out.push_str(&render(
-                    "pinvoke_bytes_len_param.jinja",
-                    minijinja::context! { len_param_name },
-                ));
-            }
-        }
-        if is_bytes_result {
-            out.push_str("        out IntPtr outPtr,\n");
-            out.push_str("        out UIntPtr outLen,\n");
-            out.push_str("        out UIntPtr outCap\n");
-        } else {
-            let trim_len = ",\n".len();
-            out.truncate(out.len() - trim_len);
-            out.push('\n');
-        }
-        out.push_str("    );\n\n");
-    }
-
-    out
 }
 
 #[cfg(test)]

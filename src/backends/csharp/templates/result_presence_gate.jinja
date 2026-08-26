@@ -1,0 +1,4 @@
+{{ indent }}if (NativeMethods.{{ cs_name }}({{ args }}) != {{ present }})
+{{ indent }}{
+{{ failure_block }}{{ indent }}    return {{ absent }};
+{{ indent }}}

@@ -1,10 +1,10 @@
 use super::super::errors::{emit_return_marshalling_indented, emit_return_statement, emit_return_statement_indented};
-use super::super::functions::{is_bytes_result_func, is_bytes_result_method};
+use super::super::pinvoke::{is_bytes_result_func, is_bytes_result_method};
 use super::super::{
-    CAPSULE_PINVOKE_RETURN_TYPE, bytes_len_arg, emit_named_param_setup, emit_named_param_teardown,
-    emit_named_param_teardown_indented, is_bridge_param, native_call_arg, needs_param_teardown, returns_ptr,
-    zero_sentinel, zero_sentinel_for_pinvoke_type,
+    CAPSULE_PINVOKE_RETURN_TYPE, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
+    is_bridge_param, native_call_arg, native_call_args, needs_param_teardown, zero_sentinel_for_pinvoke_type,
 };
+use super::native_call::{FailureCheck, NativeCall};
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::doc_emission;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
@@ -26,6 +26,61 @@ pub(super) fn sanitize_doc_for_csharp(doc: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The cast a wrapper applies to a `byte[]` parameter's length before passing it.
+const BYTES_LEN_CAST: &str = "(UIntPtr)";
+
+/// The primary P/Invoke call of a free-function wrapper.
+fn function_native_call<'a>(
+    func: &'a FunctionDef,
+    cs_native_name: &'a str,
+    visible_params: &[crate::core::ir::ParamDef],
+    true_opaque_types: &HashSet<String>,
+    call_indent: &'a str,
+    argument_indent: &'a str,
+) -> NativeCall<'a> {
+    NativeCall {
+        cs_native_name,
+        return_type: &func.return_type,
+        receiver: None,
+        has_error_type: func.error_type.is_some(),
+        args: native_call_args(None, visible_params, true_opaque_types, BYTES_LEN_CAST),
+        call_indent,
+        argument_indent,
+        failure_check: FailureCheck::LastError,
+    }
+}
+
+/// The primary P/Invoke call of a method wrapper.
+///
+/// `receiver` is `method.receiver` untouched, including for a static method: that is exactly what
+/// the FFI backend passes to the presence-companion eligibility authority, and the two must agree
+/// or C# declares a `[DllImport]` for a symbol the crate never exported. ~keep
+fn method_native_call<'a>(
+    method: &'a MethodDef,
+    cs_native_name: &'a str,
+    visible_params: &[crate::core::ir::ParamDef],
+    has_receiver: bool,
+    true_opaque_types: &HashSet<String>,
+    call_indent: &'a str,
+    argument_indent: &'a str,
+) -> NativeCall<'a> {
+    NativeCall {
+        cs_native_name,
+        return_type: &method.return_type,
+        receiver: method.receiver.as_ref(),
+        has_error_type: method.error_type.is_some(),
+        args: native_call_args(
+            has_receiver.then_some("handle"),
+            visible_params,
+            true_opaque_types,
+            BYTES_LEN_CAST,
+        ),
+        call_indent,
+        argument_indent,
+        failure_check: FailureCheck::NullSentinel,
+    }
 }
 
 /// Generate a C# wrapper for a function returning a host-native capsule (Language) type.
@@ -296,67 +351,8 @@ pub(super) fn gen_wrapper_function(
         out.push_str(lambda_indent);
         out.push_str("{\n");
 
-        out.push_str(body_indent);
-        if func.return_type != TypeRef::Unit {
-            out.push_str("var nativeResult = ");
-        }
-
-        out.push_str(
-            render(
-                "native_call_start.jinja",
-                minijinja::context! { method_name => &cs_native_name },
-            )
-            .trim_end_matches('\n'),
-        );
-
-        if visible_params.is_empty() {
-            out.push_str(");\n");
-        } else {
-            out.push('\n');
-            let mut arg_parts: Vec<String> = Vec::new();
-            for param in visible_params.iter() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                arg_parts.push(arg.clone());
-                if matches!(param.ty, TypeRef::Bytes) {
-                    arg_parts.push(bytes_len_arg("(UIntPtr)", &param_name, param.optional));
-                }
-            }
-            for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(
-                    render(
-                        "indented_arg.jinja",
-                        minijinja::context! { arg, indent => argument_indent },
-                    )
-                    .trim_end_matches('\n'),
-                );
-                if i < arg_parts.len() - 1 {
-                    out.push(',');
-                }
-                out.push('\n');
-            }
-            out.push_str(body_indent);
-            out.push_str(");\n");
-        }
-
-        if func.return_type != TypeRef::Unit && returns_ptr(&func.return_type) {
-            if matches!(func.return_type, TypeRef::Optional(_)) {
-                out.push_str(&render(
-                    "null_result_return.jinja",
-                    minijinja::context! { indent => body_indent, zero => zero_sentinel(&func.return_type) },
-                ));
-            } else {
-                out.push_str(&render(
-                    "last_error_throw.jinja",
-                    minijinja::context! { indent => body_indent },
-                ));
-            }
-        } else if func.error_type.is_some() {
-            out.push_str(&render(
-                "last_error_throw.jinja",
-                minijinja::context! { indent => body_indent },
-            ));
-        }
+        function_native_call(func, &cs_native_name, &visible_params, true_opaque_types, body_indent, argument_indent)
+            .emit(&mut out);
 
         emit_return_marshalling_indented(
             &mut out,
@@ -394,71 +390,10 @@ pub(super) fn gen_wrapper_function(
             "            "
         };
 
-        if func.return_type != TypeRef::Unit {
-            out.push_str(call_indent);
-            out.push_str("var nativeResult = ");
-        } else {
-            out.push_str(call_indent);
-        }
+        function_native_call(func, &cs_native_name, &visible_params, true_opaque_types, call_indent, argument_indent)
+            .emit(&mut out);
 
-        out.push_str(
-            render(
-                "native_call_start.jinja",
-                minijinja::context! { method_name => &cs_native_name },
-            )
-            .trim_end_matches('\n'),
-        );
-
-        if visible_params.is_empty() {
-            out.push_str(");\n");
-        } else {
-            out.push('\n');
-            let mut arg_parts: Vec<String> = Vec::new();
-            for param in visible_params.iter() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                arg_parts.push(arg.clone());
-                if matches!(param.ty, TypeRef::Bytes) {
-                    arg_parts.push(bytes_len_arg("(UIntPtr)", &param_name, param.optional));
-                }
-            }
-            for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(
-                    render(
-                        "indented_arg.jinja",
-                        minijinja::context! { arg, indent => argument_indent },
-                    )
-                    .trim_end_matches('\n'),
-                );
-                if i < arg_parts.len() - 1 {
-                    out.push(',');
-                }
-                out.push('\n');
-            }
-            out.push_str(call_indent);
-            out.push_str(");\n");
-        }
-
-        let body_indent = if needs_outer_try { "            " } else { "        " };
-
-        if func.return_type != TypeRef::Unit && returns_ptr(&func.return_type) {
-            if matches!(func.return_type, TypeRef::Optional(_)) {
-                out.push_str(&render(
-                    "null_result_return.jinja",
-                    minijinja::context! { indent => body_indent, zero => zero_sentinel(&func.return_type) },
-                ));
-            } else {
-                out.push_str(&render(
-                    "last_error_throw.jinja",
-                    minijinja::context! { indent => body_indent },
-                ));
-            }
-        } else if func.error_type.is_some() {
-            out.push_str(&render(
-                "last_error_throw.jinja",
-                minijinja::context! { indent => body_indent },
-            ));
-        }
+        let body_indent = call_indent;
 
         emit_return_marshalling_indented(
             &mut out,
@@ -681,62 +616,16 @@ pub(super) fn gen_wrapper_method(
             out.push_str("        return await Task.Run(() =>\n        {\n");
         }
 
-        if method.return_type != TypeRef::Unit {
-            out.push_str("            var nativeResult = ");
-        } else {
-            out.push_str("            ");
-        }
-
-        out.push_str(
-            render(
-                "native_call_start.jinja",
-                minijinja::context! { method_name => &cs_native_name },
-            )
-            .trim_end_matches('\n'),
-        );
-
-        if !has_receiver && visible_params.is_empty() {
-            out.push_str(");\n");
-        } else {
-            out.push('\n');
-            let mut arg_parts: Vec<String> = Vec::new();
-            if has_receiver {
-                arg_parts.push("handle".to_string());
-            }
-            for param in visible_params.iter() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                arg_parts.push(arg.clone());
-                if matches!(param.ty, TypeRef::Bytes) {
-                    arg_parts.push(bytes_len_arg("(UIntPtr)", &param_name, param.optional));
-                }
-            }
-            for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(render("indented_arg_async.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                if i < arg_parts.len() - 1 {
-                    out.push(',');
-                }
-                out.push('\n');
-            }
-            out.push_str("            );\n");
-        }
-
-        if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
-            let zero = zero_sentinel(&method.return_type);
-            if matches!(method.return_type, TypeRef::Optional(_)) {
-                out.push_str(&format!(
-                    "            if (nativeResult == {zero})\n            {{\n                return null;\n            }}\n",
-                ));
-            } else {
-                out.push_str(&format!(
-                    "            if (nativeResult == {zero})\n            {{\n                throw GetLastError();\n            }}\n",
-                ));
-            }
-        } else if method.error_type.is_some() {
-            out.push_str(
-                "            if (NativeMethods.LastErrorCode() != 0)\n            {\n                throw GetLastError();\n            }\n",
-            );
-        }
+        method_native_call(
+            method,
+            &cs_native_name,
+            &visible_params,
+            has_receiver,
+            true_opaque_types,
+            "            ",
+            "                ",
+        )
+        .emit(&mut out);
 
         emit_return_marshalling_indented(
             &mut out,
@@ -751,62 +640,16 @@ pub(super) fn gen_wrapper_method(
         emit_return_statement_indented(&mut out, &method.return_type, "            ");
         out.push_str("        });\n");
     } else {
-        if method.return_type != TypeRef::Unit {
-            out.push_str("        var nativeResult = ");
-        } else {
-            out.push_str("        ");
-        }
-
-        out.push_str(
-            render(
-                "native_call_start.jinja",
-                minijinja::context! { method_name => &cs_native_name },
-            )
-            .trim_end_matches('\n'),
-        );
-
-        if !has_receiver && visible_params.is_empty() {
-            out.push_str(");\n");
-        } else {
-            out.push('\n');
-            let mut arg_parts: Vec<String> = Vec::new();
-            if has_receiver {
-                arg_parts.push("handle".to_string());
-            }
-            for param in visible_params.iter() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                arg_parts.push(arg.clone());
-                if matches!(param.ty, TypeRef::Bytes) {
-                    arg_parts.push(bytes_len_arg("(UIntPtr)", &param_name, param.optional));
-                }
-            }
-            for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(render("indented_arg_sync.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                if i < arg_parts.len() - 1 {
-                    out.push(',');
-                }
-                out.push('\n');
-            }
-            out.push_str("        );\n");
-        }
-
-        if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
-            let zero = zero_sentinel(&method.return_type);
-            if matches!(method.return_type, TypeRef::Optional(_)) {
-                out.push_str(&format!(
-                    "        if (nativeResult == {zero})\n        {{\n            return null;\n        }}\n",
-                ));
-            } else {
-                out.push_str(&format!(
-                    "        if (nativeResult == {zero})\n        {{\n            throw GetLastError();\n        }}\n",
-                ));
-            }
-        } else if method.error_type.is_some() {
-            out.push_str(
-                "        if (NativeMethods.LastErrorCode() != 0)\n        {\n            throw GetLastError();\n        }\n",
-            );
-        }
+        method_native_call(
+            method,
+            &cs_native_name,
+            &visible_params,
+            has_receiver,
+            true_opaque_types,
+            "        ",
+            "            ",
+        )
+        .emit(&mut out);
 
         emit_return_marshalling_indented(
             &mut out,
@@ -985,7 +828,7 @@ mod tests {
     }
 
     fn pinvoke(func: &FunctionDef, capsule_types: &HashMap<String, HostCapsuleTypeConfig>) -> String {
-        super::super::super::functions::gen_pinvoke_for_func(
+        super::super::super::pinvoke::gen_pinvoke_for_func(
             &format!("sample_ffi_{}", func.name),
             func,
             &HashSet::new(),
@@ -1085,7 +928,7 @@ mod tests {
         method: &crate::core::ir::MethodDef,
         capsule_types: &HashMap<String, HostCapsuleTypeConfig>,
     ) -> String {
-        super::super::super::functions::gen_pinvoke_for_method(
+        super::super::super::pinvoke::gen_pinvoke_for_method(
             &format!("sample_ffi_registry_{}", method.name),
             "RegistryGetLanguage",
             method,

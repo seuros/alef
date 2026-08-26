@@ -4,6 +4,7 @@ use super::super::{
     returns_ptr, zero_sentinel,
 };
 use super::constructors::{gen_opaque_factory_method, gen_opaque_static_constructor, is_static_constructor};
+use crate::backends::csharp::template_env::render;
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::workspace::ClientConstructorConfig;
@@ -24,7 +25,6 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
     client_constructor: Option<&ClientConstructorConfig>,
     enum_data_variant_names: &HashSet<String>,
 ) -> String {
-    use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
     let has_streaming = typ
@@ -124,7 +124,6 @@ pub(super) fn gen_opaque_streaming_method(
     exception_name: &str,
     meta: &StreamingMethodMeta,
 ) -> String {
-    use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
     let cs_method_name = to_csharp_name(&method.name);
@@ -177,6 +176,61 @@ pub(super) fn gen_opaque_streaming_method(
     )
 }
 
+/// The cast an opaque-class wrapper applies to a `byte[]` parameter's length before passing it.
+///
+/// `nuint` rather than the free-function wrappers' `(UIntPtr)`: the two families spell the same
+/// CLR type differently and always have, and this refactor is not the place to unify them.
+const BYTES_LEN_CAST: &str = "(nuint)";
+
+/// Emit one argument per line, comma-separated, in the layout the opaque-class call sites use.
+fn emit_call_arguments(out: &mut String, args: &[String], arg_template: &str) {
+    for (index, arg) in args.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str(render(arg_template, minijinja::context! { arg }).trim_end_matches('\n'));
+    }
+}
+
+/// Emit the presence companion's guard, when the FFI crate exports one for this method.
+///
+/// Placed immediately before the primary call and after the receiver guard: every FFI wrapper
+/// clears the crate's last-error slot on entry, so a companion invoked second would erase an
+/// error the primary had just recorded. A `consumes_receiver` method cannot reach this — an owned
+/// receiver has no companion, because the companion would have to re-invoke a method whose first
+/// call already removed the handle from the registry. ~keep
+fn emit_presence_gate(
+    out: &mut String,
+    method: &MethodDef,
+    cs_native_name: &str,
+    call_args: &[String],
+    indent: &str,
+    exception_name: &str,
+) {
+    let failure_block = if method.error_type.is_some() {
+        render(
+            "last_error_context_throw.jinja",
+            minijinja::context! {
+                indent => format!("{indent}    "),
+                operation => cs_native_name,
+                exception_name,
+            },
+        )
+    } else {
+        String::new()
+    };
+    if let Some(gate) = super::super::result_presence::presence_gate(
+        &method.return_type,
+        method.receiver.as_ref(),
+        cs_native_name,
+        &call_args.join(", "),
+        indent,
+        &failure_block,
+    ) {
+        out.push_str(&gate);
+    }
+}
+
 /// Generate a single public method on an opaque handle class.
 ///
 /// The method delegates to `NativeMethods.{TypeName}{MethodName}(this.Handle, ...)`.
@@ -189,8 +243,6 @@ pub(super) fn gen_opaque_method(
     true_opaque_types: &HashSet<String>,
     enum_data_variant_names: &HashSet<String>,
 ) -> String {
-    use crate::backends::csharp::template_env::render;
-
     let mut out = String::new();
 
     let visible_params: Vec<crate::core::ir::ParamDef> = method.params.clone();
@@ -291,7 +343,16 @@ pub(super) fn gen_opaque_method(
 
     let cs_native_name = format!("{class_name}{method_cs_name}");
 
-    if super::super::functions::is_bytes_result_method(method) {
+    // Built once and consumed twice: by the primary call below, and by the presence companion's
+    // gate. The companion's C signature *is* the primary export's parameter list. ~keep
+    let call_args = super::super::native_call_args(
+        (!is_static).then_some(receiver_arg.as_str()),
+        &visible_params,
+        true_opaque_types,
+        BYTES_LEN_CAST,
+    );
+
+    if super::super::pinvoke::is_bytes_result_method(method) {
         let mut args_block = String::new();
         let arg_indent = if method.is_async {
             "                "
@@ -352,6 +413,8 @@ pub(super) fn gen_opaque_method(
             ));
         }
 
+        emit_presence_gate(&mut out, method, &cs_native_name, &call_args, "            ", exception_name);
+
         if method.return_type != TypeRef::Unit {
             out.push_str("            var nativeResult = ");
         } else {
@@ -362,50 +425,7 @@ pub(super) fn gen_opaque_method(
             "native_call_start.jinja",
             minijinja::context! { method_name => &cs_native_name },
         ));
-        if !is_static {
-            out.push_str(&format!("                {receiver_arg}"));
-            for param in &visible_params {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                out.push_str(",\n");
-                out.push_str(render("indented_arg_async.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                if matches!(param.ty, TypeRef::Bytes) {
-                    out.push_str(",\n");
-                    out.push_str(
-                        render(
-                            "indented_arg_async.jinja",
-                            minijinja::context! { arg => super::super::bytes_len_arg("(nuint)", &param_name, param.optional) },
-                        )
-                        .trim_end_matches('\n'),
-                    );
-                }
-            }
-        } else {
-            for (i, param) in visible_params.iter().enumerate() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                if i == 0 {
-                    out.push_str(
-                        render("indented_arg_async.jinja", minijinja::context! { arg }).trim_end_matches('\n'),
-                    );
-                } else {
-                    out.push_str(",\n");
-                    out.push_str(
-                        render("indented_arg_async.jinja", minijinja::context! { arg }).trim_end_matches('\n'),
-                    );
-                }
-                if matches!(param.ty, TypeRef::Bytes) {
-                    out.push_str(",\n");
-                    out.push_str(
-                        render(
-                            "indented_arg_async.jinja",
-                            minijinja::context! { arg => super::super::bytes_len_arg("(nuint)", &param_name, param.optional) },
-                        )
-                        .trim_end_matches('\n'),
-                    );
-                }
-            }
-        }
+        emit_call_arguments(&mut out, &call_args, "indented_arg_async.jinja");
         out.push_str("\n            );\n");
         if consumes_receiver {
             out.push_str(&render(
@@ -453,6 +473,8 @@ pub(super) fn gen_opaque_method(
             ));
         }
 
+        emit_presence_gate(&mut out, method, &cs_native_name, &call_args, "        ", exception_name);
+
         if method.return_type != TypeRef::Unit {
             out.push_str("        var nativeResult = ");
         } else {
@@ -463,46 +485,7 @@ pub(super) fn gen_opaque_method(
             "native_call_start.jinja",
             minijinja::context! { method_name => &cs_native_name },
         ));
-        if !is_static {
-            out.push_str(&format!("            {receiver_arg}"));
-            for param in &visible_params {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                out.push_str(",\n");
-                out.push_str(render("indented_arg_sync.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                if matches!(param.ty, TypeRef::Bytes) {
-                    out.push_str(",\n");
-                    out.push_str(
-                        render(
-                            "indented_arg_sync.jinja",
-                            minijinja::context! { arg => super::super::bytes_len_arg("(nuint)", &param_name, param.optional) },
-                        )
-                        .trim_end_matches('\n'),
-                    );
-                }
-            }
-        } else {
-            for (i, param) in visible_params.iter().enumerate() {
-                let param_name = param.name.to_lower_camel_case();
-                let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
-                if i == 0 {
-                    out.push_str(render("indented_arg_sync.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                } else {
-                    out.push_str(",\n");
-                    out.push_str(render("indented_arg_sync.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
-                }
-                if matches!(param.ty, TypeRef::Bytes) {
-                    out.push_str(",\n");
-                    out.push_str(
-                        render(
-                            "indented_arg_sync.jinja",
-                            minijinja::context! { arg => super::super::bytes_len_arg("(nuint)", &param_name, param.optional) },
-                        )
-                        .trim_end_matches('\n'),
-                    );
-                }
-            }
-        }
+        emit_call_arguments(&mut out, &call_args, "indented_arg_sync.jinja");
         out.push_str("\n        );\n");
         if consumes_receiver {
             out.push_str(&render(

@@ -525,6 +525,18 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/null_result_return.jinja"),
     ),
     (
+        "result_presence_gate.jinja",
+        include_str!("templates/result_presence_gate.jinja"),
+    ),
+    (
+        "null_sentinel_throw.jinja",
+        include_str!("templates/null_sentinel_throw.jinja"),
+    ),
+    (
+        "pinvoke_declaration.jinja",
+        include_str!("templates/pinvoke_declaration.jinja"),
+    ),
+    (
         "last_error_throw.jinja",
         include_str!("templates/last_error_throw.jinja"),
     ),
