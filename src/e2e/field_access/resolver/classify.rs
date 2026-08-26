@@ -5,6 +5,7 @@ use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
 };
 use super::super::types::{FieldResolver, PathSegment, StringyField};
+use heck::ToUpperCamelCase;
 use std::borrow::Cow;
 use std::collections::HashSet;
 
@@ -223,29 +224,46 @@ impl FieldResolver {
     }
 
     fn is_optional_direct(&self, field: &str) -> bool {
-        if self.optional_fields.contains(field) {
+        Self::optional_set_contains(&self.optional_fields, &self.array_fields, field)
+    }
+
+    /// Whether `field` matches an entry the consumer's OWN `[e2e].fields_optional` list named —
+    /// never a name `with_ir_fields` merged into `optional_fields` from the IR's own `Option<T>`
+    /// declarations. See `config_declared_optional_fields`'s field doc for why
+    /// `declaring_config_key` needs this distinct from [`Self::is_optional_direct`].
+    fn is_config_declared_optional(&self, field: &str) -> bool {
+        Self::optional_set_contains(&self.config_declared_optional_fields, &self.array_fields, field)
+    }
+
+    /// The index-normalization rules `fields_optional`-style path matching applies, shared by
+    /// [`Self::is_optional_direct`] (classification, against the IR-merged set) and
+    /// [`Self::is_config_declared_optional`] (provenance, against the unmerged config-only set)
+    /// so the two can never drift on what counts as "the same path" while disagreeing only on
+    /// which set they consult.
+    fn optional_set_contains(set: &HashSet<String>, array_fields: &HashSet<String>, field: &str) -> bool {
+        if set.contains(field) {
             return true;
         }
         let index_normalized = normalize_numeric_indices(field);
-        if index_normalized != field && self.optional_fields.contains(index_normalized.as_str()) {
+        if index_normalized != field && set.contains(index_normalized.as_str()) {
             return true;
         }
         // Also check with all numeric indices stripped: "choices[0].message.tool_calls"
         // should match optional_fields entry "choices.message.tool_calls".
         let de_indexed = strip_numeric_indices(field);
-        if de_indexed != field && self.optional_fields.contains(de_indexed.as_str()) {
+        if de_indexed != field && set.contains(de_indexed.as_str()) {
             return true;
         }
         let normalized = field.replace("[].", ".");
-        if normalized != field && self.optional_fields.contains(normalized.as_str()) {
+        if normalized != field && set.contains(normalized.as_str()) {
             return true;
         }
-        for af in &self.array_fields {
+        for af in array_fields {
             if let Some(rest) = field.strip_prefix(af.as_str())
                 && let Some(rest) = rest.strip_prefix('.')
             {
                 let with_bracket = format!("{af}[].{rest}");
-                if self.optional_fields.contains(with_bracket.as_str()) {
+                if set.contains(with_bracket.as_str()) {
                     return true;
                 }
             }
@@ -400,11 +418,21 @@ impl FieldResolver {
         {
             return Some(declared || self.namespace_prefix_reaches_a_declared_field(resolved));
         }
+        // A `fields_method_calls` entry that names exactly how to cross a tagged-union boundary is
+        // a real accessor, not a phantom one — every backend that renders one (gleam, dart, kotlin,
+        // swift) does so via this same `tagged_union_split`/`union_variant_payload` pair. Consulted
+        // BEFORE the blanket unwalkable-field refusal below, so a path extending past a
+        // method-call-covered union resolves against the variant's own payload type instead of
+        // being refused at the union itself. ~keep
+        if let Some(declared) = self.tagged_union_method_call_declares(fixture_field) {
+            return Some(declared);
+        }
         // `root_declares_path` abstains (`None`) on a declared-but-unresolvable prefix segment on
         // purpose, so a map value or `serde_json::Value` still derives its accessor. A tagged-union
         // field is the same shape, but has a definite answer this map now carries: `accessor()`
         // cannot walk a plain field access past it either, so a path that tries reads as refused
-        // here rather than falling through to the permissive flat check below. ~keep
+        // here rather than falling through to the permissive flat check below -- UNLESS a
+        // `fields_method_calls` entry above already vouched for the crossing. ~keep
         if super::super::ir_result_fields::path_crosses_unwalkable_field(&self.ir_result_field_map, resolved) {
             return Some(false);
         }
@@ -464,7 +492,7 @@ impl FieldResolver {
         if self.is_array(resolved) {
             return Some("fields_array");
         }
-        if self.is_optional_direct(resolved) {
+        if self.is_config_declared_optional(resolved) {
             return Some("fields_optional");
         }
         let is_single_segment = !resolved.contains('.') && !resolved.contains('[');
@@ -829,6 +857,33 @@ impl FieldResolver {
         None
     }
 
+    /// Whether the IR confirms a `fields_method_calls`-covered tagged-union crossing in
+    /// `fixture_field`, and if so, whether the path segment(s) past the crossing are declared on
+    /// the variant's own payload type.
+    ///
+    /// `None` when `fixture_field` does not cross a method-call-covered union at all
+    /// ([`Self::tagged_union_split`] found no covering entry), or when the IR cannot resolve the
+    /// union type at `prefix` or the variant's single-field payload type — callers must fall back
+    /// to their pre-existing unwalkable-field refusal in that case, exactly as if this method did
+    /// not exist. `Some(true)` for an empty suffix: the path stops AT the variant accessor itself,
+    /// which is a real, IR-confirmed member once the union and variant both resolve, with nothing
+    /// further to walk.
+    ///
+    /// `variant` is pascal-cased before the [`Self::union_variant_payload`] lookup, matching every
+    /// other caller of that method (gleam/dart/kotlin/swift assertion rendering): the fixture path
+    /// spells the accessor segment lower (`excel`), but `variant_payload_types` is keyed by the
+    /// Rust variant's own declared name (`Excel`).
+    fn tagged_union_method_call_declares(&self, fixture_field: &str) -> Option<bool> {
+        let (prefix, variant, suffix) = self.tagged_union_split(fixture_field)?;
+        let union_type = enum_type_at_path(&self.ir_enum_map, &prefix)?;
+        let variant_pascal = variant.to_upper_camel_case();
+        let (_, payload_type) = self.union_variant_payload(&union_type, &variant_pascal)?;
+        if suffix.is_empty() {
+            return Some(true);
+        }
+        super::super::ir_result_fields::type_declares_path(&self.ir_result_field_map, payload_type, &suffix)
+    }
+
     /// Split a bracket-wildcard path (`foo[].bar`) into its array-root path and
     /// element sub-path, or `None` when the path has no wildcard.
     ///
@@ -873,124 +928,5 @@ impl FieldResolver {
                 false
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod is_valid_for_result_anchoring_tests {
-    use super::*;
-    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
-    use std::collections::HashMap;
-
-    /// `Envelope { results: Vec<Document> }`, `Document { chunks: Vec<Chunk> }`. `chunks` is
-    /// declared on `Document`, reached only through `Envelope.results`, never directly on
-    /// `Envelope`.
-    ///
-    /// ~keep A prior attempt (unmerged, `bc67f7fc1`) anchored `is_valid_for_result` the same
-    /// way `result_field_oracle_knows` is anchored, on the theory that a name declared on ANY
-    /// IR struct (not the call's own result type) validating a fixture field was, categorically,
-    /// the same defect the `chunks`/`document_structure` production incidents already fixed via
-    /// `result_field_oracle_knows`. It is not: `presentation.rs::shows_on_result` already
-    /// consults BOTH oracles for the DERIVED docs-snippet path — `is_valid_for_result` rejects
-    /// only what is positively `ir_known_excluded_fields`, `result_field_oracle_knows` ALSO
-    /// rejects what it has simply never anchored-confirmed — and
-    /// `e2e::codegen::presentation::anchored_result_facts_tests`/`deep_result_path_tests` pin,
-    /// with real incident citations, that `is_valid_for_result` staying permissive for a HAND-
-    /// AUTHORED fixture assertion is deliberate, not the bug: a config-declared or IR-elsewhere-
-    /// reachable name must keep rendering an assertion even when the call's own anchored result
-    /// type does not declare it, precisely so a real, working assertion is never silently
-    /// dropped. Anchoring `is_valid_for_result` the way `bc67f7fc1` did makes it agree with
-    /// `result_field_oracle_knows` in exactly the cases those two test modules require them to
-    /// DISAGREE, which is a regression, not a fix. This module exists so that regression is
-    /// caught here, at the unit level, without needing the full presentation-layer suite.
-    fn envelope_and_document_type_defs() -> Vec<TypeDef> {
-        vec![
-            TypeDef {
-                name: "Envelope".to_string(),
-                fields: vec![FieldDef {
-                    name: "results".to_string(),
-                    ty: TypeRef::Vec(Box::new(TypeRef::Named("Document".to_string()))),
-                    ..FieldDef::default()
-                }],
-                ..TypeDef::default()
-            },
-            TypeDef {
-                name: "Document".to_string(),
-                fields: vec![FieldDef {
-                    name: "chunks".to_string(),
-                    ty: TypeRef::Vec(Box::new(TypeRef::Named("Chunk".to_string()))),
-                    ..FieldDef::default()
-                }],
-                ..TypeDef::default()
-            },
-        ]
-    }
-
-    fn resolver_anchored_at(root_type: &str) -> FieldResolver {
-        let type_defs = envelope_and_document_type_defs();
-        let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
-        let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
-        FieldResolver::new(
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .with_ir_result_fields(map, Some(root_type.to_string()))
-        .with_ir_fields(reachable, excluded, optional)
-    }
-
-    /// The asymmetry, at the root: `chunks` belongs to `Document`, not the call's own anchored
-    /// root `Envelope`. `is_valid_for_result` must still validate it (a hand-authored assertion
-    /// on it must still render), while `result_field_oracle_knows` — the oracle a DERIVED
-    /// accessor is judged against — must refuse it.
-    #[test]
-    fn is_valid_for_result_stays_permissive_for_a_name_declared_only_on_an_unrelated_ir_struct() {
-        let resolver = resolver_anchored_at("Envelope");
-        assert!(
-            resolver.is_valid_for_result("chunks"),
-            "a hand-authored assertion on `chunks` must still render even though `Envelope` \
-             does not declare it"
-        );
-        assert_eq!(
-            resolver.result_field_oracle_knows("chunks"),
-            Some(false),
-            "a derived accessor for `chunks` must be refused: `Envelope` does not declare it"
-        );
-    }
-
-    /// The control: when the call's root type genuinely declares the field, both oracles must
-    /// agree it is valid — the asymmetry above is specific to the anchor's `Some(false)` case,
-    /// not a blanket disagreement.
-    #[test]
-    fn both_oracles_agree_when_the_call_own_result_type_declares_the_field() {
-        let resolver = resolver_anchored_at("Document");
-        assert!(resolver.is_valid_for_result("chunks"));
-        assert_eq!(resolver.result_field_oracle_knows("chunks"), Some(true));
-    }
-
-    /// No resolved root type at all (every call site before result_type anchoring existed, and
-    /// every call site today that still can't resolve one) leaves `result_field_oracle_knows`
-    /// with nothing anchored to answer from, so it falls back to the same flat, name-keyed
-    /// check `is_valid_for_result` always used — the two agree here too, just not through the
-    /// anchor.
-    #[test]
-    fn unresolved_root_type_leaves_both_oracles_on_the_flat_fallback() {
-        let type_defs = envelope_and_document_type_defs();
-        let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
-        let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
-        let resolver = FieldResolver::new(
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .with_ir_result_fields(map, None)
-        .with_ir_fields(reachable, excluded, optional);
-
-        assert!(resolver.is_valid_for_result("chunks"));
-        assert_eq!(resolver.result_field_oracle_knows("chunks"), Some(true));
     }
 }

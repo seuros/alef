@@ -81,6 +81,7 @@ impl FieldResolver {
         Self {
             aliases: fields.clone(),
             optional_fields: optional.clone(),
+            config_declared_optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
             enum_fields: HashSet::new(),
@@ -116,6 +117,7 @@ impl FieldResolver {
         Self {
             aliases: fields.clone(),
             optional_fields: optional.clone(),
+            config_declared_optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
             enum_fields: HashSet::new(),
@@ -161,6 +163,7 @@ impl FieldResolver {
         Self {
             aliases: fields.clone(),
             optional_fields: optional.clone(),
+            config_declared_optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
             enum_fields: HashSet::new(),
@@ -212,6 +215,7 @@ impl FieldResolver {
         Self {
             aliases: fields.clone(),
             optional_fields: optional.clone(),
+            config_declared_optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
             enum_fields: HashSet::new(),
@@ -247,6 +251,7 @@ impl FieldResolver {
         Self {
             aliases: fields.clone(),
             optional_fields: optional.clone(),
+            config_declared_optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
             enum_fields: HashSet::new(),
@@ -402,7 +407,10 @@ impl FieldResolver {
     /// `optional` (also from [`Self::ir_field_sets`]) is merged into the config-declared
     /// `fields_optional` set rather than replacing it, so an `Option<T>` field is detected
     /// even when a consumer's `alef.toml` never lists it under `fields_optional` at all —
-    /// see [`Self::ir_field_sets`] for why this merge is safe to do unconditionally. ~keep
+    /// see [`Self::ir_field_sets`] for why this merge is safe to do unconditionally. The merge
+    /// only ever touches `optional_fields` (the classification answer); `config_declared_optional_fields`
+    /// is fixed at construction and stays exactly what the consumer wrote, so provenance survives
+    /// the merge undisturbed. ~keep
     pub fn with_ir_fields(
         mut self,
         reachable: HashSet<String>,

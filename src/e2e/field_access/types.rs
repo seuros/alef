@@ -5,6 +5,18 @@ use std::collections::{HashMap, HashSet};
 pub struct FieldResolver {
     pub(super) aliases: HashMap<String, String>,
     pub(super) optional_fields: HashSet<String>,
+    /// The subset of `optional_fields` the consumer's own `[e2e].fields_optional` list actually
+    /// named, fixed at construction time and never touched by `with_ir_fields`'s merge.
+    ///
+    /// `optional_fields` answers "does this classify as optional", and has to include names
+    /// `with_ir_fields` merges in from the IR's own `Option<T>` declarations so an unconfigured
+    /// field still guards correctly — that merge is deliberate (see `with_ir_fields`'s doc). But
+    /// it means `optional_fields` can no longer answer "did the CONSUMER write this down", and a
+    /// diagnostic that named `fields_optional` for an IR-only name told a consumer to delete a
+    /// config entry that was never there. Kept as a separate, unmerged set so
+    /// `FieldResolver::declaring_config_key` can ask the provenance question instead of reusing
+    /// the classification answer. ~keep
+    pub(super) config_declared_optional_fields: HashSet<String>,
     pub(super) result_fields: HashSet<String>,
     pub(super) array_fields: HashSet<String>,
     pub(super) enum_fields: HashSet<String>,

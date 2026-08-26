@@ -63,3 +63,15 @@ mod swift_json_bridged_alias_prefix_tests;
 #[cfg(test)]
 #[path = "field_access/envelope_nested_path_tests.rs"]
 mod envelope_nested_path_tests;
+
+#[cfg(test)]
+#[path = "field_access/is_valid_for_result_anchoring_tests.rs"]
+mod is_valid_for_result_anchoring_tests;
+
+#[cfg(test)]
+#[path = "field_access/config_declared_optional_provenance_tests.rs"]
+mod config_declared_optional_provenance_tests;
+
+#[cfg(test)]
+#[path = "field_access/tagged_union_method_call_extension_tests.rs"]
+mod tagged_union_method_call_extension_tests;
