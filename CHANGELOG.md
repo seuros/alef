@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dart FRB `#[cfg]` gates now attach across intervening attributes.** `cfg_gated_free_functions`
+  associated a gate with its function only when the `pub fn` sat on the very line after the
+  `#[cfg(...)]`, but the generated facade always emits `#[frb]` (or `#[frb(opaque)]`) in between,
+  so the gate was never recorded. In a real facade only 3 of ~70 gated free functions were
+  followed directly by a signature, leaving ~96% of gates invisible. Two consequences are fixed
+  together: `missing_bridge_functions` no longer reports a gated-and-disabled function as a
+  missing bridge entry and fails the build, and `CarryFrbCfgGates` now carries the gate into
+  `frb_generated.rs`'s wire wrapper and dispatch arm. The scan now skips further attribute lines
+  (single- or multi-line) and doc comments, and still declines to attach to an `impl`, a `struct`,
+  a private `fn`, or anything past a blank line.
+
+- **`[e2e].fields_optional` is no longer blamed for optionality the IR derived.**
+  `with_ir_fields` deliberately merges IR-derived `Option<T>` names into the optional set, but
+  `declaring_config_key` then reported `fields_optional` as the source for those names too — so
+  the docs-snippet diagnostic told consumers to correct or delete a config entry that was never
+  in their `alef.toml`. Config-declared provenance is now tracked in its own set that the merge
+  never touches.
+
+- **A fixture path extending past a `fields_method_calls`-covered tagged union now resolves.**
+  `result_field_oracle_knows` refused any path crossing a tagged-union field without consulting
+  `fields_method_calls`, so a path like `metadata.format.excel.sheet_count` was dropped from every
+  generated snippet even though the bindings expose it and the consumer had declared exactly how
+  to cross that union. Such a path now resolves against the variant's own payload type. A path
+  with no covering entry still refuses, and a segment the IR cannot judge still abstains.
+
 - **A host-owned `#[cfg]`-gated enum variant keeps its match arm and gains a matching
   `#[cfg(...)]` guard.** Generated Rust glue named such a variant unconditionally, so a build with
   the feature off failed with `E0599`. The shared
