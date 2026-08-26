@@ -8,7 +8,6 @@
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::HashSet;
@@ -16,7 +15,6 @@ use std::fmt::Write as FmtWrite;
 
 use super::args::{KotlinArgsContext, build_args_and_setup};
 use super::assertions::render_assertion;
-use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::codegen::inert_example::{self, InertCause};
 use crate::e2e::escape::escape_kotlin;
 
@@ -92,26 +90,11 @@ pub(super) fn render_test_method(
     } else {
         "kotlin"
     };
-    // Build per-call field resolver using the effective field sets for this call.
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's declared
-    // Rust return type so a leaf field name that means different things on different types
-    // resolves per owner, mirroring the rust/csharp/gleam/swift/dart e2e generators. This is
-    // purely additive: `is_enum` still consults `with_enum_fields` (the hand-maintained
-    // `fields_enum` config) FIRST, so an explicit config entry always wins. ~keep
-    let call_root_type = resolve_declared_result_type(call_config, lang, CallIr { functions, type_defs });
-    let call_field_resolver = FieldResolver::new(
-        e2e_config.effective_fields(call_config),
-        e2e_config.effective_fields_optional(call_config),
-        e2e_config.effective_result_fields(call_config),
-        e2e_config.effective_fields_array(call_config),
-        &HashSet::new(),
-    )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    // Build per-call field resolver using the effective field sets for this call. Extracted to
+    // `call_field_resolver.rs` (this file is at the file-size ratchet's frozen ceiling).
+    let call_field_resolver = super::call_field_resolver::build_call_field_resolver(
+        e2e_config, call_config, fixture, lang, type_defs, enums, functions,
+    );
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
     let json_scalar_fields = e2e_config.effective_fields_json_scalar(call_config);

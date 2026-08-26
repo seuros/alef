@@ -117,7 +117,19 @@ pub fn render_test_function(
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
     .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, "rust"), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    // `with_ir_fields` only ever proves a bare field name optional (e.g. "chunks"), by
+    // unanimity across every declaration of that name in the crate — it has no path context,
+    // so a renderer walking a nested path like "results[0].chunks" never matches it once the
+    // path crosses more than one segment (`optional_fields` is keyed by the FULL cumulative
+    // path the `_with_optionals` renderers build, not by bare name). `presentation.rs` already
+    // solved this for doc snippets by anchoring the exact paths about to render, via the IR's
+    // own (owner_type, field_name) walk (`with_anchored_optional_paths`); this fixture's own
+    // assertion field paths are the equivalent set for a generated test body. Without this, a
+    // `results[0].chunks: Option<Vec<Chunk>>` segment field indexed as `results[0].chunks[0]`
+    // or measured as `results[0].chunks.len()` renders unwrapped against the `Option`, and the
+    // generated Rust fails to compile (`E0608`/`E0624`). ~keep
+    .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()));
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);
     let function_name_snake = function_name.to_snake_case();
@@ -705,3 +717,7 @@ fn finalize_test_body(out: &mut String, fixture: &Fixture, e2e_config: &E2eConfi
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(body, "rust", &fixture.id);
     out.push_str(body);
 }
+
+#[cfg(test)]
+#[path = "test_function/optional_segment_len_tests.rs"]
+mod optional_segment_len_tests;

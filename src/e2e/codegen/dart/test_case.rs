@@ -5,9 +5,7 @@ use crate::core::ir::{EnumDef, TypeRef};
 use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::codegen::resolve_field;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::assertions::{render_assertion_dart, render_streaming_assertion_dart, snake_to_camel};
@@ -171,44 +169,18 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let target_params = call_recipe.target_params(lang);
     let call_overrides = call_config.overrides.get(lang);
 
-    // Merge per-language enum_fields from the Dart override into the effective enum set so that
-    // fields like "status" (BatchStatus on BatchObject) are treated as enum-typed even when
-    // they are not globally listed in fields_enum (they are context-dependent — BatchStatus on
-    // BatchObject but plain String on ResponseObject). `with_ir_enum_map` below then rescues
-    // every enum-typed field this config never mentions at all, anchored at the call's declared
-    // Rust return type. ~keep
-    let mut effective_enum_fields: HashSet<String> = e2e_config.effective_fields_enum(call_config).clone();
-    if let Some(overrides) = call_overrides {
-        effective_enum_fields.extend(overrides.enum_fields.keys().cloned());
-    }
-    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+    // Build per-call field resolver using the effective field sets for this call. Extracted to
+    // `call_field_resolver.rs` (this file is at the file-size ratchet's frozen ceiling).
+    let call_field_resolver = super::call_field_resolver::build_call_field_resolver(
+        e2e_config,
         call_config,
+        fixture,
         lang,
-        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+        dart_first_class_map,
+        type_defs,
+        enums,
+        functions,
     );
-
-    // Build per-call field resolver using the effective field sets for this call.
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    let call_field_resolver = FieldResolver::new_with_dart_first_class(
-        e2e_config.effective_fields(call_config),
-        e2e_config.effective_fields_optional(call_config),
-        e2e_config.effective_result_fields(call_config),
-        e2e_config.effective_fields_array(call_config),
-        e2e_config.effective_fields_method_calls(call_config),
-        &HashMap::new(),
-        dart_first_class_map.clone(),
-    )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()))
-    .with_enum_fields(effective_enum_fields)
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
-    // Mirrors csharp.rs/kotlin's identical `with_ir_collection_map` wiring: without it, a
-    // collection field with no per-element path anywhere in the fixture suite (nothing ever
-    // indexes into it — e.g. a recursive `Option<Vec<DataNode>> Children`) has no
-    // `fields_array` config signal at all, so `FieldResolver::is_collection_root` always
-    // returned false regardless of what `assertions.rs` checks it for. ~keep
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let mut function_name = call_overrides
         .and_then(|o| o.function.as_ref())

@@ -1,10 +1,9 @@
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_php_single, php_pcre_literal};
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::ToLowerCamelCase;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use super::{args, assertions, stubs, types, visitor};
@@ -183,18 +182,15 @@ pub(super) fn render_test_method(
         e2e_config.effective_result_fields(call_config),
     );
     let variant_access = super::enum_variant_access::PhpVariantAccess::new(&per_call_getter_map, php_enum_lowering);
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    let call_field_resolver = FieldResolver::new_with_php_getters(
-        e2e_config.effective_fields(call_config),
-        e2e_config.effective_fields_optional(call_config),
-        e2e_config.effective_result_fields(call_config),
-        e2e_config.effective_fields_array(call_config),
-        &HashSet::new(),
-        &HashMap::new(),
-        per_call_getter_map.clone(),
-    )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    // Extracted to `call_field_resolver.rs` (this file is at the file-size ratchet's frozen
+    // ceiling).
+    let call_field_resolver = super::call_field_resolver::build_call_field_resolver(
+        e2e_config,
+        call_config,
+        fixture,
+        type_defs,
+        &per_call_getter_map,
+    );
     let field_resolver = &call_field_resolver;
     let call_overrides = call_config.overrides.get(lang);
     let has_override = call_overrides.is_some_and(|o| o.function.is_some());

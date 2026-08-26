@@ -348,6 +348,7 @@ fn default_php_pkg_path(config: &ResolvedCrateConfig) -> String {
 
 mod args;
 mod assertions;
+mod call_field_resolver;
 mod enum_variant_access;
 mod http;
 mod project;

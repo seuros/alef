@@ -186,6 +186,7 @@ impl E2eCodegen for DartE2eCodegen {
 }
 
 mod assertions;
+mod call_field_resolver;
 mod http;
 mod project;
 mod snippet;

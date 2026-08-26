@@ -17,6 +17,7 @@ use super::E2eCodegen;
 
 mod args;
 mod assertions;
+mod call_field_resolver;
 mod discriminated;
 mod http;
 mod imports;
