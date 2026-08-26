@@ -1,3 +1,4 @@
+use crate::codegen::field_init::struct_field_init;
 use crate::core::ir::{DefaultValue, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 use ahash::AHashSet;
 use std::collections::{HashMap, HashSet};
@@ -778,17 +779,17 @@ fn config_constructor_parts_inner(
             if f.cfg.is_some() {
                 if never_skip_cfg_field_names.contains(&f.name) {
                     if f.optional || matches!(&f.ty, TypeRef::Optional(_)) {
-                        return format!("{}: {}", binding_name, f.name);
+                        return struct_field_init(binding_name, &f.name);
                     }
                     return format!("{}: {}.unwrap_or_default()", binding_name, f.name);
                 }
                 return format!("{}: Default::default()", binding_name);
             }
             if (option_duration_on_defaults && matches!(f.ty, TypeRef::Duration)) || optionalize_all_defaults {
-                return format!("{}: {}", binding_name, f.name);
+                return struct_field_init(binding_name, &f.name);
             }
             if f.optional || matches!(&f.ty, TypeRef::Optional(_)) {
-                format!("{}: {}", binding_name, f.name)
+                struct_field_init(binding_name, &f.name)
             } else if let Some(ref typed_default) = f.typed_default {
                 match typed_default {
                     // `Empty` *is* `Default::default()`, so the binding type's own default is the

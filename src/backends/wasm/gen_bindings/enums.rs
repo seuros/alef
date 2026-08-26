@@ -4,6 +4,7 @@ use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeRef};
 use ahash::AHashSet;
 
 use crate::backends::wasm::type_map::WasmMapper;
+use crate::codegen::field_init::struct_field_init;
 use crate::codegen::naming::{to_node_name, wire_variant_value};
 use crate::codegen::type_mapper::TypeMapper;
 
@@ -213,7 +214,7 @@ fn tagged_enum_core_to_binding_expr(
                     "                {field_ident}: {local}.as_ref().and_then(|m| serde_wasm_bindgen::to_value(m).ok())"
                 )
             }
-            _ => format!("                {field_ident}: {local}"),
+            _ => format!("                {}", struct_field_init(field_ident, local)),
         };
     }
     match field_ty {
@@ -228,7 +229,7 @@ fn tagged_enum_core_to_binding_expr(
                     "                {field_ident}: {local}.as_ref().and_then(|m| serde_wasm_bindgen::to_value(m).ok())"
                 )
             }
-            _ => format!("                {field_ident}: {local}"),
+            _ => format!("                {}", struct_field_init(field_ident, local)),
         },
         TypeRef::Named(_) => format!(
             "                {field_ident}: Some({})",

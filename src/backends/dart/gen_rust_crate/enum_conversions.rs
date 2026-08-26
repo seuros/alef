@@ -1,3 +1,4 @@
+use crate::codegen::field_init::struct_field_init;
 use crate::core::ir::{CoreWrapper, EnumDef, FieldDef, TypeRef};
 
 pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, source_crate_name: &str) {
@@ -95,7 +96,7 @@ pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, sour
                     .map(|field| {
                         let fname = &field.name;
                         let conv = enum_variant_field_conv_to_core(fname, field);
-                        format!("{fname}: {conv}")
+                        struct_field_init(fname, &conv)
                     })
                     .collect();
                 let excluded_args: Vec<String> = variant
@@ -316,7 +317,7 @@ pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_cra
                 .map(|field| {
                     let fname = &field.name;
                     let conv = enum_variant_field_conv(fname, field, source_crate_name);
-                    format!("{fname}: {conv}")
+                    struct_field_init(fname, &conv)
                 })
                 .collect();
             out.push_str(&crate::backends::dart::template_env::render(

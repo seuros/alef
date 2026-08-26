@@ -341,11 +341,7 @@ fn gen_pyo3_enum_variant_constructors_content(
                 } else {
                     variant_field_init(p, promoted, false, false, ctor.boxed[idx])
                 };
-                if expr == p.name {
-                    p.name.clone()
-                } else {
-                    format!("{}: {expr}", p.name)
-                }
+                crate::codegen::field_init::struct_field_init(&p.name, &expr)
             })
             .collect();
 

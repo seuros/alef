@@ -12,6 +12,7 @@ pub mod crate_attributes;
 pub mod defaults;
 pub mod doc_emission;
 pub mod error_gen;
+pub mod field_init;
 pub mod fn_dedup;
 pub mod generators;
 pub mod keywords;

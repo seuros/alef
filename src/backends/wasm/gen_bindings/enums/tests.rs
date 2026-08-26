@@ -546,9 +546,16 @@ fn gen_tagged_enum_struct_variant_preserves_optional_fields() {
     );
 
     let core_to_binding = gen_tagged_enum_core_to_binding(&e, "test_lib", "Wasm");
+    // The destructured local already carries the field's value unchanged, so the initializer is
+    // field-init shorthand: `bearer_format: bearer_format` is `clippy::redundant_field_names`,
+    // denied in a consumer building generated bindings under `-D warnings`. ~keep
     assert!(
-        core_to_binding.contains("bearer_format: bearer_format"),
-        "core→binding must not wrap Option<String> in Some(...);\nactual:\n{core_to_binding}"
+        core_to_binding.contains("                bearer_format,"),
+        "core→binding must pass Option<String> through as field-init shorthand;\nactual:\n{core_to_binding}"
+    );
+    assert!(
+        !core_to_binding.contains("bearer_format: bearer_format"),
+        "core→binding must not emit a redundant field name;\nactual:\n{core_to_binding}"
     );
     assert!(
         !core_to_binding.contains("bearer_format: Some(bearer_format)"),
