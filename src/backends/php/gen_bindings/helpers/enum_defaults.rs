@@ -389,6 +389,13 @@ pub(super) fn gen_string_to_enum_expr(
             continue;
         }
         valid_variants.push(wire_name.clone());
+        // A variant behind `#[cfg(...)]` (e.g. `#[cfg(any(test, feature = "testkit"))]`) does
+        // not exist in a build that doesn't satisfy that condition; an unconditional match arm
+        // naming it is a hard E0599. The surrounding match already carries a catch-all `other
+        // =>` fallback arm (see php_enum_string_match_fallback_arm.jinja), so unlike an
+        // exhaustive Rust-enum match, dropping this arm from the string match needs no
+        // additional wildcard -- gating it with `#[cfg(...)]` is sufficient and keeps the
+        // arm live whenever the feature is actually on. ~keep
         match_arms.push_str(&crate::backends::php::template_env::render(
             "php_enum_string_match_arm.jinja",
             context! {
