@@ -135,6 +135,35 @@ jobs:
       - name: Run downstream gate over the emitted tree
         run: cargo test --test generated_output_downstream_gate -- --ignored --nocapture
 
+  # Compiles alef at the exact floor `Cargo.toml` declares. Nothing else in this workflow
+  # does: `rust-toolchain.toml` pins a far newer toolchain, so every other job builds with a
+  # compiler that accepts features the declared MSRV rejects. 0.68.0 reached crates.io using
+  # `if let` guards (stable from 1.95) while advertising 1.85, and no CI job could have caught
+  # it -- an external user did, at install time (issue #262). The toolchain is read from the
+  # manifest rather than written here, so it cannot drift out of step with the claim.
+  msrv:
+    name: Compile at declared MSRV
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve declared MSRV
+        id: msrv
+        run: |
+          version="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+          if [ -z "$version" ]; then
+            echo "Cargo.toml declares no rust-version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Declared MSRV: $version"
+      - name: Install the declared toolchain
+        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+      # `+toolchain` on the command line overrides rust-toolchain.toml, which is the entire
+      # point of this job.
+      - name: Compile at the declared MSRV
+        run: cargo "+${{ steps.msrv.outputs.version }}" check --lib --locked
+
   build:
     name: Build release
     needs: validate
