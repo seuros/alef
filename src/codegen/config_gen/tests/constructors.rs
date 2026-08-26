@@ -286,9 +286,10 @@ fn test_gen_php_kwargs_constructor_optional_field_passthrough() {
     });
     let output = gen_php_kwargs_constructor(&typ, &simple_type_mapper);
     // Anchored on the whole initializer line: `output.contains("tag,")` also matches
-    // `tag: tag,`, so it cannot tell a passthrough from `clippy::redundant_field_names`. ~keep
+    // `tag: tag,`, so it cannot tell a passthrough from `clippy::redundant_field_names`. The
+    // initializer lines are emitted flush left; the formatter indents them later. ~keep
     assert!(
-        output.contains("\n        tag,\n"),
+        output.contains("\ntag,\n"),
         "optional field should be passed through as field-init shorthand; got:\n{output}"
     );
     assert!(

@@ -1569,14 +1569,16 @@ fn enum_from_json_and_enum_valued_parameter_agree_on_scalar_alef_handle() {
     syn::parse_file(&lib.content).expect("scalar-handle enum parameter wiring must parse as valid Rust");
 }
 
-/// The `_free` templates emit `if handle != 0 { if let Err(error) = remove_handle::<T>(..) }`,
-/// which trips `clippy::collapsible_if` under edition 2024. Consumers run clippy at deny level
-/// over the generated crate and cannot patch it — the file is emitted with a DO-NOT-EDIT header
-/// and its `Cargo.toml` and `poly.toml` are generated too, so no downstream escape hatch exists.
-/// Every other Rust-emitting backend (wasm, php, pyo3, napi, swift, dart) already allows this
-/// lint; FFI was the sole omission. ~keep
+/// Consumers run clippy at deny level over the generated crate and cannot patch it — the file is
+/// emitted with a DO-NOT-EDIT header and its `Cargo.toml` and `poly.toml` are generated too, so no
+/// downstream escape hatch exists. The `_free` templates that originally forced this allow now
+/// emit a let-chain instead (asserted by
+/// `handle_registry::generated_free_functions_guard_remove_handle_with_a_let_chain`), but the
+/// allow stays: it covers the whole emitted crate, not one shape, and alef's CI never runs clippy
+/// over that crate to discover the next nested `if`. This test only pins the header, so it
+/// deliberately makes no claim about which emitted shape needs it. ~keep
 #[test]
-fn generated_ffi_crate_allows_collapsible_if_for_its_own_free_functions() {
+fn generated_ffi_crate_allows_collapsible_if_over_the_whole_emitted_crate() {
     let api = sample_api();
     let config = sample_config();
 
@@ -1584,14 +1586,9 @@ fn generated_ffi_crate_allows_collapsible_if_for_its_own_free_functions() {
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
     assert!(
-        lib.content.contains("if let Err(error) = remove_handle::<"),
-        "precondition: the free functions must still emit the nested if/if-let shape this allow covers, got:\n{}",
-        lib.content
-    );
-    assert!(
         lib.content.contains("clippy::collapsible_if"),
-        "generated FFI lib.rs must allow clippy::collapsible_if, otherwise the free functions it \
-         emits fail a consumer's deny-level clippy run, got header:\n{}",
+        "generated FFI lib.rs must allow clippy::collapsible_if, otherwise any nested `if` it \
+         emits fails a consumer's deny-level clippy run, got header:\n{}",
         lib.content.lines().take(30).collect::<Vec<_>>().join("\n")
     );
 }
