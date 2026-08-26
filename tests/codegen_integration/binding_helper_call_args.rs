@@ -464,6 +464,10 @@ fn test_gen_named_let_bindings_vec_named_non_opaque() {
 
 #[test]
 fn test_gen_named_let_bindings_vec_string_is_ref() {
+    // `vec_inner_is_ref` must be true (the core param is `&[&str]`, not `&Vec<String>`) for the
+    // `_refs` intermediate to be emitted and consumed. This test was previously stale against
+    // `bef15796a`: it asserted the intermediate with `vec_inner_is_ref: false`, a shape the
+    // call-arg generator never consumes. ~keep
     let opaque_types = AHashSet::new();
     let params = vec![ParamDef {
         name: "labels".to_string(),
@@ -486,7 +490,7 @@ fn test_gen_named_let_bindings_vec_string_is_ref() {
     let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types, "my_crate");
     assert!(
         result.contains("let labels_refs: Vec<&str>"),
-        "should generate Vec<&str> intermediate for Vec<String> is_ref=true"
+        "should generate Vec<&str> intermediate for Vec<String> is_ref=true, vec_inner_is_ref=true"
     );
     assert!(
         result.contains(".iter().map(|s| s.as_str()).collect()"),
@@ -527,6 +531,8 @@ fn test_gen_named_let_bindings_vec_string_is_ref_without_inner_ref_emits_no_inte
 
 #[test]
 fn test_gen_named_let_bindings_vec_string_is_ref_optional() {
+    // See `test_gen_named_let_bindings_vec_string_is_ref` for why `vec_inner_is_ref: true` is
+    // required to exercise the `_refs` intermediate. ~keep
     let opaque_types = AHashSet::new();
     let params = vec![ParamDef {
         name: "tags".to_string(),
@@ -549,6 +555,6 @@ fn test_gen_named_let_bindings_vec_string_is_ref_optional() {
     let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types, "my_crate");
     assert!(
         result.contains("let tags_refs: Vec<&str>"),
-        "should generate Vec<&str> intermediate for optional Vec<String> is_ref=true"
+        "should generate Vec<&str> intermediate for optional Vec<String> is_ref=true, vec_inner_is_ref=true"
     );
 }
