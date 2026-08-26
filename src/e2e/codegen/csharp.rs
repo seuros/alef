@@ -1127,11 +1127,11 @@ mod fact_attribute_layout_tests;
 #[cfg(test)]
 mod not_error_presence_guard_tests;
 #[cfg(test)]
-mod optional_segment_len_tests;
-#[cfg(test)]
 mod object_initializer_tests;
 #[cfg(test)]
 mod object_initializer_type_name_tests;
+#[cfg(test)]
+mod optional_segment_len_tests;
 #[cfg(test)]
 mod sealed_display_wire_name_tests;
 #[cfg(test)]

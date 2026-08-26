@@ -93,7 +93,13 @@ pub(super) fn render_test_method(
     // Build per-call field resolver using the effective field sets for this call. Extracted to
     // `call_field_resolver.rs` (this file is at the file-size ratchet's frozen ceiling).
     let call_field_resolver = super::call_field_resolver::build_call_field_resolver(
-        e2e_config, call_config, fixture, lang, type_defs, enums, functions,
+        e2e_config,
+        call_config,
+        fixture,
+        lang,
+        type_defs,
+        enums,
+        functions,
     );
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
