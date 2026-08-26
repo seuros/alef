@@ -196,6 +196,32 @@ fn local_mode_still_aborts_when_a_format_override_fails() {
     );
 }
 
+/// The regression this fix closes: a format override that ran and rejected the code used to
+/// report only its bare exit status, discarding whatever it actually printed on the way out --
+/// exactly the shape of the real `(cd .../e2e/rust && cargo fmt --all)` failure this override
+/// path exists to run, which surfaced with no way to tell a parse error from any other reason
+/// rustfmt exits 1. The formatter's own stderr must now reach the propagated error. ~keep
+#[test]
+fn a_format_override_failure_quotes_the_formatters_own_stderr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("e2e-out");
+    std::fs::create_dir_all(out.join("python")).unwrap();
+    let config = config_with_override(
+        &out,
+        "python",
+        "echo alef-regression-marker-9f31 1>&2; exit 3",
+        DependencyMode::Local,
+    );
+
+    let error = run_formatters(&one_file_in(&out, "python", "main.py"), &config, false)
+        .expect_err("a failing override must abort the run");
+
+    assert!(
+        error.to_string().contains("alef-regression-marker-9f31"),
+        "the formatter's own stderr must survive into the error, not just its exit code: {error}"
+    );
+}
+
 /// The defect: a registry-mode resolver failure aborted the run, which took
 /// finalisation and docs down with it. It must now be reported and survived.
 #[test]
