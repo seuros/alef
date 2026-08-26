@@ -766,10 +766,21 @@ pub(super) fn gen_magnus_default_impl(typ: &TypeDef, core_import: &str) -> Strin
 /// This is used when the struct has field-level defaults (e.g., from typed_default)
 /// that don't match what the derived Default would produce. Uses the same defaults
 /// as the kwargs constructor. Filters out thread-unsafe fields like the struct definition does.
+///
+/// `types_with_default` is the set of type names known to implement `Default` (via derive or
+/// manual `impl`), i.e. every `TypeDef.name` in the surface with `has_default == true`. A field
+/// with no default annotation of its own (`typed_default: None`, `default: None`) has no
+/// legitimate default value to synthesize unless its own type provides one; the untyped
+/// fallback table in `default_value_for_field` cannot see that distinction; it renders
+/// `{Type}::default()` for any `Named` field regardless of whether `Type` actually has a
+/// `Default` impl. One field having a real default (e.g. a `#[serde(default)]` string) does not
+/// make every *other* required field in the same struct defaultable, so this function must bail
+/// out of the whole impl rather than emit a call the target type cannot satisfy. ~keep
 pub(super) fn gen_struct_default_impl_explicit(
     typ: &TypeDef,
     type_mapper: &dyn Fn(&TypeRef) -> String,
     trait_bridges: &[TraitBridgeConfig],
+    types_with_default: &std::collections::HashSet<&str>,
 ) -> Option<String> {
     let filtered_fields: Vec<FieldDef> = typ
         .fields
@@ -785,6 +796,20 @@ pub(super) fn gen_struct_default_impl_explicit(
     });
 
     if !has_non_trivial_default && !is_update_struct {
+        return None;
+    }
+
+    let has_undefaultable_required_field = filtered_fields.iter().any(|field| {
+        if matches!(&field.ty, TypeRef::Optional(_)) || field.optional {
+            return false;
+        }
+        if field.typed_default.is_some() || field.default.is_some() {
+            return false;
+        }
+        matches!(&field.ty, TypeRef::Named(name) if !types_with_default.contains(name.as_str()))
+    });
+
+    if has_undefaultable_required_field {
         return None;
     }
 
