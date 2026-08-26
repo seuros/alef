@@ -361,10 +361,7 @@ mod tests {
     fn an_alias_named_exactly_like_the_language_wins_over_a_real_second_package() {
         let sessions = HashMap::from([
             ("node".to_string(), session(Language::TypeScript, "packages/node")),
-            (
-                "typescript".to_string(),
-                session(Language::TypeScript, "packages/node"),
-            ),
+            ("typescript".to_string(), session(Language::TypeScript, "packages/node")),
             ("wasm".to_string(), session(Language::TypeScript, "packages/wasm")),
         ]);
         let snippet = snippet(Language::TypeScript, None);

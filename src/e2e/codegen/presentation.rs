@@ -515,29 +515,60 @@ fn default_operations_from_assertions(
 /// by spelling alone dropped `result.chunks` from 52 snippets in one consumer's suite while its
 /// e2e files kept asserting on the very same field. ~keep
 fn shows_on_result(field: &str, resolver: &FieldResolver, fixture_is_streaming: bool, language: &str) -> bool {
-    if field.is_empty()
-        || (fixture_is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field))
-    {
+    if !path_is_renderable_at_all(field, fixture_is_streaming) {
         return false;
     }
     if !resolver.is_valid_for_result(field) {
         return false;
     }
-    if resolver.result_field_oracle_knows(field) == Some(false) {
-        if let Some(config_key) = resolver.declaring_config_key(field) {
-            tracing::warn!(
-                target: "alef::e2e::presentation",
-                field,
-                language,
-                config_key,
-                "`{field}` is declared in `[e2e].{config_key}` but the `{language}` binding's result \
-                 type has no such member, so the documentation snippet omits it. Correct the path \
-                 or drop it from `{config_key}`."
-            );
-        }
+    ir_permits_result_path(field, resolver, language)
+}
+
+/// The authored-path counterpart of [`shows_on_result`]: the same IR refutation, without
+/// [`FieldResolver::is_valid_for_result`]'s membership test against the `[e2e].result_fields`
+/// config list.
+///
+/// `result_fields` is an incomplete allow-list by construction -- a real struct segment the config
+/// omits is still a real field, which is why the resolver already declines to reject one. Applying
+/// it to a hand-authored `docs.shows` would drop exactly the deliberately-documented virtual and
+/// namespaced paths the author wrote it for, which is what
+/// `a_hand_authored_shows_entry_is_never_filtered` protects. The IR is the authority that can
+/// refute an authored path, and it answers in three states: only a positive `Some(false)` -- "this
+/// result type exists and has no such member" -- drops the entry. `None` ("no IR wired up for this
+/// call") leaves it alone, the same "no answer, don't reject" rule
+/// [`iterate_field_is_renderable`] applies to an unresolvable element type. ~keep
+fn authored_shows_on_result(field: &str, resolver: &FieldResolver, fixture_is_streaming: bool, language: &str) -> bool {
+    if !path_is_renderable_at_all(field, fixture_is_streaming) {
         return false;
     }
-    true
+    ir_permits_result_path(field, resolver, language)
+}
+
+/// Neither an empty path nor a streaming-only virtual field can be shown on a result value,
+/// whoever wrote the path.
+fn path_is_renderable_at_all(field: &str, fixture_is_streaming: bool) -> bool {
+    !field.is_empty()
+        && !(fixture_is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field))
+}
+
+/// Whether the IR declines to refute `field` as a member of the call's result type. `false` only
+/// when the oracle positively knows the result type and positively lacks the member.
+fn ir_permits_result_path(field: &str, resolver: &FieldResolver, language: &str) -> bool {
+    if !resolver.has_ir_result_evidence() || resolver.result_field_oracle_knows(field) != Some(false) {
+        return true;
+    }
+    if let Some(config_key) = resolver.declaring_config_key(field) {
+        tracing::warn!(
+            target: "alef::e2e::presentation",
+            field,
+            language,
+            config_key,
+            "`{field}` is declared in `[e2e].{config_key}` but the `{language}` binding's result \
+             type has no such member, so the documentation snippet omits it. Correct the path \
+             or drop it from `{config_key}`."
+        );
+    }
+    false
 }
 
 /// Drop a hand-authored `docs.shows`/`docs.presentation.operations` entry the IR cannot vouch
@@ -570,7 +601,7 @@ fn validate_authored_operations(
         .into_iter()
         .filter_map(|operation| match operation {
             FixtureDocsOperation::Show { path, display } => {
-                let renderable = shows_on_result(&path, resolver, fixture_is_streaming, language);
+                let renderable = authored_shows_on_result(&path, resolver, fixture_is_streaming, language);
                 renderable.then_some(FixtureDocsOperation::Show { path, display })
             }
             FixtureDocsOperation::Iterate {
@@ -580,7 +611,7 @@ fn validate_authored_operations(
                 display,
                 optional,
             } => {
-                if !shows_on_result(&path, resolver, fixture_is_streaming, language) {
+                if !authored_shows_on_result(&path, resolver, fixture_is_streaming, language) {
                     return None;
                 }
                 let element_type = resolver.collection_element_type(&path);
