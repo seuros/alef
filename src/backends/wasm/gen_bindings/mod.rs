@@ -11,6 +11,7 @@ pub(crate) use ts_union::docs_ts_type_for_untagged_enum;
 pub mod types;
 
 mod cargo;
+mod trait_bridge_docs;
 
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
@@ -23,6 +24,7 @@ use regex::Regex;
 use std::path::PathBuf;
 
 use cargo::gen_cargo_toml;
+use trait_bridge_docs::forward_trait_bridge_builder_fields;
 
 /// The emitted wasm crate's directory layout.
 ///
@@ -1065,6 +1067,14 @@ impl Backend for WasmBackend {
         Ok(service_api::gen_service_files(&sorted_api, config))
     }
 
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<crate::core::backend::TraitBridgeRegistrationSurface> {
+        trait_bridge_docs::registration_surface(api, config)
+    }
+
     fn build_config(&self) -> Option<BuildConfig> {
         Some(BuildConfig {
             tool: "wasm-pack",
@@ -1114,21 +1124,6 @@ impl Backend for WasmBackend {
 
         Some(build_config)
     }
-}
-
-fn forward_trait_bridge_builder_fields(
-    mut content: String,
-    trait_bridges: &[crate::core::config::TraitBridgeConfig],
-) -> String {
-    for bridge in trait_bridges {
-        if let Some(field_name) = bridge.resolved_options_field() {
-            let param_name = bridge.param_name.as_deref().unwrap_or(field_name);
-            let pattern = format!(".{}({}.as_ref().map(|v| &v.inner))", field_name, param_name);
-            let replacement = format!(".{}({}.map(|v| (*v.inner).clone()))", field_name, param_name);
-            content = content.replace(&pattern, &replacement);
-        }
-    }
-    content
 }
 
 #[cfg(test)]
