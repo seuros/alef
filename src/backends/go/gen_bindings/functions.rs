@@ -230,7 +230,7 @@ pub(super) fn gen_function_wrapper(
 
     if let Some(wb) = writeback {
         let wb_type_name = mut_writeback::writeback_type_name(wb).unwrap_or_default();
-        let wb_type_snake = c_symbols::type_component(&wb_type_name);
+        let wb_type_snake = c_symbols::type_component(wb_type_name);
         let wb_handle = go_param_name(&format!("c_{}", wb.name));
         out.push_str(&crate::backends::go::template_env::render(
             "c_call_simple.jinja",

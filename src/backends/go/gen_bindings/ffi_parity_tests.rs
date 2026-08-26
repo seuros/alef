@@ -131,8 +131,8 @@ fn expression_result_type(generated: &str) -> String {
 fn return_line(generated: &str) -> String {
     generated
         .lines()
-        .filter(|line| line.trim_start().starts_with("return "))
-        .next_back()
+        .rev()
+        .find(|line| line.trim_start().starts_with("return "))
         .unwrap_or_else(|| panic!("no return statement in:\n{generated}"))
         .trim()
         .to_string()
