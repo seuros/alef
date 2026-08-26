@@ -171,6 +171,27 @@ fn anchor_to_declared_result_type(
     resolver.with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), root_type)
 }
 
+/// `resolver` re-anchored to the element type of the collection at `path`, for resolving an
+/// `Iterate` operation's per-item `fields` -- which name members of that element type, never of
+/// `resolver`'s own result-type anchor. Falls back to `resolver` unchanged when the element type
+/// does not resolve (an unresolvable collection path), matching the existing permissive default
+/// [`iterate_field_is_renderable`] uses for the same lookup.
+fn resolver_anchored_at_element(
+    resolver: &FieldResolver,
+    path: &str,
+    language: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> FieldResolver {
+    let Some(element_type) = resolver.collection_element_type(path) else {
+        return resolver.clone();
+    };
+    let result_fields = FieldResolver::ir_result_field_facts(type_defs, language);
+    let resolver = resolver
+        .clone()
+        .with_ir_result_fields(result_fields, Some(element_type.clone()));
+    resolver.with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), Some(element_type))
+}
+
 /// Write the field paths [`resolve`] would derive from `fixture`'s own assertions into the
 /// fixture's `docs.shows`, so that [`Fixture::has_docs_presentation`] reports them.
 ///
@@ -338,13 +359,21 @@ pub(crate) fn resolve_with(
                     typescript_first_item(path, language, resolver, &result_root);
                 let item_root = root_variable(language, item);
                 let field_displays = iterate_field_displays(fields, *display, path, language, resolver, &fixture.id);
+                // `fields` is rooted at the loop variable, not the call's result, so it must be
+                // resolved against `path`'s element type -- never against `resolver`, which stays
+                // anchored to the result. Reusing `resolver` here rendered `item.results?.[0]?.content`
+                // for a per-item `content` field: the result-anchored root type (`ExtractionResult`)
+                // does declare `content` at `results[].content`, so the still-result-anchored resolver
+                // dutifully reproduced that whole path underneath the already-peeled loop variable, in
+                // every backend that shares this one presentation layer. ~keep
+                let item_resolver = resolver_anchored_at_element(resolver, path, language, type_defs);
                 PresentationOperation {
                     kind: "iterate",
                     expression,
                     item: item.clone(),
                     fields: fields
                         .iter()
-                        .map(|field| resolver.accessor(field, language, &item_root))
+                        .map(|field| item_resolver.accessor(field, language, &item_root))
                         .collect(),
                     // A fixture's own `optional` flag is authored by hand and can
                     // drift from the field-optionality data already known to the
@@ -362,7 +391,7 @@ pub(crate) fn resolve_with(
                     shown_optional: false,
                     field_optionals: fields
                         .iter()
-                        .map(|field| path_yields_optional(resolver, field))
+                        .map(|field| path_yields_optional(&item_resolver, field))
                         .collect(),
                     field_displays,
                 }
@@ -810,3 +839,7 @@ mod authored_operation_validation_tests;
 #[cfg(test)]
 #[path = "presentation/iterate_field_display_safety_tests.rs"]
 mod iterate_field_display_safety_tests;
+
+#[cfg(test)]
+#[path = "presentation/iterate_element_anchor_tests.rs"]
+mod iterate_element_anchor_tests;

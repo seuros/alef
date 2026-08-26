@@ -250,6 +250,19 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             .map(|enum_def| import_name(&enum_def.name))
             .filter(|name| referenced_code.contains(name)),
     );
+    // The struct-typed twin of the enum sweep above: a trait-bridge stub method returning a
+    // plain struct (e.g. `OcrBackend.processImage(): Promise<ExtractedDocument>`) annotates
+    // its signature with that struct and casts its JSON-string body through it the same way
+    // (`(): ExtractedDocument { return "{}" as unknown as ExtractedDocument; }` — see
+    // `emit_test_backend`'s `type_imports`). Also a top-level type reached by neither
+    // `nested_types` nor `enum_fields`, so it needs the same referenced-code sweep or the
+    // emitted snippet fails to typecheck on the unimported cast target. ~keep
+    imports.extend(
+        type_defs
+            .iter()
+            .map(|type_def| import_name(&type_def.name))
+            .filter(|name| referenced_code.contains(name)),
+    );
     for arg in recipe.args {
         if arg.arg_type == "json_object"
             && let Some(type_name) = &arg.element_type

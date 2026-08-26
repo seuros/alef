@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `Iterate` docs operation resolved its per-item fields against the call's result type
+  instead of the collection's element type.** When a per-item field name was *also* reachable as a
+  nested path from the result — e.g. `content`, reachable as `results[].content` — the
+  result-anchored resolver reproduced that whole path underneath the already-peeled loop variable,
+  emitting `for result in result.results.iter() { println!("{}", result.results[0].content) }`.
+  That does not compile in Rust and does not typecheck in TypeScript. Because every backend shares
+  one presentation layer, the same wrong accessor shipped in Rust, Python, TypeScript and WASM.
+  Per-item fields now resolve through an element-anchored resolver.
+
+- **A TypeScript trait-bridge stub declared `Promise<string>` for a struct-typed method.** A stub
+  returning a non-enum struct annotated itself `string` and returned a bare `"{}"`, so it could not
+  satisfy the interface it was passed to regardless of its body. The stub now names the real struct,
+  casts through `as unknown as`, and the import sweep reaches struct names referenced only by that
+  cast.
+
 - **`alef build` staged an FFI library from a profile it never built.** `find_built_artifact`
   hardcoded the `release` profile, so a plain `alef build` — which runs `cargo build` and produces
   the *debug* artifact — could not find what it had just built. It instead fell through to

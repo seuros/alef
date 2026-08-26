@@ -3,6 +3,8 @@
 mod assertions;
 pub(crate) mod config;
 #[cfg(test)]
+mod emit_test_backend_tests;
+#[cfg(test)]
 mod is_true_tests;
 mod json;
 #[cfg(test)]
@@ -471,12 +473,26 @@ fn emit_ts_stub_method(
             let enum_def = enums.iter().find(|e| &e.name == name).expect("checked above");
             match enum_def.variants.first() {
                 Some(variant) => format!("\"\\\"{}\\\"\" as unknown as {prefixed_name}", variant.name),
-                // Enum with no variants (shouldn't happen in practice): fall back to
-                // the generic empty-object literal used for non-enum Named types.
-                None => "\"{}\"".to_string(),
+                // Enum with no variants (shouldn't happen in practice): still cast, since
+                // `ts_stub_return_type` names this same enum regardless of variant count. ~keep
+                None => format!("\"{{}}\" as unknown as {prefixed_name}"),
             }
         }
-        crate::core::ir::TypeRef::Named(_) => "\"{}\"".to_string(),
+        // A non-enum Named type (a plain struct such as `ExtractedDocument`) still returns
+        // the JSON-round-tripping `"{}"` string at runtime for the same coercion reason as
+        // the enum case above, but the stub's OWN declared return type now names that real
+        // struct (see `ts_stub_return_type`) rather than falling back to `string` — so the
+        // body needs the same `as unknown as <Type>` cast the enum arm already uses, or the
+        // literal's `string` type stops being assignable to its own method's declared
+        // return type. Registering the import here (not just in `ts_stub_return_type`,
+        // which has no `type_imports` to write to) is what makes the cast target resolve. ~keep
+        crate::core::ir::TypeRef::Named(name) => {
+            let prefixed_name = format!("{wasm_type_prefix}{name}");
+            if !type_imports.contains(&prefixed_name) {
+                type_imports.push(prefixed_name.clone());
+            }
+            format!("\"{{}}\" as unknown as {prefixed_name}")
+        }
         crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Char | crate::core::ir::TypeRef::Path => {
             fixture_backend_value(backend_input, &method.name)
                 .and_then(|val| val.as_str())
@@ -560,14 +576,15 @@ fn ts_stub_return_type(
             format!("Array<{}>", ts_stub_return_type(inner, enums, wasm_type_prefix))
         }
         crate::core::ir::TypeRef::Optional(inner) => ts_stub_return_type(inner, enums, wasm_type_prefix),
-        // A Named type that resolves to a known enum gets the real enum name as its
-        // annotation instead of falling through to the generic `string` default —
-        // see `emit_ts_stub_method`'s `default_val` for the matching stub body. The
-        // annotation must name what the package actually exports: prefixed for wasm,
-        // bare for node (see `emit_test_backend`'s `wasm_type_prefix` doc).
-        crate::core::ir::TypeRef::Named(name) if enums.iter().any(|e| &e.name == name) => {
-            format!("{wasm_type_prefix}{name}")
-        }
+        // A Named type -- enum or plain struct -- gets its own real name as the annotation
+        // instead of falling through to the generic `string` default: the real napi-rs
+        // interface this stub implements (e.g. `OcrBackend.processImage(): Promise<
+        // ExtractedDocument>`) never declares a bare `string` return for a struct-typed
+        // method, and a stub whose declared type disagrees with the interface it is passed
+        // to fails to typecheck regardless of what its body returns. The annotation must
+        // name what the package actually exports: prefixed for wasm, bare for node (see
+        // `emit_test_backend`'s `wasm_type_prefix` doc). ~keep
+        crate::core::ir::TypeRef::Named(name) => format!("{wasm_type_prefix}{name}"),
         _ => "string".to_string(),
     }
 }
@@ -627,16 +644,6 @@ fn test_method(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_fixture(id: &str, input: serde_json::Value) -> crate::e2e::fixture::Fixture {
-        serde_json::from_value(serde_json::json!({
-            "id": id,
-            "description": "test fixture",
-            "input": input,
-            "assertions": []
-        }))
-        .expect("minimal fixture JSON must parse")
-    }
 
     #[test]
     fn language_name_is_node() {
@@ -738,228 +745,6 @@ result_var = "result"
             workspace.is_none(),
             "Local mode must NOT emit pnpm-workspace.yaml; found: {:?}",
             workspace
-        );
-    }
-
-    #[test]
-    fn emit_test_backend_ts_generates_class_and_new_expr() {
-        use crate::core::config::TraitBridgeConfig;
-        use crate::core::ir::TypeRef;
-
-        let bridge = TraitBridgeConfig {
-            trait_name: "TestTrait".to_string(),
-            super_trait: Some("Plugin".to_string()),
-            ..Default::default()
-        };
-
-        let m1 = test_method("syncOp", TypeRef::String, false, false);
-        let m2 = test_method("asyncOp", TypeRef::Named("WorkResult".to_string()), true, false);
-        let methods = [&m1, &m2];
-
-        let fixture = make_fixture("ts_test_fixture", serde_json::json!({ "name": "my-ts-backend" }));
-
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
-
-        // setup_block must define a TS class.
-        assert!(
-            emission.setup_block.contains("class _TestStub_ts_test_fixture"),
-            "setup_block should define the stub class, got: {}",
-            emission.setup_block
-        );
-        // Must NOT hardcode sample_core-domain trait names.
-        assert!(
-            !emission.setup_block.contains("OcrBackend"),
-            "setup_block must not hardcode OcrBackend"
-        );
-        assert!(
-            !emission.setup_block.contains("DocumentExtractor"),
-            "setup_block must not hardcode DocumentExtractor"
-        );
-
-        // name() emitted because super_trait is set.
-        assert!(
-            emission.setup_block.contains("name()"),
-            "setup_block should emit name() method"
-        );
-        assert!(
-            emission.setup_block.contains("my-ts-backend"),
-            "name() should return the backend name"
-        );
-
-        // Required methods emitted.
-        assert!(
-            emission.setup_block.contains("syncOp("),
-            "required sync method should be emitted"
-        );
-        assert!(
-            emission.setup_block.contains("async asyncOp("),
-            "required async method should be emitted with async keyword"
-        );
-        assert!(
-            emission.setup_block.contains("syncOp(): string"),
-            "sync method should return the generated sync shape, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            emission.setup_block.contains("async asyncOp(): Promise<string>"),
-            "async method should return the generated async shape, got: {}",
-            emission.setup_block
-        );
-
-        // arg_expr uses new keyword.
-        assert_eq!(
-            emission.arg_expr, "new _TestStub_ts_test_fixture()",
-            "arg_expr should use new constructor"
-        );
-
-        // Named return type must use "{}" not new WorkResult().
-        assert!(
-            emission.setup_block.contains("return \"{}\";"),
-            "Named return type should emit \"{{}}\" not a constructor call, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            !emission.setup_block.contains("new WorkResult()"),
-            "Named return type must not emit a constructor call, got: {}",
-            emission.setup_block
-        );
-    }
-
-    /// `Vec<T>`-returning trait methods (e.g. `EmbeddingBackend::embed() ->
-    /// Vec<Vec<f32>>`, `OcrBackend::supported_languages() -> Vec<String>`) must
-    /// get a matching array return-type annotation on the generated stub.
-    ///
-    /// Before this fix, `ts_stub_return_type` fell through to its `"string"`
-    /// default for any non-primitive, non-unit type -- including `Vec<T>` --
-    /// while `default_val` correctly emitted `[]` for the same type. The
-    /// mismatch between the declared `Promise<string>` and the actual `[]`
-    /// return value is a `tsc` TS2322 ("Type 'never[]' is not assignable to
-    /// type 'string'"), and it fails every generated trait-bridge stub whose
-    /// interface has an array-returning method: embedding, OCR, and reranker
-    /// backends all failed this way (see register_embedding_backend_trait_bridge.md,
-    /// register_ocr_backend_trait_bridge.md, register_reranker_backend_trait_bridge.md).
-    #[test]
-    fn emit_test_backend_ts_vec_return_type_uses_array_annotation_not_string() {
-        use crate::core::config::TraitBridgeConfig;
-        use crate::core::ir::{PrimitiveType, TypeRef};
-
-        let bridge = TraitBridgeConfig {
-            trait_name: "EmbeddingBackend".to_string(),
-            super_trait: Some("Plugin".to_string()),
-            ..Default::default()
-        };
-
-        // Vec<Vec<f32>>, matching EmbeddingBackend::embed's real return type.
-        let embed = test_method(
-            "embed",
-            TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::F32))))),
-            true,
-            false,
-        );
-        // Vec<String>, matching OcrBackend::supported_languages's real return type.
-        let supported_languages = test_method(
-            "supportedLanguages",
-            TypeRef::Vec(Box::new(TypeRef::String)),
-            false,
-            false,
-        );
-        let methods = [&embed, &supported_languages];
-
-        let fixture = make_fixture("vec_return_fixture", serde_json::json!({ "name": "my-embedder" }));
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
-
-        assert!(
-            emission
-                .setup_block
-                .contains("async embed(): Promise<Array<Array<number>>> { return []; }"),
-            "Vec<Vec<f32>> return type must be declared as Array<Array<number>>, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            emission
-                .setup_block
-                .contains("supportedLanguages(): Array<string> { return []; }"),
-            "Vec<String> return type must be declared as Array<string>, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            !emission.setup_block.contains(": Promise<string> { return []; }"),
-            "an array-typed method must never declare a bare 'string' return type, got: {}",
-            emission.setup_block
-        );
-    }
-
-    // Trait-bridge stub named-enum-return coverage (node bare name, wasm prefixed name) lives in
-    // `wasm_trait_bridge_stub_tests.rs`, split out to keep this file under the crate's 1,000-line
-    // cap — see that file's module doc. ~keep
-
-    #[test]
-    fn emit_test_backend_ts_extracts_fixture_values_for_numeric_and_string_defaults() {
-        use crate::core::config::TraitBridgeConfig;
-        use crate::core::ir::{PrimitiveType, TypeRef};
-
-        let bridge = TraitBridgeConfig {
-            trait_name: "EmbeddingBackend".to_string(),
-            super_trait: Some("OcrBackend".to_string()),
-            ..Default::default()
-        };
-
-        let m1 = test_method("dimensions", TypeRef::Primitive(PrimitiveType::U32), false, false);
-        let m2 = test_method("model", TypeRef::String, false, false);
-        let methods = [&m1, &m2];
-
-        // Fixture with backend input containing dimensions value
-        let fixture = make_fixture(
-            "embedding_fixture",
-            serde_json::json!({
-                "name": "my-embedder",
-                "backend": {
-                    "dimensions": 768,
-                    "model": "all-MiniLM-L6-v2"
-                }
-            }),
-        );
-
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
-
-        assert!(
-            emission.setup_block.contains("dimensions(): number { return 768; }"),
-            "numeric method should extract value from fixture.input.backend, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            emission
-                .setup_block
-                .contains("model(): string { return \"all-MiniLM-L6-v2\"; }"),
-            "string method should extract value from fixture.input.backend, got: {}",
-            emission.setup_block
-        );
-    }
-
-    #[test]
-    fn emit_test_backend_ts_emits_default_impl_noops() {
-        use crate::core::config::TraitBridgeConfig;
-        use crate::core::ir::TypeRef;
-
-        let bridge = TraitBridgeConfig {
-            trait_name: "TestTrait".to_string(),
-            ..Default::default()
-        };
-
-        let required = test_method("mustImplement", TypeRef::String, false, false);
-        let optional = test_method("mayImplement", TypeRef::String, false, true);
-        let methods = [&required, &optional];
-
-        let fixture = make_fixture("ts_skip_defaults", serde_json::json!({}));
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
-
-        assert!(
-            emission.setup_block.contains("mustImplement("),
-            "required method should be emitted"
-        );
-        assert!(
-            emission.setup_block.contains("mayImplement("),
-            "default-impl method should be emitted as a no-op stub"
         );
     }
 }
