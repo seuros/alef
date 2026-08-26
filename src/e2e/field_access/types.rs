@@ -113,6 +113,14 @@ pub struct FieldResolver {
 ///   with. Not the same question as "is the Rust field `Option<T>`": see that enum.
 /// * `declared_fields[type_name]` — every binding-visible field of `type_name`, i.e. the members
 ///   a generated accessor may legally name.
+/// * `unresolvable_named_fields[type_name]` — declared fields whose type names ANOTHER user type
+///   (resolves via [`crate::e2e::codegen::call_ir::named_type`]) that is not itself a struct in
+///   `field_types` — a tagged union, most commonly. Distinct from a field simply absent from
+///   `field_types` because its type is a scalar, `serde_json::Value`, or another opaque/foreign
+///   type nobody extracted: THOSE fields never resolve to a `Named` type at all, so a path
+///   stepping past them stays unjudgeable on purpose (map values and JSON blobs are legitimately
+///   walkable further, just not through this map). Only a field that positively names another
+///   user type the IR declined to treat as a struct member of belongs here.
 /// * `root_type` — the IR type name the call's declared return type resolves to, via
 ///   `codegen::call_ir::resolve_declared_result_type`. `None` disables every anchored answer.
 #[derive(Debug, Clone, Default)]
@@ -120,6 +128,7 @@ pub struct IrResultFieldMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub optional_fields: HashMap<String, HashSet<String>>,
     pub declared_fields: HashMap<String, HashSet<String>>,
+    pub unresolvable_named_fields: HashMap<String, HashSet<String>>,
     pub root_type: Option<String>,
 }
 

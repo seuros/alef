@@ -78,6 +78,7 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut optional_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut declared_fields: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut unresolvable_named_fields: HashMap<String, HashSet<String>> = HashMap::new();
 
     for type_def in type_defs {
         for field in binding_fields(&type_def.fields) {
@@ -99,6 +100,15 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone(), named.to_string());
+            } else {
+                // Names ANOTHER user type (not a scalar, `serde_json::Value`, or other type with
+                // no name at all -- those never reach this branch, `named_type` returned `None`
+                // for them above) that this crate's own struct list does not carry as a struct.
+                // The overwhelmingly common case is a tagged union. ~keep
+                unresolvable_named_fields
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone());
             }
         }
     }
@@ -107,6 +117,7 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
         field_types,
         optional_fields,
         declared_fields,
+        unresolvable_named_fields,
         root_type: None,
     }
 }
@@ -237,11 +248,26 @@ pub(super) fn path_crosses_unwalkable_field(map: &IrResultFieldMap, path: &str) 
             return false;
         };
         if !declared.contains(name) {
+            // An unknown field is `root_declares_path`'s concern (it answers `Some(false)` for
+            // it directly), not this one's -- conflating the two would report "crosses" for a
+            // path that never reached a real field to cross.
             return false;
+        }
+        // A segment naming another user type the IR would not walk into as a struct is the
+        // positive "crosses" answer. A segment absent from `field_types` but ALSO absent from
+        // `unresolvable_named_fields` names a scalar, `serde_json::Value`, or other opaque type
+        // with no `Named` resolution at all -- unjudgeable, not unwalkable, so the walk must
+        // still abstain (`false`) for it rather than reject a legitimate map/JSON traversal.
+        if map
+            .unresolvable_named_fields
+            .get(owner)
+            .is_some_and(|fields| fields.contains(name))
+        {
+            return true;
         }
         match map.field_types.get(owner).and_then(|fields| fields.get(name)) {
             Some(next) => owner = next.as_str(),
-            None => return true,
+            None => return false,
         }
     }
     false
@@ -335,6 +361,24 @@ mod tests {
     fn a_path_through_an_undeclared_segment_does_not_cross() {
         let map = anchored_map(&type_defs_with_unresolvable_variant_field());
         assert!(!path_crosses_unwalkable_field(&map, "not_a_real_field.anything"));
+    }
+
+    /// The critical negative control: a field declared with NO `Named` type at all (a scalar, or
+    /// `serde_json::Value`) must stay permissive, exactly like `root_declares_path` already does
+    /// for it. An earlier version of this check conflated "no `field_types` entry" with "crosses
+    /// an unwalkable field", which is true for a tagged union but NOT for a JSON/map value one
+    /// entry (`document.payload.anything`) already derives an accessor through on purpose. This
+    /// pins the fix `unresolvable_named_fields` makes: only a field that positively names ANOTHER
+    /// user type must be flagged, never a field with no `Named` resolution whatsoever.
+    #[test]
+    fn a_path_through_a_field_with_no_named_type_at_all_does_not_cross() {
+        let type_defs = vec![TypeDef {
+            name: "Envelope".to_string(),
+            fields: vec![field("payload", crate::core::ir::TypeRef::Json)],
+            ..TypeDef::default()
+        }];
+        let map = anchored_map(&type_defs);
+        assert!(!path_crosses_unwalkable_field(&map, "payload.anything"));
     }
 
     #[test]
