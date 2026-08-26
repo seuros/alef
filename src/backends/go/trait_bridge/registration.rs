@@ -21,6 +21,7 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
     }
 
     let c_function = c_symbols::trait_unregister_symbol(ffi_prefix, trait_name);
+    let trait_snake = super::helpers::registry_var_stem(trait_name);
     let go_fn_name = super::registration_surface::configured_unregister_fn_name(fn_name);
 
     let mut out = String::new();
@@ -37,6 +38,7 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
             c_function => c_function,
             ffi_prefix => ffi_prefix,
             trait_name => trait_name,
+            trait_snake => &trait_snake,
         },
     ));
     out.push_str("}\n");
@@ -53,7 +55,7 @@ pub(super) fn gen_clear_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: &str, tra
     let Some(fn_name) = bridge_cfg.clear_fn.as_deref() else {
         return String::new();
     };
-    let trait_snake = heck::AsSnakeCase(trait_name).to_string();
+    let trait_snake = super::helpers::registry_var_stem(trait_name);
     let c_function = c_symbols::trait_clear_symbol(ffi_prefix, trait_name);
     let go_fn_name = super::registration_surface::clear_fn_name(fn_name);
 

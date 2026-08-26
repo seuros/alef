@@ -201,7 +201,7 @@ pub fn gen_trait_bridges_file(
             if !bridge_cfg.exclude_languages.iter().any(|lang| lang == "go")
                 && api.types.iter().any(|t| t.name == bridge_cfg.trait_name)
             {
-                let trait_snake = heck::AsSnakeCase(&bridge_cfg.trait_name).to_string();
+                let trait_snake = super::helpers::registry_var_stem(&bridge_cfg.trait_name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "handle_registry_var.jinja",
                     minijinja::context! {
@@ -295,7 +295,7 @@ pub(super) fn gen_trait_bridge(
     #[allow(unused_variables)] trait_snake: &str,
 ) {
     let trait_name = &trait_def.name;
-    let trait_snake = heck::AsSnakeCase(trait_name).to_string();
+    let trait_snake = super::helpers::registry_var_stem(trait_name);
     let trait_pascal = trait_name.to_pascal_case();
 
     let crate_normalized = crate_name.replace('-', "_");

@@ -106,6 +106,41 @@ fn gen_unregistration_fn_emits_wrapper_when_set() {
     );
 }
 
+/// The config-driven unregister wrapper deletes the handle from the trait's registry. That
+/// registry variable is declared by `handle_registry_var.jinja` as `{stem}Registry`, so the
+/// delete must name the same stem — this call site used to omit `trait_snake` from the template
+/// context entirely, and minijinja rendered the undefined value as the empty string, emitting a
+/// bare `Registry.delete(name)` that only fails at `go build`. ~keep
+#[test]
+fn a_configured_unregister_wrapper_deletes_from_the_registry_the_declaration_names() {
+    let cfg = crate::core::config::TraitBridgeConfig {
+        trait_name: "OcrBackend".to_string(),
+        unregister_fn: Some("remove_ocr_backend".to_string()),
+        clear_fn: None,
+        ..Default::default()
+    };
+    let result = gen_unregistration_fn(&cfg, "sample_crate", "OcrBackend");
+
+    let declared = crate::backends::go::template_env::render(
+        "handle_registry_var.jinja",
+        minijinja::context! { trait_snake => super::helpers::registry_var_stem("OcrBackend") },
+    );
+    let registry_var = declared
+        .split_whitespace()
+        .next()
+        .expect("registry declaration is not empty");
+    assert_eq!(registry_var, "ocr_backendRegistry");
+
+    assert!(
+        result.contains(&format!("{registry_var}.delete(name)")),
+        "unregister wrapper does not delete from `{registry_var}`:\n{result}"
+    );
+    assert!(
+        !result.contains("\tRegistry.delete"),
+        "still emitting a bare `Registry.delete`, which is undefined in the generated package:\n{result}"
+    );
+}
+
 #[test]
 fn gen_clear_fn_returns_empty_when_none() {
     let cfg = crate::core::config::TraitBridgeConfig {

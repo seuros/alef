@@ -373,3 +373,15 @@ pub(super) fn capitalize(s: &str) -> String {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
+
+/// The Go identifier stem for a trait's handle registry: the emitted variable is
+/// `{stem}Registry`.
+///
+/// The registry is declared by one template (`handle_registry_var.jinja`) and read by three
+/// others (`register_c_call`, `unregister_c_call`, `clear_c_call`), each rendered from a
+/// different call site. Every site derived the stem itself, so a site that forgot to pass it
+/// emitted a bare `Registry.delete(name)` — an undefined Go identifier that only fails at
+/// `go build`. One derivation, asked for by all four. ~keep
+pub(super) fn registry_var_stem(trait_name: &str) -> String {
+    heck::AsSnakeCase(trait_name).to_string()
+}
