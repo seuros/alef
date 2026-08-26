@@ -1,6 +1,7 @@
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Fixture, FixtureDocsOperation};
+use heck::ToLowerCamelCase;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct PresentationOperation {
@@ -749,7 +750,23 @@ fn typescript_first_item(
         && let Some((source, tail)) = path.split_once("[0].")
     {
         let source = resolver.accessor(source, language, result_var);
-        return (format!("{source} ?? []"), "first".into(), format!("first?.{tail}"));
+        // `tail` names a field on the destructured `first` item. Both node (napi-rs) and wasm
+        // expose struct fields camelCased (napi's default `#[napi(object)]` derive; wasm's
+        // `to_node_name` — see `gen_getter` in backends/wasm/gen_bindings/types.rs), never the
+        // fixture's snake_case IR/wire name, so splicing `tail` in verbatim referenced a member
+        // neither binding declares whenever the path's tail segment wasn't already camelCase by
+        // coincidence (e.g. a fixture path of `results[0].extracted_keywords` produced
+        // `first?.extracted_keywords` against a binding that only exports `.extractedKeywords`).
+        // Only the field-name casing is fixed here, per segment; the unconditional `?.`/`?? []`
+        // guarding this function already applies to `source` is left exactly as-is rather than
+        // rerouted through `resolver`'s own (narrower) optionality detection, which is a
+        // separate, unverified behavior change. ~keep
+        let tail_camel = tail
+            .split('.')
+            .map(|segment| segment.to_lower_camel_case())
+            .collect::<Vec<_>>()
+            .join(".");
+        return (format!("{source} ?? []"), "first".into(), format!("first?.{tail_camel}"));
     }
     (
         String::new(),
@@ -777,6 +794,10 @@ mod deep_result_path_tests;
 #[cfg(test)]
 #[path = "presentation/wasm_optional_leaf_field_tests.rs"]
 mod wasm_optional_leaf_field_tests;
+
+#[cfg(test)]
+#[path = "presentation/node_wasm_iterate_tail_casing_tests.rs"]
+mod node_wasm_iterate_tail_casing_tests;
 
 #[cfg(test)]
 #[path = "presentation/authored_operation_validation_tests.rs"]

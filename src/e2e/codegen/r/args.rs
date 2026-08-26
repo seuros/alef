@@ -249,7 +249,7 @@ pub(super) fn build_args_string(
                             .map(|t| t.methods.iter().collect())
                             .unwrap_or_default();
                         let emission =
-                            crate::e2e::codegen::emit_test_backend("r", trait_bridge, &methods, fixture, &[]);
+                            crate::e2e::codegen::emit_test_backend("r", trait_bridge, &methods, fixture, &[], "");
                         // Emit the backend list definition before the call site.
                         if !emission.setup_block.is_empty() {
                             setup_lines.push(emission.setup_block.trim_end().to_string());

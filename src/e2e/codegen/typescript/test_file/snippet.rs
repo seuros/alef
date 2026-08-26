@@ -208,17 +208,35 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     // name". `render_test_file`'s import builder already walks the IR transitively for the
     // same reason (`collect_transitive_nested_types_for_wasm`); this standalone-snippet path
     // lacked the same walk. Filtered by `referenced_code.contains`, matching every other
-    // entry in this list, so a reachable-but-unused class is never imported. ~keep
-    if lang == "wasm"
-        && let Some(seed) = options_type.as_deref()
-    {
-        let seeds: std::collections::BTreeSet<String> = std::iter::once(seed.to_string()).collect();
-        imports.extend(
-            collect_transitive_nested_types_for_wasm(&seeds, type_defs, wasm_type_prefix)
-                .into_iter()
-                .map(|name| import_name(&name))
-                .filter(|name| referenced_code.contains(name)),
-        );
+    // entry in this list, so a reachable-but-unused class is never imported.
+    //
+    // The walk must also seed from every `json_object` arg's array `element_type`
+    // (`extractBatch(inputs: ExtractInput[])`), not just the call's single `options_type`:
+    // once each array element is built via the same typed wasm builder (see
+    // `build_args_and_setup`'s array branch), a class reached only through *that* element
+    // type's own fields — e.g. `ExtractInput.config: FileExtractionConfig` — is exactly as
+    // unreachable from `options_type` as the options-type case above, and was built into the
+    // snippet body but never imported for the identical reason. ~keep
+    if lang == "wasm" {
+        let mut seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        if let Some(seed) = options_type.as_deref() {
+            seeds.insert(seed.to_string());
+        }
+        for arg in recipe.args {
+            if arg.arg_type == "json_object"
+                && let Some(element_type) = &arg.element_type
+            {
+                seeds.insert(canonical_ts_type_name(lang, element_type, config));
+            }
+        }
+        if !seeds.is_empty() {
+            imports.extend(
+                collect_transitive_nested_types_for_wasm(&seeds, type_defs, wasm_type_prefix)
+                    .into_iter()
+                    .map(|name| import_name(&name))
+                    .filter(|name| referenced_code.contains(name)),
+            );
+        }
     }
     // A trait-bridge stub method returning a named enum annotates its signature with that
     // enum and casts through it (`(): ProcessingStage { return "\"Early\"" as unknown as

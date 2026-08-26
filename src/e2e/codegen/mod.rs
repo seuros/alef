@@ -807,18 +807,26 @@ pub struct TestBackendEmission {
 /// resolves the trait bridge config and calls the language-specific emitter.
 /// Backends that haven't implemented test backend emission yet panic rather
 /// than return a placeholder — see [`TestBackendEmission`]'s doc comment.
+///
+/// `wasm_type_prefix` is the wasm-bindgen class prefix from the crate's resolved
+/// config (e.g. `"Wasm"`); every non-wasm caller passes `""`. Only the shared
+/// node/wasm TypeScript emitter reads it — see `typescript::emit_test_backend`'s
+/// doc for why a wasm stub must reference its enum types under that prefix.
 pub fn emit_test_backend(
     language: &str,
     trait_bridge: &crate::core::config::TraitBridgeConfig,
     methods: &[&MethodDef],
     fixture: &Fixture,
     enums: &[crate::core::ir::EnumDef],
+    wasm_type_prefix: &str,
 ) -> TestBackendEmission {
     match language {
         "rust" => rust::emit_test_backend(trait_bridge, methods, fixture),
         "python" => python::emit_test_backend(trait_bridge, methods, fixture),
-        "typescript" | "wasm" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums),
-        "node" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums), // node uses typescript codegen
+        "typescript" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums, ""),
+        "wasm" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums, wasm_type_prefix),
+        // node uses typescript codegen
+        "node" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums, ""),
         "go" => go::emit_test_backend(trait_bridge, methods, fixture),
         "java" => java::emit_test_backend(trait_bridge, methods, fixture, ""),
         "kotlin" => kotlin::emit_test_backend(trait_bridge, methods, fixture),
@@ -903,7 +911,7 @@ mod unimplemented_test_backend_tests {
             let bridge = registered_bridge();
             let fixture = sample_fixture();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                emit_test_backend(language, &bridge, &[], &fixture, &[])
+                emit_test_backend(language, &bridge, &[], &fixture, &[], "")
             }));
             assert!(
                 result.is_err(),

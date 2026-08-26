@@ -9,6 +9,8 @@ mod json;
 mod not_error_sibling_assertion_tests;
 pub(crate) mod test_file;
 mod visitors;
+#[cfg(test)]
+mod wasm_trait_bridge_stub_tests;
 
 use crate::e2e::config::E2eConfig;
 
@@ -335,12 +337,22 @@ fn is_node_fixture_runnable(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
 /// The `language` parameter distinguishes `"node"` / `"typescript"` / `"wasm"` so
 /// the emitter can use the correct `register` call convention (camelCase for JS).
 ///
+/// `wasm_type_prefix` is the wasm-bindgen class prefix (e.g. `"Wasm"`) and must be
+/// `""` for every non-wasm caller. Every enum a stub method references — in its
+/// return-type annotation and in the JSON-quoted-variant cast the bridge boundary
+/// requires — is a wasm-bindgen-emitted class under that prefix, exactly like every
+/// other wasm type (see `gen_struct`/`gen_opaque_struct` in
+/// `backends/wasm/gen_bindings/types.rs`); a bare `ProcessingStage` names nothing the
+/// wasm package exports. napi-rs does not prefix its types, so node keeps the bare
+/// name unchanged. ~keep
+///
 /// The returned `arg_expr` is `new _TestStub_<fixture_id>()`.
 pub fn emit_test_backend(
     trait_bridge: &crate::core::config::TraitBridgeConfig,
     methods: &[&crate::core::ir::MethodDef],
     fixture: &Fixture,
     enums: &[crate::core::ir::EnumDef],
+    wasm_type_prefix: &str,
 ) -> super::TestBackendEmission {
     use crate::codegen::defaults::language_defaults;
     use crate::e2e::escape::{escape_js, sanitize_ident};
@@ -373,7 +385,15 @@ pub fn emit_test_backend(
         if trait_bridge.super_trait.is_some() && method.name == "name" {
             continue;
         }
-        emit_ts_stub_method(&mut setup, method, &*defaults, backend_input, enums, &mut type_imports);
+        emit_ts_stub_method(
+            &mut setup,
+            method,
+            &*defaults,
+            backend_input,
+            enums,
+            wasm_type_prefix,
+            &mut type_imports,
+        );
     }
 
     // Emit dispose() method for cleanup. The test cleanup code calls dispose()
@@ -407,6 +427,7 @@ fn emit_ts_stub_method(
     defaults: &dyn crate::codegen::defaults::LanguageDefaults,
     backend_input: Option<&serde_json::Map<String, serde_json::Value>>,
     enums: &[crate::core::ir::EnumDef],
+    wasm_type_prefix: &str,
     type_imports: &mut Vec<String>,
 ) {
     use crate::e2e::escape::escape_js;
@@ -441,12 +462,13 @@ fn emit_ts_stub_method(
     let default_val = match &method.return_type {
         crate::core::ir::TypeRef::Unit => "undefined".to_string(),
         crate::core::ir::TypeRef::Named(name) if enums.iter().any(|e| &e.name == name) => {
-            if !type_imports.contains(name) {
-                type_imports.push(name.clone());
+            let prefixed_name = format!("{wasm_type_prefix}{name}");
+            if !type_imports.contains(&prefixed_name) {
+                type_imports.push(prefixed_name.clone());
             }
             let enum_def = enums.iter().find(|e| &e.name == name).expect("checked above");
             match enum_def.variants.first() {
-                Some(variant) => format!("\"\\\"{}\\\"\" as unknown as {name}", variant.name),
+                Some(variant) => format!("\"\\\"{}\\\"\" as unknown as {prefixed_name}", variant.name),
                 // Enum with no variants (shouldn't happen in practice): fall back to
                 // the generic empty-object literal used for non-enum Named types.
                 None => "\"{}\"".to_string(),
@@ -491,7 +513,7 @@ fn emit_ts_stub_method(
         }
         other => defaults.emit_default(other),
     };
-    let return_type = ts_stub_return_type(&method.return_type, enums);
+    let return_type = ts_stub_return_type(&method.return_type, enums, wasm_type_prefix);
 
     if method.is_async {
         let _ = writeln!(
@@ -517,7 +539,11 @@ fn fixture_backend_value<'a>(
         .or_else(|| backend_input.and_then(|b| b.get(&to_camel_case(method_name))))
 }
 
-fn ts_stub_return_type(return_type: &crate::core::ir::TypeRef, enums: &[crate::core::ir::EnumDef]) -> String {
+fn ts_stub_return_type(
+    return_type: &crate::core::ir::TypeRef,
+    enums: &[crate::core::ir::EnumDef],
+    wasm_type_prefix: &str,
+) -> String {
     match return_type {
         crate::core::ir::TypeRef::Unit => "void".to_string(),
         crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => "boolean".to_string(),
@@ -528,12 +554,18 @@ fn ts_stub_return_type(return_type: &crate::core::ir::TypeRef, enums: &[crate::c
         // methods (see `default_val` above); falling through to the bare
         // `"string"` default below mismatched that `[]` against its own
         // declared return type (TS2322: `never[]` not assignable to `string`).
-        crate::core::ir::TypeRef::Vec(inner) => format!("Array<{}>", ts_stub_return_type(inner, enums)),
-        crate::core::ir::TypeRef::Optional(inner) => ts_stub_return_type(inner, enums),
+        crate::core::ir::TypeRef::Vec(inner) => {
+            format!("Array<{}>", ts_stub_return_type(inner, enums, wasm_type_prefix))
+        }
+        crate::core::ir::TypeRef::Optional(inner) => ts_stub_return_type(inner, enums, wasm_type_prefix),
         // A Named type that resolves to a known enum gets the real enum name as its
         // annotation instead of falling through to the generic `string` default —
-        // see `emit_ts_stub_method`'s `default_val` for the matching stub body.
-        crate::core::ir::TypeRef::Named(name) if enums.iter().any(|e| &e.name == name) => name.clone(),
+        // see `emit_ts_stub_method`'s `default_val` for the matching stub body. The
+        // annotation must name what the package actually exports: prefixed for wasm,
+        // bare for node (see `emit_test_backend`'s `wasm_type_prefix` doc).
+        crate::core::ir::TypeRef::Named(name) if enums.iter().any(|e| &e.name == name) => {
+            format!("{wasm_type_prefix}{name}")
+        }
         _ => "string".to_string(),
     }
 }
@@ -724,7 +756,7 @@ result_var = "result"
 
         let fixture = make_fixture("ts_test_fixture", serde_json::json!({ "name": "my-ts-backend" }));
 
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
+        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
 
         // setup_block must define a TS class.
         assert!(
@@ -832,7 +864,7 @@ result_var = "result"
         let methods = [&embed, &supported_languages];
 
         let fixture = make_fixture("vec_return_fixture", serde_json::json!({ "name": "my-embedder" }));
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
+        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
 
         assert!(
             emission
@@ -855,76 +887,9 @@ result_var = "result"
         );
     }
 
-    /// A trait method returning a `Named` enum (e.g. `PostProcessor::processing_stage()
-    /// -> ProcessingStage`) must be annotated with the real enum type, not the generic
-    /// `string` fallback, and its stub body must return a value that actually satisfies
-    /// that type at the napi-rs bridge boundary.
-    ///
-    /// The bridge coerces the JS return value to a string and parses it with
-    /// `serde_json::from_str`, so the emitted body must return the JSON-quoted variant
-    /// name (`"Early"`, quotes included) cast through `unknown` to satisfy the nominal
-    /// enum return annotation — see `emit_ts_stub_method`.
-    #[test]
-    fn emit_test_backend_ts_named_enum_return_uses_enum_type_and_valid_variant() {
-        use crate::core::config::TraitBridgeConfig;
-        use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
-
-        let bridge = TraitBridgeConfig {
-            trait_name: "PostProcessor".to_string(),
-            super_trait: Some("Plugin".to_string()),
-            ..Default::default()
-        };
-
-        let processing_stage = test_method(
-            "processingStage",
-            TypeRef::Named("ProcessingStage".to_string()),
-            false,
-            false,
-        );
-        let methods = [&processing_stage];
-
-        let enums = [EnumDef {
-            name: "ProcessingStage".to_string(),
-            variants: vec![
-                EnumVariant {
-                    name: "Early".to_string(),
-                    ..Default::default()
-                },
-                EnumVariant {
-                    name: "Middle".to_string(),
-                    ..Default::default()
-                },
-                EnumVariant {
-                    name: "Late".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        }];
-
-        let fixture = make_fixture("enum_return_fixture", serde_json::json!({ "name": "my-processor" }));
-
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &enums);
-
-        assert!(
-            emission.setup_block.contains(
-                "processingStage(): ProcessingStage { return \"\\\"Early\\\"\" as unknown as ProcessingStage; }"
-            ),
-            "Named enum return must be annotated with the real enum type and return a \
-             JSON-quoted first variant cast to that type, got: {}",
-            emission.setup_block
-        );
-        assert!(
-            !emission.setup_block.contains("processingStage(): string"),
-            "Named enum return must not fall through to the generic 'string' annotation, got: {}",
-            emission.setup_block
-        );
-        assert_eq!(
-            emission.type_imports,
-            vec!["ProcessingStage".to_string()],
-            "the enum type must be recorded so callers can wire up the import"
-        );
-    }
+    // Trait-bridge stub named-enum-return coverage (node bare name, wasm prefixed name) lives in
+    // `wasm_trait_bridge_stub_tests.rs`, split out to keep this file under the crate's 1,000-line
+    // cap — see that file's module doc. ~keep
 
     #[test]
     fn emit_test_backend_ts_extracts_fixture_values_for_numeric_and_string_defaults() {
@@ -953,7 +918,7 @@ result_var = "result"
             }),
         );
 
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
+        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
 
         assert!(
             emission.setup_block.contains("dimensions(): number { return 768; }"),
@@ -984,7 +949,7 @@ result_var = "result"
         let methods = [&required, &optional];
 
         let fixture = make_fixture("ts_skip_defaults", serde_json::json!({}));
-        let emission = emit_test_backend(&bridge, &methods, &fixture, &[]);
+        let emission = emit_test_backend(&bridge, &methods, &fixture, &[], "");
 
         assert!(
             emission.setup_block.contains("mustImplement("),

@@ -132,7 +132,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                     .find(|t| t.name == *trait_name)
                     .map(|t| t.methods.iter().collect())
                     .unwrap_or_default();
-                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, enums);
+                let emission = crate::e2e::codegen::emit_test_backend(
+                    lang,
+                    trait_bridge,
+                    &methods,
+                    fixture,
+                    enums,
+                    wasm_type_prefix,
+                );
                 setup_lines.push(emission.setup_block);
                 // Assign the bridge to a variable for NAPI cleanup
                 if lang == "node" {
@@ -351,11 +358,19 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                         // napi nests under a synthesized per-variant field (see
                         // `build_node_tagged_enum_variant_literal`), nor that a field typed as
                         // `bytes` or as an enum needs a real `Uint8Array`/host identifier rather
-                        // than the bare wire value — wasm-bindgen also rejects a plain object
-                        // literal where it expects a class instance. Route each element through
-                        // the same typed builder single objects use, for both node and wasm, so
-                        // an array of e.g. `ExtractInput` matches the shape the binding actually
-                        // declares (napi's `.d.ts` union, or wasm-bindgen's wrapped class). ~keep
+                        // than the bare wire value. Route each element through the same typed
+                        // builder single objects use, so an array of e.g. `Message` matches the
+                        // shape napi's `.d.ts` union actually declares.
+                        //
+                        // wasm needs the identical routing for a second reason: every
+                        // wasm-bindgen struct is lowered to a JS *class* with a positional
+                        // constructor (`gen_new_method` in backends/wasm/gen_bindings/types.rs),
+                        // never a plain interface -- so a bare object literal fails
+                        // wasm-bindgen's `instanceof` guard at runtime and `tsc` at compile time
+                        // (`TS2739: missing properties`). The single-object branch below already
+                        // prefixes wasm element types via `wasm_prefixed_wrapped_type`; array
+                        // elements must do the same rather than falling through to
+                        // `json_to_js_camel`'s plain literal. ~keep
                         let element_type = arg
                             .element_type
                             .as_deref()
@@ -363,11 +378,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                         let is_known_element_type = element_type.as_deref().is_some_and(|name| {
                             type_defs.iter().any(|t| t.name == name) || enums.iter().any(|e| e.name == name)
                         });
-                        if matches!(lang, "node" | "wasm")
+                        if (lang == "node" || lang == "wasm")
                             && let Some(element_type) = element_type.filter(|_| is_known_element_type)
                         {
-                            let element_type =
-                                wasm_prefixed_wrapped_type(lang, &element_type, type_defs, enums, wasm_type_prefix);
+                            let builder_type_name = if lang == "wasm" {
+                                wasm_prefixed_wrapped_type(lang, &element_type, type_defs, enums, wasm_type_prefix)
+                            } else {
+                                element_type
+                            };
                             let items: Vec<String> = v
                                 .as_array()
                                 .expect("checked is_array above")
@@ -375,7 +393,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                 .map(|item| match item.as_object() {
                                     Some(item_obj) => ts_builder_expression(
                                         item_obj,
-                                        &element_type,
+                                        &builder_type_name,
                                         nested_types,
                                         lang,
                                         enum_fields,

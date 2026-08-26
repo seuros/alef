@@ -1244,7 +1244,7 @@ pub(super) fn build_args_string_c(
             // `emit_test_backend` panics rather than return a placeholder when the C
             // test-backend emitter is unimplemented — see `TestBackendEmission`'s and
             // `trait_bridge_snippet::emit_test_backend`'s doc comments. ~keep
-            let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[]);
+            let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[], "");
             parts.push(emission.arg_expr);
             continue;
         }

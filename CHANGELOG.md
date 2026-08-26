@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated wasm TypeScript now constructs the classes wasm-bindgen actually exports.** The wasm
+  backend lowers every struct with fields to a JS class with a positional constructor, never a
+  plain interface, but four places in the shared node/wasm e2e generator still assumed the NAPI
+  object shape: array-typed `json_object` arguments fell through to a bare object literal; the
+  transitive nested-class import walk was seeded only from a call's `options_type` and missed a
+  class reachable solely through an argument's own fields; trait-bridge stub enum return types and
+  casts used the unprefixed IR name the wasm package does not export; and an `Iterate` presentation
+  path split on `results[0].` spliced its tail segment in verbatim, referencing a snake_case member
+  against a binding that only exports the camelCased one (that last one affected node identically).
+
 - **`alef build` now restages the FFI shared library it just built.** Staging into the Go, Java and
   C# native-library directories only ever ran from `alef test --e2e` and `alef publish`; `alef
   build` rebuilt the cdylib, never copied it, and reported success, so the staged artifact rotted
