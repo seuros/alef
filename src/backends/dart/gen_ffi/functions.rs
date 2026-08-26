@@ -2,6 +2,7 @@ use crate::codegen::naming::{PublicIdentifierKind, public_host_identifier};
 use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
 
+use super::result_presence::{PrimarySignature, emit_presence_lookup, indent_fragment, presence_gate};
 use super::type_map::{
     call_arg_name, dart_callable_return, dart_callable_type, dart_param_name, dart_public_return, dart_wrapper_param,
     native_param_type, native_return_type, unwrap_return_expr,
@@ -90,6 +91,17 @@ pub(super) fn emit_function(
         },
     ));
 
+    let presence_fn = emit_presence_lookup(
+        &f.return_type,
+        &PrimarySignature {
+            fn_name: &fn_name,
+            c_symbol: &c_symbol,
+            native_params: &native_params.join(", "),
+            dart_params: &dart_params.join(", "),
+        },
+        out,
+    );
+
     let dart_wrapper_params: Vec<String> = f.params.iter().map(dart_wrapper_param).collect();
     let wrapper_return = dart_public_return(&f.return_type);
 
@@ -122,6 +134,16 @@ pub(super) fn emit_function(
         }
         emit_param_free_all(&f.params, out);
     } else {
+        if let Some(presence_fn) = &presence_fn {
+            let mut teardown = String::new();
+            emit_param_free_all(&f.params, &mut teardown);
+            out.push_str(&presence_gate(
+                presence_fn,
+                &call_args_str,
+                &indent_fragment(&teardown, "  "),
+                f.error_type.is_some(),
+            ));
+        }
         out.push_str(&template_env::render(
             "ffi_call_result.jinja",
             minijinja::context! {

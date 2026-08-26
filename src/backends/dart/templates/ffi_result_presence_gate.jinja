@@ -1,0 +1,4 @@
+  if (_{{ fn_name }}Fn({{ call_args }}) != {{ present }}) {
+{% if checks_error %}    _checkError();
+{% endif %}{{ cleanup }}    return null;
+  }

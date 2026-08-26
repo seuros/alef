@@ -805,6 +805,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_typedef_native_sig.jinja"),
     ),
     (
+        "ffi_result_presence_gate.jinja",
+        include_str!("templates/ffi_result_presence_gate.jinja"),
+    ),
+    (
         "ffi_typedef_dart_sig.jinja",
         include_str!("templates/ffi_typedef_dart_sig.jinja"),
     ),

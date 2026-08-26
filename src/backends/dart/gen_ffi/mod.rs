@@ -3,6 +3,7 @@
 
 mod error_helpers;
 mod functions;
+mod result_presence;
 mod type_map;
 mod types;
 

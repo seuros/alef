@@ -53,6 +53,44 @@ pub(super) fn dart_param_name(name: &str) -> String {
     public_host_identifier(Language::Dart, PublicIdentifierKind::Parameter, name)
 }
 
+/// The `dart:ffi` (native, Dart) type pair for the C type the FFI crate really returns.
+///
+/// Asked of [`crate::backends::ffi::type_map::c_return_type`] — the layer that emits the symbol —
+/// rather than re-derived from the `TypeRef`. An `Optional` return used to fall through to
+/// `Pointer<Void>` here while the crate exported `int64_t`, so Dart read an integer as an address;
+/// `Option<bool>` was worse still, a 4-byte `i32` read as an 8-byte pointer. Nothing downstream
+/// can catch that: `gen_ffi` never parses the cbindgen header, so the straddle is invisible from
+/// the Dart side.
+///
+/// Panics on a C spelling this table does not know, so a new FFI return shape fails at generation
+/// time instead of silently reintroducing a `Pointer<Void>`. ~keep
+fn ffi_return_shape(ty: &TypeRef) -> (&'static str, &'static str) {
+    // A handle return is `AlefHandle` whatever the core path is, so the import is not consulted.
+    let c_type = crate::backends::ffi::type_map::c_return_type(ty, "");
+    match c_type.as_ref() {
+        "()" => ("Void", "void"),
+        "i8" => ("Int8", "int"),
+        "i16" => ("Int16", "int"),
+        "i32" => ("Int32", "int"),
+        "i64" => ("Int64", "int"),
+        "u8" => ("Uint8", "int"),
+        "u16" => ("Uint16", "int"),
+        "u32" => ("Uint32", "int"),
+        "u64" | "AlefHandle" => ("Uint64", "int"),
+        "usize" => ("Size", "int"),
+        "isize" => ("IntPtr", "int"),
+        "f32" => ("Float", "double"),
+        "f64" => ("Double", "double"),
+        "*mut std::ffi::c_char" => ("Pointer<Char>", "Pointer<Char>"),
+        "*mut u8" => ("Pointer<Uint8>", "Pointer<Uint8>"),
+        other => panic!(
+            "dart:ffi backend: the FFI crate returns `{other}` for {ty:?}, which has no declared \
+             dart:ffi shape; add it to `ffi_return_shape` rather than letting the typedef fall \
+             back to a pointer of the wrong width"
+        ),
+    }
+}
+
 /// Native C return type (used in the native typedef).
 pub(super) fn native_return_type(ty: &TypeRef) -> String {
     match ty {
@@ -63,6 +101,7 @@ pub(super) fn native_return_type(ty: &TypeRef) -> String {
         TypeRef::Bytes => "Pointer<Uint8>".to_string(),
         TypeRef::Primitive(prim) => native_primitive(prim),
         TypeRef::Char => "Uint32".to_string(),
+        TypeRef::Optional(_) => ffi_return_shape(ty).0.to_string(),
         _ => "Pointer<Void>".to_string(),
     }
 }
@@ -77,6 +116,7 @@ pub(super) fn dart_callable_return(ty: &TypeRef) -> String {
         TypeRef::Bytes => "Pointer<Uint8>".to_string(),
         TypeRef::Primitive(prim) => dart_primitive_callable(prim),
         TypeRef::Char => "int".to_string(),
+        TypeRef::Optional(_) => ffi_return_shape(ty).1.to_string(),
         _ => "Pointer<Void>".to_string(),
     }
 }
@@ -90,18 +130,34 @@ pub(super) fn dart_public_return(ty: &TypeRef) -> String {
 }
 
 /// Convert a raw C return value to the public Dart type.
+///
+/// The `Optional` arm reads the shape [`ffi_return_shape`] declared, so the conversion can never
+/// be derived from a different fact than the typedef it consumes. A scalar leaf stays a bare
+/// passthrough: its absence is answered out of band by the presence companion (`result_presence`),
+/// not by inspecting the value. `Option<bool>` is the one scalar that still needs converting,
+/// because the FFI crate returns it as `i32`. ~keep
 pub(super) fn unwrap_return_expr(raw: &str, ty: &TypeRef, _free_symbol: &str, _error_code_symbol: &str) -> String {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json => {
-            format!(
-                "() {{ final s = {raw}.cast<Utf8>().toDartString(); _freeString({raw}.cast<Char>()); return s; }}()"
-            )
+        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+            owned_string_expr(raw)
         }
-        TypeRef::Vec(_) | TypeRef::Map(_, _) => {
-            format!(
-                "() {{ final s = {raw}.cast<Utf8>().toDartString(); _freeString({raw}.cast<Char>()); return s; }}()"
-            )
-        }
+        TypeRef::Optional(inner) => optional_unwrap_return_expr(raw, inner, ty),
+        _ => raw.to_string(),
+    }
+}
+
+/// Copy a `Pointer<Char>` the FFI crate owns into a Dart `String` and release it.
+fn owned_string_expr(raw: &str) -> String {
+    format!("() {{ final s = {raw}.cast<Utf8>().toDartString(); _freeString({raw}.cast<Char>()); return s; }}()")
+}
+
+/// The `Optional<T>` half of [`unwrap_return_expr`].
+fn optional_unwrap_return_expr(raw: &str, inner: &TypeRef, ty: &TypeRef) -> String {
+    if ffi_return_shape(ty).1 == "Pointer<Char>" {
+        return format!("{raw} == nullptr ? null : {}", owned_string_expr(raw));
+    }
+    match inner {
+        TypeRef::Primitive(PrimitiveType::Bool) => format!("{raw} != 0"),
         _ => raw.to_string(),
     }
 }

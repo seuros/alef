@@ -27,8 +27,14 @@ enum PresenceStance {
     /// `{fn}_has_result` companion. Any backend here that stops calling it silently reports a
     /// zero as present.
     ConsumesCompanion,
-    /// Consumes the C ABI but has not been wired to the companion yet. A known gap, named rather
-    /// than left implicit, so it cannot be mistaken for a backend that was audited and cleared.
+    /// Consumes the C ABI but has not been wired to the companion yet. Empty today — every
+    /// C-ABI backend now calls the companion. Kept, and kept named, because the failure this file
+    /// guards is a *silent* omission: the next C-ABI backend must be able to say "not yet" out
+    /// loud rather than be quietly absorbed into one of the other three stances. ~keep
+    #[expect(
+        dead_code,
+        reason = "the gap list is empty today; the variant is the vocabulary the next gap needs"
+    )]
     ConsumesCabiNotYetWired,
     /// Hands a real Rust `Option<T>` to a macro framework (PyO3, napi-rs, magnus, ext-php-rs,
     /// wasm-bindgen, Rustler, extendr) or to its own non-C-ABI bridge, which lowers `None` to a
@@ -43,16 +49,15 @@ enum PresenceStance {
 const fn presence_channel_stance(language: Language) -> PresenceStance {
     match language {
         // Wired: the wrapper invokes `{fn}_has_result` before the primary call and reports
-        // absence as the host's absent value.
-        Language::Go | Language::Java | Language::Csharp | Language::Zig => PresenceStance::ConsumesCompanion,
+        // absence as the host's absent value. Dart is listed for its opt-in `style = "ffi"` mode,
+        // the only Dart surface that crosses the C ABI at all; its default `frb` style is a
+        // `NativeOptional` consumer and forms no sentinel.
+        Language::Go | Language::Java | Language::Csharp | Language::Zig | Language::Dart => {
+            PresenceStance::ConsumesCompanion
+        }
         // Kotlin/JVM emits no downcall of its own — it calls the Java facade and applies
         // `.orElse(null)`, so it consumes the companion transitively through Java.
         Language::Kotlin => PresenceStance::ConsumesCompanion,
-        // Audited and confirmed broken; the companion exists but this backend does not call it.
-        // Dart's `ffi` style is broken one layer below the presence channel: its `dart:ffi`
-        // typedef declares `Pointer<Void>` where the FFI crate returns `int64_t`, so a gate over
-        // it would guard a call of the wrong width.
-        Language::Dart => PresenceStance::ConsumesCabiNotYetWired,
         // Real `Option<T>` into a macro framework: Python `None`, JS `null`, Ruby `nil`, PHP
         // `null`, Elixir `nil`, R `NULL`/`NA`.
         Language::Python | Language::Node | Language::Ruby | Language::Php | Language::Elixir | Language::R => {
@@ -90,7 +95,9 @@ fn every_language_states_a_presence_stance() {
 /// The gap list is a ledger, not a wildcard. When a backend is wired, its arm moves to
 /// `ConsumesCompanion` and this test is what forces the ledger to be updated rather than left
 /// stale — a backend silently remaining "not yet wired" after being fixed is how a real control
-/// decays into a comment. ~keep
+/// decays into a comment. The list is empty now that Go, Java, C#, Zig and Dart's `ffi` style all
+/// call the companion; the assertion stays so that adding a backend as "not yet wired" has to be
+/// recorded here rather than passing unnoticed. ~keep
 #[test]
 fn the_unwired_c_abi_backends_are_exactly_the_known_gaps() {
     let unwired: Vec<Language> = Language::ALL
@@ -100,7 +107,7 @@ fn the_unwired_c_abi_backends_are_exactly_the_known_gaps() {
 
     assert_eq!(
         unwired,
-        vec![Language::Dart],
+        Vec::<Language>::new(),
         "the set of C-ABI backends still missing the presence companion changed"
     );
 }
