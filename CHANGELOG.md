@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`VerifyFrbBridgeCoverage` no longer passes silently on a gate naming an undeclared
+  feature.** A `#[cfg(feature = "...")]` whose feature the sibling `Cargo.toml` never declares at
+  all was treated exactly like one declared but left out of `default`, so the function was
+  excluded from coverage and the build passed. That is the alef #135 scenario itself: the
+  ownership guard refuses to write a forwarding `[features]` entry into a pre-marker-convention
+  manifest, the facade gains a gated function the manifest can never activate, and the coverage
+  failure was the only signal that would have surfaced the refused write. An inactive gate is now
+  excluded only when the manifest declares every feature it names; an undeclared one stays a
+  coverage candidate, and the diagnostic names the undeclared feature and the manifest and points
+  at `alef adopt <path>` rather than at a stale bridge.
+
 - **Dart FRB `#[cfg]` gates now attach across intervening attributes.** `cfg_gated_free_functions`
   associated a gate with its function only when the `pub fn` sat on the very line after the
   `#[cfg(...)]`, but the generated facade always emits `#[frb]` (or `#[frb(opaque)]`) in between,
