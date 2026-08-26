@@ -14,6 +14,29 @@ pub(crate) fn trait_pascal(trait_name: &str) -> String {
     trait_name.to_pascal_case()
 }
 
+/// One abstract method the Java plugin lifecycle contract always requires.
+pub(crate) struct SuperTraitMethod {
+    /// The snake_case method name, matching the interface's declared signature verbatim.
+    pub(crate) name: &'static str,
+}
+
+/// Abstract methods `trait_interface.jinja`'s `{% if has_super_trait %}` block always declares
+/// on `I<Trait>` when a bridge configures a `super_trait` -- `initialize()`/`shutdown()` are
+/// emitted as `default` methods there and need no override, so they are not part of this list.
+///
+/// The Java plugin lifecycle is a fixed host-language convention, not something read off the
+/// real Rust super-trait: `gen_interface_file` emits it unconditionally from `has_super_trait`
+/// alone and never looks up the super-trait's `TypeDef`. The e2e trait-bridge stub generator
+/// (`e2e::codegen::java::args::build_args_and_setup`) used to be the one place that *did* look
+/// it up -- by matching `TraitBridgeConfig::super_trait` against `TypeDef::rust_path` -- and
+/// silently produced no methods at all when that lookup missed (e.g. a super-trait declared in
+/// a private module and re-exported via `pub use`, whose `rust_path` does not necessarily equal
+/// the configured value). The interface still required `name()`/`version()` either way, so the
+/// stub was `not abstract and does not override abstract method version()`. Read this constant
+/// wherever that guarantee is needed instead of re-deriving it from the super-trait's IR. ~keep
+pub(crate) const SUPER_TRAIT_REQUIRED_METHODS: [SuperTraitMethod; 2] =
+    [SuperTraitMethod { name: "name" }, SuperTraitMethod { name: "version" }];
+
 /// The static class holding the registration methods, e.g. `SamplePluginBridge`.
 pub(crate) fn bridge_class_name(trait_pascal: &str) -> String {
     format!("{trait_pascal}Bridge")
