@@ -164,26 +164,26 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
     }
 }
 
-/// The P/Invoke return type for `Optional<inner>` when the FFI crate exports it as a raw
-/// primitive scalar rather than a pointer — mirrors
-/// `backends::ffi::type_map::c_return_optional`'s primitive/duration branches (including its one
-/// level of nested-`Optional` flattening) exactly, so this declaration can never diverge from the
-/// actual C symbol cbindgen emits for the same return position.
+/// The P/Invoke return type for `Optional<inner>` when the FFI crate exports it as a raw scalar
+/// rather than a pointer.
 ///
-/// This is the fix for the memory-unsafe defect where `Option<u64>` (and every other
-/// `Optional<Primitive>`/`Optional<Duration>` return) was declared `IntPtr` here while the FFI
-/// crate exported the raw scalar — the C# wrapper then read the integer bit pattern as a pointer
-/// and freed it. Returns `None` when the FFI crate emits a pointer instead
-/// (String/Named/Vec/Map/Bytes/Json/Unit), in which case the caller falls back to `IntPtr`.
+/// The DECISION of which shapes cross as a scalar is not made here — it is asked of
+/// [`crate::backends::ffi::type_map::optional_return_crosses_as_scalar`], the FFI layer that
+/// actually emits the symbol. This function only maps the resolved leaf to its C# spelling.
+/// Keeping a second copy of the branching is what produced the defect this fixes: `Option<u64>`
+/// was declared `IntPtr` here while the FFI crate exported a raw scalar, so the wrapper read the
+/// integer bit pattern as a pointer and passed it to `FreeString` — an arbitrary-address free.
+/// A private mirror had already drifted from the authority on `Option<Option<Duration>>` before
+/// this call replaced it. `None` means the FFI crate emits a real pointer and the caller should
+/// fall back to `IntPtr`. ~keep
 fn optional_scalar_pinvoke_return_type(inner: &TypeRef) -> Option<&'static str> {
-    match inner {
-        TypeRef::Primitive(_) | TypeRef::Duration => Some(pinvoke_return_type(inner)),
-        TypeRef::Optional(inner2) => match inner2.as_ref() {
-            TypeRef::Primitive(_) | TypeRef::Duration => Some(pinvoke_return_type(inner2)),
-            _ => None,
-        },
-        _ => None,
+    if !crate::backends::ffi::type_map::optional_return_crosses_as_scalar(inner) {
+        return None;
     }
+    Some(match inner {
+        TypeRef::Optional(nested) => pinvoke_return_type(nested),
+        _ => pinvoke_return_type(inner),
+    })
 }
 
 /// Returns the C# `[DllImport]` return type, accounting for host-native capsule returns.
@@ -295,8 +295,10 @@ pub(super) fn returns_bool_via_int(ty: &TypeRef) -> bool {
 /// as a JSON object would read the scalar's bit pattern as an address — the exact memory-unsafe
 /// defect this predicate used to cause for `Option<u64>` returns.
 pub(super) fn returns_json_object(ty: &TypeRef) -> bool {
-    matches!(ty, TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Named(_) | TypeRef::Bytes)
-        || matches!(ty, TypeRef::Optional(inner) if optional_scalar_pinvoke_return_type(inner).is_none())
+    matches!(
+        ty,
+        TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Named(_) | TypeRef::Bytes
+    ) || matches!(ty, TypeRef::Optional(inner) if optional_scalar_pinvoke_return_type(inner).is_none())
 }
 
 /// Returns true if the FFI return type is a pointer (IntPtr), as opposed to a numeric value.

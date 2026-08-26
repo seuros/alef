@@ -509,7 +509,10 @@ mod tests {
             TypeRef::Bytes,
             TypeRef::Named("Foo".to_string()),
             TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U8))),
-            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::Primitive(PrimitiveType::U8))),
+            TypeRef::Map(
+                Box::new(TypeRef::String),
+                Box::new(TypeRef::Primitive(PrimitiveType::U8)),
+            ),
             TypeRef::Unit,
             // Nested Optional: Primitive flattens to scalar, Duration does not — the asymmetry
             // this test exists to pin.

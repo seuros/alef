@@ -302,3 +302,53 @@ fn should_pass_a_bool_argument_as_the_c_int_the_declaration_expects() {
     assert_eq!(required, "(verbose ? 1 : 0)");
     assert_eq!(optional, "((verbose ?? false) ? 1 : 0)");
 }
+
+/// Return-position parity for `Optional<T>`.
+///
+/// The C# `[DllImport]` return type must be a pointer exactly when the FFI crate returns a
+/// pointer for the same IR type, and a scalar exactly when it returns a scalar. Declaring a
+/// scalar as `IntPtr` is not a cosmetic mismatch: the generated wrapper reads the integer bit
+/// pattern as a UTF-8 string pointer and hands it to `FreeString`, which for a value like
+/// `Some(52_428_800)` is an arbitrary-address free. That shipped, so this is the regression that
+/// should have existed. Like the parameter tests above, it never spells a C# type directly —
+/// it asks both emitters and compares. ~keep
+#[test]
+fn optional_return_pointerness_matches_the_ffi_crate() {
+    use crate::backends::csharp::gen_bindings::marshalling::pinvoke_return_type;
+    use crate::backends::ffi::type_map::c_return_type;
+
+    let shapes = vec![
+        TypeRef::Primitive(PrimitiveType::U64),
+        TypeRef::Primitive(PrimitiveType::I32),
+        TypeRef::Primitive(PrimitiveType::F64),
+        TypeRef::Primitive(PrimitiveType::Bool),
+        TypeRef::Duration,
+        TypeRef::String,
+        TypeRef::Path,
+        TypeRef::Json,
+        TypeRef::Bytes,
+        TypeRef::Named("Config".to_string()),
+        TypeRef::Vec(Box::new(TypeRef::String)),
+        TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))),
+        TypeRef::Optional(Box::new(TypeRef::Duration)),
+        TypeRef::Optional(Box::new(TypeRef::String)),
+    ];
+
+    for inner in shapes {
+        let optional = TypeRef::Optional(Box::new(inner.clone()));
+        let c_type = c_return_type(&optional, "core_crate");
+        // `AlefHandle` is `type AlefHandle = u64` (handle_registry.rs.jinja) -- an integer key
+        // into a registry, NOT a pointer. Classifying it as one would have flagged C#'s correct
+        // `ulong` declaration as the bug. ~keep
+        let ffi_returns_pointer = c_type.contains('*');
+        let csharp_declares_pointer = pinvoke_return_type(&optional) == "IntPtr";
+
+        assert_eq!(
+            csharp_declares_pointer,
+            ffi_returns_pointer,
+            "Option<{inner:?}>: the FFI crate returns `{c_type}` but C# declares \
+             `{}`. A scalar declared as IntPtr is read as a pointer and freed.",
+            pinvoke_return_type(&optional)
+        );
+    }
+}
