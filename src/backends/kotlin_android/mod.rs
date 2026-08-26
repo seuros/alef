@@ -45,7 +45,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::backends::kotlin::literal_normalizer;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{KotlinFfiStyle, Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
 
@@ -187,6 +189,49 @@ impl Backend for KotlinAndroidBackend {
             build_dep: BuildDependency::Ffi,
             post_build: vec![],
         })
+    }
+
+    /// Kotlin/Android registration lives on the generated `object <Trait>Bridge`, whose method
+    /// names are fixed rather than taken from `register_fn`/`unregister_fn`/`clear_fn` — those
+    /// only decide *whether* the `unregister`/`clearAll` methods exist. `register` is always
+    /// emitted. Mirrors the gates in `gen_bindings::trait_interfaces::emit_trait_interfaces`,
+    /// which is the only caller of the bridge-object emitter. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        let excluded_functions = naming::excluded_function_names(config);
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("kotlin_android"))
+            .filter(|bridge| {
+                bridge
+                    .param_name
+                    .as_deref()
+                    .is_none_or(|param| !excluded_functions.contains(param))
+            })
+            .filter_map(|bridge| {
+                let trait_def = api
+                    .types
+                    .iter()
+                    .find(|typ| typ.is_trait && typ.name == bridge.trait_name && !typ.binding_excluded)?;
+                let bridge_object = naming::bridge_object_name(&trait_def.name);
+                Some(TraitBridgeRegistrationSurface {
+                    trait_name: trait_def.name.clone(),
+                    register_symbol: Some(format!("{bridge_object}.{}", trait_bridge::REGISTER_METHOD)),
+                    unregister_symbol: bridge
+                        .unregister_fn
+                        .as_ref()
+                        .map(|_| format!("{bridge_object}.{}", trait_bridge::UNREGISTER_METHOD)),
+                    clear_symbol: bridge
+                        .clear_fn
+                        .as_ref()
+                        .map(|_| format!("{bridge_object}.{}", trait_bridge::CLEAR_METHOD)),
+                })
+            })
+            .collect()
     }
 }
 

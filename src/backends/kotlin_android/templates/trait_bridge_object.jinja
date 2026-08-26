@@ -2,24 +2,24 @@ object {{ bridge_obj }} {
     private val registered = mutableMapOf<String, {{ interface_name }}>()
 
 {% if has_super_trait %}
-    fun register(impl: {{ interface_name }}): Unit {
+    fun {{ register_method }}(impl: {{ interface_name }}): Unit {
         val name = impl.name()
 {% else %}
-    fun register(impl: {{ interface_name }}, name: String): Unit {
+    fun {{ register_method }}(impl: {{ interface_name }}, name: String): Unit {
 {% endif %}
         registered[name] = impl
         {{ bridge_class_name }}.{{ register_native_fn }}({% if has_super_trait %}{{ dispatcher_class }}(impl){% else %}{{ dispatcher_class }}(impl), name{% endif %})
     }
 
 {% if unregister_native_fn %}
-    fun unregister(name: String): Unit {
+    fun {{ unregister_method }}(name: String): Unit {
         registered.remove(name)
         {{ bridge_class_name }}.{{ unregister_native_fn }}(name)
     }
 
 {% endif %}
 {% if clear_native_fn %}
-    fun clearAll(): Unit {
+    fun {{ clear_method }}(): Unit {
         registered.clear()
         {{ bridge_class_name }}.{{ clear_native_fn }}()
     }

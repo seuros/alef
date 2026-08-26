@@ -145,6 +145,19 @@ pub fn bridge_object_name(trait_name: &str) -> String {
     format!("{trait_name}Bridge")
 }
 
+/// Function names `[crates.kotlin_android] exclude_functions` suppresses.
+///
+/// Read by the wrapper emitter, the trait-interface emitter, and
+/// `KotlinAndroidBackend::trait_bridge_registration_surface`; a bridge whose `param_name` lands
+/// in this set is dropped, so all three must consult the same list. ~keep
+pub fn excluded_function_names(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {
+    config
+        .kotlin_android
+        .as_ref()
+        .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
 fn sanitize_package(name: &str) -> String {
     name.replace('-', "_")
         .chars()

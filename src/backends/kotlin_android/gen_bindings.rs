@@ -25,6 +25,7 @@ use crate::backends::kotlin::{
     ValueMethodBridge, default_constructible_type_names, emit_enum_pub, emit_error_type_pub, emit_jni_bridge_object,
     emit_jni_client_class, emit_type_pub_with_defaults_sealed_and_constructible,
 };
+use crate::backends::kotlin_android::naming;
 use crate::backends::kotlin_android::naming::kotlin_package;
 use crate::backends::kotlin_android::template_env;
 use crate::core::backend::GeneratedFile;
@@ -39,11 +40,7 @@ use crate::core::jni::bridge_class_name;
 /// Shared with [`super::gen_seed_test`] rather than duplicated, so the scaffolded unit test
 /// can never name a type this emitter refuses to emit. ~keep
 pub(super) fn effective_excluded_type_names(config: &ResolvedCrateConfig) -> std::collections::HashSet<String> {
-    let kotlin_android_excluded_function_names: std::collections::HashSet<&str> = config
-        .kotlin_android
-        .as_ref()
-        .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
-        .unwrap_or_default();
+    let kotlin_android_excluded_function_names = naming::excluded_function_names(config);
     let mut effective_excluded_types: std::collections::HashSet<String> = config
         .kotlin_android
         .as_ref()

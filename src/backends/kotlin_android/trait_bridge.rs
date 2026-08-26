@@ -22,6 +22,18 @@ use std::collections::BTreeSet;
 /// - This function generates the JNI dispatcher that wraps user impls for native dispatch
 ///
 /// Returns a list of (filename, content) tuples ready for GeneratedFile emission.
+/// The Kotlin method names on the generated `object <Trait>Bridge`.
+///
+/// Fixed rather than derived from `register_fn`/`unregister_fn`/`clear_fn`: those config values
+/// name the core-crate registry functions the JNI shims call, not the Kotlin API. Kept here so
+/// `trait_bridge_object.jinja` and `KotlinAndroidBackend::trait_bridge_registration_surface`
+/// spell them from one place. ~keep
+pub(crate) const REGISTER_METHOD: &str = "register";
+/// See [`REGISTER_METHOD`]. ~keep
+pub(crate) const UNREGISTER_METHOD: &str = "unregister";
+/// See [`REGISTER_METHOD`]. ~keep
+pub(crate) const CLEAR_METHOD: &str = "clearAll";
+
 pub fn gen_trait_bridge_files(
     package: &str,
     trait_name: &str,
@@ -57,6 +69,9 @@ pub fn gen_trait_bridge_files(
                 register_native_fn => register_native_fn,
                 unregister_native_fn => unregister_native_fn,
                 clear_native_fn => clear_native_fn,
+                register_method => REGISTER_METHOD,
+                unregister_method => UNREGISTER_METHOD,
+                clear_method => CLEAR_METHOD,
                 dispatcher_class => format!("{trait_name}JniDispatcher"),
             },
         );

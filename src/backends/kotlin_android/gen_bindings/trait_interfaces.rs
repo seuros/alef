@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::backends::kotlin::{emit_kdoc_pub, kotlin_type_str_pub, to_lower_camel};
+use crate::backends::kotlin_android::naming;
 use crate::backends::kotlin_android::template_env;
 use crate::backends::kotlin_android::trait_bridge;
 use crate::core::backend::GeneratedFile;
@@ -18,11 +19,7 @@ pub(super) fn emit_trait_interfaces(
     package: &str,
     files: &mut Vec<GeneratedFile>,
 ) {
-    let kotlin_android_excluded_function_names: std::collections::HashSet<&str> = config
-        .kotlin_android
-        .as_ref()
-        .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
-        .unwrap_or_default();
+    let kotlin_android_excluded_function_names = naming::excluded_function_names(config);
 
     let mut effective_excluded_types: std::collections::HashSet<String> = config
         .kotlin_android
