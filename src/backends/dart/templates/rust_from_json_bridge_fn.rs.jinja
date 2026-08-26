@@ -1,7 +1,10 @@
-{# from_json bridge fns stay unconditional: frb_generated.rs wires them in regardless #}
-{# of feature flags, and the mirror crate pins the core dependency with its full #}
-{# feature set. See rust_mirror_enum_attribute.jinja for the full rationale. #}
-#[frb]
+{# from_json bridge fns stay unconditional for an ordinary (field/variant-gated) type -- see #}
+{# rust_mirror_enum_attribute.jinja for that rationale. This one names `core_ty` (the host #}
+{# path) directly in its body, so when the WHOLE type is gated (`source_cfg` from `ty.cfg`) #}
+{# the function must carry the same gate or it references a path that does not exist in a #}
+{# build excluding that feature. #}
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}#[frb]
 pub fn {{ fn_name }}(json: String) -> Result<{{ type_name }}, String> {
     serde_json::from_str::<{{ core_ty }}>(&json)
         .map({{ type_name }}::from)

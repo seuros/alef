@@ -1,6 +1,9 @@
-{# Mirror conversions stay unconditional: frb_generated.rs calls them implicitly and #}
-{# the mirror crate pins the core dependency with its full feature set. See #}
-{# rust_mirror_enum_attribute.jinja for the full rationale. #}
-impl From<{{ core_ty }}> for {{ name }} {
+{# The mirror struct DECLARATION stays unconditional (see rust_mirror_struct_attribute.jinja): #}
+{# its fields use widened FRB-native types, never `core_ty` directly. This `impl From<core_ty>` #}
+{# is different -- `core_ty` names the host path verbatim, so when the whole type is gated #}
+{# (`source_cfg` set from `ty.cfg`) the impl must carry the same gate or it references a path #}
+{# that does not exist in a build excluding that feature. #}
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}impl From<{{ core_ty }}> for {{ name }} {
     fn from(v: {{ core_ty }}) -> Self {
         {{ name }} {

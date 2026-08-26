@@ -1,4 +1,7 @@
-{# Mirror conversions stay unconditional — see rust_mirror_enum_attribute.jinja for rationale. #}
-impl From<{{ name }}> for {{ core_ty }} {
+{# Same asymmetry as rust_from_core_struct_open.jinja: the mirror struct declaration stays #}
+{# unconditional, but this impl names `core_ty` (the host path) directly, so a whole-type gate #}
+{# (`source_cfg` from `ty.cfg`) must carry through here too. #}
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}impl From<{{ name }}> for {{ core_ty }} {
     fn from(v: {{ name }}) -> Self {
         {{ core_ty }} {

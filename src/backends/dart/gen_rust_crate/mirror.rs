@@ -525,3 +525,58 @@ pub(crate) fn emit_mirror_error(out: &mut String, error: &ErrorDef, source_crate
     }
     out.push_str("}\n");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::emit_mirror_struct;
+    use crate::core::ir::TypeDef;
+
+    /// The regression this task fixes: an opaque wrapper's `inner` field names the host path
+    /// (`inner_path`) directly -- unlike a plain mirror struct, whose fields are widened
+    /// FRB-native types -- so when the wrapped type is wholly gated behind a Cargo feature
+    /// (`TypeDef::cfg`), the struct declaration AND both `From` impls must all carry the gate,
+    /// or the generated crate references a path that does not exist in a build excluding that
+    /// feature (E0433 in the real failure this mirrors). Before the fix, `source_cfg` was passed
+    /// to `rust_opaque_wrapper_struct.jinja` but the template never used it.
+    #[test]
+    fn gated_opaque_wrapper_carries_cfg_on_struct_and_both_impls() {
+        let ty = TypeDef {
+            name: "OcrEngine".to_string(),
+            rust_path: "mylib::thumbnails::OcrEngine".to_string(),
+            cfg: Some(r#"feature = "thumbnails""#.to_string()),
+            is_opaque: true,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_mirror_struct(&mut out, &ty, "mylib");
+
+        assert!(
+            out.contains("mylib::thumbnails::OcrEngine"),
+            "expected the gated host path to still be referenced, got:\n{out}"
+        );
+        assert_eq!(
+            out.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            3,
+            "the whole-type gate must land on the struct declaration and both From impls, got:\n{out}"
+        );
+    }
+
+    /// Negative control: an ungated opaque type (`TypeDef::cfg` is `None`) must emit no
+    /// `#[cfg(...)]` at all.
+    #[test]
+    fn ungated_opaque_wrapper_emits_no_cfg() {
+        let ty = TypeDef {
+            name: "PlainEngine".to_string(),
+            rust_path: "mylib::PlainEngine".to_string(),
+            is_opaque: true,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_mirror_struct(&mut out, &ty, "mylib");
+
+        assert!(
+            !out.contains("#[cfg("),
+            "ungated opaque type must not emit #[cfg(...)], got:\n{out}"
+        );
+    }
+}

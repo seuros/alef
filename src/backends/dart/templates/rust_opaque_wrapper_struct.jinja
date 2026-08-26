@@ -1,19 +1,25 @@
-{# Opaque wrapper + conversions stay unconditional: frb_generated.rs references the #}
-{# wrapper type unconditionally. The mirror crate pins the core dependency with its #}
-{# full feature set, so `inner_path` is always available. See #}
-{# rust_mirror_enum_attribute.jinja for the full rationale. #}
-#[frb(opaque)]
+{# Unlike a mirror struct (whose fields are widened FRB-native types), an opaque wrapper's #}
+{# `inner` field names `inner_path` -- the host path -- directly, so when the wrapped type #}
+{# is gated (`source_cfg`, already widened by `widen_opaque_wrapper_cfg` the same way the #}
+{# sibling `impl {{ name }} { ... }` block in rust_impl_open.rs.jinja is) every item below #}
+{# must carry the gate too, or it references a path that does not exist in a build #}
+{# excluding that feature. Each item needs its own `#[cfg(...)]` -- Rust attributes don't #}
+{# span multiple top-level items. #}
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}#[frb(opaque)]
 pub struct {{ name }} {
     pub(crate) inner: {{ inner_path }},
 }
 
-impl From<{{ inner_path }}> for {{ name }} {
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}impl From<{{ inner_path }}> for {{ name }} {
     fn from(inner: {{ inner_path }}) -> Self {
         Self { inner }
     }
 }
 
-impl From<{{ name }}> for {{ inner_path }} {
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}impl From<{{ name }}> for {{ inner_path }} {
     fn from(value: {{ name }}) -> Self {
         value.inner
     }
