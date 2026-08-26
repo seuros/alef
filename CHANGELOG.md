@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **C#, Zig, Dart (`style = "ffi"`) and Kotlin/Native now consult the result-presence companion.**
+  A scalar `Option` return crosses the C ABI as a bare scalar, so absence and a legitimate zero are
+  the same bytes. C# matched `TypeRef::Optional(_)` unconditionally and emitted
+  `if (nativeResult == 0) { return null; }` against an `int64_t`, which also shadowed the wrapper's
+  error check so a genuine FFI failure surfaced as `null`. Zig and Kotlin/Native passed the raw C
+  value through and let the language coerce it into an optional as non-null. Dart's `dart:ffi`
+  typedef declared `Pointer<Void>` where the FFI crate exported `int64_t` — and read `Option<bool>`,
+  which crosses as `i32`, as an 8-byte pointer. The `ConsumesCabiNotYetWired` ledger in
+  `backends::result_presence_stance_tests` is now empty. The default Dart `frb` style is unaffected.
+- **Go calls the trait-bridge register symbol the FFI backend actually exports.** The FFI backend
+  names it `{prefix}_{register_fn}` from the bridge's configured `register_fn`; Go composed
+  `{prefix}_register_{trait_snake}` from the trait name, so any bridge whose `register_fn` spelled
+  anything else linked against a symbol exported nowhere.
+- **A return of `Option<Option<SomeType>>` declares a handle on the C side.** The FFI backend
+  declared `*mut c_char` for that shape while its own emitted body handed back `insert_handle(..)`
+  and its absent branch handed back the handle-shaped `0` — three answers to one question, of which
+  only the declaration reached the header and the consuming backends.
+- **Go names the trait registry in the configured unregister wrapper.** It rendered
+  `unregister_c_call.jinja` without `trait_snake`, so the undefined value resolved to the empty
+  string and the template emitted a bare `Registry.delete(name)` — an identifier the generated
+  package never declares.
+- **napi, wasm and php honour `exclude_languages` for trait bridges.** All three emitted the bridge
+  wrapper struct and the register/unregister/clear entry points regardless, so a consumer writing
+  `exclude_languages = ["wasm"]` still got the bridge. Each backend's emitter, options-field wiring
+  and reported registration surface now read one shared predicate. The napi gate honours both
+  `"node"` and `"napi"`.
+- **php, magnus and rustler no longer emit host wrappers for a trait absent from the API surface.**
+  The Rust-side bridge emitter skips such a bridge; the host-side pass did not, so PHP emitted
+  wrapper methods forwarding to `crate::<register_fn>`, magnus emitted
+  `define_module_function("<register_fn>", …)`, and rustler emitted Elixir delegates calling
+  `<AppModule>.Native.<fn>` — each naming a symbol no pass generated. `native.ex` likewise declared
+  NIF stubs for those bridges. All now ask the same lookup.
+- **php and magnus type stubs no longer declare bridge entry points the bindings skip.** The
+  `.stub.php` and Ruby RBS emitters listed a bridge's methods off `trait_bridges` alone.
+- **extendr's `extendr_module!` no longer registers a registration function that was never
+  generated.** `collect_trait_bridge_functions` wired `register_fn` into the module macro without
+  checking `registry_getter`, while `gen_registration_fn` writes no `#[extendr] pub fn` without one
+  — a Rust compile error.
+- **pyo3: a public wrapper is annotated with the return type `options.py` publishes**, and converts
+  the native value into it, instead of being annotated `-> _rust.<Name>` — the private extension
+  module's `#[pyclass]`. Under the `typed-dict` output style the wrapper's annotation named a
+  different type than the one a consumer imports under the same word.
+- **pyo3: the keyword-omission unpack is no longer emitted for a field `options.py` never nulls.**
+  A bare `#[serde(default)]` enum field renders as a literal default and can never be absent, so the
+  unpack was dead — and a type checker resolves an unpacked keyword against every remaining
+  parameter, costing one error per pair (three such unpacks in one constructor call produced six).
+- **`alef setup` and `alef build` kill a timed-out command's whole process group**, not just the
+  `sh` wrapper, so a `sh -> gradlew -> daemon` tree no longer outlives its deadline and reparents to
+  PID 1. The drain that follows is bounded by a 5s grace rather than reading to end of stream, which
+  a descendant holding the inherited pipes never reaches; the captured helper also drains
+  concurrently with the wait, so a command that fills the OS pipe buffer no longer can only end by
+  timing out.
+- **Generated Rust no longer trips `redundant_field_names`, `collapsible_if` or
+  `vec_init_then_push`** under a consumer's deny-level clippy. Struct literals use field-init
+  shorthand where the value is exactly the field identifier; the FFI `*_free` wrappers, the pyo3 DTO
+  alias helper and enum discriminant branch, the napi/wasm/extendr/php visitor result branches and
+  the Dart FRB loader build script use let-chains; the extendr and rustler visitor-context pair
+  lists are `vec![]` literals. `extra_clippy_allows` remains available for consumer-owned code.
+- **e2e validator diagnostics are reported once per crate** rather than once per render pass.
+
+### Changed
+
+- **Timed pipeline commands are spawned into their own process group** and registered for
+  termination forwarding, so Ctrl-C still tears the whole tree down. Forwarding delivers `SIGKILL`,
+  matching the snippet validators. Untimed pipeline commands stay in the foreground group and are
+  unaffected. The process-group lifecycle moved from `src/snippets/validators/` to a crate-level
+  `src/process/` module so both paths share one implementation.
+- **Service-API and trait-bridge C symbols are spelled in one place, `codegen::c_consumer`.** Both
+  the FFI emitters that export them and the Go cgo call sites that consume them derive their names
+  from it. Templates receive whole symbols rather than fragments to interpolate. The service
+  family's two derivations agreed on every input, so that half is a drift guard, not a behaviour
+  change.
+- **`register_fn` without `registry_getter` warns at config resolution.** Every backend's
+  registration emitter needs a registry and emits nothing without one (the C FFI backend panics), so
+  the combination silently produced no registration function anywhere.
+- **A trait bridge skipped because its trait is absent logs a `WARN`**; one skipped because
+  `exclude_languages` names the target logs at `DEBUG`, since that is an honoured request rather
+  than degradation.
+
+### Removed
+
+- **The unreachable `KotlinJvmBridgeGenerator`.** A Kotlin/JVM consumer calls the generated Java
+  bridge class directly, so it emitted nothing reachable.
+
 ## [0.70.0] - 2026-08-26
 
 ### Changed (BREAKING)
