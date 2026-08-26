@@ -100,6 +100,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/native_result_assign.jinja"),
     ),
     (
+        "native_presence_capture.jinja",
+        include_str!("templates/native_presence_capture.jinja"),
+    ),
+    (
         "native_error_code_check.jinja",
         include_str!("templates/native_error_code_check.jinja"),
     ),

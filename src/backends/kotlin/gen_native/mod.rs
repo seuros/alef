@@ -8,6 +8,7 @@
 mod cinterop_def;
 mod native_build_gradle;
 mod native_types;
+mod result_presence;
 
 use crate::codegen::c_consumer;
 use crate::core::backend::GeneratedFile;
@@ -195,6 +196,11 @@ fn emit_native_function(
     let c_args: Vec<String> = f.params.iter().map(native_c_arg).collect();
     let call = format!("{c_fn}({})", c_args.join(", "));
 
+    let presence = result_presence::presence_capture(&f.return_type, &c_fn, &c_args);
+    if let Some(capture) = &presence {
+        out.push_str(capture);
+    }
+
     if f.error_type.is_some() {
         out.push_str(&crate::backends::kotlin::template_env::render(
             "native_result_assign.jinja",
@@ -238,7 +244,7 @@ fn emit_native_function(
         if matches!(f.return_type, TypeRef::Unit) {
             out.push_str("            Unit\n");
         } else {
-            let expr = native_unwrap_return("_result", &f.return_type, &free_sym);
+            let expr = presence_aware_return(&f.return_type, &free_sym, presence.is_some());
             out.push_str(&crate::backends::kotlin::template_env::render(
                 "native_return_expr.jinja",
                 minijinja::context! {
@@ -261,7 +267,7 @@ fn emit_native_function(
                 call => call,
             },
         ));
-        let expr = native_unwrap_return("_result", &f.return_type, &free_sym);
+        let expr = presence_aware_return(&f.return_type, &free_sym, presence.is_some());
         out.push_str(&crate::backends::kotlin::template_env::render(
             "native_return_expr.jinja",
             minijinja::context! {
@@ -316,6 +322,16 @@ fn emit_native_param_conversion(p: &ParamDef, out: &mut String) {
             ));
         }
         _ => {}
+    }
+}
+
+/// The wrapper's yielded expression, gated on the presence companion when one was captured.
+fn presence_aware_return(return_type: &TypeRef, free_sym: &str, has_presence: bool) -> String {
+    let expr = native_unwrap_return("_result", return_type, free_sym);
+    if has_presence {
+        result_presence::presence_conditional(&expr)
+    } else {
+        expr
     }
 }
 

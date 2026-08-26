@@ -56,7 +56,9 @@ const fn presence_channel_stance(language: Language) -> PresenceStance {
             PresenceStance::ConsumesCompanion
         }
         // Kotlin/JVM emits no downcall of its own — it calls the Java facade and applies
-        // `.orElse(null)`, so it consumes the companion transitively through Java.
+        // `.orElse(null)`, so it consumes the companion transitively through Java. The
+        // Kotlin/Native target reaches the cbindgen exports directly through `kotlinx.cinterop`
+        // and captures the companion itself (`gen_native::result_presence`).
         Language::Kotlin => PresenceStance::ConsumesCompanion,
         // Real `Option<T>` into a macro framework: Python `None`, JS `null`, Ruby `nil`, PHP
         // `null`, Elixir `nil`, R `NULL`/`NA`.
