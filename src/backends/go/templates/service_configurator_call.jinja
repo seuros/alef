@@ -1,4 +1,4 @@
-	new_owner := C.{{ service_lower }}_{{ service_snake }}_{{ cfg_method_snake }}(
+	new_owner := C.{{ symbol }}(
 {% for arg in args %}
 		{{ arg.expr }},
 {% endfor %}

@@ -13,10 +13,11 @@
 //!
 //! All names and signatures are derived from the `ApiSurface` IR — alef is generic.
 
+use crate::backends::go::c_symbols;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, HandlerContractDef, RegistrationDef, ServiceDef, TypeRef, WrapperConstructorArg};
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 use std::path::PathBuf;
 
 /// Find the `HandlerContractDef` by trait name in the surface.
@@ -114,13 +115,10 @@ fn gen_service_go(api: &ApiSurface, config: &ResolvedCrateConfig, pkg_name: &str
 /// This is purely informational — the actual C declarations come from the header
 /// included in the cgo preamble. We emit a comment block for readability.
 fn gen_service_c_imports_comment(out: &mut String, service: &ServiceDef, _api: &ApiSurface, ffi_prefix: &str) {
-    let service_snake = service.name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let registrations = service
         .registrations
         .iter()
         .map(|reg| {
-            let reg_method_snake = reg.method.to_snake_case();
             let params = reg
                 .metadata_params
                 .iter()
@@ -132,7 +130,7 @@ fn gen_service_c_imports_comment(out: &mut String, service: &ServiceDef, _api: &
                 })
                 .collect::<Vec<_>>();
             minijinja::context! {
-                symbol => format!("{service_lower}_{service_snake}_register_{reg_method_snake}"),
+                symbol => c_symbols::service_register_symbol(ffi_prefix, &service.name, &reg.method),
                 params => params,
             }
         })
@@ -141,7 +139,6 @@ fn gen_service_c_imports_comment(out: &mut String, service: &ServiceDef, _api: &
         .entrypoints
         .iter()
         .map(|ep| {
-            let ep_name_snake = ep.method.to_snake_case();
             let params = ep
                 .params
                 .iter()
@@ -154,7 +151,7 @@ fn gen_service_c_imports_comment(out: &mut String, service: &ServiceDef, _api: &
                 .collect::<Vec<_>>();
             minijinja::context! {
                 return_c_type => typeref_to_c_type(&ep.return_type),
-                symbol => format!("{service_lower}_{service_snake}_ep_{ep_name_snake}"),
+                symbol => c_symbols::service_entrypoint_symbol(ffi_prefix, &service.name, &ep.method),
                 params => params,
             }
         })
@@ -164,8 +161,8 @@ fn gen_service_c_imports_comment(out: &mut String, service: &ServiceDef, _api: &
         "service_c_imports_comment.jinja",
         minijinja::context! {
             service_name => &service.name,
-            service_lower => &service_lower,
-            service_snake => &service_snake,
+            new_symbol => c_symbols::service_new_symbol(ffi_prefix, &service.name),
+            free_symbol => c_symbols::service_free_symbol(ffi_prefix, &service.name),
             registrations => registrations,
             entrypoints => entrypoints,
         },
@@ -317,8 +314,6 @@ fn gen_service_struct(
     api_surface: &ApiSurface,
 ) {
     let service_name = &service.name;
-    let service_snake = service_name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let upper_prefix = ffi_prefix.to_uppercase();
 
     let doc_block = if service.doc.is_empty() {
@@ -338,16 +333,14 @@ fn gen_service_struct(
         "service_constructor.jinja",
         minijinja::context! {
             service_name => service_name,
-            service_lower => service_lower,
-            service_snake => service_snake,
+            new_symbol => c_symbols::service_new_symbol(ffi_prefix, service_name),
         },
     ));
     out.push_str(&crate::backends::go::template_env::render(
         "service_close_method.jinja",
         minijinja::context! {
             service_name => service_name,
-            service_lower => service_lower,
-            service_snake => service_snake,
+            free_symbol => c_symbols::service_free_symbol(ffi_prefix, service_name),
             upper_prefix => upper_prefix,
         },
     ));
@@ -382,11 +375,8 @@ fn gen_registration_method(
     ffi_prefix: &str,
 ) {
     let service_name = &service.name;
-    let service_snake = service_name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let method_name = &reg.method;
     let method_name_pascal = method_name.to_upper_camel_case();
-    let reg_method_snake = method_name.to_snake_case();
 
     let mut params = vec!["handler HandlerFunc".to_owned()];
     for meta_param in &reg.metadata_params {
@@ -444,9 +434,7 @@ fn gen_registration_method(
     out.push_str(&crate::backends::go::template_env::render(
         "service_registration_call_header.jinja",
         minijinja::context! {
-            service_lower => &service_lower,
-            service_snake => &service_snake,
-            reg_method_snake => &reg_method_snake,
+            symbol => c_symbols::service_register_symbol(ffi_prefix, service_name, method_name),
             upper_prefix => &upper_prefix,
             service_name => service_name,
         },
@@ -476,10 +464,7 @@ fn gen_registration_variant(
     ffi_prefix: &str,
 ) {
     let service_name = &service.name;
-    let service_snake = service_name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let variant_name_pascal = variant.name.to_upper_camel_case();
-    let variant_name_snake = variant.name.to_snake_case();
 
     let mut params = vec!["handler HandlerFunc".to_owned()];
     for sig_param in &variant.signature_params {
@@ -532,9 +517,7 @@ fn gen_registration_variant(
     out.push_str(&crate::backends::go::template_env::render(
         "service_variant_call_header.jinja",
         minijinja::context! {
-            service_lower => &service_lower,
-            service_snake => &service_snake,
-            variant_name_snake => &variant_name_snake,
+            symbol => c_symbols::service_method_symbol(ffi_prefix, service_name, &variant.name),
             upper_prefix => &upper_prefix,
             service_name => service_name,
         },
@@ -575,10 +558,7 @@ fn gen_configurator_method(
     ffi_prefix: &str,
 ) {
     let service_name = &service.name;
-    let service_snake = service_name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let cfg_method_pascal = cfg.name.to_upper_camel_case();
-    let cfg_method_snake = cfg.name.to_snake_case();
 
     let mut params = Vec::new();
     for cfg_param in &cfg.params {
@@ -647,9 +627,7 @@ fn gen_configurator_method(
     out.push_str(&crate::backends::go::template_env::render(
         "service_configurator_call.jinja",
         minijinja::context! {
-            service_lower => &service_lower,
-            service_snake => &service_snake,
-            cfg_method_snake => &cfg_method_snake,
+            symbol => c_symbols::service_method_symbol(ffi_prefix, service_name, &cfg.name),
             service_name => service_name,
             args => cfg_args,
         },
@@ -669,11 +647,8 @@ fn gen_entrypoint_method(
         return;
     }
     let service_name = &service.name;
-    let service_snake = service_name.to_snake_case();
-    let service_lower = ffi_prefix.to_lowercase();
     let ep_method = &ep.method;
     let ep_method_pascal = ep_method.to_upper_camel_case();
-    let ep_name_snake = ep_method.to_snake_case();
 
     let mut params = vec![];
     for ep_param in &ep.params {
@@ -736,9 +711,7 @@ fn gen_entrypoint_method(
         "service_entrypoint_call_header.jinja",
         minijinja::context! {
             capture => capture,
-            service_lower => &service_lower,
-            service_snake => &service_snake,
-            ep_name_snake => &ep_name_snake,
+            symbol => c_symbols::service_entrypoint_symbol(ffi_prefix, service_name, ep_method),
             upper_prefix => &upper_prefix,
             service_name => service_name,
         },

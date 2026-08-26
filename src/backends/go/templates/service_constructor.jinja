@@ -1,6 +1,6 @@
 // New{{ service_name }} creates a new {{ service_name }} instance.
 func New{{ service_name }}() (*{{ service_name }}, error) {
-	owner := C.{{ service_lower }}_{{ service_snake }}_new()
+	owner := C.{{ new_symbol }}()
 	if owner == 0 {
 		return nil, errors.New("failed to create {{ service_name }}")
 	}

@@ -1,4 +1,4 @@
-	ret := C.{{ service_lower }}_{{ service_snake }}_register_{{ reg_method_snake }}(
+	ret := C.{{ symbol }}(
 		s.owner,
 		C.get_service_handler_callback(),
 		C.get_service_handler_response_free(),

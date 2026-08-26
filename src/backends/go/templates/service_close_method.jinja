@@ -3,7 +3,7 @@ func (s *{{ service_name }}) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.owner != 0 {
-		C.{{ service_lower }}_{{ service_snake }}_free(s.owner)
+		C.{{ free_symbol }}(s.owner)
 		s.owner = 0
 	}
 }

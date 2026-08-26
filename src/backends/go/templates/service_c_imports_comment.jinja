@@ -1,6 +1,6 @@
 // Service: {{ service_name }}
-// extern uint64_t {{ service_lower }}_{{ service_snake }}_new(void);
-// extern void {{ service_lower }}_{{ service_snake }}_free(uint64_t handle);
+// extern uint64_t {{ new_symbol }}(void);
+// extern void {{ free_symbol }}(uint64_t handle);
 {% for registration in registrations %}
 // extern int {{ registration.symbol }}(
 //     uint64_t owner,
