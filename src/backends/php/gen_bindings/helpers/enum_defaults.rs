@@ -367,14 +367,28 @@ pub(super) fn gen_string_to_enum_expr(
         );
         // either convention without forcing the core to add `#[serde(rename_all)]`.
         let variant_lower = wire_name.to_lowercase();
-        valid_variants.push(wire_name.clone());
         // A variant behind `#[cfg(...)]` (e.g. `#[cfg(any(test, feature = "testkit"))]`) does
         // not exist in a build that doesn't satisfy that condition; an unconditional match arm
         // naming it is a hard E0599. The surrounding match already carries a catch-all `other
         // =>` fallback arm (see php_enum_string_match_fallback_arm.jinja), so unlike an
-        // exhaustive Rust-enum match, dropping this arm from the string match needs no
-        // additional wildcard -- gating it with `#[cfg(...)]` is sufficient and keeps the
-        // arm live whenever the feature is actually on. ~keep
+        // exhaustive Rust-enum match, dropping this arm needs no additional wildcard.
+        //
+        // Which of the two we do depends on who owns the enum. A *host*-owned gated variant
+        // keeps its arm under the same `#[cfg]`, so the arm goes live whenever the feature is
+        // on. A *foreign*-owned one (a `[[crates.source_crates]]` enum) must have its arm
+        // dropped: the feature name belongs to that crate, not to the generated one, so
+        // forwarding the gate emits `unexpected cfg condition value` -- and because
+        // `cfg(test)` is satisfied under `cargo clippy --all-targets`, the arm still compiles
+        // and fails E0599 on a variant the foreign crate was not built with. ~keep
+        if variant.cfg.is_some() && !crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path) {
+            tracing::debug!(
+                enum_name = %enum_def.name,
+                variant = %variant.name,
+                "gen_bindings(php): drop string-match arm for a foreign crate's cfg-gated variant"
+            );
+            continue;
+        }
+        valid_variants.push(wire_name.clone());
         match_arms.push_str(&crate::backends::php::template_env::render(
             "php_enum_string_match_arm.jinja",
             context! {
@@ -717,6 +731,46 @@ mod tests {
         assert!(
             expr.contains(r#""Mask" | "mask" => crate::RedactionStrategy::Mask,"#),
             "the ungated sibling variant's arm must stay unconditional, got:\n{expr}"
+        );
+    }
+
+    /// The host-owned test above keeps its arm under a `#[cfg]`. A *foreign*-owned enum -- one
+    /// from a `[[crates.source_crates]]` entry -- must have the arm dropped instead. Forwarding
+    /// the gate emits `unexpected cfg condition value` (the feature belongs to that crate, not
+    /// the generated one), and because `cfg(test)` is satisfied under `cargo clippy
+    /// --all-targets` the arm still compiles and fails E0599 on a variant the foreign crate was
+    /// not built with. Both symptoms were observed in a consumer's generated PHP crate. ~keep
+    #[test]
+    fn foreign_crate_cfg_gated_variant_drops_its_match_arm_instead_of_gating_it() {
+        let enums = vec![EnumDef {
+            name: "TierStrategy".to_string(),
+            rust_path: "foreign_lib::TierStrategy".to_string(),
+            variants: vec![
+                unit_variant("Auto", true),
+                crate::core::ir::EnumVariant {
+                    cfg: Some(r#"any(test, feature = "testkit")"#.to_string()),
+                    ..unit_variant("Tier1", false)
+                },
+            ],
+            ..Default::default()
+        }];
+        let expr = gen_string_to_enum_expr("val.tier", "TierStrategy", false, &enums, "hostlib", "tier");
+
+        assert!(
+            !expr.contains("testkit"),
+            "a foreign crate's feature name must not be forwarded into the generated crate, got:\n{expr}"
+        );
+        assert!(
+            !expr.contains("TierStrategy::Tier1"),
+            "the dropped arm must not name a variant this build may not have, got:\n{expr}"
+        );
+        assert!(
+            !expr.contains("\"Tier1\""),
+            "a dropped arm must not still be advertised as an accepted value, got:\n{expr}"
+        );
+        assert!(
+            expr.contains("foreign_lib::TierStrategy::Auto"),
+            "the ungated sibling must survive, got:\n{expr}"
         );
     }
 
