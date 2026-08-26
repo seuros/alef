@@ -508,6 +508,12 @@ pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str,
             enum_snake => enum_snake,
             qualified => qualified,
             arms => arms,
+            // The enum's own item-level cfg, not just its variants': `qualified` names the core
+            // type directly, so a host-owned enum declared behind e.g. `#[cfg(feature = "x")]`
+            // makes this whole helper -- not only individual arms -- reference a type that does
+            // not exist without that feature. See `gen_enum_free`/`gen_enum_to_json` below, which
+            // apply the same `source_cfg` to their sibling struct helpers via `typ.cfg`. ~keep
+            source_cfg => enum_def.cfg.as_deref().unwrap_or(""),
         },
     )
 }
@@ -519,6 +525,14 @@ pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str,
 /// via `insert_handle` (see `value_to_c_conversion.jinja`'s `named_enum`/`named_clone`
 /// arms and `gen_type_to_json`/`gen_type_free`), never a raw pointer, so the matching
 /// `_free` must consume the same scalar handle and release it via `remove_handle`.
+///
+/// Forwards `enum_def.cfg` as `source_cfg`, mirroring `gen_type_free`'s `typ.cfg`: an enum
+/// defined inside a `#[cfg(feature = "x")]`-gated module does not exist in a build without
+/// that feature, so an ungated `remove_handle::<core::x::TheEnum>(...)` here is a hard
+/// `E0433` for every consumer that declares `x` (e.g. via `[crates.ffi].extra_features`, kept
+/// out of `default` on purpose) without also enabling it -- this function used to emit the
+/// handle-accessor body unconditionally while `gen_type_free` already gated the struct
+/// equivalent, so identically-gated enums and structs diverged. ~keep
 pub(super) fn gen_enum_free(enum_def: &EnumDef, prefix: &str, core_import: &str) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let enum_name = &enum_def.name;
@@ -531,6 +545,7 @@ pub(super) fn gen_enum_free(enum_def: &EnumDef, prefix: &str, core_import: &str)
             enum_snake => enum_snake,
             prefix => prefix,
             qualified => qualified,
+            source_cfg => enum_def.cfg.as_deref().unwrap_or(""),
         },
     )
 }
@@ -551,6 +566,7 @@ pub(super) fn gen_enum_to_json(enum_def: &EnumDef, prefix: &str, core_import: &s
             enum_snake => enum_snake,
             prefix => prefix,
             qualified => qualified,
+            source_cfg => enum_def.cfg.as_deref().unwrap_or(""),
         },
     )
 }
@@ -574,6 +590,7 @@ pub(super) fn gen_enum_to_string(enum_def: &EnumDef, prefix: &str, core_import: 
             enum_snake => enum_snake,
             prefix => prefix,
             qualified => qualified,
+            source_cfg => enum_def.cfg.as_deref().unwrap_or(""),
         },
     )
 }
@@ -595,6 +612,7 @@ pub(super) fn gen_enum_from_json(enum_def: &EnumDef, prefix: &str, core_import: 
             enum_snake => enum_snake,
             prefix => prefix,
             qualified => qualified,
+            source_cfg => enum_def.cfg.as_deref().unwrap_or(""),
         },
     )
 }
