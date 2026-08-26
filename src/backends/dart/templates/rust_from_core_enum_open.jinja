@@ -1,4 +1,10 @@
-{# Mirror conversions stay unconditional — see rust_mirror_enum_attribute.jinja for rationale. #}
-impl From<{{ core_ty }}> for {{ name }} {
+{# The mirror enum DECLARATION stays unconditional (see rust_mirror_enum_attribute.jinja): #}
+{# frb_generated.rs references `crate::{Name}` regardless of feature flags, and its variant #}
+{# policy already handles per-variant cfg. This `impl From<core_ty>` is different -- `core_ty` #}
+{# names the host path verbatim, so when the WHOLE enum is gated (`source_cfg` from `en.cfg`, #}
+{# as opposed to a single variant) the impl must carry the same gate or it references a path #}
+{# that does not exist in a build excluding that feature. #}
+{% if source_cfg %}#[cfg({{ source_cfg }})]
+{% endif %}impl From<{{ core_ty }}> for {{ name }} {
     fn from(v: {{ core_ty }}) -> Self {
         match v {

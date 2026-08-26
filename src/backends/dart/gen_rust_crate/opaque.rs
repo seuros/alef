@@ -764,3 +764,49 @@ pub(super) fn emit_from_json_fn(out: &mut String, ty: &TypeDef, source_crate_nam
 fn dart_rust_function_component(s: &str) -> String {
     public_host_identifier(Language::Rust, PublicIdentifierKind::Function, s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::emit_from_json_fn;
+    use crate::core::ir::TypeDef;
+
+    /// The regression this task fixes: `emit_from_json_fn` names `core_ty` (the host path)
+    /// directly in `serde_json::from_str::<core_ty>`, so when the whole type is gated
+    /// (`TypeDef::cfg`) the free function must carry the same gate or it references a path that
+    /// does not exist in a build excluding that feature.
+    #[test]
+    fn gated_type_carries_cfg_on_from_json_fn() {
+        let ty = TypeDef {
+            name: "OcrResult".to_string(),
+            rust_path: "mylib::thumbnails::OcrResult".to_string(),
+            cfg: Some(r#"feature = "thumbnails""#.to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_from_json_fn(&mut out, &ty, "mylib");
+
+        assert!(
+            out.contains("mylib::thumbnails::OcrResult"),
+            "expected the gated host path to still be referenced, got:\n{out}"
+        );
+        assert_eq!(
+            out.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            1,
+            "the whole-type gate must land on the from_json fn exactly once, got:\n{out}"
+        );
+    }
+
+    /// Negative control: an ungated type must emit no `#[cfg(...)]`.
+    #[test]
+    fn ungated_type_emits_no_cfg_on_from_json_fn() {
+        let ty = TypeDef {
+            name: "PlainResult".to_string(),
+            rust_path: "mylib::PlainResult".to_string(),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_from_json_fn(&mut out, &ty, "mylib");
+
+        assert!(!out.contains("#[cfg("), "ungated type must not emit #[cfg(...)], got:\n{out}");
+    }
+}
