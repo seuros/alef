@@ -376,3 +376,103 @@ fn find_trait_def_locates_bridge_trait_by_name() {
     };
     assert!(find_trait_def(&missing, &api).is_none());
 }
+
+fn plugin_trait_api() -> ApiSurface {
+    ApiSurface {
+        types: vec![TypeDef {
+            name: "SamplePlugin".to_string(),
+            rust_path: "sample_core::SamplePlugin".to_string(),
+            is_trait: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    }
+}
+
+fn plugin_bridge_cfg() -> TraitBridgeConfig {
+    TraitBridgeConfig {
+        trait_name: "SamplePlugin".to_string(),
+        registry_getter: Some("sample_core::registry::get_sample_plugin_registry".to_string()),
+        register_fn: Some("install_sample_plugin".to_string()),
+        ..TraitBridgeConfig::default()
+    }
+}
+
+#[test]
+fn bridge_targets_language_is_true_when_no_spelling_is_excluded() {
+    assert!(bridge_targets_language(&plugin_bridge_cfg(), &["node", "napi"]));
+}
+
+#[test]
+fn bridge_targets_language_is_false_when_any_spelling_is_excluded() {
+    for excluded in ["node", "napi"] {
+        let bridge = TraitBridgeConfig {
+            exclude_languages: vec![excluded.to_string()],
+            ..plugin_bridge_cfg()
+        };
+
+        assert!(
+            !bridge_targets_language(&bridge, &["node", "napi"]),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the bridge under both spellings"
+        );
+    }
+}
+
+#[test]
+fn bridge_register_symbol_is_none_without_a_registry_getter() {
+    let bridge = TraitBridgeConfig {
+        registry_getter: None,
+        ..plugin_bridge_cfg()
+    };
+
+    assert_eq!(bridge_register_symbol(&bridge), None);
+}
+
+#[test]
+fn bridge_register_symbol_is_the_configured_name_with_a_registry_getter() {
+    assert_eq!(
+        bridge_register_symbol(&plugin_bridge_cfg()),
+        Some("install_sample_plugin")
+    );
+}
+
+#[test]
+fn active_bridge_trait_def_resolves_the_trait_for_an_unexcluded_target() {
+    let api = plugin_trait_api();
+
+    let found = active_bridge_trait_def(&plugin_bridge_cfg(), &api, &["node", "napi"])
+        .expect("an unexcluded bridge whose trait is present must resolve");
+
+    assert_eq!(found.name, "SamplePlugin");
+}
+
+#[test]
+fn active_bridge_trait_def_is_none_when_the_target_is_excluded_under_either_spelling() {
+    let api = plugin_trait_api();
+
+    for excluded in ["node", "napi"] {
+        let bridge = TraitBridgeConfig {
+            exclude_languages: vec![excluded.to_string()],
+            ..plugin_bridge_cfg()
+        };
+
+        assert_eq!(
+            active_bridge_trait_def(&bridge, &api, &["node", "napi"]).map(|typ| typ.name.as_str()),
+            None,
+            "`exclude_languages = [\"{excluded}\"]` must gate the bridge out"
+        );
+    }
+}
+
+#[test]
+fn active_bridge_trait_def_is_none_when_the_trait_is_absent_from_the_api_surface() {
+    let bridge = TraitBridgeConfig {
+        trait_name: "AbsentPlugin".to_string(),
+        ..plugin_bridge_cfg()
+    };
+
+    assert_eq!(
+        active_bridge_trait_def(&bridge, &plugin_trait_api(), &["node", "napi"]).map(|typ| typ.name.as_str()),
+        None
+    );
+}

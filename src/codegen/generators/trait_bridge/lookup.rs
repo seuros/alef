@@ -244,13 +244,34 @@ pub fn find_trait_def<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) -> Op
         .find(|typ| typ.is_trait && typ.name == bridge.trait_name)
 }
 
+/// Whether `bridge` is emitted for the target that answers to `target_spellings`.
+///
+/// `exclude_languages` may name a backend by its language (`"node"`, `"r"`, `"elixir"`) or by the
+/// backend itself (`"napi"`, `"extendr"`, `"rustler"`), so a target that answers to more than one
+/// spelling is excluded when *any* of its spellings is listed. ~keep
+pub fn bridge_targets_language(bridge: &TraitBridgeConfig, target_spellings: &[&str]) -> bool {
+    target_spellings.iter().all(|spelling| bridge.is_active_for(spelling))
+}
+
+/// The `register_fn` for which a registration function is actually generated.
+///
+/// `register_fn` alone is not enough: every backend's `gen_registration_fn` returns an empty
+/// string without `registry_getter` (the FFI backend panics instead), because the generated body
+/// has no registry to insert into. A site that wires the name into a module manifest —
+/// `extendr_module!`, a NAMESPACE file, a reported registration surface — must ask this rather
+/// than read `register_fn` directly, or it names a symbol no emitter wrote. ~keep
+pub fn bridge_register_symbol(bridge: &TraitBridgeConfig) -> Option<&str> {
+    bridge
+        .register_fn
+        .as_deref()
+        .filter(|_| bridge.registry_getter.is_some())
+}
+
 /// The trait `TypeDef` a bridge wraps, when the target named by `target_spellings` emits that
 /// bridge at all.
 ///
 /// Combines the two gates a bridge emitter applies: the bridge must not be excluded for the target
-/// — under *every* spelling the target answers to, since `exclude_languages` may name a backend by
-/// its language (`"r"`) or by the backend itself (`"extendr"`) — and its trait must resolve in the
-/// `ApiSurface`.
+/// (see [`bridge_targets_language`]) and its trait must resolve in the `ApiSurface`.
 ///
 /// Backends that emit the Rust bridge and the host-language wrapper from separate passes ask
 /// through this one lookup, so the passes cannot answer the question differently and leave a
@@ -261,10 +282,24 @@ pub fn active_bridge_trait_def<'a>(
     api: &'a ApiSurface,
     target_spellings: &[&str],
 ) -> Option<&'a TypeDef> {
-    if !target_spellings.iter().all(|spelling| bridge.is_active_for(spelling)) {
+    let target = target_spellings.first().copied().unwrap_or("");
+    if !bridge_targets_language(bridge, target_spellings) {
+        tracing::debug!(
+            trait_name = %bridge.trait_name,
+            target,
+            "trait bridge skipped: exclude_languages names this target"
+        );
         return None;
     }
-    find_trait_def(bridge, api)
+    let trait_def = find_trait_def(bridge, api);
+    if trait_def.is_none() {
+        tracing::warn!(
+            trait_name = %bridge.trait_name,
+            target,
+            "trait bridge skipped: the configured trait is absent from the API surface"
+        );
+    }
+    trait_def
 }
 
 /// True if `field_ty` references a `Named` type whose name equals `alias`,
