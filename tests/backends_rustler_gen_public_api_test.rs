@@ -667,10 +667,20 @@ fn test_main_module_has_method_wrappers() {
 #[test]
 fn test_trait_bridge_unregister_and_clear_specs_match_atom_returns() {
     let backend = RustlerBackend;
+    // The bridged trait has to be in the surface for the delegates to be emitted at all — a
+    // bridge whose trait does not resolve emits no NIF to delegate to. It is declared with no
+    // methods so no `Greeter.Host`-style behaviour block is emitted, keeping this test's negative
+    // assertions about `@callback` return shapes about the delegate specs alone. ~keep
     let api = ApiSurface {
         crate_name: "my-lib".to_string(),
         version: "1.0.0".to_string(),
-        types: vec![],
+        types: vec![TypeDef {
+            name: "OcrBackend".to_string(),
+            rust_path: "my_lib::OcrBackend".to_string(),
+            is_trait: true,
+            is_opaque: true,
+            ..Default::default()
+        }],
         functions: vec![],
         enums: vec![],
         errors: vec![],
