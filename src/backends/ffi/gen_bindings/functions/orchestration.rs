@@ -15,7 +15,7 @@ use super::return_handling::{
 use super::signatures::{internal_class_component, is_owned_default_constructor};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
 
-fn named_handle_type(ty: &TypeRef) -> Option<&str> {
+pub(super) fn named_handle_type(ty: &TypeRef) -> Option<&str> {
     match ty {
         TypeRef::Named(name) => Some(name),
         TypeRef::Optional(inner) => match inner.as_ref() {
@@ -26,7 +26,7 @@ fn named_handle_type(ty: &TypeRef) -> Option<&str> {
     }
 }
 
-fn named_type_path(type_name: &str, core_import: &str, path_map: &AHashMap<String, String>) -> String {
+pub(super) fn named_type_path(type_name: &str, core_import: &str, path_map: &AHashMap<String, String>) -> String {
     path_map
         .get(type_name)
         .filter(|path| !path.is_empty())

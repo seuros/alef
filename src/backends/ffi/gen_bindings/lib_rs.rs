@@ -1,6 +1,7 @@
 use crate::adapters::AdapterBodies;
 use crate::backends::ffi::gen_bindings::functions::{
-    gen_free_function, gen_free_function_len_companion, gen_method_wrapper, gen_streaming_method_wrapper,
+    gen_free_function, gen_free_function_len_companion, gen_free_function_result_presence_wrapper,
+    gen_method_result_presence_wrapper, gen_method_wrapper, gen_streaming_method_wrapper,
     is_owned_default_constructor, returns_bytes_out_params, returns_c_char, should_skip_method_wrapper,
 };
 use crate::backends::ffi::gen_bindings::helpers;
@@ -335,6 +336,11 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                 ffi_param_enums,
                 serde_names,
             ));
+            if let Some(presence) =
+                gen_method_result_presence_wrapper(typ, method, prefix, &core_import, path_map, ffi_param_enums)
+            {
+                builder.add_item(&presence);
+            }
         }
     }
 
@@ -544,6 +550,11 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                 path_map,
                 ffi_param_enums,
             ));
+        }
+        if let Some(presence) =
+            gen_free_function_result_presence_wrapper(func, prefix, &core_import, path_map, ffi_param_enums)
+        {
+            builder.add_item(&presence);
         }
     }
 
