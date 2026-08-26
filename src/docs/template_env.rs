@@ -26,6 +26,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "deprecated_notice.jinja",
         include_str!("templates/deprecated_notice.jinja"),
     ),
+    (
+        "reference_page_link.jinja",
+        include_str!("templates/reference_page_link.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

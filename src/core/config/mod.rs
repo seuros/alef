@@ -53,10 +53,10 @@ pub use legacy::{LegacyConfigError, LegacyKey, detect_legacy_keys};
 pub use new_config::{NewAlefConfig, ResolveError};
 pub use output::{
     BuildCommandConfig, CitationAuthor, CitationConfig, CleanConfig, DocsConfig, DocsLlmsConfig,
-    DocsSkillTemplateConfig, DocsSkillsConfig, DocsSnippetsConfig, DocsSourceConfig, ExcludeConfig,
-    GeneratedHeaderConfig, IncludeConfig, LintConfig, OutputConfig, OutputTemplate, ReadmeConfig, ScaffoldCargo,
-    ScaffoldCargoEnvValue, ScaffoldCargoTargets, ScaffoldConfig, SetupConfig, SyncConfig, TestConfig, TextReplacement,
-    UpdateConfig,
+    DocsReferenceLinkStyle, DocsSkillTemplateConfig, DocsSkillsConfig, DocsSnippetsConfig, DocsSourceConfig,
+    ExcludeConfig, GeneratedHeaderConfig, IncludeConfig, LintConfig, OutputConfig, OutputTemplate, ReadmeConfig,
+    ScaffoldCargo, ScaffoldCargoEnvValue, ScaffoldCargoTargets, ScaffoldConfig, SetupConfig, SyncConfig, TestConfig,
+    TextReplacement, UpdateConfig,
 };
 pub use package_metadata::PackageMetadataConfig;
 pub use poly::{PolyConfig, TyposConfig};

@@ -1,6 +1,6 @@
 use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::{DocsReferenceLinkStyle, Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, EnumDef, PrimitiveType, TypeDef, TypeRef};
 use std::path::PathBuf;
 
@@ -11,6 +11,22 @@ use super::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use super::formatting::{doc_type_with_optional, escape_table_cell, format_field_default};
 use super::sorting::is_update_type;
 use super::{clean_doc, template_env, version_labels};
+
+/// The link target for a cross-page reference to `page_stem` (e.g. `"configuration"`),
+/// honoring `[docs].reference_link_style`.
+///
+/// This is the single place the docs layer computes a cross-page link -- every generated
+/// reference page that links to another generated reference page must call this rather than
+/// hand-writing a `.md`-suffixed or extensionless target inline, or the two pages drift the
+/// way `types.md`'s link to `configuration.md` once did (hardcoded to the suffixed form,
+/// which a content-collection docs site such as Astro Starlight cannot resolve). ~keep
+fn reference_page_link(config: &ResolvedCrateConfig, page_stem: &str) -> String {
+    let style = config.docs.as_ref().map(|docs| docs.reference_link_style).unwrap_or_default();
+    match style {
+        DocsReferenceLinkStyle::Suffixed => format!("{page_stem}.md"),
+        DocsReferenceLinkStyle::Extensionless => format!("./{page_stem}/"),
+    }
+}
 
 pub(super) fn generate_configuration_doc(
     api: &ApiSurface,
@@ -133,7 +149,11 @@ fn categorize_type(ty: &TypeDef) -> &'static str {
     }
 }
 
-pub(super) fn generate_types_doc(api: &ApiSurface, output_dir: &str) -> anyhow::Result<GeneratedFile> {
+pub(super) fn generate_types_doc(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    output_dir: &str,
+) -> anyhow::Result<GeneratedFile> {
     let mut out = String::with_capacity(8192);
 
     out.push_str("---\ntitle: \"Types Reference\"\n---\n\n");
@@ -179,7 +199,12 @@ pub(super) fn generate_types_doc(api: &ApiSurface, output_dir: &str) -> anyhow::
         ));
 
         if cat == "Configuration Types" {
-            out.push_str("See [Configuration Reference](configuration.md) for detailed defaults and language-specific representations.\n\n");
+            let target = reference_page_link(config, "configuration");
+            out.push_str(&template_env::render(
+                "reference_page_link.jinja",
+                minijinja::context! { title => "Configuration Reference", target => target },
+            ));
+            out.push('\n');
         }
 
         for ty in types {

@@ -202,6 +202,28 @@ pub struct ReadmeConfig {
     pub targets: HashMap<String, JsonValue>,
 }
 
+/// How a generated reference page links to another generated reference page in the same
+/// `reference_output` directory.
+///
+/// Different docs-site generators resolve a sibling page's URL differently: plain
+/// GitHub-rendered Markdown and most static-site generators serve the file as written, so
+/// the link must keep the `.md` suffix, while content-collection site generators (for
+/// example Astro Starlight) resolve routes from a page's slug and treat a `.md`-suffixed
+/// link as a broken route. Alef cannot infer which is true for a given consumer, so this is
+/// configuration rather than a guess -- see `docs::shared_pages::reference_page_link`,
+/// the single place that reads it. ~keep
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DocsReferenceLinkStyle {
+    /// Keep the `.md` suffix: `configuration.md`. Correct for GitHub-rendered Markdown and
+    /// most static-site generators that serve the file as-is.
+    #[default]
+    Suffixed,
+    /// Drop the file extension and use a directory-style route: `./configuration/`.
+    /// Matches content-collection site generators that resolve routes from slugs.
+    Extensionless,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DocsConfig {
@@ -224,6 +246,10 @@ pub struct DocsConfig {
     /// Snippet discovery and validation config used by docs templates.
     #[serde(default)]
     pub snippets: Option<DocsSnippetsConfig>,
+    /// How generated reference pages link to each other. Defaults to
+    /// [`DocsReferenceLinkStyle::Suffixed`].
+    #[serde(default)]
+    pub reference_link_style: DocsReferenceLinkStyle,
 }
 
 impl DocsConfig {
@@ -256,6 +282,9 @@ impl DocsConfig {
                 workspace.and_then(|cfg| cfg.snippets.as_ref()),
                 krate.and_then(|cfg| cfg.snippets.as_ref()),
             ),
+            reference_link_style: krate
+                .map(|cfg| cfg.reference_link_style)
+                .unwrap_or_else(|| workspace.map(|cfg| cfg.reference_link_style).unwrap_or_default()),
         })
     }
 }

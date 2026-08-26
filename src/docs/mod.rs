@@ -73,7 +73,7 @@ pub fn generate_docs(
     }
 
     files.push(shared_pages::generate_configuration_doc(api, config, output_dir)?);
-    files.push(shared_pages::generate_types_doc(api, output_dir)?);
+    files.push(shared_pages::generate_types_doc(api, config, output_dir)?);
     files.push(shared_pages::generate_errors_doc(api, output_dir)?);
 
     for file in &mut files {

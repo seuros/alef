@@ -1,6 +1,110 @@
 use super::super::shared_pages::render_enum_for_shared_doc;
 use super::*;
 
+/// A minimal `types.md`-triggering config type: any type whose name ends in `Config` lands
+/// in the "Configuration Types" category, which is what emits the cross-page link to
+/// `configuration.md` under test here.
+fn make_config_type() -> TypeDef {
+    TypeDef {
+        name: "FooConfig".into(),
+        rust_path: "mylib::FooConfig".into(),
+        original_rust_path: String::new(),
+        fields: vec![],
+        methods: vec![],
+        is_opaque: false,
+        is_clone: true,
+        is_copy: false,
+        doc: String::new(),
+        cfg: None,
+        is_trait: false,
+        has_default: true,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: false,
+        serde_container_default: false,
+        serde_container_conversion: Default::default(),
+        super_traits: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    }
+}
+
+/// task: `types.md`'s link to `configuration.md` was hardcoded to a `.md`-suffixed relative
+/// link, which a content-collection docs site (Astro Starlight) cannot resolve -- it needs
+/// `./configuration/`. The default (no `[docs].reference_link_style` set) must keep emitting
+/// the `.md`-suffixed form so plain Markdown viewers and unconfigured consumers see no
+/// change; a consumer opting into `reference_link_style = "extensionless"` must get the
+/// directory-style route instead, and only that.
+#[test]
+fn test_types_doc_configuration_link_honors_reference_link_style() {
+    let api = ApiSurface {
+        crate_name: "mylib".into(),
+        version: "0.1.0".into(),
+        types: vec![make_config_type()],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let default_config = make_test_config();
+    let default_files = generate_docs(&api, &default_config, &[Language::Python], "out").unwrap();
+    let default_types_file = default_files
+        .iter()
+        .find(|f| f.path.to_str().unwrap().contains("types"))
+        .unwrap();
+    assert!(
+        default_types_file
+            .content
+            .contains("[Configuration Reference](configuration.md)"),
+        "default (unconfigured) link style must stay `.md`-suffixed for backward compatibility: {}",
+        default_types_file.content
+    );
+
+    let extensionless_raw: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs]
+reference_link_style = "extensionless"
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .expect("valid toml");
+    let extensionless_config = extensionless_raw.resolve().expect("resolve ok").remove(0);
+    let extensionless_files = generate_docs(&api, &extensionless_config, &[Language::Python], "out").unwrap();
+    let extensionless_types_file = extensionless_files
+        .iter()
+        .find(|f| f.path.to_str().unwrap().contains("types"))
+        .unwrap();
+    assert!(
+        extensionless_types_file
+            .content
+            .contains("[Configuration Reference](./configuration/)"),
+        "`reference_link_style = \"extensionless\"` must emit a directory-style route, not a \
+         `.md`-suffixed link a Starlight-style site cannot resolve: {}",
+        extensionless_types_file.content
+    );
+    assert!(
+        !extensionless_types_file.content.contains("configuration.md"),
+        "the `.md`-suffixed form must not leak through once extensionless is configured: {}",
+        extensionless_types_file.content
+    );
+}
+
 #[test]
 fn test_generate_types_doc_renders_enum_variants() {
     use crate::core::ir::EnumVariant;
