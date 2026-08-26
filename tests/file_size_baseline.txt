@@ -92,7 +92,6 @@ src/scaffold/languages/zig.rs 1113
 src/scaffold/mod.rs 1212
 src/scaffold/tests/ffi_go_java_ruby.rs 1081
 src/scaffold/tests/poly.rs 1068
-src/snippets/validators/zig.rs 1014
 tests/adapters_adapter_test.rs 1301
 tests/backends_csharp_gen_bindings_test.rs 4093
 tests/backends_dart_gen_bindings_test.rs 2059

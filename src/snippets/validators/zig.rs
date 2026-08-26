@@ -7,6 +7,7 @@ use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command
 pub struct ZigValidator;
 
 mod batch;
+mod manifest;
 #[cfg(test)]
 mod session_command_tests;
 
@@ -78,7 +79,12 @@ impl SnippetValidator for ZigValidator {
         } else if let Some(manifest) = session.manifest.as_deref() {
             let (module_name, module_source) = zig_package_module(manifest)?;
             if let Some(package_root) = zig_package_root(&module_source) {
-                let build_file = write_snippet_build(dir.path(), &module_name, &package_root)?;
+                // `alef build` with no `--release` produces `target/debug/`, but the scaffolded
+                // `build.zig`'s `ffi_path` default only ever searches `target/release/` -- without
+                // this override every snippet fails identically ("unable to find dynamic system
+                // library") whenever the FFI crate was last built without `--release`. ~keep
+                let ffi_override = manifest::resolve_ffi_library_override(manifest)?;
+                let build_file = write_snippet_build(dir.path(), &module_name, &package_root, ffi_override.as_ref())?;
                 command = std::process::Command::new("zig");
                 command.args(["build", "--summary", "none", "--build-file"]);
                 command.arg(build_file);
@@ -99,7 +105,7 @@ impl SnippetValidator for ZigValidator {
                 // root, and the two directories only coincide when the session happens to set
                 // `cwd` to the package. ~keep
                 let build_root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
-                declared_include_paths = zig_manifest_include_paths(manifest)?
+                declared_include_paths = manifest::zig_manifest_include_paths(manifest)?
                     .into_iter()
                     .map(|path| build_root.join(path))
                     .collect();
@@ -163,88 +169,6 @@ fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std
     }
 }
 
-/// Include directories the build manifest declares for its module, in declaration order. ~keep
-///
-/// A `build.zig` is a program rather than a manifest, so this reads back only the shape Alef's own
-/// scaffold (`scaffold::languages::zig::scaffold_zig`) emits:
-/// `addIncludePath(.{ .cwd_relative = <expr> })`, where `<expr>` is either a string literal or an
-/// identifier [`binding_default`] can trace back to one. Any other expression is skipped rather
-/// than guessed at — a wrong `-I` is worse than none.
-///
-/// Without this the reconstructed `build-exe` command carries no `-I` at all unless the consumer
-/// also repeats the path under `include_paths`, so every snippet reaching a `@cInclude` in the
-/// binding fails with `C import failed ... 'header.h' not found` while `zig build` succeeds.
-/// Paths are returned verbatim, relative to the manifest's own directory — the build root the
-/// scaffolded manifest rebases them onto, which the caller supplies.
-fn zig_manifest_include_paths(manifest: &std::path::Path) -> Result<Vec<String>> {
-    const DECLARATION: &str = "addIncludePath(.{ .cwd_relative = ";
-
-    let source = std::fs::read_to_string(manifest)?;
-    let mut paths: Vec<String> = Vec::new();
-    for occurrence in source.split(DECLARATION).skip(1) {
-        let Some(end) = occurrence.find(" })") else {
-            continue;
-        };
-        let expression = occurrence[..end].trim();
-        let Some(path) = string_literal(expression)
-            .map(str::to_owned)
-            .or_else(|| binding_default(&source, expression))
-        else {
-            continue;
-        };
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    Ok(paths)
-}
-
-fn string_literal(expression: &str) -> Option<&str> {
-    expression.strip_prefix('"')?.strip_suffix('"')
-}
-
-/// How many `const` hops [`binding_default`] follows before giving up. The scaffold emits exactly
-/// one (`ffi_include` → `ffi_include_option`); the rest is headroom, and the bound is what keeps a
-/// hand-written manifest with a cyclic binding from spinning here. ~keep
-const MAX_BINDING_INDIRECTIONS: usize = 4;
-
-/// The default path a scaffolded `build.zig` binds to `name`.
-///
-/// Two shapes, both of which alef's own scaffold has emitted:
-/// `const <name> = b.option(...) orelse "<default>";`, and the build-root-rebased pair
-/// `const <name> = b.pathResolve(&.{ <build root>, <inner> });` whose `<inner>` is itself a
-/// binding resolved the same way. The build-root argument is deliberately dropped rather than
-/// joined in: the caller already knows that directory as the manifest's own, and it is an
-/// expression here (`b.build_root.path orelse "."`) rather than a literal this could read. ~keep
-fn binding_default(source: &str, name: &str) -> Option<String> {
-    const REBASE: &str = "b.pathResolve(&.{";
-
-    let mut name = name.to_owned();
-    for _ in 0..MAX_BINDING_INDIRECTIONS {
-        let marker = format!("const {name} = ");
-        let start = source.find(&marker)? + marker.len();
-        let statement = source[start..]
-            .split_once(';')
-            .map_or(&source[start..], |(head, _)| head);
-        let Some(arguments) = statement.strip_prefix(REBASE) else {
-            return orelse_literal(statement);
-        };
-        let end = arguments.find("})")?;
-        name = arguments[..end].rsplit(',').next()?.trim().to_owned();
-    }
-    None
-}
-
-/// The literal in `... orelse "<default>"` within a single statement.
-fn orelse_literal(statement: &str) -> Option<String> {
-    const ORELSE: &str = "orelse ";
-
-    let default = statement.find(ORELSE)? + ORELSE.len();
-    let literal = statement[default..].trim_start().strip_prefix('"')?;
-    let end = literal.find('"')?;
-    Some(literal[..end].to_owned())
-}
-
 fn zig_package_module(manifest: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
     let source = std::fs::read_to_string(manifest)?;
     let module_marker = "addModule(\"";
@@ -280,6 +204,7 @@ fn write_snippet_build(
     directory: &std::path::Path,
     module_name: &str,
     package_root: &std::path::Path,
+    ffi_override: Option<&(String, std::path::PathBuf)>,
 ) -> Result<std::path::PathBuf> {
     // Zig 0.16 requires `.path` dependencies in `build.zig.zon` to be relative to the build
     // root (the manifest's own directory, i.e. `directory` here) — an absolute path is a hard
@@ -287,8 +212,19 @@ fn write_snippet_build(
     // lint warning. `package_root` arrives absolute (from `zig_package_root`, which walks up
     // from an absolute manifest path), so it must be rebased here rather than written as-is. ~keep
     let package_root = zon_dependency_path(&relative_path(directory, package_root)?);
+    // A top-level `-D` flag only sets an option on *this* build.zig, never on a `.path`
+    // dependency's own `b.option(...)` calls -- those are set only by naming them in the
+    // `b.dependency(...)` args struct itself, which is why the override is spliced into the
+    // dependency call here rather than passed on the command line. ~keep
+    let dependency_args = match ffi_override {
+        Some((option_name, path)) => format!(
+            ".target = target, .optimize = optimize, .{option_name} = \"{}\"",
+            zig_string_literal(path)
+        ),
+        None => ".target = target, .optimize = optimize".to_owned(),
+    };
     let build = format!(
-        "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {{\n    const target = b.standardTargetOptions(.{{}});\n    const optimize = b.standardOptimizeOption(.{{}});\n    const binding = b.dependency(\"binding\", .{{ .target = target, .optimize = optimize }});\n    const root = b.createModule(.{{\n        .root_source_file = b.path(\"snippet.zig\"),\n        .target = target,\n        .optimize = optimize,\n    }});\n    root.addImport(\"{module_name}\", binding.module(\"{module_name}\"));\n    const executable = b.addExecutable(.{{ .name = \"snippet\", .root_module = root }});\n    b.default_step.dependOn(&executable.step);\n}}\n"
+        "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {{\n    const target = b.standardTargetOptions(.{{}});\n    const optimize = b.standardOptimizeOption(.{{}});\n    const binding = b.dependency(\"binding\", .{{ {dependency_args} }});\n    const root = b.createModule(.{{\n        .root_source_file = b.path(\"snippet.zig\"),\n        .target = target,\n        .optimize = optimize,\n    }});\n    root.addImport(\"{module_name}\", binding.module(\"{module_name}\"));\n    const executable = b.addExecutable(.{{ .name = \"snippet\", .root_module = root }});\n    b.default_step.dependOn(&executable.step);\n}}\n"
     );
     let zon = format!(
         ".{{\n    .name = .alef_snippet,\n    .version = \"0.0.0\",\n    .fingerprint = 0x{fingerprint:016x},\n    .dependencies = .{{ .binding = .{{ .path = \"{package_root}\" }} }},\n    .paths = .{{ \"build.zig\", \"build.zig.zon\", \"snippet.zig\" }},\n}}\n",
@@ -318,6 +254,14 @@ fn zon_dependency_path(relative: &std::path::Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// Render `path` as a Zig string literal body (escaped, unquoted). Unlike
+/// [`zon_dependency_path`], the result is used as an ordinary `.cwd_relative` filesystem path
+/// rather than a `build.zig.zon` `.path` dependency, so native separators are left as-is -- only
+/// the characters a Zig string literal cannot contain unescaped are escaped. ~keep
+fn zig_string_literal(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Express `target` as a path relative to `base`, purely lexically (no filesystem access, so
@@ -505,7 +449,7 @@ mod tests {
         let scratch = directory.path().join("scratch");
         std::fs::create_dir(&scratch).unwrap();
 
-        let build_file = write_snippet_build(&scratch, "sample_binding", &package).unwrap();
+        let build_file = write_snippet_build(&scratch, "sample_binding", &package, None).unwrap();
         let build = std::fs::read_to_string(build_file).unwrap();
         let zon = std::fs::read_to_string(scratch.join("build.zig.zon")).unwrap();
 
@@ -551,7 +495,7 @@ mod tests {
         let scratch = directory.path().join("scratch");
         std::fs::create_dir(&scratch).unwrap();
 
-        write_snippet_build(&scratch, "sample_binding", &package).unwrap();
+        write_snippet_build(&scratch, "sample_binding", &package, None).unwrap();
         let zon = std::fs::read_to_string(scratch.join("build.zig.zon")).unwrap();
 
         let dependency_line = zon
@@ -681,7 +625,7 @@ mod tests {
 
         let scratch = directory.path().join("scratch");
         std::fs::create_dir(&scratch).unwrap();
-        let build_file = write_snippet_build(&scratch, "binding_pkg", &package).unwrap();
+        let build_file = write_snippet_build(&scratch, "binding_pkg", &package, None).unwrap();
         std::fs::write(
             scratch.join("snippet.zig"),
             "const binding_pkg = @import(\"binding_pkg\");\npub fn main() void {\n    _ = binding_pkg.ok;\n}\n",
@@ -700,43 +644,6 @@ mod tests {
             "zig build failed against the generated snippet manifest:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    /// Alef's own scaffold binds the include directory through a `b.option(...) orelse`
-    /// default, so reading only string literals finds nothing in the manifest Alef itself writes.
-    #[test]
-    fn manifest_include_paths_resolve_through_the_build_option_default() {
-        let directory = tempfile::tempdir().unwrap();
-        let manifest = directory.path().join("build.zig");
-        std::fs::write(&manifest, sample_build_zig(true)).unwrap();
-
-        let paths = zig_manifest_include_paths(&manifest).unwrap();
-
-        assert_eq!(paths, ["vendor/include"]);
-    }
-
-    #[test]
-    fn manifest_include_paths_accept_a_direct_string_literal() {
-        let directory = tempfile::tempdir().unwrap();
-        let manifest = directory.path().join("build.zig");
-        std::fs::write(
-            &manifest,
-            "const module = b.addModule(\"sample_binding\", .{\n    .root_source_file = b.path(\"src/root.zig\"),\n});\nmodule.addIncludePath(.{ .cwd_relative = \"include\" });\n",
-        )
-        .unwrap();
-
-        let paths = zig_manifest_include_paths(&manifest).unwrap();
-
-        assert_eq!(paths, ["include"]);
-    }
-
-    #[test]
-    fn a_manifest_without_an_include_declaration_contributes_no_paths() {
-        let directory = tempfile::tempdir().unwrap();
-        let manifest = directory.path().join("build.zig");
-        std::fs::write(&manifest, sample_build_zig(false)).unwrap();
-
-        assert!(zig_manifest_include_paths(&manifest).unwrap().is_empty());
     }
 
     /// The decisive check: a snippet whose binding module reaches a `@cInclude` compiles only when
@@ -781,76 +688,6 @@ mod tests {
             "without a declared include directory the header cannot resolve"
         );
         drop((declaring, omitting));
-    }
-
-    fn sample_build_zig(with_include: bool) -> String {
-        let include = if with_include {
-            "module.addIncludePath(.{ .cwd_relative = ffi_include });\n"
-        } else {
-            ""
-        };
-        format!(
-            "const std = @import(\"std\");\n\
-             pub fn build(b: *std.Build) void {{\n\
-             \x20   const ffi_include = b.option(\n\
-             \x20       []const u8,\n\
-             \x20       \"ffi_include_path\",\n\
-             \x20       \"Path to directory containing the FFI C header\"\n\
-             \x20   ) orelse \"vendor/include\";\n\
-             \x20   const module = b.addModule(\"sample_binding\", .{{\n\
-             \x20       .root_source_file = b.path(\"src/root.zig\"),\n\
-             \x20       .link_libc = true,\n\
-             \x20   }});\n\
-             \x20   {include}\
-             }}\n"
-        )
-    }
-
-    /// The include declaration alef's scaffold emits today: the option default is rebased onto the
-    /// package's own build root before it reaches `.cwd_relative`, so the literal the parser needs
-    /// sits one `const` further away than it used to.
-    fn build_root_rebased_build_zig(package_name: &str) -> String {
-        format!(
-            "const std = @import(\"std\");\n\
-             pub fn build(b: *std.Build) void {{\n\
-             \x20   const target = b.standardTargetOptions(.{{}});\n\
-             \x20   const optimize = b.standardOptimizeOption(.{{}});\n\
-             \x20   const build_root = b.build_root.path orelse \".\";\n\
-             \x20   const ffi_include_option = b.option(\n\
-             \x20       []const u8,\n\
-             \x20       \"ffi_include_path\",\n\
-             \x20       \"Path to directory containing the FFI C header\"\n\
-             \x20   ) orelse \"vendor/include\";\n\
-             \x20   const ffi_include = b.pathResolve(&.{{ build_root, ffi_include_option }});\n\
-             \x20   const module = b.addModule(\"{package_name}\", .{{\n\
-             \x20       .root_source_file = b.path(\"src/root.zig\"),\n\
-             \x20       .target = target,\n\
-             \x20       .optimize = optimize,\n\
-             \x20       .link_libc = true,\n\
-             \x20   }});\n\
-             \x20   module.addIncludePath(.{{ .cwd_relative = ffi_include }});\n\
-             }}\n"
-        )
-    }
-
-    /// Regression: reading only `const <name> = b.option(...) orelse "<literal>"` finds nothing in
-    /// the manifest alef writes today, because the binding `.cwd_relative` names is the rebased one.
-    #[test]
-    fn manifest_include_paths_resolve_through_a_build_root_rebased_binding() {
-        let directory = tempfile::tempdir().expect("project directory");
-        let manifest = directory.path().join("build.zig");
-        std::fs::write(&manifest, build_root_rebased_build_zig("sample_binding")).unwrap();
-
-        let paths = zig_manifest_include_paths(&manifest).unwrap();
-
-        assert_eq!(paths, ["vendor/include"]);
-    }
-
-    #[test]
-    fn binding_default_gives_up_rather_than_looping_on_a_cyclic_binding() {
-        let source = "const a = b.pathResolve(&.{ root, b_name });\nconst b_name = b.pathResolve(&.{ root, a });\n";
-
-        assert_eq!(binding_default(source, "a"), None);
     }
 
     /// The decisive cwd-independence check, and the exact shape the Zig snippet validator itself
@@ -915,9 +752,9 @@ mod tests {
         std::fs::create_dir_all(&elsewhere).unwrap();
 
         let manifest = if rebase_onto_build_root {
-            build_root_rebased_build_zig(PACKAGE)
+            manifest::tests::build_root_rebased_build_zig(PACKAGE)
         } else {
-            build_root_rebased_build_zig(PACKAGE).replace(
+            manifest::tests::build_root_rebased_build_zig(PACKAGE).replace(
                 "const ffi_include = b.pathResolve(&.{ build_root, ffi_include_option });",
                 "const ffi_include = ffi_include_option;",
             )
@@ -974,7 +811,7 @@ mod tests {
         let root = directory.path();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("vendor/include")).unwrap();
-        std::fs::write(root.join("build.zig"), sample_build_zig(with_include)).unwrap();
+        std::fs::write(root.join("build.zig"), manifest::tests::sample_build_zig(with_include)).unwrap();
         std::fs::write(root.join("vendor/include/fixture.h"), "#define FIXTURE_VALUE 7\n").unwrap();
         std::fs::write(
             root.join("src/root.zig"),
@@ -993,6 +830,115 @@ mod tests {
             rust_dependencies: std::collections::BTreeMap::new(),
         };
         (directory, session)
+    }
+
+    /// A `.path`-dependency package whose `ffi_path` default names a `target/release/` directory
+    /// that is never created; only `target/debug/` carries a real, linkable dynamic library. Mirrors
+    /// exactly what `alef build` with no `--release` flag leaves on disk.
+    fn debug_only_ffi_project() -> (tempfile::TempDir, ValidationSession) {
+        const LIB_NAME: &str = "sample_ffi";
+        const EXTENSION: &str = if cfg!(target_os = "macos") {
+            "dylib"
+        } else if cfg!(target_os = "windows") {
+            "dll"
+        } else {
+            "so"
+        };
+
+        let directory = tempfile::tempdir().expect("project directory");
+        let debug_dir = directory.path().join("target/debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        let lib_source = directory.path().join("fixture.zig");
+        std::fs::write(
+            &lib_source,
+            "export fn fixture_value() callconv(.c) c_int {\n    return 7;\n}\n",
+        )
+        .unwrap();
+        let lib_path = debug_dir.join(format!("lib{LIB_NAME}.{EXTENSION}"));
+        let mut lib_command = std::process::Command::new("zig");
+        lib_command
+            .args(["build-lib", "-dynamic"])
+            .arg(&lib_source)
+            .arg(format!("-femit-bin={}", lib_path.display()));
+        apply_cache_dirs(&mut lib_command, directory.path());
+        let lib_output = lib_command
+            .output()
+            .expect("zig must be installed to build the fixture library");
+        assert!(
+            lib_output.status.success(),
+            "failed to build the fixture FFI library:\n{}",
+            String::from_utf8_lossy(&lib_output.stderr)
+        );
+
+        let package = directory.path().join("package");
+        std::fs::create_dir_all(package.join("src")).unwrap();
+        std::fs::write(
+            package.join("build.zig"),
+            manifest::tests::build_root_rebased_ffi_path_build_zig(LIB_NAME, "../target/release"),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("build.zig.zon"),
+            format!(
+                ".{{\n    .name = .sample_binding,\n    .version = \"0.0.0\",\n    \
+                 .fingerprint = 0x{fingerprint:016x},\n    \
+                 .minimum_zig_version = \"0.16.0\",\n    \
+                 .paths = .{{ \"build.zig\", \"build.zig.zon\", \"src\" }},\n}}\n",
+                fingerprint = package_fingerprint(b"sample_binding"),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("src/root.zig"),
+            "extern fn fixture_value() callconv(.c) c_int;\n\npub fn value() c_int {\n    return fixture_value();\n}\n",
+        )
+        .unwrap();
+
+        let session = ValidationSession {
+            language: Language::Zig,
+            working_directory: package.clone(),
+            manifest: Some(package.join("build.zig")),
+            fingerprint: "debug-only-ffi-project".into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        };
+        (directory, session)
+    }
+
+    /// The decisive check for the profile-mismatch fix: `alef build` with no `--release` leaves
+    /// only `target/debug/`, and the scaffolded `build.zig`'s `ffi_path` default only ever
+    /// searches `target/release/` -- without the override this fails at snippet validation time
+    /// with exactly the toolchain error the bug report ("unable to find dynamic system library")
+    /// describes. Runs a real `zig build` link against a real dynamic library, not a stubbed-out
+    /// placeholder file. ~keep
+    #[test]
+    fn a_snippet_links_against_the_debug_profile_when_release_is_missing() {
+        if which::which("zig").is_err() {
+            return;
+        }
+
+        let (project, session) = debug_only_ffi_project();
+        let snippet = zig_snippet(
+            "const sample_binding = @import(\"sample_binding\");\n\npub fn main() void {\n    _ = sample_binding.value();\n}\n",
+        );
+
+        let (status, output) = ZigValidator
+            .validate_in_session(
+                &snippet,
+                ValidationLevel::Compile,
+                TOOLCHAIN_TEST_TIMEOUT_SECS,
+                Some(&session),
+            )
+            .expect("session validates");
+
+        assert_eq!(
+            status,
+            SnippetStatus::Pass,
+            "must fall back to and link against the debug-profile library when release is missing: {output:?}"
+        );
+        drop(project);
     }
 
     #[test]

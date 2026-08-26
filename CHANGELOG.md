@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zig snippet validation could not reach a debug-profile FFI library.** Zig snippets are built
+  through `zig build` against the consumer's real `build.zig`, whose `ffi_path` build option
+  defaults to the release profile. The synthesized snippet build only ever threaded
+  `.target`/`.optimize` into its `b.dependency("binding", .{…})` call, and a top-level `-D` cannot
+  set an option on a `.path` dependency — so there was no mechanism at all to redirect that path.
+  With `alef build` producing a debug artifact, every Zig snippet failed with `unable to find
+  dynamic system library`. The validator now resolves the library itself — release preferred,
+  debug fallback, never crediting a `deps/`-only copy — and splices the resolved option into the
+  dependency call. When neither profile holds a real library it returns no override rather than
+  guessing a path.
+
 - **An `Iterate` docs operation resolved its per-item fields against the call's result type
   instead of the collection's element type.** When a per-item field name was *also* reachable as a
   nested path from the result — e.g. `content`, reachable as `results[].content` — the
