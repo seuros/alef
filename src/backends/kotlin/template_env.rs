@@ -195,6 +195,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/jni_deserialize_body.jinja"),
     ),
     (
+        "jni_optional_deserialize_body.jinja",
+        include_str!("templates/jni_optional_deserialize_body.jinja"),
+    ),
+    (
         "jni_passthrough_body.jinja",
         include_str!("templates/jni_passthrough_body.jinja"),
     ),

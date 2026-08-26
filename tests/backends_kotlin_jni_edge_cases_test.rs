@@ -297,3 +297,97 @@ fn client_constructors_emits_bridge_extern_and_factory_method() {
         "factory method must call DemoBridge.nativeNewDefaultClient; got:\n{client}"
     );
 }
+
+/// Replace `DefaultClient`'s only method with a no-argument getter of the given return type,
+/// so a test can name one IR shape and read back exactly what the two Kotlin sides emit for it.
+fn api_with_client_getter(method_name: &str, return_type: TypeRef) -> ApiSurface {
+    let mut api = make_jni_api_with_client_and_function();
+    api.types[0].methods = vec![MethodDef {
+        name: method_name.to_string(),
+        return_type,
+        ..MethodDef::default()
+    }];
+    api
+}
+
+fn kotlin_jni_bridge_and_client(api: &ApiSurface) -> (String, String) {
+    let files = KotlinBackend
+        .generate_bindings(api, &make_jni_config_no_streaming())
+        .unwrap();
+    let find = |needle: &str| {
+        files
+            .iter()
+            .find(|file| file.path.to_string_lossy().contains(needle))
+            .unwrap_or_else(|| panic!("{needle} must be emitted"))
+            .content
+            .clone()
+    };
+    (find("Bridge.kt"), find("DefaultClient.kt"))
+}
+
+/// The Rust JNI shim returns `serde_json::to_string(&inner)` as a `jstring` for every `Option`
+/// whose inner is neither `String` nor bytes (see `backends::jni::gen_shims::marshalling`), so
+/// the `external fun` is correctly `String?`. The wrapper declares the real Kotlin type, and the
+/// body has to bridge the two. It used to be a bare passthrough -- `String?` handed straight
+/// back from a function declared `Long?`, which is a Kotlin type error, not a runtime bug. ~keep
+#[test]
+fn an_optional_primitive_getter_deserializes_instead_of_passing_the_json_through() {
+    let api = api_with_client_getter("token_count", TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))));
+
+    let (bridge, client) = kotlin_jni_bridge_and_client(&api);
+
+    assert!(
+        bridge.contains("external fun nativeDefaultClientTokenCount(handle: Long): String?"),
+        "the bridge must declare the shim's real jstring return; got:\n{bridge}"
+    );
+    assert!(
+        client.contains("fun tokenCount(): Long? {"),
+        "the wrapper must expose the Kotlin type, not the wire type; got:\n{client}"
+    );
+    assert!(
+        client.contains("MAPPER.readValue(responseJson, Long::class.java)"),
+        "the wrapper must decode the JSON the shim sent; got:\n{client}"
+    );
+    assert!(
+        !client.contains("return withHandle { handle -> DemoBridge.nativeDefaultClientTokenCount(handle) }"),
+        "a bare passthrough returns String? from a Long? function and cannot compile; got:\n{client}"
+    );
+}
+
+/// `None` arrives as a null `jstring`, and Jackson's `readValue` rejects a null input rather than
+/// producing one, so the nullable arm must test before it decodes.
+#[test]
+fn an_optional_getter_returns_null_without_calling_the_json_mapper() {
+    let api = api_with_client_getter("token_count", TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))));
+
+    let (_bridge, client) = kotlin_jni_bridge_and_client(&api);
+
+    assert!(
+        client.contains("return if (responseJson == null) null else"),
+        "the None case must short-circuit before Jackson sees it; got:\n{client}"
+    );
+}
+
+/// PROOF THE WIDENING STOPPED WHERE THE SHIM DOES. `Option<String>` is the one non-binary
+/// `Option` the shim hands back as a raw string rather than JSON, so decoding it would be just as
+/// wrong as passing the primitive case through. ~keep
+#[test]
+fn an_optional_string_getter_stays_a_passthrough() {
+    let api = api_with_client_getter("label", TypeRef::Optional(Box::new(TypeRef::String)));
+
+    let (bridge, client) = kotlin_jni_bridge_and_client(&api);
+
+    assert!(
+        bridge.contains("external fun nativeDefaultClientLabel(handle: Long): String?"),
+        "got:\n{bridge}"
+    );
+    assert!(client.contains("fun label(): String? {"), "got:\n{client}");
+    assert!(
+        client.contains("return withHandle { handle -> DemoBridge.nativeDefaultClientLabel(handle) }"),
+        "a raw optional string needs no decoding; got:\n{client}"
+    );
+    assert!(
+        !client.contains("MAPPER.readValue(responseJson, String::class.java)"),
+        "decoding a raw string as JSON would fail on any unquoted value; got:\n{client}"
+    );
+}

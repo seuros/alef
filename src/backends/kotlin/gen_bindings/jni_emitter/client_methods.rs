@@ -233,8 +233,16 @@ fn emit_method_body(
             } else {
                 format!("MAPPER.readValue(responseJson, {base_ty}::class.java)")
             };
+            // The shim returns a null `jstring` for `None`, and Jackson's `readValue` rejects a
+            // null input rather than producing one, so the nullable arm has to test before it
+            // deserialises. ~keep
+            let body_template = if matches!(m.return_type, TypeRef::Optional(_)) {
+                "jni_optional_deserialize_body.jinja"
+            } else {
+                "jni_deserialize_body.jinja"
+            };
             out.push_str(&template_env::render(
-                "jni_deserialize_body.jinja",
+                body_template,
                 minijinja::context! {
                     is_async => m.is_async,
                     bridge_call => bridge_call,

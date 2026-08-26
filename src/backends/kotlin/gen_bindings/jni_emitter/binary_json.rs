@@ -25,10 +25,20 @@ fn is_binary_param_type(ty: &TypeRef) -> bool {
 
 /// Returns true when the bridge return type is a JSON String that must be
 /// deserialised into a richer Kotlin type in the wrapper body.
+///
+/// The `Optional` arm mirrors the Rust JNI shim's own return marshalling
+/// (`backends::jni::gen_shims::marshalling`): it hands back a raw `jstring` only for
+/// `Option<String>`, a `jbyteArray` only for `Option<Bytes>`/`Option<Vec<u8>>`, and
+/// `serde_json::to_string` for every other `Option`. Recognising only `Option<Named>` here left
+/// `Option<u64>`, `Option<bool>`, `Option<Vec<T>>` and friends declared `String?` on the
+/// `external fun` and `Long?`/`Boolean?`/`List<T>?` on the wrapper, with a bare passthrough
+/// between them -- Kotlin that does not compile. ~keep
 fn needs_json_deserialize(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Named(_) => true,
-        TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Named(_)),
+        TypeRef::Optional(inner) => {
+            !matches!(inner.as_ref(), TypeRef::String) && !is_binary_return_type(inner)
+        }
         TypeRef::Map(_, _) => true,
         TypeRef::Vec(inner) => !matches!(inner.as_ref(), TypeRef::Primitive(crate::core::ir::PrimitiveType::U8)),
         _ => false,

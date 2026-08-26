@@ -1,0 +1,9 @@
+{% if is_async %}
+        return withContext(Dispatchers.IO) {
+            val responseJson = {{ bridge_call }}
+            if (responseJson == null) null else {{ deserialize_call }}
+        }
+{% else %}
+        val responseJson = {{ bridge_call }}
+        return if (responseJson == null) null else {{ deserialize_call }}
+{% endif %}
