@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-08-28
+
 ### Changed (BREAKING)
 
 - **BREAKING (regenerate required):** the embedded `alef:hash:` stamp is now computed over each generated file's own content alone. Previously `inputs_hash` -- a whole-tree fingerprint over every parsed Rust source plus the canonicalized `alef.toml` -- was folded into every individual file's stamp, so a one-line change anywhere restamped the entire generated tree (measured at 99.3% noise in one consumer regen, and one commit elsewhere that rewrote 8,418 files with exactly one insertion and one deletion each). The generation-inputs fingerprint is now recorded once per crate in a committed `.alef-generation.toml`, and `alef verify` performs two checks instead of one: a content walk for hand-edit detection and a crate-scoped fingerprint comparison for stale-tree detection. `CODEGEN_FORMAT_VERSION` moves 2 -> 3, so every file re-stamps once on the first generate after upgrading; land the pin bump and the regen in the same commit and no consumer observes a red `alef verify`.
