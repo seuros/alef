@@ -58,26 +58,28 @@ pub fn stage_ffi(
     Ok(dest_path)
 }
 
-/// Stage the FFI shared library using whichever build profile is already on disk, `release`
-/// preferred, falling back to `debug`.
+/// Stage the FFI shared library using whichever build profile is already on disk, in
+/// [`crate::publish::package::PREFERRING_RELEASE_ORDER`] preference (`release` first, `debug`
+/// fallback).
 ///
 /// For callers that do not themselves know which profile (if either) was most recently built --
 /// `alef generate`'s post-build pass and `alef test`'s e2e FFI staging never invoke `cargo build`
-/// at all, so neither can name a profile the way [`stage_ffi`]'s contract requires. Trying
-/// `release` first matches what every other caller of `stage_ffi` (the `build` pipeline, `alef
-/// publish`) treats as canonical; `debug` is a legitimate fallback here specifically because nothing
-/// in this path just ran a build of its own to trust over what is already there. Still never
-/// touches `deps/` -- that fallback is what this whole module exists to not repeat.
+/// at all, so neither can name a profile the way [`stage_ffi`]'s contract requires. `debug` is a
+/// legitimate fallback here specifically because nothing in this path just ran a build of its own
+/// to trust over what is already there. Still never touches `deps/` -- that fallback is what this
+/// whole module exists to not repeat.
 pub fn stage_ffi_preferring_release(
     config: &ResolvedCrateConfig,
     lang: Language,
     target: &RustTarget,
     workspace_root: &Path,
 ) -> Result<PathBuf> {
-    match stage_ffi(config, lang, target, workspace_root, BuildProfile::Release) {
+    let [primary, fallback] = crate::publish::package::PREFERRING_RELEASE_ORDER;
+    match stage_ffi(config, lang, target, workspace_root, primary) {
         Ok(dest) => Ok(dest),
-        Err(release_error) => stage_ffi(config, lang, target, workspace_root, BuildProfile::Debug)
-            .map_err(|debug_error| release_error.context(format!("debug fallback also failed: {debug_error:#}"))),
+        Err(primary_error) => stage_ffi(config, lang, target, workspace_root, fallback).map_err(|fallback_error| {
+            primary_error.context(format!("{fallback} fallback also failed: {fallback_error:#}"))
+        }),
     }
 }
 
@@ -134,16 +136,17 @@ pub fn ffi_artifact_built(
     find_built_library(workspace_root, target, &shared_lib, profile).is_ok()
 }
 
-/// [`ffi_artifact_built`] but for callers that cannot name a single profile -- true when either
-/// `release` or `debug` has a trusted, uplifted artifact on disk. Mirrors
-/// [`stage_ffi_preferring_release`]'s fallback order.
+/// [`ffi_artifact_built`] but for callers that cannot name a single profile -- true when any
+/// profile in [`crate::publish::package::PREFERRING_RELEASE_ORDER`] has a trusted, uplifted
+/// artifact on disk. Mirrors [`stage_ffi_preferring_release`]'s fallback order.
 pub fn ffi_artifact_built_preferring_release(
     config: &ResolvedCrateConfig,
     target: &RustTarget,
     workspace_root: &Path,
 ) -> bool {
-    ffi_artifact_built(config, target, workspace_root, BuildProfile::Release)
-        || ffi_artifact_built(config, target, workspace_root, BuildProfile::Debug)
+    crate::publish::package::PREFERRING_RELEASE_ORDER
+        .into_iter()
+        .any(|profile| ffi_artifact_built(config, target, workspace_root, profile))
 }
 
 /// Determine the staging directory for a language + target combination.

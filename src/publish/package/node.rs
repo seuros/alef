@@ -10,6 +10,7 @@
 use super::PackageArtifact;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::template_versions as tv;
+use crate::publish::package::BuildProfile;
 use crate::publish::platform::RustTarget;
 use anyhow::{Context, Result};
 use std::fs;
@@ -207,6 +208,14 @@ fn generate_sub_package_json(
     )
 }
 
+/// Locate the compiled `.node` binary, preferring `primary_name` (the cross-compile-renamed form
+/// napi-rs produces, e.g. `mylib.linux-x64-gnu.node`) over `fallback_name` (the simple form a
+/// plain `napi build` produces, e.g. `mylib.node`) at each location tier in turn.
+///
+/// Delegates to [`crate::publish::package::find_built_artifact_any_with_extra_dirs`] for the
+/// two canonical `target/{triple}/release/` / `target/release/` locations, plus
+/// `crates/{node_crate}/`, which is where `napi build` writes its output directly rather than
+/// into `target/` at all.
 fn find_node_binary(
     workspace_root: &Path,
     target: &RustTarget,
@@ -214,34 +223,21 @@ fn find_node_binary(
     primary_name: &str,
     fallback_name: &str,
 ) -> Result<PathBuf> {
-    for name in &[primary_name, fallback_name] {
-        let cross = workspace_root
-            .join("target")
-            .join(&target.triple)
-            .join("release")
-            .join(name);
-        if cross.exists() {
-            return Ok(cross);
-        }
-    }
-    for name in &[primary_name, fallback_name] {
-        let native = workspace_root.join("target/release").join(name);
-        if native.exists() {
-            return Ok(native);
-        }
-    }
-    for name in &[primary_name, fallback_name] {
-        let in_crate = workspace_root.join("crates").join(node_crate).join(name);
-        if in_crate.exists() {
-            return Ok(in_crate);
-        }
-    }
-    anyhow::bail!(
-        ".node binary not found for target {}. Expected '{}' or '{}' in target dirs or crates/{node_crate}/",
-        target.triple,
-        primary_name,
-        fallback_name
+    let in_crate_dir = workspace_root.join("crates").join(node_crate);
+    crate::publish::package::find_built_artifact_any_with_extra_dirs(
+        workspace_root,
+        target,
+        &[primary_name, fallback_name],
+        BuildProfile::Release,
+        std::slice::from_ref(&in_crate_dir),
     )
+    .with_context(|| {
+        format!(
+            ".node binary not found for target {}. Expected '{primary_name}' or '{fallback_name}' in target \
+             dirs or crates/{node_crate}/",
+            target.triple
+        )
+    })
 }
 
 fn find_tgz(dir: &Path) -> Result<PathBuf> {
@@ -386,5 +382,93 @@ npm_subpackage_platforms = ["linux-x64-gnu", "darwin-arm64"]
         )
         .unwrap();
         assert!(result.exists());
+    }
+
+    /// The in-crate fallback this rewrite preserves: `napi build` writes its output directly into
+    /// the napi crate's own directory rather than into `target/` at all, so neither canonical
+    /// uplifted location will ever contain it. This is the exact case
+    /// `find_built_artifact`/`find_built_artifact_with_extra_dirs` with an empty `extra_dirs`
+    /// would miss.
+    #[test]
+    fn find_node_binary_falls_back_to_in_crate_output() {
+        let tmp = TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+        let in_crate_dir = tmp.path().join("crates/my-lib-node");
+        std::fs::create_dir_all(&in_crate_dir).unwrap();
+        std::fs::write(in_crate_dir.join("my_lib.node"), b"in-crate-bytes").unwrap();
+
+        let result = find_node_binary(
+            tmp.path(),
+            &target,
+            "my-lib-node",
+            "my-lib.x64-linux-gnu.node",
+            "my_lib.node",
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            in_crate_dir.join("my_lib.node"),
+            "expected the in-crate fallback at {}, got {}",
+            in_crate_dir.join("my_lib.node").display(),
+            result.display()
+        );
+    }
+
+    /// Tier priority must win over name priority: a `fallback_name` artifact at the
+    /// higher-priority cross-compile tier must be found even when a `primary_name` artifact also
+    /// exists at the lower-priority in-crate tier -- proves the delegation to
+    /// `find_built_artifact_any_with_extra_dirs` searches tier-then-name, not name-then-tier
+    /// (which would wrongly prefer the in-crate primary_name copy here).
+    #[test]
+    fn find_node_binary_searches_tier_before_name() {
+        let tmp = TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+
+        let cross_dir = tmp.path().join("target/x86_64-unknown-linux-gnu/release");
+        std::fs::create_dir_all(&cross_dir).unwrap();
+        std::fs::write(cross_dir.join("my_lib.node"), b"cross-fallback-name").unwrap();
+
+        let in_crate_dir = tmp.path().join("crates/my-lib-node");
+        std::fs::create_dir_all(&in_crate_dir).unwrap();
+        std::fs::write(in_crate_dir.join("my-lib.x64-linux-gnu.node"), b"in-crate-primary-name").unwrap();
+
+        let result = find_node_binary(
+            tmp.path(),
+            &target,
+            "my-lib-node",
+            "my-lib.x64-linux-gnu.node",
+            "my_lib.node",
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            cross_dir.join("my_lib.node"),
+            "the higher-priority cross tier must win over a lower-priority tier even under a preferred name; \
+             expected {}, got {}",
+            cross_dir.join("my_lib.node").display(),
+            result.display()
+        );
+    }
+
+    /// `primary_name` must be tried before `fallback_name` at every location tier -- proves the
+    /// name-preference order survived the delegation to `find_built_artifact_any_with_extra_dirs`.
+    #[test]
+    fn find_node_binary_prefers_primary_name_over_fallback_name() {
+        let tmp = TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+        let release_dir = tmp.path().join("target/x86_64-unknown-linux-gnu/release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(release_dir.join("my-lib.x64-linux-gnu.node"), b"primary").unwrap();
+        std::fs::write(release_dir.join("my_lib.node"), b"fallback").unwrap();
+
+        let result = find_node_binary(
+            tmp.path(),
+            &target,
+            "my-lib-node",
+            "my-lib.x64-linux-gnu.node",
+            "my_lib.node",
+        )
+        .unwrap();
+        assert_eq!(result, release_dir.join("my-lib.x64-linux-gnu.node"));
     }
 }

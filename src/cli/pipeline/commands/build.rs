@@ -555,7 +555,8 @@ fn record_post_build_outcome(
     }
 }
 
-/// Which build profile [`crate::core::backend::PostBuildStep::StageFfiLibrary`] should look for.
+/// Which build profile [`crate::core::backend::PostBuildStep::StageFfiLibrary`] and
+/// [`crate::core::backend::PostBuildStep::StageDartNatives`] should look for.
 ///
 /// `run_post_build` runs from two kinds of caller with different guarantees about what was just
 /// built. `build_with_environment`'s own two dispatch loops call it immediately after running
@@ -683,9 +684,25 @@ pub fn run_post_build(
             }
             PostBuildStep::StageDartNatives { lib_stem } => {
                 let package_root = base_dir.join("packages/dart");
-                let status =
-                    crate::publish::dart_native::stage_dart_native_libraries(base_dir, &package_root, lib_stem)
-                        .with_context(|| format!("failed to stage Dart native libraries for stem '{lib_stem}'"))?;
+                // Same `staging_profile` dispatch as `StageFfiLibrary` below -- a stale artifact
+                // from the *other* profile must never silently satisfy this run's staging step.
+                // ~keep
+                let status = match staging_profile {
+                    StagingProfile::JustBuilt(profile) => crate::publish::dart_native::stage_dart_native_libraries(
+                        base_dir,
+                        &package_root,
+                        lib_stem,
+                        profile,
+                    ),
+                    StagingProfile::PreferOnDisk => {
+                        crate::publish::dart_native::stage_dart_native_libraries_preferring_release(
+                            base_dir,
+                            &package_root,
+                            lib_stem,
+                        )
+                    }
+                }
+                .with_context(|| format!("failed to stage Dart native libraries for stem '{lib_stem}'"))?;
                 match status {
                     crate::publish::dart_native::NativeLibraryStageStatus::Staged => {
                         info!("Staged native libraries for Dart package from build output (stem: '{lib_stem}')");

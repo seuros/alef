@@ -38,7 +38,7 @@ pub fn package_elixir(
     let lib_name = rustler_crate.replace('-', "_");
     let shared_lib = target.shared_lib_name(&lib_name);
 
-    let lib_src = find_elixir_nif(workspace_root, target, &shared_lib)?;
+    let lib_src = super::find_built_artifact(workspace_root, target, &shared_lib, super::BuildProfile::Release)?;
 
     let ext = nif_extension(target);
 
@@ -200,22 +200,6 @@ fn resolve_nif_versions(config: &ResolvedCrateConfig) -> Vec<String> {
         return versions.clone();
     }
     vec!["2.16".to_string(), "2.17".to_string()]
-}
-
-fn find_elixir_nif(workspace_root: &Path, target: &RustTarget, shared_lib: &str) -> Result<PathBuf> {
-    let cross = workspace_root
-        .join("target")
-        .join(&target.triple)
-        .join("release")
-        .join(shared_lib);
-    if cross.exists() {
-        return Ok(cross);
-    }
-    let native = workspace_root.join("target/release").join(shared_lib);
-    if native.exists() {
-        return Ok(native);
-    }
-    anyhow::bail!("Elixir NIF '{shared_lib}' not found for target {}", target.triple)
 }
 
 /// Compute SHA-256 hex digest of a file.

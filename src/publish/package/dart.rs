@@ -4,6 +4,7 @@ use super::PackageArtifact;
 use super::util::{copy_dir_recursive, copy_optional_file};
 use crate::core::config::ResolvedCrateConfig;
 use crate::publish::dart_native::{NativeLibraryStageStatus, stage_dart_native_libraries};
+use crate::publish::package::BuildProfile;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
@@ -45,7 +46,10 @@ pub fn package_dart(
     copy_dir_recursive(&pkg_src, &staging).context("copying Dart package directory")?;
 
     let lib_stem = format!("{}_dart", pubspec_name.replace('-', "_"));
-    let native_status = stage_dart_native_libraries(workspace_root, &staging, &lib_stem)
+    // Every other publish packager (ruby, node, php, elixir, java, zig, go, c_ffi, cli, csharp)
+    // packages a `release` build only -- `alef publish` is expected to run against a release
+    // artifact, not whatever debug build happens to be lying around. ~keep
+    let native_status = stage_dart_native_libraries(workspace_root, &staging, &lib_stem, BuildProfile::Release)
         .context("staging native libraries for Dart package")?;
     if native_status == NativeLibraryStageStatus::Missing {
         warn!(

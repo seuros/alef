@@ -130,13 +130,15 @@ pub fn package_php(
 
     if target.os == Os::Windows {
         let cargo_dll_name = format!("{cargo_lib_stem}.dll");
-        let dll_src = find_php_ext(workspace_root, target, &cargo_dll_name)?;
+        let dll_src =
+            super::find_built_artifact(workspace_root, target, &cargo_dll_name, super::BuildProfile::Release)?;
         let staged_name = format!("{ext_name}.dll");
         fs::copy(&dll_src, staging.join(&staged_name))?;
         create_zip(&staging, &archive_path)?;
     } else {
         let cargo_lib_file = target.shared_lib_name(&cargo_lib_stem);
-        let lib_src = find_php_ext(workspace_root, target, &cargo_lib_file)?;
+        let lib_src =
+            super::find_built_artifact(workspace_root, target, &cargo_lib_file, super::BuildProfile::Release)?;
         let staged_name = format!("{ext_name}.so");
         fs::copy(&lib_src, staging.join(&staged_name))?;
         super::create_tar_gz_flat(&staging, &archive_path)?;
@@ -209,28 +211,6 @@ fn pie_archive_name(
             ts = options.ts_mode.as_unix_suffix(),
         )))
     }
-}
-
-/// Locate the compiled PHP extension (`.so`, `.dylib`, or `.dll`).
-///
-/// Searches `target/{triple}/release/` then `target/release/`.
-fn find_php_ext(workspace_root: &Path, target: &RustTarget, lib_file: &str) -> Result<PathBuf> {
-    let cross = workspace_root
-        .join("target")
-        .join(&target.triple)
-        .join("release")
-        .join(lib_file);
-    if cross.exists() {
-        return Ok(cross);
-    }
-    let native = workspace_root.join("target/release").join(lib_file);
-    if native.exists() {
-        return Ok(native);
-    }
-    bail!(
-        "PHP extension '{lib_file}' not found in target/{}/release/ or target/release/",
-        target.triple
-    )
 }
 
 /// Create a zip archive from a staging directory.

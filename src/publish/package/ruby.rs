@@ -12,6 +12,7 @@
 
 use super::PackageArtifact;
 use crate::core::config::ResolvedCrateConfig;
+use crate::publish::package::BuildProfile;
 use crate::publish::platform::RustTarget;
 use anyhow::{Context, Result};
 use std::fs;
@@ -98,36 +99,29 @@ pub fn package_ruby(
     })
 }
 
+/// Locate the compiled Ruby native extension. Delegates to
+/// [`crate::publish::package::find_built_artifact_with_extra_dirs`] for the two canonical
+/// `target/{triple}/release/` / `target/release/` locations, plus one Ruby-specific extra: a
+/// `rb_sys`/rake-driven build sometimes runs `cargo build` from inside the extension crate's own
+/// directory rather than the workspace root, leaving its output under
+/// `crates/{rb_crate}/target/release/` instead of being uplifted to the workspace `target/`.
 fn find_ruby_native_lib(
     workspace_root: &Path,
     target: &RustTarget,
     rb_crate: &str,
     lib_filename: &str,
 ) -> Result<PathBuf> {
-    let cross = workspace_root
-        .join("target")
-        .join(&target.triple)
-        .join("release")
-        .join(lib_filename);
-    if cross.exists() {
-        return Ok(cross);
-    }
-    let native = workspace_root.join("target/release").join(lib_filename);
-    if native.exists() {
-        return Ok(native);
-    }
-    let in_crate = workspace_root
+    let in_crate_dir = workspace_root
         .join("crates")
         .join(rb_crate)
         .join("target")
-        .join("release")
-        .join(lib_filename);
-    if in_crate.exists() {
-        return Ok(in_crate);
-    }
-    anyhow::bail!(
-        "Ruby native lib '{lib_filename}' not found in target dirs for {}",
-        target.triple
+        .join("release");
+    crate::publish::package::find_built_artifact_with_extra_dirs(
+        workspace_root,
+        target,
+        lib_filename,
+        BuildProfile::Release,
+        std::slice::from_ref(&in_crate_dir),
     )
 }
 
@@ -426,5 +420,63 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = find_gem_file(tmp.path(), "mygem", "1.0.0", "x86_64-linux");
         assert!(result.is_err());
+    }
+
+    /// `find_ruby_native_lib` now delegates to
+    /// `crate::publish::package::find_built_artifact_with_extra_dirs` for the two canonical
+    /// locations -- this proves that delegation actually finds a normal workspace-uplifted
+    /// artifact, the same as before the rewrite.
+    #[test]
+    fn find_ruby_native_lib_finds_canonical_workspace_uplift() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+        let release_dir = tmp.path().join("target").join(&target.triple).join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(release_dir.join("libmylib_rb.so"), b"canonical").unwrap();
+
+        let found = find_ruby_native_lib(tmp.path(), &target, "mylib-rb", "libmylib_rb.so").unwrap();
+        assert_eq!(found, release_dir.join("libmylib_rb.so"));
+    }
+
+    /// The Ruby-specific extra fallback this rewrite preserves: `rb_sys`/rake-driven builds can
+    /// run `cargo build` from inside the extension crate's own directory, leaving output under
+    /// `crates/{rb_crate}/target/release/` rather than uplifted to the workspace `target/`. This
+    /// is the exact case `find_built_artifact` alone (no `extra_dirs`) would miss.
+    #[test]
+    fn find_ruby_native_lib_falls_back_to_in_crate_build_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+        let in_crate_dir = tmp.path().join("crates/mylib-rb/target/release");
+        std::fs::create_dir_all(&in_crate_dir).unwrap();
+        std::fs::write(in_crate_dir.join("libmylib_rb.so"), b"in-crate").unwrap();
+
+        let found = find_ruby_native_lib(tmp.path(), &target, "mylib-rb", "libmylib_rb.so").unwrap();
+        assert_eq!(
+            found,
+            in_crate_dir.join("libmylib_rb.so"),
+            "expected the in-crate fallback at {}, got {}",
+            in_crate_dir.join("libmylib_rb.so").display(),
+            found.display()
+        );
+    }
+
+    /// The canonical workspace-uplifted location must still win over the in-crate fallback when
+    /// both exist -- the fallback is for tools that skip the uplift entirely, never a preference
+    /// over cargo's own uplifted output.
+    #[test]
+    fn find_ruby_native_lib_prefers_canonical_uplift_over_in_crate_fallback() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = RustTarget::parse("x86_64-unknown-linux-gnu").unwrap();
+
+        let release_dir = tmp.path().join("target").join(&target.triple).join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(release_dir.join("libmylib_rb.so"), b"canonical").unwrap();
+
+        let in_crate_dir = tmp.path().join("crates/mylib-rb/target/release");
+        std::fs::create_dir_all(&in_crate_dir).unwrap();
+        std::fs::write(in_crate_dir.join("libmylib_rb.so"), b"in-crate").unwrap();
+
+        let found = find_ruby_native_lib(tmp.path(), &target, "mylib-rb", "libmylib_rb.so").unwrap();
+        assert_eq!(found, release_dir.join("libmylib_rb.so"));
     }
 }
