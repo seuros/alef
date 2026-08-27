@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::cli::{cache, dispatch, pipeline, version_pin};
+use crate::cli::{cache, dispatch, pipeline};
 
 use super::args::*;
 use super::dispatch::DispatchContext;
@@ -41,14 +41,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let _ = skip_frb;
             let overwrite_create_once = create_once_overwrite(clean, clobber_create_once_seeds);
             let (mut workspace, mut resolved) = load_config(config_path)?;
-            version_pin::check_alef_toml_version(&workspace)?;
+            crate::bin_cli::version_pin_sync::sync_alef_version_pin(
+                &workspace,
+                config_path,
+                crate::bin_cli::build_info::running_build_is_clean(),
+            )?;
             let registry_versions_changed = {
                 let selected = dispatch::select_crates(&resolved, &context.crate_filter)?;
                 sync_registry_versions_before_all(config_path, &selected)?
             };
             if registry_versions_changed {
                 (workspace, resolved) = load_config(config_path)?;
-                version_pin::check_alef_toml_version(&workspace)?;
+                crate::bin_cli::version_pin_sync::sync_alef_version_pin(
+                    &workspace,
+                    config_path,
+                    crate::bin_cli::build_info::running_build_is_clean(),
+                )?;
             }
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
             let multi = dispatch::is_multi_crate(&crates_to_process);

@@ -7792,6 +7792,11 @@
             "null"
           ]
         },
+        "auto_update_alef_version": {
+          "default": false,
+          "description": "Opt in to letting a clean, newer-than-pin alef build rewrite the `alef_version` pin above\nautomatically during `alef all`/`alef generate`/`alef scaffold`. Defaults to `false`:\nversion-pin synchronization stays an explicit release operation unless a project turns\nthis on. See [`crate::cli::version_pin::maybe_update_alef_toml_version_pin`] for the full\nset of additional safety conditions this toggle does not bypass (the pin must still be\npresent, parse as semver, be strictly older than the running CLI, and the running build\nmust be stamped clean) -- turning this on does not make an unsafe rewrite safe, it only\nallows the already-guarded rewrite to run unattended. ~keep",
+          "type": "boolean"
+        },
         "build_commands": {
           "additionalProperties": {
             "$ref": "#/$defs/BuildCommandConfig"
@@ -8366,6 +8371,7 @@
       "$ref": "#/$defs/WorkspaceConfig",
       "default": {
         "alef_version": null,
+        "auto_update_alef_version": false,
         "build_commands": {},
         "citation": null,
         "clean": {},

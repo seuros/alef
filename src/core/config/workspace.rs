@@ -83,6 +83,17 @@ pub struct WorkspaceConfig {
     #[serde(default)]
     pub alef_version: Option<String>,
 
+    /// Opt in to letting a clean, newer-than-pin alef build rewrite the `alef_version` pin above
+    /// automatically during `alef all`/`alef generate`/`alef scaffold`. Defaults to `false`:
+    /// version-pin synchronization stays an explicit release operation unless a project turns
+    /// this on. See [`crate::cli::version_pin::maybe_update_alef_toml_version_pin`] for the full
+    /// set of additional safety conditions this toggle does not bypass (the pin must still be
+    /// present, parse as semver, be strictly older than the running CLI, and the running build
+    /// must be stamped clean) -- turning this on does not make an unsafe rewrite safe, it only
+    /// allows the already-guarded rewrite to run unattended. ~keep
+    #[serde(default)]
+    pub auto_update_alef_version: bool,
+
     /// Default list of target languages for crates that do not specify their
     /// own. A per-crate `languages` array overrides this entirely.
     #[serde(default)]
@@ -285,10 +296,20 @@ mod tests {
     fn workspace_config_deserializes_empty() {
         let cfg: WorkspaceConfig = toml::from_str("").unwrap();
         assert!(cfg.alef_version.is_none());
+        assert!(
+            !cfg.auto_update_alef_version,
+            "auto_update_alef_version must default to off"
+        );
         assert!(cfg.languages.is_empty());
         assert!(cfg.lint.is_empty());
         assert!(cfg.opaque_types.is_empty());
         assert!(cfg.sync.is_none());
+    }
+
+    #[test]
+    fn workspace_config_deserializes_auto_update_alef_version_opt_in() {
+        let cfg: WorkspaceConfig = toml::from_str("auto_update_alef_version = true\n").unwrap();
+        assert!(cfg.auto_update_alef_version);
     }
 
     #[test]

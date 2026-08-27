@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 
-use crate::cli::{cache, dispatch, pipeline, version_pin};
+use crate::cli::{cache, dispatch, pipeline};
 
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
@@ -30,7 +30,11 @@ pub(crate) fn handle_generate(
     }
     let _ = skip_frb;
     let (workspace, resolved) = load_config(config_path)?;
-    version_pin::check_alef_toml_version(&workspace)?;
+    crate::bin_cli::version_pin_sync::sync_alef_version_pin(
+        &workspace,
+        config_path,
+        crate::bin_cli::build_info::running_build_is_clean(),
+    )?;
     let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
     let multi = dispatch::is_multi_crate(&crates_to_process);
     let base_dir = std::env::current_dir()?;

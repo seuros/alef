@@ -35,6 +35,17 @@ const DIRTY_MARKER: &str = "DIRTY";
 static LONG_VERSION: LazyLock<String> =
     LazyLock::new(|| render_long_version(env!("CARGO_PKG_VERSION"), COMMIT_SHORT, COMMIT, TREE_STATE, TIMESTAMP));
 
+/// Whether this binary's own working tree was stamped clean at compile time.
+///
+/// The one signal `version_pin::maybe_update_alef_toml_version_pin` requires before it will ever
+/// rewrite the `alef_version` pin -- see that function's doc for why a dirty build must never
+/// drive the pin. `TREE_STATE`'s own doc already notes `clean` is the weakest of the three build
+/// claims (it can be stale); this helper does not strengthen that, it only names the comparison
+/// once instead of repeating the string literal at every call site. ~keep
+pub(crate) fn running_build_is_clean() -> bool {
+    TREE_STATE == TREE_CLEAN
+}
+
 /// The multi-line body clap prints after the binary name for `--version`.
 ///
 /// `-V` keeps printing the short, single-line `alef <semver>`. ~keep
@@ -176,6 +187,14 @@ mod tests {
         assert!(rendered.contains("tree:    unknown"), "{rendered}");
         assert!(rendered.contains("not attributable to any commit"), "{rendered}");
         assert!(!rendered.contains(DIRTY_MARKER), "{rendered}");
+    }
+
+    /// `running_build_is_clean` must track whatever `TREE_STATE` this binary was actually
+    /// compiled with -- not hardcode an assumption about the test environment's own tree state,
+    /// which this suite does not control. ~keep
+    #[test]
+    fn running_build_is_clean_matches_the_compiled_in_tree_state() {
+        assert_eq!(running_build_is_clean(), TREE_STATE == TREE_CLEAN);
     }
 
     #[test]

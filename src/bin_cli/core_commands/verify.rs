@@ -67,7 +67,9 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         .collect();
     let stale_crates = cache::stale_crate_names(
         &base_dir,
-        current_inputs_hashes.iter().map(|(name, hash)| (name.as_str(), hash.as_str())),
+        current_inputs_hashes
+            .iter()
+            .map(|(name, hash)| (name.as_str(), hash.as_str())),
     );
     let has_stale_crates = !stale_crates.is_empty();
 
