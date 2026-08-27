@@ -1,1 +1,1 @@
-	defer C.{{ ffi_prefix }}_free_string({{ ptr }})
+	defer C.{{ free_string_fn }}({{ ptr }})

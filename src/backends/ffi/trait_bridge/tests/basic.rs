@@ -1,5 +1,25 @@
 use super::*;
 
+/// The single source of truth Go's cgo preamble must call instead of re-deriving the vtable
+/// struct name from `crate_name` (alef#525). Table-driven per `centralized-naming`: covers a
+/// hyphenated prefix, since `to_class_name` treats `-` as a word boundary. ~keep
+#[test]
+fn vtable_struct_name_is_pascal_prefix_plus_trait_name_plus_vtable() {
+    let cases = [
+        ("ml", "OcrBackend", "MlOcrBackendVTable"),
+        ("sample_core", "PostProcessor", "SampleCorePostProcessorVTable"),
+        ("sample-core", "PostProcessor", "SampleCorePostProcessorVTable"),
+        ("sc", "Validator", "ScValidatorVTable"),
+    ];
+    for (prefix, trait_name, expected) in cases {
+        assert_eq!(
+            vtable_struct_name(prefix, trait_name),
+            expected,
+            "prefix={prefix}, trait={trait_name}"
+        );
+    }
+}
+
 #[test]
 fn test_vtable_struct_is_repr_c() {
     let trait_def = make_trait_def("OcrBackend", vec![make_method("process", TypeRef::String, true, false)]);

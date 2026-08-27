@@ -58,11 +58,22 @@ pub struct FfiBridgeGenerator {
     pub lifetime_type_names: HashSet<String>,
 }
 
+/// VTable struct name: `{PascalPrefix}{TraitName}VTable`.
+///
+/// Single source of truth for the vtable struct spelling. The FFI backend emits the
+/// `#[repr(C)]` struct under this exact name (via [`FfiBridgeGenerator::vtable_name`]), so any
+/// consumer of the generated C header — Go's cgo preamble is the only one today — must declare
+/// the identical spelling or it references a type nothing exports. Derives from `prefix`, never
+/// `crate_name`: Go used to re-derive this from `crate_name` and silently diverged from the FFI
+/// backend whenever `[ffi] prefix` differs from the crate name (alef#525). ~keep
+pub fn vtable_struct_name(prefix: &str, trait_name: &str) -> String {
+    format!("{}{}VTable", to_class_name(prefix), trait_name)
+}
+
 impl FfiBridgeGenerator {
     /// VTable struct name: `{PascalPrefix}{TraitName}VTable`.
     pub(super) fn vtable_name(&self, spec: &TraitBridgeSpec) -> String {
-        let pascal = to_class_name(&self.prefix);
-        format!("{}{}VTable", pascal, spec.trait_def.name)
+        vtable_struct_name(&self.prefix, &spec.trait_def.name)
     }
 
     /// Bridge struct name: `{PascalPrefix}{TraitName}Bridge`.

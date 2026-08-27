@@ -37,7 +37,6 @@ use std::collections::HashSet;
 /// `ffi_header`: C header filename (e.g., `"sample_core.h"`).
 /// `ffi_crate_dir`: path from go output dir to the FFI crate dir.
 /// `to_root`: relative path from go output dir to the repo root.
-/// `crate_name`: Rust FFI crate name (e.g., `"sample_core"`), used to derive C type names.
 #[allow(clippy::too_many_arguments)]
 pub fn gen_trait_bridges_file(
     api: &ApiSurface,
@@ -47,7 +46,6 @@ pub fn gen_trait_bridges_file(
     ffi_header: &str,
     ffi_crate_dir: &str,
     to_root: &str,
-    crate_name: &str,
 ) -> String {
     let mut out = String::with_capacity(16_384);
 
@@ -137,10 +135,17 @@ pub fn gen_trait_bridges_file(
         {
             let trait_pascal = trait_def.name.to_pascal_case();
             let vtable_constructor = c_symbols::go_vtable_constructor_symbol(ffi_prefix, &trait_def.name);
-            let crate_normalized = crate_name.replace('-', "_");
-            let crate_upper = crate_normalized.to_uppercase();
-            let crate_pascal = crate_normalized.to_pascal_case();
-            let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
+            // Ask the FFI authority for the Rust struct spelling rather than re-deriving it from
+            // `crate_name` — the FFI backend names the `#[repr(C)]` struct from `ffi_prefix`, and
+            // the two inputs diverge whenever `[ffi] prefix` is configured (alef#525). cbindgen
+            // then prepends its `[export] prefix` (the shouty-snake FFI prefix) verbatim to that
+            // already-prefix-cased name, so the C header declares both segments — dropping either
+            // one yields a cgo reference to a struct the header never defines. ~keep
+            let c_vtable_struct = format!(
+                "{}{}",
+                crate::codegen::c_consumer::export_type_prefix(ffi_prefix),
+                crate::backends::ffi::trait_bridge::vtable_struct_name(ffi_prefix, &trait_def.name)
+            );
             let vtable_methods: Vec<_> = trait_def
                 .methods
                 .iter()
@@ -258,7 +263,6 @@ pub fn gen_trait_bridges_file(
                 trait_def,
                 bridge_cfg,
                 ffi_prefix,
-                crate_name,
                 &excluded_named_types,
                 &trait_snake,
             );
@@ -290,19 +294,12 @@ pub(super) fn gen_trait_bridge(
     trait_def: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,
     ffi_prefix: &str,
-    crate_name: &str,
     excluded_named_types: &HashSet<&str>,
     #[allow(unused_variables)] trait_snake: &str,
 ) {
     let trait_name = &trait_def.name;
     let trait_snake = super::helpers::registry_var_stem(trait_name);
     let trait_pascal = trait_name.to_pascal_case();
-
-    let crate_normalized = crate_name.replace('-', "_");
-    let crate_upper = crate_normalized.to_uppercase();
-    let crate_pascal = crate_normalized.to_pascal_case();
-    #[allow(unused_variables)]
-    let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
 
     out.push_str(&crate::backends::go::template_env::render(
         "trait_interface_header.jinja",
@@ -413,7 +410,7 @@ pub(super) fn gen_trait_bridge(
         "register_c_call.jinja",
         minijinja::context! {
             c_function => register_symbol(bridge_cfg, ffi_prefix, trait_name),
-            ffi_prefix => ffi_prefix,
+            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
             trait_name => trait_name,
             trait_snake => trait_snake,
         },
@@ -433,7 +430,7 @@ pub(super) fn gen_trait_bridge(
         "unregister_c_call.jinja",
         minijinja::context! {
             c_function => c_symbols::trait_unregister_symbol(ffi_prefix, trait_name),
-            ffi_prefix => ffi_prefix,
+            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
             trait_name => trait_name,
             trait_snake => trait_snake,
         },

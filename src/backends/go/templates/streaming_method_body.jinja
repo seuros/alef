@@ -27,7 +27,7 @@
 			var chunk {{ item_type }}
 			unmarshalErr := json.Unmarshal([]byte(C.GoString(jsonPtr)), &chunk)
 {% endif %}
-			C.{{ ffi_prefix }}_free_string(jsonPtr)
+			C.{{ free_string_fn }}(jsonPtr)
 			C.{{ item_free_fn }}(chunkPtr)
 			if unmarshalErr != nil {
 				return

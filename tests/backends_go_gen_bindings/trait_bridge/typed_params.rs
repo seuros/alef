@@ -42,7 +42,7 @@ fn test_trait_bridge_string_param_emitted_as_string_not_interface() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("ProcessFile(path string"),
@@ -140,7 +140,7 @@ fn test_trait_bridge_named_config_param_emitted_as_concrete_type() {
         version: Default::default(),
     });
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("ProcessImage(") && code.contains("config OcrConfig"),
@@ -213,7 +213,7 @@ fn test_trait_bridge_enum_return_type_emitted_as_concrete_type() {
         version: Default::default(),
     });
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("BackendType() OcrBackendType"),
@@ -263,7 +263,7 @@ fn test_trait_bridge_substitutes_excluded_named_types_with_json_raw_message() {
         "sample_crate::types::internal::InternalDocument".to_string(),
     );
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         !code.contains("InternalDocument"),
@@ -302,7 +302,7 @@ fn test_trait_bridge_dedup_snake_case_unregister_functions() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("func UnregisterOcrBackend(name string) error {"),
@@ -356,7 +356,7 @@ fn test_trait_bridge_unmarshals_config_into_concrete_type() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     eprintln!("Full generated code:\n{}", code);
     eprintln!("---");

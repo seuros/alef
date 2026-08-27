@@ -42,7 +42,6 @@ fn generate_go(trait_name: &str, register_fn: Option<&str>) -> String {
         &trait_def(trait_name),
         &bridge_config(trait_name, register_fn),
         PREFIX,
-        "demo_core",
         &excluded,
         "",
     );

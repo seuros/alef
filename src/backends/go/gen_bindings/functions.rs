@@ -242,6 +242,7 @@ pub(super) fn gen_function_wrapper(
             "mut_writeback_return.jinja",
             minijinja::context! {
                 ffi_prefix => ffi_prefix,
+                free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                 type_snake => &wb_type_snake,
                 type_name => wb_type_name,
                 handle => &wb_handle,
@@ -303,7 +304,7 @@ pub(super) fn gen_function_wrapper(
                     out.push_str(&crate::backends::go::template_env::render(
                         "free_string_on_error.jinja",
                         minijinja::context! {
-                            ffi_prefix => ffi_prefix,
+                            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                         },
                     ));
                     out.push_str("\t\t}\n");
@@ -336,7 +337,7 @@ pub(super) fn gen_function_wrapper(
                 out.push_str(&crate::backends::go::template_env::render(
                     "free_string.jinja",
                     minijinja::context! {
-                        ffi_prefix => ffi_prefix,
+                        free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                         ptr => "ptr",
                     },
                 ));
@@ -372,7 +373,7 @@ pub(super) fn gen_function_wrapper(
                         out.push_str(&crate::backends::go::template_env::render(
                             "free_string.jinja",
                             minijinja::context! {
-                                ffi_prefix => ffi_prefix,
+                                free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                                 ptr => "jsonPtr",
                             },
                         ));
@@ -407,7 +408,7 @@ pub(super) fn gen_function_wrapper(
                         out.push_str(&crate::backends::go::template_env::render(
                             "free_string.jinja",
                             minijinja::context! {
-                                ffi_prefix => ffi_prefix,
+                                free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                                 ptr => "ptr",
                             },
                         ));
@@ -468,7 +469,7 @@ pub(super) fn gen_function_wrapper(
             out.push_str(&crate::backends::go::template_env::render(
                 "free_string.jinja",
                 minijinja::context! {
-                    ffi_prefix => ffi_prefix,
+                    free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                     ptr => "ptr",
                 },
             ));
@@ -764,7 +765,7 @@ pub(super) fn gen_convert_with_visitor_wrapper(
         minijinja::context! {
             to_json_fn => &to_json_fn,
             use_prefix_free_string => true,
-            ffi_prefix => ffi_prefix,
+            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
             return_type_name => return_type_name,
         },
     ));

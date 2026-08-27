@@ -1,24 +1,10 @@
 use super::dispatch::gen_trampoline;
 use super::helpers::{c_trampoline_signature, substitute_excluded_types};
-use super::orchestration::gen_trait_bridge;
+use super::orchestration::{gen_trait_bridge, gen_trait_bridges_file};
 use super::registration::{gen_clear_fn, gen_unregistration_fn};
-use crate::core::config::TraitBridgeConfig;
-use crate::core::ir::{TypeDef, TypeRef};
-use heck::ToPascalCase;
+use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
+use crate::core::ir::{ApiSurface, TypeDef, TypeRef};
 use std::collections::HashSet;
-
-#[test]
-fn test_vtable_struct_name_derivation() {
-    let crate_name = "sample_crate";
-    let crate_upper = crate_name.to_uppercase();
-    let crate_pascal = crate_name.to_pascal_case();
-    let trait_name = "OcrBackend";
-    let trait_pascal = trait_name.to_pascal_case();
-
-    let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
-
-    assert_eq!(c_vtable_struct, "SAMPLE_CRATESampleCrateOcrBackendVTable");
-}
 
 #[test]
 fn test_register_function_name_format() {
@@ -38,37 +24,6 @@ fn test_unregister_function_name_format() {
 
     let unregister_fn = format!("{}_unregister_{}", ffi_prefix, trait_snake);
     assert_eq!(unregister_fn, "sample_crate_unregister_post_processor");
-}
-
-#[test]
-fn test_vtable_struct_name_multiple_traits() {
-    let test_cases = vec![
-        ("sample_crate", "OcrBackend", "SAMPLE_CRATESampleCrateOcrBackendVTable"),
-        (
-            "sample_crate",
-            "PostProcessor",
-            "SAMPLE_CRATESampleCratePostProcessorVTable",
-        ),
-        ("sample_crate", "Validator", "SAMPLE_CRATESampleCrateValidatorVTable"),
-        (
-            "sample_crate",
-            "EmbeddingBackend",
-            "SAMPLE_CRATESampleCrateEmbeddingBackendVTable",
-        ),
-    ];
-
-    for (crate_name, trait_name, expected_struct) in test_cases {
-        let crate_upper = crate_name.to_uppercase();
-        let crate_pascal = crate_name.to_pascal_case();
-        let trait_pascal = trait_name.to_pascal_case();
-        let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
-
-        assert_eq!(
-            c_vtable_struct, expected_struct,
-            "Mismatch for crate={}, trait={}",
-            crate_name, trait_name
-        );
-    }
 }
 
 #[test]
@@ -377,7 +332,6 @@ fn trait_bridge_register_uses_c_vtable_helper_and_free_string_callback() {
         &trait_def,
         &bridge_cfg,
         "sample_crate",
-        "sample_crate",
         &excluded,
         "ocr_backend",
     );
@@ -459,15 +413,7 @@ fn register_c_call_passes_vtable_by_value() {
     let mut out = String::new();
     let excluded = HashSet::new();
 
-    gen_trait_bridge(
-        &mut out,
-        &trait_def,
-        &bridge_cfg,
-        "test_crate",
-        "test_crate",
-        &excluded,
-        "backend",
-    );
+    gen_trait_bridge(&mut out, &trait_def, &bridge_cfg, "test_crate", &excluded, "backend");
 
     assert!(
         out.contains("C.test_crate_register_backend(\n\t\tcName,\n\t\tvtable,"),
@@ -533,7 +479,6 @@ fn text_processor_interface_and_bridge_wrapper_emitted() {
         &mut out,
         &trait_def,
         &bridge_cfg,
-        "sample_crate",
         "sample_crate",
         &excluded,
         "text_processor",
@@ -608,5 +553,65 @@ fn trampoline_callback_result_name_does_not_collide_with_param_name() {
     assert!(
         out.contains("cResult := C.CString(callbackResult)"),
         "string result conversion must use the callback return local;\nactual:\n{out}"
+    );
+}
+
+/// #525 regression: the cgo preamble's vtable-struct declaration must spell the exact struct
+/// name the FFI backend emits (`ffi::trait_bridge::vtable_struct_name`, driven by `ffi_prefix`),
+/// not a name re-derived from the crate name. `config.name` ("sample_crate_core") is
+/// deliberately distinct from `ffi_prefix` ("sc") below — a fixture where the two happen to
+/// agree cannot catch a derivation that silently reads the wrong input, since both formulas
+/// would then produce the same string by coincidence. The expected value is computed by calling
+/// the FFI authority directly rather than hardcoded, so this test cannot drift from it. ~keep
+#[test]
+fn gen_trait_bridges_file_vtable_struct_name_comes_from_ffi_prefix_not_crate_name() {
+    let trait_def = TypeDef {
+        name: "OcrBackend".to_string(),
+        rust_path: "sample_crate_core::OcrBackend".to_string(),
+        is_trait: true,
+        ..Default::default()
+    };
+    let bridge_cfg = TraitBridgeConfig {
+        trait_name: "OcrBackend".to_string(),
+        super_trait: Some("Plugin".to_string()),
+        register_fn: Some("register_ocr_backend".to_string()),
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![trait_def],
+        ..Default::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "sample_crate_core".to_string(),
+        trait_bridges: vec![bridge_cfg],
+        ..Default::default()
+    };
+    let ffi_prefix = "sc";
+
+    let out = gen_trait_bridges_file(
+        &api,
+        &config,
+        "sample_crate_core",
+        ffi_prefix,
+        "sc.h",
+        "../ffi",
+        "../..",
+    );
+
+    // Spelled out rather than composed from the helpers under test: deriving the expectation by
+    // calling the same functions the generator calls makes the assertion true by construction and
+    // blind to both halves drifting together. `SC` is cbindgen's `[export] prefix`, `Sc` is the
+    // prefix-cased Rust struct name cbindgen prepends it to. ~keep
+    let expected = "SCScOcrBackendVTable";
+    assert!(
+        out.contains(&format!("static inline {expected}* ")),
+        "vtable struct declaration must spell `{expected}`;\nactual:\n{out}"
+    );
+
+    let crate_name_derivation = "SAMPLE_CRATE_CORESampleCrateCoreOcrBackendVTable";
+    assert!(
+        !out.contains(crate_name_derivation),
+        "still spelling the crate-name-derived vtable struct name, which the FFI backend never \
+         declares:\n{out}"
     );
 }

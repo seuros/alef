@@ -1,3 +1,4 @@
+use crate::backends::go::c_symbols;
 use crate::core::ir::{DefaultValue, FieldDef, TypeDef, TypeRef};
 use minijinja::context;
 
@@ -160,7 +161,8 @@ pub(in crate::backends::go::gen_bindings) fn gen_last_error_helper(
     crate::backends::go::template_env::render(
         "last_error_helper.jinja",
         context! {
-            ffi_prefix => ffi_prefix,
+            last_error_code_fn => c_symbols::last_error_code_symbol(ffi_prefix),
+            last_error_context_fn => c_symbols::last_error_context_symbol(ffi_prefix),
             error_codes => error_codes,
         },
     )

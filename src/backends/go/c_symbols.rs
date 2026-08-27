@@ -70,6 +70,21 @@ pub(crate) fn trait_clear_symbol(ffi_prefix: &str, trait_name: &str) -> String {
     c_consumer::trait_clear_symbol(ffi_prefix, trait_name)
 }
 
+/// Cgo call target for the FFI backend's string-deallocation function.
+pub(crate) fn free_string_symbol(ffi_prefix: &str) -> String {
+    c_consumer::free_string_symbol(ffi_prefix)
+}
+
+/// Cgo call target for reading the thread-local last-error code.
+pub(crate) fn last_error_code_symbol(ffi_prefix: &str) -> String {
+    c_consumer::last_error_code_symbol(ffi_prefix)
+}
+
+/// Cgo call target for reading the thread-local last-error context message.
+pub(crate) fn last_error_context_symbol(ffi_prefix: &str) -> String {
+    c_consumer::last_error_context_symbol(ffi_prefix)
+}
+
 /// The name of the `static inline` cgo helper Go declares in its own preamble to heap-allocate a
 /// vtable struct: `{prefix}_{trait_snake}_vtable_new`.
 ///
@@ -93,6 +108,23 @@ pub(crate) fn type_component(type_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #524 (drift risk, not a live defect): `free_string_symbol`/`last_error_code_symbol`/
+    /// `last_error_context_symbol` must delegate to `c_consumer`, not reimplement the formula —
+    /// otherwise the ~10 templates and Rust call sites that ask this module for the symbol name
+    /// can silently diverge from the FFI backend again if `c_consumer`'s spelling ever changes.
+    /// The literals below document today's byte-identical output; they are not proof of a bug,
+    /// since `c_consumer`'s formula was already bare `format!("{prefix}_...")` before this
+    /// refactor. ~keep
+    #[test]
+    fn free_string_and_last_error_symbols_delegate_to_c_consumer() {
+        assert_eq!(free_string_symbol("sample_core"), "sample_core_free_string");
+        assert_eq!(last_error_code_symbol("sample_core"), "sample_core_last_error_code");
+        assert_eq!(
+            last_error_context_symbol("sample_core"),
+            "sample_core_last_error_context"
+        );
+    }
 
     /// Names chosen to discriminate between `heck::ToSnakeCase` (what Go used to apply) and the
     /// ABI helpers: consecutive capitals, an embedded acronym, digit boundaries, a leading

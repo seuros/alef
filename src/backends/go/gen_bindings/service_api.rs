@@ -14,7 +14,6 @@
 //! All names and signatures are derived from the `ApiSurface` IR — alef is generic.
 
 use crate::backends::go::c_symbols;
-use crate::codegen::c_consumer;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, HandlerContractDef, RegistrationDef, ServiceDef, TypeRef, WrapperConstructorArg};
@@ -202,7 +201,7 @@ fn typeref_to_c_type(ty: &TypeRef) -> String {
 /// Generate a C argument expression for a parameter.
 /// For opaque types and primitives, returns just the expression.
 /// For DTOs in configurators, use service_c_arg_expr_with_marshal instead.
-fn service_c_arg_expr(param_name: &str, ty: &TypeRef, api: &ApiSurface, _upper_prefix: &str) -> String {
+fn service_c_arg_expr(param_name: &str, ty: &TypeRef, api: &ApiSurface) -> String {
     match ty {
         TypeRef::String => format!("C.CString({param_name})"),
         TypeRef::Named(type_name) if api.types.iter().any(|t| t.name == *type_name) => {
@@ -224,7 +223,6 @@ fn service_c_arg_expr_with_marshal(
     param_name: &str,
     ty: &TypeRef,
     api: &ApiSurface,
-    _upper_prefix: &str,
     ffi_prefix: &str,
 ) -> (String, String) {
     match ty {
@@ -315,7 +313,6 @@ fn gen_service_struct(
     api_surface: &ApiSurface,
 ) {
     let service_name = &service.name;
-    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
 
     let doc_block = if service.doc.is_empty() {
         String::new()
@@ -326,7 +323,6 @@ fn gen_service_struct(
         "service_struct.jinja",
         minijinja::context! {
             service_name => service_name,
-            upper_prefix => upper_prefix,
             doc_block => doc_block,
         },
     ));
@@ -342,7 +338,6 @@ fn gen_service_struct(
         minijinja::context! {
             service_name => service_name,
             free_symbol => c_symbols::service_free_symbol(ffi_prefix, service_name),
-            upper_prefix => upper_prefix,
         },
     ));
 
@@ -431,18 +426,16 @@ fn gen_registration_method(
 
     out.push_str("\tctxID := registerHandler(handler)\n");
 
-    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     out.push_str(&crate::backends::go::template_env::render(
         "service_registration_call_header.jinja",
         minijinja::context! {
             symbol => c_symbols::service_register_symbol(ffi_prefix, service_name, method_name),
-            upper_prefix => &upper_prefix,
             service_name => service_name,
         },
     ));
 
     for meta_param in &reg.metadata_params {
-        let expr = service_c_arg_expr(&meta_param.name, &meta_param.ty, api, &upper_prefix);
+        let expr = service_c_arg_expr(&meta_param.name, &meta_param.ty, api);
         emit_service_call_arg(out, &expr);
     }
     out.push_str("\t)\n\n");
@@ -514,12 +507,10 @@ fn gen_registration_variant(
 
     out.push_str("\tctxID := registerHandler(handler)\n");
 
-    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     out.push_str(&crate::backends::go::template_env::render(
         "service_variant_call_header.jinja",
         minijinja::context! {
             symbol => c_symbols::service_method_symbol(ffi_prefix, service_name, &variant.name),
-            upper_prefix => &upper_prefix,
             service_name => service_name,
         },
     ));
@@ -527,7 +518,7 @@ fn gen_registration_variant(
     if let Some(wc) = &variant.wrapper_call {
         for arg in &wc.args {
             if let WrapperConstructorArg::Free { param } = arg {
-                let expr = service_c_arg_expr(&param.name, &param.ty, api, &upper_prefix);
+                let expr = service_c_arg_expr(&param.name, &param.ty, api);
                 emit_service_call_arg(out, &expr);
             }
         }
@@ -535,7 +526,7 @@ fn gen_registration_variant(
         for base_param in &reg.metadata_params {
             if variant.overrides.iter().any(|o| o.param_name == base_param.name) {
             } else if let Some(sig_param) = variant.signature_params.iter().find(|s| s.name == base_param.name) {
-                let expr = service_c_arg_expr(&sig_param.name, &sig_param.ty, api, &upper_prefix);
+                let expr = service_c_arg_expr(&sig_param.name, &sig_param.ty, api);
                 emit_service_call_arg(out, &expr);
             }
         }
@@ -603,8 +594,6 @@ fn gen_configurator_method(
         },
     ));
 
-    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
-
     let mut cfg_args = Vec::new();
     let mut preprocessing = String::new();
 
@@ -613,8 +602,7 @@ fn gen_configurator_method(
     });
 
     for cfg_param in &cfg.params {
-        let (pre, expr) =
-            service_c_arg_expr_with_marshal(&cfg_param.name, &cfg_param.ty, api, &upper_prefix, ffi_prefix);
+        let (pre, expr) = service_c_arg_expr_with_marshal(&cfg_param.name, &cfg_param.ty, api, ffi_prefix);
         preprocessing.push_str(&pre);
         cfg_args.push(minijinja::context! {
             expr => expr,
@@ -662,7 +650,6 @@ fn gen_entrypoint_method(
         params.join(", ")
     };
 
-    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     let opaque_return = match &ep.return_type {
         TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n) => Some(n.clone()),
         _ => None,
@@ -713,12 +700,11 @@ fn gen_entrypoint_method(
         minijinja::context! {
             capture => capture,
             symbol => c_symbols::service_entrypoint_symbol(ffi_prefix, service_name, ep_method),
-            upper_prefix => &upper_prefix,
             service_name => service_name,
         },
     ));
     for ep_param in &ep.params {
-        let expr = service_c_arg_expr(&ep_param.name, &ep_param.ty, api, &upper_prefix);
+        let expr = service_c_arg_expr(&ep_param.name, &ep_param.ty, api);
         emit_service_call_arg(out, &expr);
     }
     out.push_str("\t)\n");

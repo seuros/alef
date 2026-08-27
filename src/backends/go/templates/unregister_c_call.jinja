@@ -5,7 +5,7 @@
 	msg := "failed to unregister {{ trait_name }}"
 	if cErr != nil {
 		msg = C.GoString(cErr)
-		C.{{ ffi_prefix }}_free_string(cErr)
+		C.{{ free_string_fn }}(cErr)
 	}
 	return fmt.Errorf("%s", msg)
 	}

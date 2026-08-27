@@ -1,6 +1,6 @@
 // lastError retrieves the last error from the FFI layer.
 func lastError() error {
-	code := int32(C.{{ ffi_prefix }}_last_error_code())
+	code := int32(C.{{ last_error_code_fn }}())
 	if code == 0 {
 		return nil
 	}
@@ -12,7 +12,7 @@ func lastError() error {
 {% endfor %}
 	}
 {% endif %}
-	ctx := C.{{ ffi_prefix }}_last_error_context()
+	ctx := C.{{ last_error_context_fn }}()
 	if ctx == nil {
 		return fmt.Errorf("[%d] native error", code)
 	}

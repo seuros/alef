@@ -481,8 +481,7 @@ fn marshalled_dto_handle_uses_scalar_zero_sentinel() {
         }],
         ..ApiSurface::default()
     };
-    let (setup, argument) =
-        service_c_arg_expr_with_marshal("config", &TypeRef::Named("Config".into()), &api, "SAMPLE", "sample");
+    let (setup, argument) = service_c_arg_expr_with_marshal("config", &TypeRef::Named("Config".into()), &api, "sample");
     assert_eq!(argument, "c_config");
     assert!(setup.contains("if c_config == 0"), "{setup}");
     assert!(!setup.contains("if c_config == nil"), "{setup}");

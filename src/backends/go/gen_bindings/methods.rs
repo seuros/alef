@@ -109,6 +109,7 @@ pub(super) fn gen_streaming_method_wrapper(
         minijinja::context! {
             start_call => &start_call,
             ffi_prefix => ffi_prefix,
+            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
             method_name => &method.name,
             fn_next => &fn_next,
             fn_free => &fn_free,
@@ -277,8 +278,9 @@ pub(super) fn gen_method_wrapper(
                 String::new()
             };
             let err_action = format!("return {err_prefix}fmt.Errorf(\"failed to marshal receiver: %w\", err)");
+            let last_error_context_fn = c_symbols::last_error_context_symbol(ffi_prefix);
             let from_json_err_action = format!(
-                "return {err_prefix}fmt.Errorf(\"failed to create receiver: %s\", C.GoString(C.{ffi_prefix}_last_error_context()))"
+                "return {err_prefix}fmt.Errorf(\"failed to create receiver: %s\", C.GoString(C.{last_error_context_fn}()))"
             );
             out.push_str(&crate::backends::go::template_env::render(
                 "marshal_receiver_to_c.jinja",
@@ -358,6 +360,7 @@ pub(super) fn gen_method_wrapper(
                         "method_update_from_json.jinja",
                         minijinja::context! {
                             ffi_prefix => ffi_prefix,
+                            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                             type_snake => &type_snake,
                             recv => receiver_name,
                         },
@@ -385,7 +388,7 @@ pub(super) fn gen_method_wrapper(
                         out.push_str(&crate::backends::go::template_env::render(
                             "free_string_on_error.jinja",
                             minijinja::context! {
-                                ffi_prefix => ffi_prefix,
+                                free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                             },
                         ));
                         out.push_str("\t\t}\n");
@@ -406,7 +409,7 @@ pub(super) fn gen_method_wrapper(
                     out.push_str(&crate::backends::go::template_env::render(
                         "free_string.jinja",
                         minijinja::context! {
-                            ffi_prefix => ffi_prefix,
+                            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                             ptr => "ptr",
                         },
                     ));
@@ -469,7 +472,7 @@ pub(super) fn gen_method_wrapper(
                 out.push_str(&crate::backends::go::template_env::render(
                     "free_string.jinja",
                     minijinja::context! {
-                        ffi_prefix => ffi_prefix,
+                        free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
                         ptr => "ptr",
                     },
                 ));
@@ -592,13 +595,14 @@ pub(super) fn gen_param_to_c(
         }
         TypeRef::Named(name) => {
             if opaque_names.contains(name.as_str()) {
-                let c_type = format!("{}{}", c_consumer::export_type_prefix(ffi_prefix), name);
+                // `param_opaque_cast.jinja` emits `{{ c_name }} := {{ go_param }}.ptr` with no
+                // cast — the wrapper struct's `.ptr` field is already declared as the exact C
+                // type cgo expects, so a `c_type` value here is dead weight, not a live cast. ~keep
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_opaque_cast.jinja",
                     minijinja::context! {
                         c_name => &c_name,
                         go_param => &go_param,
-                        c_type => &c_type,
                     },
                 ));
                 out.push('\n');
@@ -616,6 +620,7 @@ pub(super) fn gen_param_to_c(
                 out.push('\n');
             } else if enum_names.contains(name) {
                 let type_snake = c_symbols::type_component(name);
+                let last_error_context_fn = c_symbols::last_error_context_symbol(ffi_prefix);
                 let err_action = if can_return_error {
                     format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
                 } else {
@@ -623,12 +628,10 @@ pub(super) fn gen_param_to_c(
                 };
                 let from_json_err_action = if can_return_error {
                     format!(
-                        "return {err_return_prefix}fmt.Errorf(\"failed to create {type_snake}: %s\", C.GoString(C.{ffi_prefix}_last_error_context()))"
+                        "return {err_return_prefix}fmt.Errorf(\"failed to create {type_snake}: %s\", C.GoString(C.{last_error_context_fn}()))"
                     )
                 } else {
-                    format!(
-                        "panic(\"failed to create {type_snake}: \" + C.GoString(C.{ffi_prefix}_last_error_context()))"
-                    )
+                    format!("panic(\"failed to create {type_snake}: \" + C.GoString(C.{last_error_context_fn}()))")
                 };
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_named_type.jinja",
@@ -644,6 +647,7 @@ pub(super) fn gen_param_to_c(
                 out.push('\n');
             } else {
                 let type_snake = c_symbols::type_component(name);
+                let last_error_context_fn = c_symbols::last_error_context_symbol(ffi_prefix);
                 let err_action = if can_return_error {
                     format!("return {err_return_prefix}fmt.Errorf(\"failed to marshal: %w\", err)")
                 } else {
@@ -651,12 +655,10 @@ pub(super) fn gen_param_to_c(
                 };
                 let from_json_err_action = if can_return_error {
                     format!(
-                        "return {err_return_prefix}fmt.Errorf(\"failed to create {type_snake}: %s\", C.GoString(C.{ffi_prefix}_last_error_context()))"
+                        "return {err_return_prefix}fmt.Errorf(\"failed to create {type_snake}: %s\", C.GoString(C.{last_error_context_fn}()))"
                     )
                 } else {
-                    format!(
-                        "panic(\"failed to create {type_snake}: \" + C.GoString(C.{ffi_prefix}_last_error_context()))"
-                    )
+                    format!("panic(\"failed to create {type_snake}: \" + C.GoString(C.{last_error_context_fn}()))")
                 };
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_named_type.jinja",

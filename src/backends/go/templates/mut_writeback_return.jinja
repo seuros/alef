@@ -2,7 +2,7 @@
 	if jsonPtr == nil {
 		return nil, fmt.Errorf("failed to convert to JSON")
 	}
-	defer C.{{ ffi_prefix }}_free_string(jsonPtr)
+	defer C.{{ free_string_fn }}(jsonPtr)
 	var result {{ type_name }}
 	if err := json.Unmarshal([]byte(C.GoString(jsonPtr)), &result); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)

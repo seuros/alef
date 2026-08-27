@@ -36,7 +36,7 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
         "unregister_c_call.jinja",
         minijinja::context! {
             c_function => c_function,
-            ffi_prefix => ffi_prefix,
+            free_string_fn => c_symbols::free_string_symbol(ffi_prefix),
             trait_name => trait_name,
             trait_snake => &trait_snake,
         },

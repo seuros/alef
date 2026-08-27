@@ -321,7 +321,7 @@ fn test_gen_trait_bridges_file_produces_go_interface() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("type OcrBackend interface"),
@@ -358,7 +358,7 @@ fn test_gen_trait_bridges_file_interface_includes_plugin_lifecycle_methods() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("Name() string"),
@@ -415,7 +415,7 @@ fn test_gen_trait_bridges_file_interface_includes_trait_methods_in_pascal_case()
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("ProcessImage("),
@@ -459,7 +459,7 @@ fn test_gen_trait_bridges_file_interface_method_with_error_returns_tuple_or_erro
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("(string, error)"),
@@ -500,7 +500,7 @@ fn test_gen_trait_bridges_file_generates_exported_trampolines() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("//export goOcrBackendProcess"),
@@ -549,7 +549,7 @@ fn test_gen_trait_bridges_file_trampolines_retrieve_go_object_via_cgo_handle() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("cgo.Handle(uintptr(unsafe.Pointer(userData)))"),
@@ -588,7 +588,7 @@ fn test_trait_bridge_string_return_is_not_json_quoted() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("cResult := C.CString(callbackResult)"),
@@ -634,7 +634,7 @@ fn test_gen_trait_bridges_file_trampoline_converts_string_param_from_c() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("C.GoString(message)"),
@@ -671,7 +671,7 @@ fn test_gen_trait_bridges_file_registration_fn_builds_vtable_and_calls_c_registe
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("func RegisterOcrBackend(impl OcrBackend) error"),
@@ -724,7 +724,7 @@ fn test_gen_trait_bridges_file_registration_fn_handles_c_error_response() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("if rc != 0"),
@@ -777,16 +777,7 @@ fn test_gen_trait_bridges_file_uses_correct_vtable_struct_name() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(
-        &api,
-        &config,
-        "testlib",
-        "sample_crate",
-        "test.h",
-        "../ffi",
-        "..",
-        "sample_crate",
-    );
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "sample_crate", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("static inline SAMPLE_CRATESampleCrateOcrBackendVTable* sample_crate_ocr_backend_vtable_new("),
@@ -827,7 +818,7 @@ fn test_gen_trait_bridges_file_cgo_preamble_forward_declares_trampolines() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("extern int32_t goAnalyzerAnalyze("),
@@ -948,7 +939,7 @@ fn test_gen_trait_bridges_file_trampolines_recover_host_panics() {
     let config = make_config_with_bridges(vec![bridge_cfg]);
     let api = make_api_with_type(trait_type);
 
-    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
+    let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..");
 
     assert!(
         code.contains("defer func() {") && code.contains("if r := recover(); r != nil {"),

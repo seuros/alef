@@ -101,6 +101,7 @@ fn go_return_expr_inner(
     opaque_names: &std::collections::HashSet<&str>,
     _value_only_types: &std::collections::HashSet<String>,
 ) -> String {
+    let free_string_fn = c_symbols::free_string_symbol(ffi_prefix);
     match ty {
         TypeRef::Primitive(prim) => match prim {
             crate::core::ir::PrimitiveType::Bool => format!("{var_name} != 0"),
@@ -127,7 +128,7 @@ fn go_return_expr_inner(
                     "func() *{go_type} {{\n\
                      \tjsonPtr := C.{ffi_prefix}_{type_snake}_to_json({var_name})\n\
                      \tif jsonPtr == nil {{ return nil }}\n\
-                     \tdefer C.{ffi_prefix}_free_string(jsonPtr)\n\
+                     \tdefer C.{free_string_fn}(jsonPtr)\n\
                      \tvar result {go_type}\n\
                      \tif err := json.Unmarshal([]byte(C.GoString(jsonPtr)), &result); err != nil {{ return nil }}\n\
                      \treturn &result\n\
@@ -136,6 +137,7 @@ fn go_return_expr_inner(
                     ffi_prefix = ffi_prefix,
                     type_snake = type_snake,
                     var_name = var_name,
+                    free_string_fn = free_string_fn,
                 )
             }
         }
@@ -175,12 +177,12 @@ fn go_return_expr_inner(
                 format!(
                     "func() *string {{\n\
                      \tif {var_name} == nil {{ return nil }}\n\
-                     \tdefer C.{ffi_prefix}_free_string({var_name})\n\
+                     \tdefer C.{free_string_fn}({var_name})\n\
                      \ts := C.GoString({var_name})\n\
                      \treturn &s\n\
                      }}()",
                     var_name = var_name,
-                    ffi_prefix = ffi_prefix,
+                    free_string_fn = free_string_fn,
                 )
             }
             _ => go_return_expr_inner(inner, var_name, ffi_prefix, opaque_names, _value_only_types),
@@ -190,14 +192,14 @@ fn go_return_expr_inner(
             format!(
                 "func() []{go_elem} {{\n\
                  \tif {var_name} == nil {{ return nil }}\n\
-                 \tdefer C.{ffi_prefix}_free_string({var_name})\n\
+                 \tdefer C.{free_string_fn}({var_name})\n\
                  \tvar result []{go_elem}\n\
                  \tif err := json.Unmarshal([]byte(C.GoString({var_name})), &result); err != nil {{ return nil }}\n\
                  \treturn result\n\
                  }}()",
                 go_elem = go_elem,
                 var_name = var_name,
-                ffi_prefix = ffi_prefix,
+                free_string_fn = free_string_fn,
             )
         }
         TypeRef::Map(k, v) => {
@@ -206,7 +208,7 @@ fn go_return_expr_inner(
             format!(
                 "func() map[{go_k}]{go_v} {{\n\
                  \tif {var_name} == nil {{ return nil }}\n\
-                 \tdefer C.{ffi_prefix}_free_string({var_name})\n\
+                 \tdefer C.{free_string_fn}({var_name})\n\
                  \tvar result map[{go_k}]{go_v}\n\
                  \tif err := json.Unmarshal([]byte(C.GoString({var_name})), &result); err != nil {{ return nil }}\n\
                  \treturn result\n\
@@ -214,7 +216,7 @@ fn go_return_expr_inner(
                 go_k = go_k,
                 go_v = go_v,
                 var_name = var_name,
-                ffi_prefix = ffi_prefix,
+                free_string_fn = free_string_fn,
             )
         }
         _ => format!("unmarshal{}({})", type_name(ty), var_name),

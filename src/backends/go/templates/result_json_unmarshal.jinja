@@ -3,7 +3,7 @@
 		return nil, fmt.Errorf("failed to convert result to JSON")
 	}
 {% if use_prefix_free_string %}
-	defer C.{{ ffi_prefix }}_free_string(jsonPtr)
+	defer C.{{ free_string_fn }}(jsonPtr)
 {% else %}
 	defer C.free(unsafe.Pointer(jsonPtr))
 {% endif %}
