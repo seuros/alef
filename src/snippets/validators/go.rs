@@ -297,6 +297,19 @@ impl GoValidator {
     }
 }
 
+/// Apple's current linker spells a missing library `ld: library 'name' not found`, with no `-l`
+/// anywhere in the line. Matching the two literal fragments in order -- rather than a bare
+/// `not found`, which also appears in "file not found" and "framework not found" -- keeps this
+/// from swallowing unrelated errors. ~keep
+fn apple_quoted_library_not_found(output: &str) -> bool {
+    output.lines().any(|line| {
+        line.split_once("library '").is_some_and(|(_, rest)| {
+            rest.split_once('\'')
+                .is_some_and(|(_, tail)| tail.starts_with(" not found"))
+        })
+    })
+}
+
 impl SnippetValidator for GoValidator {
     fn language(&self) -> Language {
         Language::Go
@@ -357,7 +370,11 @@ impl SnippetValidator for GoValidator {
     /// only starts once every earlier stage succeeded), then fails once it reaches the artifact
     /// `alef build` produces — the one the package's own `#cgo LDFLAGS: -l<name>` directive names
     /// — and that artifact is not on disk yet. GNU `ld` reports that as `cannot find -l<name>`;
-    /// Apple's linker as `library not found for -l<name>`; LLVM's `lld` (reached via
+    /// Apple's classic linker as `library not found for -l<name>`; Apple's *current* linker
+    /// (Xcode 15+, the default `ld` on macOS today) as `ld: library '<name>' not found` -- a
+    /// quoted form naming no `-l`, which is why the other three patterns all miss it. That form
+    /// was found by running the real gate against a real consumer tree, not by reading docs:
+    /// every synthetic fixture had used one of the older spellings. LLVM's `lld` (reached via
     /// `-fuse-ld=lld`, e.g. a CI toolchain tuned for faster links) as `unable to find library
     /// -l<name>` (`lld/ELF/Driver.cpp`'s `searchLibraryBaseName`) — a third, distinct phrasing
     /// task #505 added after confirming neither of the other two patterns already covered it.
@@ -381,7 +398,8 @@ impl SnippetValidator for GoValidator {
     fn is_dependency_error(&self, output: &str) -> bool {
         let missing_library = (output.contains("cannot find -l")
             || output.contains("library not found for -l")
-            || output.contains("unable to find library -l"))
+            || output.contains("unable to find library -l")
+            || apple_quoted_library_not_found(output))
             && !output.contains("undefined reference to")
             && !output.contains("Undefined symbols for architecture");
         missing_library

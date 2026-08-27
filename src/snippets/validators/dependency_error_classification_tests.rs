@@ -250,6 +250,38 @@ ld.lld: error: unable to find library -lsample_ffi
 clang: error: linker command failed with exit code 1 (use -v to see invocation)
 ";
 
+/// Apple's CURRENT linker (Xcode 15+, the default `ld` on macOS today). It names no `-l` at all
+/// and quotes the library instead, so none of the GNU/classic-Apple/lld patterns match it.
+///
+/// This is a verbatim capture from `alef snippets check --lang go` over a real consumer tree with
+/// the native library not yet built -- not a hand-written fixture. Every earlier fixture in this
+/// file used an older spelling, which is exactly why the gap survived three rounds of "linker
+/// forms are covered": the synthetic strings agreed with each other and none of them agreed with
+/// the linker actually installed. ~keep
+const GO_MISSING_LINKER_LIBRARY_APPLE_QUOTED: &str = "\
+/opt/homebrew/Cellar/go/1.27.0/libexec/pkg/tool/darwin_arm64/link: running cc failed: exit status 1
+ld: warning: search path '/repo/packages/go/.lib/macos-arm64' not found
+ld: library 'sample_ffi' not found
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+";
+
+/// The quoted-form sibling of `GO_LINKER_UNDEFINED_REFERENCE`: the library WAS found, and a
+/// symbol in it did not match. `Undefined symbols for architecture` must still win over the
+/// quoted `library '...' not found` shape if both somehow appear. ~keep
+const GO_APPLE_QUOTED_WITH_UNDEFINED_SYMBOLS: &str = "\
+ld: library 'sample_ffi' not found
+Undefined symbols for architecture arm64:
+  \"_sample_convert_missing_symbol\", referenced from:
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+";
+
+/// A missing *file* or *framework* is not a missing library, and must not be laundered into
+/// `Unavailable` by a loose `not found` match. ~keep
+const GO_APPLE_FILE_NOT_FOUND: &str = "\
+ld: file not found: /repo/packages/go/.lib/macos-arm64/libsample_ffi.a
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+";
+
 /// The library WAS found and loaded; a symbol inside it does not match. That is a real defect —
 /// a stale build, an ABI mismatch, or the generator emitting the wrong symbol name — never a
 /// build-ordering problem, and must not be laundered into `Unavailable` just because a linker
@@ -285,6 +317,34 @@ fn go_missing_linked_library_lld_is_a_missing_dependency() {
         GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_LLD),
         "LLVM lld's `unable to find library -l<name>` is the same missing-artifact shape: \
          {GO_MISSING_LINKER_LIBRARY_LLD}"
+    );
+}
+
+#[test]
+fn go_missing_linked_library_apple_quoted_is_a_missing_dependency() {
+    assert!(
+        GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_APPLE_QUOTED),
+        "Apple's current linker spells a missing library `ld: library '<name>' not found`, with \
+         no -l anywhere; it is the same missing-artifact shape: \
+         {GO_MISSING_LINKER_LIBRARY_APPLE_QUOTED}"
+    );
+}
+
+#[test]
+fn go_apple_quoted_library_with_undefined_symbols_is_not_a_missing_dependency() {
+    assert!(
+        !GoValidator.is_dependency_error(GO_APPLE_QUOTED_WITH_UNDEFINED_SYMBOLS),
+        "an undefined symbol means the library was found and loaded; that must keep its Fail \
+         even alongside the quoted missing-library line: {GO_APPLE_QUOTED_WITH_UNDEFINED_SYMBOLS}"
+    );
+}
+
+#[test]
+fn go_apple_file_not_found_is_not_a_missing_library() {
+    assert!(
+        !GoValidator.is_dependency_error(GO_APPLE_FILE_NOT_FOUND),
+        "`file not found` is not the missing-library shape and must not be matched by a loose \
+         `not found`: {GO_APPLE_FILE_NOT_FOUND}"
     );
 }
 
