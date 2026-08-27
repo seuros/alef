@@ -4,6 +4,17 @@ use crate::core::ir::{FieldDef, TypeRef};
 use super::field_fragments::sanitized_vec_field_to_core_expr;
 use super::{field_references_excluded_type, is_tuple_variant};
 
+/// Emit a named-field initializer, collapsing `field_name: field_name` to the shorthand
+/// `field_name` when the conversion expression is just the field itself (no conversion
+/// needed). Avoids `clippy::redundant_field_names` in generated struct/variant literals.
+fn field_init(field_name: &str, expr: &str) -> String {
+    if expr == field_name {
+        field_name.to_string()
+    } else {
+        format!("{field_name}: {expr}")
+    }
+}
+
 /// Wrap a sanitized field's JSON deserialize so a value that fails to parse emits a
 /// `tracing::warn!` before falling back to `Default::default()`, instead of swallowing the
 /// parse error with no diagnostic. Only reachable for `binding_enums_have_data: true` backends
@@ -125,7 +136,7 @@ pub fn binding_to_core_match_arm_ext_cfg(
                 } else {
                     expr
                 };
-                format!("{}: {expr}", f.name)
+                field_init(&f.name, &expr)
             })
             .collect();
         format!(
@@ -182,7 +193,7 @@ pub fn core_to_binding_match_arm_ext_cfg(
                         }
                         expr
                     } else {
-                        format!("{}: {}", f.name, expr)
+                        field_init(&f.name, &expr)
                     }
                 } else {
                     conv
@@ -213,7 +224,7 @@ pub fn core_to_binding_match_arm_ext_cfg(
                     if f.is_boxed {
                         expr = expr.replace(&format!("{}.into()", f.name), &format!("(*{}).into()", f.name));
                     }
-                    format!("{}: {}", f.name, expr)
+                    field_init(&f.name, &expr)
                 } else {
                     conv
                 }
@@ -223,5 +234,84 @@ pub fn core_to_binding_match_arm_ext_cfg(
             "{core_prefix}::{variant_name} {{ {pattern} }} => Self::{variant_name} {{ {} }},",
             binding_fields.join(", ")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::PrimitiveType;
+
+    /// Regression coverage for task #511: struct-form named field initializers used to emit
+    /// `field: field` unconditionally, tripping `clippy::redundant_field_names` on every
+    /// no-op field in generated enum conversions. Table-driven over the collapse rule itself.
+    #[test]
+    fn field_init_collapses_only_when_expr_is_exactly_the_field_name() {
+        let cases: &[(&str, &str, &str)] = &[
+            // No conversion needed: expr is exactly the field name -> collapses to shorthand.
+            ("url", "url", "url"),
+            // Conversion needed: expr differs (a real transform) -> must NOT collapse. This is
+            // the more important half: a false-positive collapse here would drop data silently.
+            ("url", "val.url.to_string()", "url: val.url.to_string()"),
+            // Target name differs from source name: expr names a different identifier, not a
+            // conversion of the same field -> must NOT collapse (exact-equality boundary, not
+            // a prefix/substring match).
+            ("id", "identifier", "id: identifier"),
+        ];
+        for (field_name, expr, expected) in cases {
+            assert_eq!(
+                field_init(field_name, expr),
+                *expected,
+                "field_init({field_name:?}, {expr:?}) mismatch"
+            );
+        }
+    }
+
+    fn string_field(name: &str) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }
+    }
+
+    /// End-to-end reproduction of the reported defect shape (`Self::Link { url: url, title:
+    /// title }`) at the public match-arm generator: one field that needs no conversion must
+    /// collapse to shorthand, one field with a real conversion must keep its `name: expr` form.
+    #[test]
+    fn core_to_binding_match_arm_collapses_no_op_fields_only() {
+        let fields = vec![
+            FieldDef {
+                name: "id".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::I32),
+                ..Default::default()
+            },
+            string_field("url"),
+        ];
+        let config = ConversionConfig::default();
+
+        let arm = core_to_binding_match_arm_ext_cfg("Core", "Link", &fields, true, &config, false);
+
+        assert_eq!(
+            arm, "Core::Link { id, url } => Self::Link { id, url: url.to_string() },",
+            "no-op field `id` must collapse to shorthand while converted field `url` keeps its \
+             `name: expr` form, got:\n{arm}"
+        );
+    }
+
+    /// Same reproduction for the binding->core direction, where a bare `String` field needs no
+    /// conversion at all: both fields must collapse (this is the exact `url: url, title: title`
+    /// shape from the reported clippy findings).
+    #[test]
+    fn binding_to_core_match_arm_collapses_all_no_op_fields() {
+        let fields = vec![string_field("url"), string_field("title")];
+        let config = ConversionConfig::default();
+
+        let arm = binding_to_core_match_arm_ext_cfg("Binding", "Link", &fields, true, &config, false);
+
+        assert_eq!(
+            arm, "Binding::Link { url, title } => Self::Link { url, title },",
+            "both no-op fields must collapse to shorthand, got:\n{arm}"
+        );
     }
 }
