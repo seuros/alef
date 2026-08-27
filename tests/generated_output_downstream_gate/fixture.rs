@@ -25,10 +25,29 @@ pub struct Report {
     pub attachment: Attachment,
 }
 
+/// `Chunked` is gated on a feature this crate declares but does not default-enable (see
+/// `FIXTURE_CARGO_TOML`'s `[features]` table) -- alef forwards it into every binding crate's own
+/// manifest and turns it on by default there, so a clippy-lane binding crate always compiles
+/// with it active. Regression coverage for two defects at once: (1) the forwarding row must
+/// exist at all -- pyo3 previously declared no such row, so this gate's own `#[cfg(feature =
+/// "chunking-tokenizers")]` re-emission tripped `unexpected_cfgs` under `-D warnings`; (2) the
+/// resulting `From<Binding> for Mode` / `From<Mode> for Binding` match must NOT gain a trailing
+/// `_ => Default::default()` merely because a variant is cfg-gated -- the arm carries the same
+/// gate as the variant, so with the feature always active in this gate's own build the catch-all
+/// is unreachable and trips `unreachable_patterns` under `-D warnings`. ~keep
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
     Fast,
     Thorough,
+    #[cfg(feature = "chunking-tokenizers")]
+    Chunked,
+}
+
+/// A free function gated the same way, covering the function-position half of the same
+/// forwarding requirement (`Mode::Chunked` above only covers the enum-variant position).
+#[cfg(feature = "chunking-tokenizers")]
+pub fn count_tokens(text: String) -> Result<u64, String> {
+    Ok(text.len() as u64)
 }
 
 /// A data-carrying enum, covering both variant shapes swift's `from_string` reconstruction
@@ -141,6 +160,7 @@ pub fn get_language(name: String) -> Result<Language, String> {
 // `[package]` manifest -- the common case for a small, pre-existing consumer crate -- so it
 // carries the allowlist itself, exactly as a real consumer in that shape has to today. ~keep
 pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                                              [features]\nchunking-tokenizers = []\n\n\
                                               [dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n\
                                               [lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(alef)'] }\n";
 

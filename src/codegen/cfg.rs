@@ -441,6 +441,52 @@ pub fn expand_configured_features(config: &ResolvedCrateConfig, requested: &[Str
         .collect()
 }
 
+/// Render a Cargo `[features]` table body forwarding every name in `features` into
+/// `core_crate_name` -- one `default = [...]` line listing every name not in
+/// `excluded_default_features`, followed by one `<feature> = ["<core_crate_name>/<feature>"]`
+/// line per name in `features` (in the set's own, already-sorted order).
+///
+/// The single formula behind every Rust-emitting binding crate's `[features]` table:
+/// `scaffold_ruby_cargo`, `scaffold_elixir_cargo`, `scaffold_node_cargo`, `scaffold_php_cargo`,
+/// and `scaffold_python_cargo` all discover the same kind of feature set (via
+/// [`collect_cfg_features`], possibly unioned with a language-specific base such as Elixir's
+/// `nif_features`/core-default mirror) and previously each re-wrote this exact loop -- default
+/// list first, then one forwarding row per name -- by hand. That is the shape that let Python's
+/// scaffold ship with no forwarding at all: nothing forced its `[features]` table to agree with
+/// the other four once they diverged in the smallest way. Centralizing the loop does not
+/// centralize the *set* (each backend still decides which names belong via its own config, e.g.
+/// `excluded_default_features`, PHP's function-referenced-name exclusion, or Elixir's
+/// `nif_features` override) -- only the mechanical "set of names -> TOML lines" step, which has
+/// exactly one right answer everywhere it appears. ~keep
+///
+/// Returns only the `default = [...]` and forwarding lines (not the `[features]` header or
+/// surrounding blank lines): callers differ on how the table is wrapped -- most emit a bare
+/// `[features]\n` header, PHP additionally declares a fixed `extension-module = []` line first --
+/// so this stays the one place the feature-set-to-lines mapping lives without dictating a
+/// specific manifest shape. Always emits the `default = [...]` line, even for an empty
+/// `features` (`default = []`, no forwarding rows) -- callers that only want a `[features]` table
+/// when there is something to forward (ruby, node, python) check `features.is_empty()`
+/// themselves before calling; Elixir's scaffold has always emitted the table unconditionally and
+/// this preserves that distinction rather than collapsing it. ~keep
+#[must_use]
+pub fn cfg_default_and_forwarding_lines(
+    features: &BTreeSet<String>,
+    core_crate_name: &str,
+    excluded_default_features: &HashSet<&str>,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::with_capacity(features.len() + 1);
+    let default_list: Vec<String> = features
+        .iter()
+        .filter(|name| !excluded_default_features.contains(name.as_str()))
+        .map(|name| format!("\"{name}\""))
+        .collect();
+    lines.push(format!("default = [{}]", default_list.join(", ")));
+    for name in features {
+        lines.push(format!(r#"{name} = ["{core_crate_name}/{name}"]"#));
+    }
+    lines
+}
+
 /// Insert every name [`undeclared_cfg_features`] finds missing from `existing`'s own
 /// `[features]` table -- forwarding each to `core_crate_name` the same way the sibling rows
 /// `scaffold_ruby_cargo`/`scaffold_elixir_cargo` already write do (`<feature> =

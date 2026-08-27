@@ -457,6 +457,13 @@ mod flat_data_enum_from_impls_tests {
     /// an `E0599: no variant found` when the variant does not exist in the build. A host-owned
     /// cfg-gated variant (`rust_path` rooted in the same crate as `core_import`) must keep its
     /// arm in both directions, now carrying its `#[cfg(...)]` guard exactly once per direction.
+    ///
+    /// A second, later regression: the `From<CoreType> for Binding` direction unconditionally
+    /// added `_ => Default::default()` whenever ANY variant carried a cfg, host-owned or not. A
+    /// host-owned variant's arm carries the same `#[cfg(...)]` as the variant declaration itself,
+    /// so the two always compile in or out together -- the catch-all is unreachable and trips
+    /// `-D warnings`' `unreachable_patterns` once the gating feature is active (the default once
+    /// cfg features are forwarded, alef #464).
     #[test]
     fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_both_directions() {
         let mut enum_def = make_enum("Message", Some("kind"), false, false);
@@ -476,6 +483,11 @@ mod flat_data_enum_from_impls_tests {
             generated.matches("#[cfg(feature = \"thumbnails\")]").count(),
             2,
             "the gate must land on both directions' arms exactly once each, got:\n{generated}"
+        );
+        assert!(
+            !generated.contains("_ => Default::default(),"),
+            "a host-owned cfg-gated variant must not trigger a catch-all (unreachable pattern \
+             under -D warnings), got:\n{generated}"
         );
     }
 

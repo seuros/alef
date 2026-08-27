@@ -88,6 +88,17 @@ fn host_owned_cfg_gated_variant_keeps_arm_under_matching_cfg_guard() {
         out.contains("#[cfg(feature = \"beta\")]\n            test_lib::Status::Beta => Self::Beta,"),
         "host-owned cfg-gated variant must keep its core->binding arm under a matching #[cfg(...)] guard:\n{out}"
     );
+    // A later regression right next to this one: `catch_all` added `_ => Self::default(),` in
+    // both directions whenever ANY variant carried a cfg, host-owned or not. A host-owned
+    // variant's arm carries the identical `#[cfg(...)]` as the variant itself, so the two always
+    // compile in or out together and the match stays exhaustive either way -- the catch-all is
+    // unreachable and trips `-D warnings`' `unreachable_patterns` the moment the gating feature
+    // is active (the default once cfg features are forwarded, alef #464).
+    assert!(
+        !out.contains("_ => Self::default(),"),
+        "a host-owned cfg-gated variant alone must not trigger a catch-all (unreachable pattern \
+         under -D warnings):\n{out}"
+    );
 }
 
 /// Foreign-owned enum (`rust_path` does not start with the configured core crate name): the
@@ -134,6 +145,11 @@ fn foreign_owned_cfg_gated_variant_drops_arm_entirely() {
     assert!(
         !out.contains(r#"#[cfg(feature = "extra")]"#),
         "a foreign crate's cfg gate must never be forwarded into this generated crate:\n{out}"
+    );
+    assert!(
+        out.contains("_ => Self::default(),"),
+        "dropping the foreign-owned variant's arm must still leave the match exhaustive via the \
+         catch-all:\n{out}"
     );
 }
 

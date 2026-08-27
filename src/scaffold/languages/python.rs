@@ -194,6 +194,27 @@ pub(crate) fn scaffold_python_cargo(
     let dep_block = dep_entries.join("\n");
     let _ = extra_deps_section;
 
+    // Forwards every feature name a generated `#[cfg(feature = "X")]` in this pyo3 crate's
+    // source references (see `pyo3::gen_bindings`, which emits such gates on cfg'd-out
+    // types/enums/fields/methods) into this crate's own `[features]` table, `<feature> =
+    // ["<core>/<feature>"]`, plus a `default = [...]` line turning every one of them on. Without
+    // this, rustc's `unexpected_cfgs` lint (denied under `-D warnings`) rejects every such gate:
+    // this manifest previously declared only `extension-module`, never anything the core crate's
+    // own gates could reference. Mirrors `scaffold_ruby_cargo`/`scaffold_node_cargo`/
+    // `scaffold_php_cargo`, which have forwarded these features via the same
+    // `codegen::cfg::cfg_default_and_forwarding_lines` helper since before pyo3 had any cfg
+    // surface to gate at all -- pyo3 simply never grew this block alongside them (alef #464's
+    // sibling gap). ~keep
+    let cfg_features = crate::codegen::cfg::collect_cfg_features(api);
+    let cfg_forwarding = if cfg_features.is_empty() {
+        String::new()
+    } else {
+        let empty_exclusions = std::collections::HashSet::new();
+        let lines =
+            crate::codegen::cfg::cfg_default_and_forwarding_lines(&cfg_features, &config.name, &empty_exclusions);
+        format!("\n{}\n", lines.join("\n"))
+    };
+
     let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
         r#"{pkg_header}
@@ -213,7 +234,7 @@ crate-type = ["cdylib"]
 
 [features]
 extension-module = ["pyo3/extension-module", "pyo3/abi3-py310"]
-
+{cfg_forwarding}
 [dependencies]
 {dep_block}
 {core_target_blocks_section}{lints_section}"#,
@@ -223,6 +244,7 @@ extension-module = ["pyo3/extension-module", "pyo3/abi3-py310"]
         dep_block = dep_block,
         core_target_blocks_section = core_target_blocks_section,
         machete_ignored_str = machete_ignored_str,
+        cfg_forwarding = cfg_forwarding,
     );
 
     Ok(vec![GeneratedFile {
@@ -442,5 +464,106 @@ mod tests {
         assert_eq!(canonicalize_pep440_specifier(">=0.14.8"), ">=0.14.8");
         assert_eq!(canonicalize_pep440_specifier("==1.0"), "==1");
         assert_eq!(canonicalize_pep440_specifier(">=1.0, <2.0"), ">=1,<2");
+    }
+}
+
+/// Regression: the pyo3 crate's `[features]` table declared only `extension-module`, never
+/// forwarding any `#[cfg(feature = "X")]`-referenced name into `<core>/<feature>` the way
+/// `scaffold_ruby_cargo`/`scaffold_node_cargo`/`scaffold_php_cargo` already do. rustc's
+/// `unexpected_cfgs` lint (denied under `-D warnings`) then rejects every generated
+/// `#[cfg(feature = "X")]` gate the pyo3 backend emits for a cfg-gated function/type/enum, since
+/// nothing in this manifest declares `X` at all.
+#[cfg(test)]
+mod cfg_feature_forwarding_tests {
+    use super::scaffold_python_cargo;
+    use crate::core::config::NewAlefConfig;
+    use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
+
+    #[test]
+    fn scaffold_python_cargo_forwards_a_cfg_referenced_feature_into_default() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "sample-lib"
+sources = []
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            functions: vec![FunctionDef {
+                name: "tokenize".to_string(),
+                rust_path: "sample_lib::tokenize".to_string(),
+                return_type: TypeRef::Unit,
+                cfg: Some(r#"feature = "chunking-tokenizers""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let files = scaffold_python_cargo(&api, &config).expect("scaffold_python_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        assert!(
+            cargo_toml.contains(r#"chunking-tokenizers = ["sample-lib/chunking-tokenizers"]"#),
+            "a cfg-referenced feature must get a forwarding entry to the core crate so the \
+             generated #[cfg(feature = \"chunking-tokenizers\")] gate resolves against a \
+             declared feature instead of tripping unexpected_cfgs under -D warnings:\n{cargo_toml}"
+        );
+        let default_line = cargo_toml
+            .lines()
+            .find(|line| line.trim_start().starts_with("default = ["))
+            .unwrap_or_else(|| panic!("no default = [...] line in:\n{cargo_toml}"));
+        assert!(
+            default_line.contains("\"chunking-tokenizers\""),
+            "the forwarded feature must also be turned on by default (no build wrapper here \
+             passes --features): {default_line}"
+        );
+        assert!(
+            cargo_toml.contains(r#"extension-module = ["pyo3/extension-module", "pyo3/abi3-py310"]"#),
+            "the pre-existing extension-module feature must be preserved:\n{cargo_toml}"
+        );
+    }
+
+    /// Negative control: an API surface with no cfg-gated item must not grow a forwarding block,
+    /// matching the pre-existing shape of this manifest.
+    #[test]
+    fn scaffold_python_cargo_emits_no_forwarding_block_when_nothing_is_cfg_gated() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "sample-lib"
+sources = []
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let files = scaffold_python_cargo(&api, &config).expect("scaffold_python_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        assert!(
+            !cargo_toml.contains("default = ["),
+            "no [features] forwarding block should appear when nothing is cfg-gated:\n{cargo_toml}"
+        );
     }
 }

@@ -3,6 +3,7 @@ use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
 use tracing_test::traced_test;
 
 mod drift;
+mod feature_forwarding;
 
 #[test]
 fn combine_gates_drops_an_owner_the_member_already_requires() {

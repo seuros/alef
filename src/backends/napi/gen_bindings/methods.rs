@@ -3,8 +3,11 @@
 use crate::{
     codegen::{
         cfg::is_host_owned_rust_path,
-        conversions::helpers::{
-            sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
+        conversions::{
+            enum_conversion_needs_catch_all,
+            helpers::{
+                sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
+            },
         },
         naming::wire_variant_value,
     },
@@ -472,7 +475,8 @@ pub(super) fn gen_tagged_enum_core_to_binding(
         .collect::<Vec<_>>();
 
     let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    let has_excluded_variants = !enum_def.excluded_variants.is_empty() || has_cfg_variants;
+    let has_excluded_variants =
+        enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty());
 
     crate::backends::napi::template_env::render(
         "gen_tagged_enum_core_to_binding.jinja",
@@ -513,6 +517,17 @@ mod tests {
     /// `gen_tagged_enum_core_to_binding` referenced every variant unconditionally, regardless of
     /// `EnumVariant::cfg` -- E0599 in a build excluding a gated variant's feature. A host-owned
     /// cfg-gated variant must now keep its arm, gated with `#[cfg(...)]`, in both directions.
+    ///
+    /// A second, later regression lived right next to this one: `gen_tagged_enum_core_to_binding`
+    /// used to add the `_ => Default::default()` catch-all whenever ANY variant carried a cfg,
+    /// host-owned or not. A host-owned variant's arm carries the identical `#[cfg(...)]` as the
+    /// variant itself, so the two always compile in or out together and the match stays
+    /// exhaustive either way -- the catch-all is unreachable and trips `-D warnings`'
+    /// `unreachable_patterns` the moment the gating feature is active (the default once cfg
+    /// features are forwarded, alef #464). `gen_tagged_enum_binding_to_core` matches on a string
+    /// tag, not a Rust enum, so it always needs (and always emits, via its own
+    /// `default_variant` mechanism) a fallback regardless of cfg -- only the core_to_binding
+    /// (real Rust enum match) direction is asserted here.
     #[test]
     fn host_owned_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
         let en = tagged_enum(
@@ -544,6 +559,11 @@ mod tests {
             core_to_binding.matches("#[cfg(feature = \"thumbnails\")]").count(),
             1,
             "the host-owned variant's arm must carry its #[cfg] guard exactly once, got:\n{core_to_binding}"
+        );
+        assert!(
+            !core_to_binding.contains("_ => Default::default()"),
+            "a host-owned cfg-gated variant must not trigger a catch-all (unreachable pattern \
+             under -D warnings), got:\n{core_to_binding}"
         );
     }
 

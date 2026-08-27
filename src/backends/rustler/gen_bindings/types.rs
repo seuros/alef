@@ -1,5 +1,6 @@
 use crate::backends::rustler::template_env;
 use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::enum_conversion_needs_catch_all;
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
@@ -388,9 +389,15 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
         }
     }
 
+    // Previously triggered on ANY cfg-gated variant, host-owned or not, and papered over the
+    // resulting `unreachable_patterns` (rather than the genuinely non-exhaustive case this
+    // catch-all exists for) with `#[allow(unreachable_patterns)]`. A host-owned variant's arm
+    // carries the identical `#[cfg(...)]` as the variant itself (see `rustler_flat_variant_kept`
+    // above), so the two always compile in or out together and the match stays exhaustive either
+    // way -- see `codegen::conversions::enum_conversion_needs_catch_all`, the same decision every
+    // other Rust-emitting backend's enum conversion now defers to. ~keep
     let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    if !enum_def.excluded_variants.is_empty() || has_cfg_variants {
-        out.push_str("            #[allow(unreachable_patterns)]\n");
+    if enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty()) {
         out.push_str("            _ => Self::default(),\n");
     }
 

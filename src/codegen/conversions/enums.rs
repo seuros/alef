@@ -43,6 +43,35 @@ fn emit_cfg_gated_arm(
     Some(minijinja::context! { arm => arm, cfg => cfg })
 }
 
+/// Whether a generated `From<...>` match over `enum_def`'s variants needs a trailing
+/// `_ => Default::default()` catch-all to stay exhaustive under `-D warnings`.
+///
+/// A cfg-gated variant that is host-owned keeps a match arm carrying the identical
+/// `#[cfg(...)]` guard as the variant's own declaration ([`emit_cfg_gated_arm`] and every
+/// backend-local mirror of it), so in any single build the variant and its arm compile in or
+/// out together: the match stays exhaustive either way and a catch-all over it is never
+/// reachable. Only a cfg-gated variant that gets DROPPED -- a foreign-crate variant whose
+/// `#[cfg(...)]` names a feature this binding crate cannot declare, see
+/// `codegen::cfg::is_host_owned_rust_path` -- leaves a real gap: the match loses that arm
+/// unconditionally while the matched type may still carry the variant, so a catch-all is
+/// required. `has_cfg_variants` alone (ignoring host ownership) over-reports this and produces
+/// an `unreachable_patterns` error the moment every cfg-gated variant happens to be host-owned,
+/// which is the common case once every binding language forwards its cfg features (alef #464).
+///
+/// `has_excluded_variants` covers the orthogonal case where the compared type carries variants
+/// entirely absent from the generated arms regardless of cfg -- pass `true` only when matching a
+/// representation (typically the CORE type) that can hold more variants than the binding
+/// generates arms for; pass `false` when matching the binding's own type, which by construction
+/// never contains a variant absent from the arm list. ~keep
+#[must_use]
+pub fn enum_conversion_needs_catch_all(
+    has_cfg_variants: bool,
+    is_host_enum: bool,
+    has_excluded_variants: bool,
+) -> bool {
+    has_excluded_variants || (has_cfg_variants && !is_host_enum)
+}
+
 /// Generate `impl From<BindingEnum> for core::Enum` (binding -> core).
 pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     gen_enum_from_binding_to_core_cfg(enum_def, core_import, &ConversionConfig::default())
@@ -72,6 +101,7 @@ pub fn gen_enum_from_binding_to_core_cfg(enum_def: &EnumDef, core_import: &str, 
         .collect();
 
     let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
+    let needs_catch_all = enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, false);
 
     crate::codegen::template_env::render(
         "conversions/enum_from_binding_to_core",
@@ -79,7 +109,7 @@ pub fn gen_enum_from_binding_to_core_cfg(enum_def: &EnumDef, core_import: &str, 
             binding_name => binding_name,
             core_path => core_path,
             arms => arms,
-            has_excluded_variants => has_cfg_variants,
+            has_excluded_variants => needs_catch_all,
         },
     )
 }
@@ -113,7 +143,8 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
         .collect();
 
     let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    let needs_catch_all = !enum_def.excluded_variants.is_empty() || has_cfg_variants;
+    let needs_catch_all =
+        enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty());
 
     crate::codegen::template_env::render(
         "conversions/enum_from_core_to_binding",

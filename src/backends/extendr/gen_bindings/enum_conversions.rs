@@ -70,7 +70,7 @@ pub(super) fn gen_from_binding_to_core(
         })
         .collect();
 
-    let catch_all = catch_all(enum_def).then(|| {
+    let catch_all = catch_all(enum_def, is_host_enum).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_binding_to_core_catch_all.jinja",
             minijinja::context! {},
@@ -113,7 +113,7 @@ pub(super) fn gen_from_core_to_binding(
         })
         .collect();
 
-    let catch_all = catch_all(enum_def).then(|| {
+    let catch_all = catch_all(enum_def, is_host_enum).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_core_to_binding_catch_all.jinja",
             minijinja::context! {},
@@ -131,19 +131,28 @@ pub(super) fn gen_from_core_to_binding(
     )
 }
 
-fn catch_all(enum_def: &EnumDef) -> bool {
+fn catch_all(enum_def: &EnumDef, is_host_enum: bool) -> bool {
     let has_excluded_variants = !enum_def.excluded_variants.is_empty();
     let core_has_struct_variants = enum_def
         .variants
         .iter()
         .any(|variant| !variant.fields.is_empty() && !variant.is_tuple);
     let has_any_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    // A cfg-gated variant's arm is either wrapped in a `#[cfg(...)]` guard (host-owned) or
-    // dropped entirely (foreign-owned, see `emit_cfg_gated_arm`); either way the match is no
-    // longer guaranteed exhaustive without a catch-all once any variant carries a cfg. ~keep
+    // A cfg-gated variant's arm is dropped entirely only when foreign-owned (see
+    // `emit_cfg_gated_arm`) -- that really does leave the match non-exhaustive. A host-owned
+    // gated variant keeps its arm under the identical `#[cfg(...)]` guard as the variant itself,
+    // so the two always compile in or out together and the match stays exhaustive either way;
+    // triggering the catch-all on that case alone made it unreachable under `-D warnings` the
+    // moment the gating feature was active (the default once cfg features are forwarded, alef
+    // #464). That host/foreign distinction is delegated to
+    // `codegen::conversions::enum_conversion_needs_catch_all` rather than restated here, so the
+    // rule cannot drift out of step with the other Rust-emitting backends. The two extra
+    // conditions below are extendr-specific and stay local. ~keep
     let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
 
-    has_excluded_variants || core_has_struct_variants || has_any_data_variants || has_cfg_variants
+    crate::codegen::conversions::enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, has_excluded_variants)
+        || core_has_struct_variants
+        || has_any_data_variants
 }
 
 fn binding_pattern(binding_name: &str, variant: &EnumVariant) -> String {

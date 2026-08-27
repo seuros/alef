@@ -290,19 +290,14 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         if features.is_empty() {
             String::new()
         } else {
-            let mut lines: Vec<String> = Vec::with_capacity(features.len() + 1);
             // A name in `excluded_default_features` is still declared below (so
             // `cargo build --features <name>` keeps working) but dropped from `default`,
             // matching `RubyConfig::excluded_default_features`. ~keep
-            let default_list: Vec<String> = features
-                .iter()
-                .filter(|name| !excluded_default_features.contains(name.as_str()))
-                .map(|name| format!("\"{name}\""))
-                .collect();
-            lines.push(format!("default = [{}]", default_list.join(", ")));
-            for name in &features {
-                lines.push(format!(r#"{name} = ["{core_dep_name}/{name}"]"#));
-            }
+            let lines = crate::codegen::cfg::cfg_default_and_forwarding_lines(
+                &features,
+                core_dep_name,
+                &excluded_default_features,
+            );
             format!("{}\n", lines.join("\n"))
         }
     };

@@ -162,3 +162,96 @@ fn magnus_data_enum_with_excluded_variant_no_catch_all_in_binding_to_core() {
          (unreachable pattern under -D warnings).\n{binding_to_core}"
     );
 }
+
+fn cfg_gated_variant(name: &str, cfg: &str) -> EnumVariant {
+    EnumVariant {
+        name: name.into(),
+        fields: vec![],
+        doc: String::new(),
+        is_default: false,
+        serde_rename: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_tuple: false,
+        originally_had_data_fields: false,
+        cfg: Some(cfg.to_string()),
+        version: Default::default(),
+    }
+}
+
+/// The real regression this task fixes: a HOST-owned cfg-gated variant kept in
+/// `enum_def.variants` (not `excluded_variants`) must not trigger a catch-all in either
+/// direction. Its match arm carries the identical `#[cfg(...)]` guard as the variant itself
+/// (`emit_cfg_gated_arm`), so the variant and arm always compile in or out together and the
+/// match stays exhaustive under any single build -- a catch-all here is never reachable and
+/// trips `-D warnings`' `unreachable_patterns` the moment the gating feature is active, which it
+/// is by default once the binding crate forwards its cfg features (alef #464).
+#[test]
+fn host_owned_cfg_gated_variant_no_catch_all_in_either_direction() {
+    let mut enum_def = make_color_enum();
+    enum_def
+        .variants
+        .push(cfg_gated_variant("Purple", "feature = \"extra-colors\""));
+
+    let config = ConversionConfig::default();
+
+    let binding_to_core = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        binding_to_core.contains("Purple"),
+        "the host-owned cfg-gated variant's arm must still be emitted:\n{binding_to_core}"
+    );
+    assert!(
+        !binding_to_core.contains("_ => Default::default()"),
+        "From<BindingEnum>→core: a host-owned cfg-gated variant must not trigger a catch-all \
+         (unreachable pattern under -D warnings) -- the arm and the variant share the identical \
+         cfg gate.\n{binding_to_core}"
+    );
+
+    let core_to_binding = gen_enum_from_core_to_binding_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        core_to_binding.contains("Purple"),
+        "the host-owned cfg-gated variant's arm must still be emitted:\n{core_to_binding}"
+    );
+    assert!(
+        !core_to_binding.contains("_ => Default::default()"),
+        "From<CoreEnum>→binding: a host-owned cfg-gated variant must not trigger a catch-all \
+         (unreachable pattern under -D warnings).\n{core_to_binding}"
+    );
+}
+
+/// Contrast: a FOREIGN-owned cfg-gated variant (merged in from a `[[crates.source_crates]]`
+/// crate whose feature this binding crate cannot declare) has its arm dropped entirely and
+/// unconditionally -- see `emit_cfg_gated_arm`. That really does leave the match
+/// non-exhaustive, so the catch-all is required in both directions.
+#[test]
+fn foreign_owned_cfg_gated_variant_still_needs_catch_all_in_either_direction() {
+    let mut enum_def = make_color_enum();
+    enum_def.rust_path = "dep_crate::Color".to_string();
+    enum_def
+        .variants
+        .push(cfg_gated_variant("Purple", "feature = \"extra-colors\""));
+
+    let config = ConversionConfig::default();
+
+    let binding_to_core = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        !binding_to_core.contains("Purple"),
+        "a foreign-crate cfg-gated variant's arm must be dropped, not referenced:\n{binding_to_core}"
+    );
+    assert!(
+        binding_to_core.contains("_ => Default::default()"),
+        "From<BindingEnum>→core: dropping a foreign-crate cfg-gated variant's arm leaves the \
+         match non-exhaustive, so the catch-all must still be emitted.\n{binding_to_core}"
+    );
+
+    let core_to_binding = gen_enum_from_core_to_binding_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        !core_to_binding.contains("Purple"),
+        "a foreign-crate cfg-gated variant's arm must be dropped, not referenced:\n{core_to_binding}"
+    );
+    assert!(
+        core_to_binding.contains("_ => Default::default()"),
+        "From<CoreEnum>→binding: dropping a foreign-crate cfg-gated variant's arm leaves the \
+         match non-exhaustive, so the catch-all must still be emitted.\n{core_to_binding}"
+    );
+}

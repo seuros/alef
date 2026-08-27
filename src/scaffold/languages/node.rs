@@ -278,22 +278,14 @@ pub(crate) fn scaffold_node_cargo(
     // still get a forwarding entry below -- alef-task #374, regression in
     // `cargo_excluded_features_tests`. ~keep
     cfg_features.extend(excluded_default_features.iter().map(|name| (*name).to_string()));
+    // A name in `excluded_default_features` is still declared below (so `cargo build --features
+    // <name>` keeps working) but dropped from `default`, matching
+    // `RubyConfig::excluded_default_features`. ~keep
     let features_table = if cfg_features.is_empty() {
         String::new()
     } else {
-        let mut lines: Vec<String> = Vec::with_capacity(cfg_features.len() + 1);
-        // A name in `excluded_default_features` is still declared below (so
-        // `cargo build --features <name>` keeps working) but dropped from `default`,
-        // matching `RubyConfig::excluded_default_features`. ~keep
-        let default_list: Vec<String> = cfg_features
-            .iter()
-            .filter(|name| !excluded_default_features.contains(name.as_str()))
-            .map(|name| format!("\"{name}\""))
-            .collect();
-        lines.push(format!("default = [{}]", default_list.join(", ")));
-        for name in &cfg_features {
-            lines.push(format!(r#"{name} = ["{}/{name}"]"#, config.name));
-        }
+        let lines =
+            shared_cfg::cfg_default_and_forwarding_lines(&cfg_features, &config.name, &excluded_default_features);
         format!("[features]\n{}\n\n", lines.join("\n"))
     };
 

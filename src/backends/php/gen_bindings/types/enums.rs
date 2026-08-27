@@ -1,5 +1,6 @@
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::ImplBuilder;
+use crate::codegen::conversions::enum_conversion_needs_catch_all;
 use crate::codegen::naming::wire_variant_value;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
@@ -475,9 +476,14 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
     }
     // When the IR has excluded variants (e.g. cfg-gated variants with #[alef(skip)] or
     // #[doc(hidden)]), the Rust compiler sees those variants at compile time but the generated
-    // A cfg-gated variant leaves the same kind of gap: either its arm is gated off (feature not
-    // enabled) or dropped entirely (foreign-crate cfg), so the match needs the same catch-all.
-    if !enum_def.excluded_variants.is_empty() || has_cfg_variants {
+    // match has no arm for them, so a catch-all is required. A foreign-crate cfg-gated variant
+    // (dropped above, unconditionally) leaves the same kind of gap. A host-owned cfg-gated
+    // variant does NOT: its arm carries the identical `#[cfg(...)]` as the variant itself, so
+    // they compile in or out together and the match stays exhaustive either way -- see
+    // `codegen::conversions::enum_conversion_needs_catch_all`, which this defers to so the two
+    // reimplementations (this one and NAPI's `gen_tagged_enum_core_to_binding`) can't drift back
+    // out of sync with each other or with the shared `gen_enum_from_core_to_binding_cfg`. ~keep
+    if enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty()) {
         out.push_str("            _ => Default::default(),\n");
     }
     out.push_str(&crate::backends::php::template_env::render(

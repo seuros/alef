@@ -26,6 +26,14 @@ fn simple_enum() -> EnumDef {
 /// shared by napi, magnus, rustler, and wasm, so this one fix covers all four. A host-owned
 /// cfg-gated variant (`rust_path` rooted in the same crate as `core_import`) keeps its arm in
 /// both directions and the arm now carries its `#[cfg(...)]` guard.
+///
+/// A second, later regression lived right next to this one: both directions added a trailing
+/// `_ => Default::default()` catch-all whenever ANY variant carried a cfg, host-owned or not. A
+/// host-owned variant's arm carries the identical `#[cfg(...)]` as the variant itself, so the
+/// two always compile in or out together and the match stays exhaustive either way -- the
+/// catch-all is unreachable and trips `-D warnings`' `unreachable_patterns` the moment the
+/// gating feature is active (the default once cfg features are forwarded, alef #464). See
+/// `enum_conversion_needs_catch_all`.
 #[test]
 fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_both_directions() {
     let mut enum_def = simple_enum();
@@ -41,6 +49,11 @@ fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_both_directions() {
         1,
         "the From<CoreType> arm must carry the #[cfg] guard exactly once, got:\n{core_to_binding}"
     );
+    assert!(
+        !core_to_binding.contains("_ => Default::default()"),
+        "a host-owned cfg-gated variant must not trigger a catch-all (unreachable pattern under \
+         -D warnings), got:\n{core_to_binding}"
+    );
 
     let binding_to_core = gen_enum_from_binding_to_core(&enum_def, "my_crate");
     assert!(
@@ -51,6 +64,11 @@ fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_both_directions() {
         binding_to_core.matches("#[cfg(feature = \"gpu-accel\")]").count(),
         1,
         "the From<BindingEnum> arm must carry the #[cfg] guard exactly once, got:\n{binding_to_core}"
+    );
+    assert!(
+        !binding_to_core.contains("_ => Default::default()"),
+        "a host-owned cfg-gated variant must not trigger a catch-all (unreachable pattern under \
+         -D warnings), got:\n{binding_to_core}"
     );
 }
 
@@ -89,6 +107,11 @@ fn foreign_cfg_variant_arm_is_dropped_not_gated_in_both_directions() {
     assert!(
         !binding_to_core.contains("Backend::Gpu => Self::Gpu"),
         "a foreign-crate cfg-gated variant must not be referenced in the From<BindingEnum> match, got:\n{binding_to_core}"
+    );
+    assert!(
+        binding_to_core.contains("_ => Default::default()"),
+        "dropping the arm must still leave the From<BindingEnum> match exhaustive via the \
+         catch-all, got:\n{binding_to_core}"
     );
 }
 

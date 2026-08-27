@@ -23,6 +23,13 @@ fn flat_enum(rust_path: &str, variants: Vec<EnumVariant>) -> EnumDef {
 /// a flat-struct data enum was referenced unconditionally in both `From`-impl directions --
 /// E0599 in a build excluding its feature. A host-owned variant must keep its arm, gated with
 /// `#[cfg(...)]`, in both directions.
+///
+/// A second, later regression lived right next to this one: `gen_rustler_flat_data_enum_from_core`
+/// added a trailing `_ => Self::default()` catch-all whenever ANY variant carried a cfg,
+/// host-owned or not, and masked the resulting `unreachable_patterns` with
+/// `#[allow(unreachable_patterns)]` rather than fixing the condition. A host-owned variant's arm
+/// carries the identical `#[cfg(...)]` as the variant itself, so the two always compile in or out
+/// together and the match stays exhaustive either way -- the catch-all is genuinely unreachable.
 #[test]
 fn host_owned_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
     let en = flat_enum(
@@ -42,6 +49,15 @@ fn host_owned_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
         from_core.matches("#[cfg(feature = \"thumbnails\")]").count(),
         1,
         "the host-owned variant's arm must carry its #[cfg] guard exactly once, got:\n{from_core}"
+    );
+    assert!(
+        !from_core.contains("_ => Self::default()"),
+        "a host-owned cfg-gated variant must not trigger a catch-all (unreachable pattern under \
+         -D warnings), got:\n{from_core}"
+    );
+    assert!(
+        !from_core.contains("#[allow(unreachable_patterns)]"),
+        "the band-aid suppression must be gone now that the condition is fixed, got:\n{from_core}"
     );
 
     let to_core = gen_rustler_flat_data_enum_to_core(&en, "mylib");
