@@ -132,6 +132,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/nif_tagged_enum_serde_tag.jinja"),
     ),
     (
+        "nif_tagged_enum_large_variant_expect.jinja",
+        include_str!("../templates/nif_tagged_enum_large_variant_expect.jinja"),
+    ),
+    (
         "nif_tagged_enum_variant_unit.jinja",
         include_str!("../templates/nif_tagged_enum_variant_unit.jinja"),
     ),

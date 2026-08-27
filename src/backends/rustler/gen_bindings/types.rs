@@ -3,7 +3,7 @@ use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::conversions::enum_conversion_needs_catch_all_for_features;
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 
 /// Whether `variant`'s `#[cfg(...)]` is safe to re-emit verbatim on its match arm.
@@ -506,7 +506,12 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
 /// Unit enums (all variants have no fields) use `NifUnitEnum` — they encode as atoms.
 /// Data enums where all tuple variants contain Named types (structs) use flat NifStruct
 /// with optional fields. Other data enums use `NifTaggedEnum`.
-pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
+///
+/// `api` is consulted only to decide whether the emitted `NifTaggedEnum` needs a narrow
+/// `#[expect(clippy::large_enum_variant, ...)]` -- see
+/// [`crate::codegen::enum_variant_size::enum_should_expect_large_variant_lint`] for the
+/// heuristic and why it must stay conservative about emitting the attribute (alef #545).
+pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str, api: &ApiSurface) -> String {
     let name = &enum_def.name;
     let mut out = String::with_capacity(512);
 
@@ -519,6 +524,16 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
     }
 
     if has_data {
+        if crate::codegen::enum_variant_size::enum_should_expect_large_variant_lint(enum_def, api) {
+            out.push_str(&template_env::render(
+                "nif_tagged_enum_large_variant_expect.jinja",
+                minijinja::context! {
+                    reason => "this enum's data variants differ substantially in estimated size; \
+                               boxing the largest field would change the generated public variant \
+                               shape, so the size difference is accepted here instead",
+                },
+            ));
+        }
         out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, rustler::NifTaggedEnum)]\n");
         if let Some(tag) = &enum_def.serde_tag {
             out.push_str(&template_env::render(

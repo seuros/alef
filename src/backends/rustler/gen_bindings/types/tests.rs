@@ -198,7 +198,7 @@ fn data_enum() -> EnumDef {
 /// Unit enums must still lower to NifUnitEnum (atoms on the Elixir side).
 #[test]
 fn test_gen_enum_unit_uses_nif_unit_enum() {
-    let result = gen_enum(&unit_enum(), "SampleCrate");
+    let result = gen_enum(&unit_enum(), "SampleCrate", &ApiSurface::default());
     assert!(
         result.contains("NifUnitEnum"),
         "unit enum should use NifUnitEnum; got:\n{result}"
@@ -214,7 +214,7 @@ fn test_gen_enum_unit_uses_nif_unit_enum() {
 /// Data enums must lower to NifTaggedEnum and preserve all variant fields.
 #[test]
 fn test_gen_enum_data_uses_nif_tagged_enum() {
-    let result = gen_enum(&data_enum(), "SampleCrate");
+    let result = gen_enum(&data_enum(), "SampleCrate", &ApiSurface::default());
     assert!(
         result.contains("NifTaggedEnum"),
         "data enum should use NifTaggedEnum; got:\n{result}"
@@ -241,13 +241,162 @@ fn test_gen_enum_data_uses_nif_tagged_enum() {
     );
 }
 
+// --- `#[expect(clippy::large_enum_variant, ...)]` gating (alef #545) ------------------------
+//
+// Rustler's NifTaggedEnum path emits a real Rust `enum` with data-carrying variants, which is
+// the shape `clippy::large_enum_variant` inspects. These two tests are a matched pair: the
+// first proves the attribute appears when one variant's payload genuinely dwarfs its siblings,
+// the second proves it does NOT appear for an otherwise-identical NifTaggedEnum whose variants
+// are comparably sized. The second test is the one that would catch an unconditional emission
+// -- an `#[expect]` on an enum the real lint never fires on is a hard
+// `unfulfilled_lint_expectation` compile error, not a warning.
+
+fn string_field(name: &str) -> FieldDef {
+    FieldDef {
+        name: name.to_string(),
+        ty: TypeRef::String,
+        ..FieldDef::default()
+    }
+}
+
+/// A struct with enough `String` fields that its estimated size clears
+/// `enum_variant_size::EXPECT_GAP_THRESHOLD_BYTES` against a small sibling variant.
+fn heavy_config_type() -> TypeDef {
+    TypeDef {
+        name: "RemoteProviderConfig".to_string(),
+        rust_path: "sample_crate::RemoteProviderConfig".to_string(),
+        fields: (0..30).map(|i| string_field(&format!("setting_{i}"))).collect(),
+        ..TypeDef::default()
+    }
+}
+
+fn struct_variant(name: &str, field_name: &str, ty: TypeRef) -> EnumVariant {
+    EnumVariant {
+        name: name.to_string(),
+        fields: vec![FieldDef {
+            name: field_name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }],
+        is_tuple: false,
+        ..EnumVariant::default()
+    }
+}
+
+/// One struct variant wraps a large `Named` payload (`RemoteProviderConfig`); its siblings are
+/// tiny. Mirrors the reported shape: a struct-field variant (`Llm { llm: LlmConfig }` in the
+/// consumer's report), not a tuple variant, so this cannot route through the flat-struct
+/// lowering (`is_flat_data_enum` requires every data variant to be a tuple variant).
+fn enum_with_one_oversized_struct_variant() -> EnumDef {
+    EnumDef {
+        name: "ProviderKind".to_string(),
+        rust_path: "sample_crate::ProviderKind".to_string(),
+        variants: vec![
+            struct_variant("Remote", "config", TypeRef::Named("RemoteProviderConfig".to_string())),
+            EnumVariant {
+                name: "Local".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                is_tuple: true,
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "None".to_string(),
+                fields: vec![],
+                is_tuple: false,
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }
+}
+
+/// Same shape as [`enum_with_one_oversized_struct_variant`] -- a struct variant among tuple and
+/// unit siblings, routing through the identical NifTaggedEnum codepath -- but every variant's
+/// payload is small, so no variant should be estimated as dwarfing its siblings.
+fn enum_with_similarly_sized_struct_variant() -> EnumDef {
+    EnumDef {
+        name: "RequestKind".to_string(),
+        rust_path: "sample_crate::RequestKind".to_string(),
+        variants: vec![
+            struct_variant("Configured", "name", TypeRef::String),
+            EnumVariant {
+                name: "Simple".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                is_tuple: true,
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "None".to_string(),
+                fields: vec![],
+                is_tuple: false,
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }
+}
+
+/// Positive control: a struct variant whose payload genuinely dwarfs its siblings must get the
+/// narrow `#[expect(...)]`, and the emitted enum must still be a real `NifTaggedEnum` (no
+/// silent fallback to a different lowering).
+#[test]
+fn gen_enum_emits_expect_for_genuinely_oversized_variant() {
+    let mut api = ApiSurface::default();
+    api.types.push(heavy_config_type());
+
+    let result = gen_enum(&enum_with_one_oversized_struct_variant(), "SampleCrate", &api);
+
+    assert!(
+        result.contains("#[expect(clippy::large_enum_variant, reason ="),
+        "expected a narrow #[expect(clippy::large_enum_variant, ...)] attribute; got:\n{result}"
+    );
+    assert!(
+        result.contains("NifTaggedEnum"),
+        "must still lower to NifTaggedEnum, not a boxed or flattened shape; got:\n{result}"
+    );
+    assert!(
+        !result.contains("Box<"),
+        "the consumer's chosen remedy is the narrow #[expect], not boxing; got:\n{result}"
+    );
+}
+
+/// Negative control: an otherwise-identical NifTaggedEnum whose variants are comparably sized
+/// must NOT get the attribute. This is the test that fails if `gen_enum` starts emitting
+/// `#[expect(clippy::large_enum_variant, ...)]` unconditionally on every NifTaggedEnum --
+/// exactly the trap task #545 calls out, since `#[expect]` hard-errors
+/// (`unfulfilled_lint_expectation`) when the lint it names never fires.
+#[test]
+fn gen_enum_does_not_emit_expect_for_similarly_sized_variants() {
+    let api = ApiSurface::default();
+
+    let result = gen_enum(&enum_with_similarly_sized_struct_variant(), "SampleCrate", &api);
+
+    assert!(
+        result.contains("NifTaggedEnum"),
+        "sanity check: this fixture must exercise the NifTaggedEnum path; got:\n{result}"
+    );
+    assert!(
+        !result.contains("clippy::large_enum_variant"),
+        "no variant here dwarfs its siblings; an unconditional #[expect] would hard-error via \
+         unfulfilled_lint_expectation on this exact shape; got:\n{result}"
+    );
+}
+
 #[test]
 fn data_enum_emits_adjacent_serde_representation() {
     let mut enum_def = data_enum();
     enum_def.serde_tag = Some("type".to_string());
     enum_def.serde_content = Some("output".to_string());
 
-    let result = gen_enum(&enum_def, "SampleCrate");
+    let result = gen_enum(&enum_def, "SampleCrate", &ApiSurface::default());
 
     assert!(result.contains(r#"#[serde(tag = "type", content = "output""#));
 }
@@ -347,7 +496,7 @@ fn test_gen_enum_tuple_named_uses_nif_struct() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&format_enum, "SampleCrate");
+    let result = gen_enum(&format_enum, "SampleCrate", &ApiSurface::default());
     assert!(
         result.contains("NifStruct"),
         "tuple data enum with named types should use NifStruct; got:\n{result}"

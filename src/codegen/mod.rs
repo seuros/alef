@@ -11,6 +11,7 @@ pub mod conversions;
 pub mod crate_attributes;
 pub mod defaults;
 pub mod doc_emission;
+pub mod enum_variant_size;
 pub mod error_gen;
 pub mod field_init;
 pub mod fn_dedup;
