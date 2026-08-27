@@ -3,7 +3,8 @@ use std::path::Path;
 use crate::core::config::Language;
 use crate::core::config::output::StringOrVec;
 use crate::process::capture::{
-    OUTPUT_DRAIN_GRACE, StreamDrain, collect_output_within, output_reader, spawn_drain, wait_for_drains,
+    OUTPUT_DRAIN_GRACE, StreamDrain, collect_output_within, output_reader, output_reader_tee, spawn_drain,
+    wait_for_drains,
 };
 use crate::process::timed::{Deadline, GroupChild};
 use anyhow::Context as _;
@@ -340,22 +341,55 @@ pub(crate) fn run_command_captured(cmd: &str) -> anyhow::Result<(String, String)
 }
 
 /// Run a shell command with child-scoped environment variables while capturing output.
+///
+/// This is the runner every per-language backend build command (`cargo build`, `wasm-pack
+/// build`, `napi build`, `maturin develop`, ...) goes through -- see
+/// `cli::pipeline::commands::build::build_command_for`. It used to buffer both streams entirely
+/// in memory via `Command::output()` and only ever look at them after the child exited, so a
+/// build that failed after minutes of real compiler output could still surface nothing: a plain
+/// `Command::output()`/`wait()` error (the child never producing a clean `Output`, e.g. because a
+/// descendant kept a pipe open past this process's own lifetime) carries no captured bytes at
+/// all, only the OS-level wait failure. Streams are now read on background threads as they
+/// arrive, mirrored to alef's own stderr live (so a long build still looks alive) and captured at
+/// the same time, matching the fix `run_run_command` already applies to post-build steps -- see
+/// `cli::pipeline::commands::build::run_run_command` and its `output_reader_tee` doc comment.
+/// Taken before the wait, not after: a child that fills the OS pipe buffer blocks on the write and
+/// never exits if nothing is draining it concurrently. ~keep
 pub(crate) fn run_command_captured_with_env(
     cmd: &str,
     environment: &[(&str, &str)],
 ) -> anyhow::Result<(String, String)> {
     info!("Running: {cmd}");
-    let output = std::process::Command::new("sh")
+    let mut command = std::process::Command::new("sh");
+    command
         .args(["-c", cmd])
         .envs(environment.iter().copied())
-        .output()
-        .with_context(|| format!("failed to spawn: {cmd}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        anyhow::bail!("Command failed: {cmd}\n--- stderr ---\n{stderr}\n--- stdout ---\n{stdout}");
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().with_context(|| format!("failed to spawn: {cmd}"))?;
+
+    let stdout = child.stdout.take().map(output_reader_tee);
+    let stderr = child.stderr.take().map(output_reader_tee);
+
+    let status = child.wait().with_context(|| format!("failed to wait on: {cmd}"))?;
+    let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)
+        .with_context(|| format!("failed to read the output of: {cmd}"))?;
+    if !drained.complete {
+        tracing::warn!(
+            command = cmd,
+            grace_seconds = OUTPUT_DRAIN_GRACE.as_secs(),
+            "a descendant outlived the command still holding its output pipes; the captured output \
+             below may be incomplete"
+        );
     }
-    Ok((stdout, stderr))
+    if !status.success() {
+        anyhow::bail!(
+            "Command failed: {cmd}\n--- stderr ---\n{}\n--- stdout ---\n{}",
+            drained.stderr,
+            drained.stdout
+        );
+    }
+    Ok((drained.stdout, drained.stderr))
 }
 
 /// Run a precondition command and report only whether it succeeded.
@@ -780,6 +814,54 @@ mod tests {
         assert!(result.is_ok(), "Command without timeout should succeed");
         let (stdout, _) = result.unwrap();
         assert!(stdout.contains("test"), "Command output should be captured");
+    }
+
+    /// Regression coverage for the "backend build swallows a failed command's output" defect:
+    /// every per-language backend build (`build_command_for` + `run_command_captured_with_env`)
+    /// went through `Command::output()`, which blocks reading each pipe to end-of-stream. A
+    /// background job started with `&` and never waited on inherits the parent shell's stdout,
+    /// so the shell itself exits immediately while the OS pipe write end stays open in the leaked
+    /// child -- `Command::output()` then blocks for as long as that descendant holds the pipe,
+    /// which is exactly how a real `wasm-pack build` run produced zero lines of diagnostic output
+    /// after 375 seconds. The fix drains for at most `OUTPUT_DRAIN_GRACE` after the *direct*
+    /// child exits, so this must return quickly even though the leaked descendant is still
+    /// running. Reverting to `Command::output()` makes this test hang for the descendant's whole
+    /// sleep instead of returning within the assertion's bound. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn run_command_captured_with_env_does_not_hang_on_a_leaked_descendant_holding_the_pipe() {
+        let cmd = "echo direct-child-output; (sleep 10 &) ; true";
+        let started = std::time::Instant::now();
+        let result = run_command_captured_with_env(cmd, &[]);
+        let elapsed = started.elapsed();
+
+        let (stdout, _stderr) = result.expect("the direct child exits zero");
+        assert!(
+            stdout.contains("direct-child-output"),
+            "the direct child's own output must still be captured: {stdout}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(8),
+            "must return within the output drain grace period, not hang for the leaked \
+             descendant's full sleep: {elapsed:?}"
+        );
+    }
+
+    /// Negative control for the test above: a command with no descendants at all must still
+    /// return its output promptly -- proving the drain-grace bound isn't itself adding a fixed
+    /// delay to the common case.
+    #[test]
+    fn run_command_captured_with_env_returns_promptly_with_no_leaked_descendants() {
+        let started = std::time::Instant::now();
+        let result = run_command_captured_with_env("echo quick", &[]);
+        let elapsed = started.elapsed();
+
+        let (stdout, _stderr) = result.expect("a plain command exits zero");
+        assert!(stdout.contains("quick"), "output must be captured: {stdout}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "a command with no leaked descendants must not pay the drain grace period: {elapsed:?}"
+        );
     }
 
     #[test]
