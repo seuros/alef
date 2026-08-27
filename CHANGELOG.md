@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `GoValidator::is_dependency_error` did not recognize the linker's missing-shared-library shape (`ld: cannot find -l<name>` / Apple ld's `library not found for -l<name>`), so any Go snippet validated without a prior `alef build` producing the FFI artifact reported as a real `Fail` instead of `Unavailable`. In one consumer's no-build CI run this misclassified 141 of 146 Go snippets as genuine failures. `is_dependency_error` now recognizes both linker shapes (the accompanying `collect2: error: ld returned 1 exit status` summary line is deliberately not matched, since it carries no root-cause signal on its own) but excludes `undefined reference to` / `Undefined symbols for architecture`, which mean the library was found and a symbol inside it is wrong -- a real link defect that must stay `Fail`.
+
 ## [0.71.0] - 2026-08-27
 
 ### Fixed
