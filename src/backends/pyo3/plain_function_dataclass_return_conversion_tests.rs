@@ -1,6 +1,6 @@
-//! A plain (non-adapter) async function whose return type is a public *input* `@dataclass` --
-//! not a return-only `TypedDict` -- must still convert the engine's native return value before
-//! handing it back.
+//! A plain (non-adapter) function -- sync or async -- whose return type is a public *input*
+//! `@dataclass` -- not a return-only `TypedDict` -- must still convert the engine's native return
+//! value before handing it back.
 //!
 //! `emit_function_wrappers`'s return-conversion check (`public_return_leaf` in
 //! `function_wrappers.rs`) and `orchestration.rs`'s `function_return_converters` used to be
@@ -23,6 +23,7 @@ use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, TypeDef, TypeRef};
 
 const RETURN_TYPE: &str = "ScanResult";
 const FUNCTION_NAME: &str = "scan_target";
+const SYNC_FUNCTION_NAME: &str = "scan_target_sync";
 const NATIVE_ONLY_TYPE: &str = "ScanHandle";
 const NATIVE_FUNCTION_NAME: &str = "open_scan";
 
@@ -49,9 +50,9 @@ output = "packages/python/test_lib"
 
 /// `ScanResult` is `has_default` and NOT `is_return_type` -- the shape of a type that
 /// `options.py` publishes as a public *input* `@dataclass` (e.g. it is also accepted as a
-/// parameter somewhere else in the real surface) which a plain async function also happens to
-/// return. `ScanHandle` is native-pyclass-only (no `has_default`): nothing in `options.py` ever
-/// publishes it, so its return value must stay unconverted.
+/// parameter somewhere else in the real surface) which a plain function -- sync or async --
+/// also happens to return. `ScanHandle` is native-pyclass-only (no `has_default`): nothing in
+/// `options.py` ever publishes it, so its return value must stay unconverted.
 fn surface() -> ApiSurface {
     ApiSurface {
         crate_name: "test-lib".to_string(),
@@ -88,6 +89,17 @@ fn surface() -> ApiSurface {
                 params: Vec::new(),
                 return_type: TypeRef::Named(RETURN_TYPE.to_string()),
                 is_async: true,
+                ..Default::default()
+            },
+            // Same return-conversion requirement as `FUNCTION_NAME`, but `is_async: false` --
+            // `emit_function_return_call` shares one code path for both, but nothing regression-
+            // tested the sync half of that path until now. ~keep
+            FunctionDef {
+                name: SYNC_FUNCTION_NAME.to_string(),
+                rust_path: format!("test_lib::{SYNC_FUNCTION_NAME}"),
+                params: Vec::new(),
+                return_type: TypeRef::Named(RETURN_TYPE.to_string()),
+                is_async: false,
                 ..Default::default()
             },
             FunctionDef {
@@ -158,6 +170,34 @@ fn a_plain_async_function_converts_its_native_return_value_into_a_dataclass_publ
     assert!(
         !api_py.contains(&format!("    return await _rust.{FUNCTION_NAME}()\n")),
         "the wrapper must not hand back the unconverted native value:\n{api_py}"
+    );
+}
+
+/// A plain *sync* function must apply the exact same conversion the async case gets --
+/// `emit_function_return_call` shares one code path for both, gated only on `return_converter`,
+/// not on `func.is_async`. Regressing the sync half specifically (e.g. reintroducing an
+/// async-only condition around the converter call) must fail this test even if the async
+/// sibling above stays green.
+#[test]
+fn a_plain_sync_function_converts_its_native_return_value_into_a_dataclass_published_type() {
+    let config = dataclass_config();
+    let (api_py, _options_py, _init_py) = render_public_api(&config);
+
+    assert!(
+        api_py.contains(&format!("def {SYNC_FUNCTION_NAME}() -> {RETURN_TYPE}:"))
+            && !api_py.contains(&format!("async def {SYNC_FUNCTION_NAME}")),
+        "the fixture must reach the sync case under test:\n{api_py}"
+    );
+    assert!(
+        api_py.contains(&format!(
+            "    return _from_native_scan_result(_rust.{SYNC_FUNCTION_NAME}())\n"
+        )),
+        "the sync wrapper must convert the native return value before handing it back, with no \
+         `await`:\n{api_py}"
+    );
+    assert!(
+        !api_py.contains(&format!("    return _rust.{SYNC_FUNCTION_NAME}()\n")),
+        "the sync wrapper must not hand back the unconverted native value:\n{api_py}"
     );
 }
 
