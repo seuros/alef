@@ -58,12 +58,7 @@ pub(crate) fn outputs_exist(manifest_path: &Path) -> bool {
 /// marker return `true`: the question is "was a stamped file modified after alef wrote it", and
 /// only a stamped file can be asked. Unstamped outputs -- `generated_header: false`, create-once
 /// seeds -- must keep the existence-only rule or a warm run would never hit again.
-///
-/// `inputs_hash` is accepted, unused, purely so [`super::cache::is_lang_cached`] -- its one
-/// caller -- keeps its own existing signature and every one of *its* callers stays unchanged:
-/// see [`crate::core::hash::compute_file_hash`]'s doc for why the per-file stamp no longer
-/// takes a generation-inputs argument at all. ~keep
-pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path, _inputs_hash: &str) -> bool {
+pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path) -> bool {
     let Ok(manifest) = fs::read_to_string(manifest_path) else {
         return false;
     };

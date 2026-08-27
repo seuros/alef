@@ -119,20 +119,20 @@ fn unreadable_output_manifest_is_a_cache_miss() {
     std::fs::write(&generated, "# generated\n").expect("write generated output");
     write_lang_hash("sample-crate", "python", &test_key("hash-1"), &[generated]).expect("write hash and manifest");
     assert!(
-        is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
+        is_lang_cached("sample-crate", "python", &test_key("hash-1")),
         "a matching hash whose manifested outputs are all present must be a hit"
     );
 
     let manifest = hashes_dir("sample-crate").join("python.manifest");
     std::fs::remove_file(&manifest).expect("remove the manifest, leaving the hash behind");
     assert!(
-        !is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
+        !is_lang_cached("sample-crate", "python", &test_key("hash-1")),
         "a hash with no manifest at all must not validate a cache hit"
     );
 
     std::fs::create_dir_all(&manifest).expect("put something unreadable where the manifest belongs");
     assert!(
-        !is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
+        !is_lang_cached("sample-crate", "python", &test_key("hash-1")),
         "a manifest that exists but cannot be read must not validate a cache hit either"
     );
 }
@@ -216,12 +216,7 @@ fn a_deleted_recorded_output_downgrades_a_cache_hit_to_a_miss() {
         }
 
         assert_eq!(
-            is_stage_cached(
-                "sample-crate",
-                scenario.stage,
-                &test_key(scenario.query_hash),
-                "inputs-hash"
-            ),
+            is_stage_cached("sample-crate", scenario.stage, &test_key(scenario.query_hash)),
             scenario.expect_hit,
             "scenario `{}` expected hit={}",
             scenario.name,

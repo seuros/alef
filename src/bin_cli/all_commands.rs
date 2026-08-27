@@ -489,7 +489,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     &api,
                     &base_dir,
                     &config_toml,
-                    &inputs_hash,
                     &sources_hash,
                     &alef_toml_bytes,
                     clean,

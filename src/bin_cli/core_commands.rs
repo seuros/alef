@@ -140,13 +140,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
                 let ir_json = serde_json::to_string(&api)?;
                 let stage_hash = cache::compute_stage_hash(&ir_json, "scaffold", &config_toml, &[]);
-                // Computed before the cache check, not after: `is_stage_cached` needs the same
-                // `inputs_hash` every stamped output was stamped under to tell a hand-edited
-                // scaffold file from an untouched one, not just whether the file still exists. ~keep
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
-                if cache::is_stage_cached(&resolved_cfg.name, "scaffold", &stage_hash, &inputs_hash) {
+                if cache::is_stage_cached(&resolved_cfg.name, "scaffold", &stage_hash) {
                     if multi {
                         tracing::info!("[{}] Scaffold up to date (cached)", resolved_cfg.name);
                     } else {
@@ -214,12 +210,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let ir_json = serde_json::to_string(&api)?;
                 let stage_hash = cache::compute_stage_hash(&ir_json, "readme", &config_toml, &[]);
-                // Computed before the cache check -- see the matching comment on the scaffold
-                // stage above for why `is_stage_cached` needs this. ~keep
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
-                if cache::is_stage_cached(&resolved_cfg.name, "readme", &stage_hash, &inputs_hash) {
+                if cache::is_stage_cached(&resolved_cfg.name, "readme", &stage_hash) {
                     if multi {
                         tracing::info!("[{}] READMEs up to date (cached)", resolved_cfg.name);
                     } else {

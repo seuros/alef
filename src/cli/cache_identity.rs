@@ -32,14 +32,17 @@
 //! type exists to withhold. The invariant is enforced where it matters, on the
 //! read side that actually decides whether work is skipped. ~keep
 //!
-//! # These are NOT the embedded `alef:hash:` inputs hash
+//! # These are NOT the embedded `alef:hash:` stamp
 //!
 //! Generated files carry an `alef:hash:` value produced by
-//! [`crate::core::hash::compute_inputs_hash`], which is a deliberately narrow
-//! function of the Rust sources plus a normalized `alef.toml` (with the
-//! `[workspace] alef_version` pin stripped). That value must stay stable across
-//! alef releases, or every consumer restamps every generated file on every
-//! upgrade. The hashes in this module are a *separate mechanism*: they are
+//! [`crate::core::hash::compute_file_hash`], a function of that one file's own
+//! content and nothing else. It deliberately folds in *no* generation inputs:
+//! when it did, one edited source or one `alef.toml` key restamped every
+//! generated file in the tree, and 98.8% of a consumer's regen diff was
+//! provenance noise. The whole-tree fingerprint
+//! ([`crate::core::hash::compute_inputs_hash`]) is recorded once per crate
+//! instead, via `cache::record_inputs_hash`. The hashes in this module are a
+//! *separate mechanism* again: they are
 //! skip-or-regenerate decisions held in `.alef/`, never written into generated
 //! output. Adding an input here changes what is regenerated; it does not change
 //! a single byte of any file's embedded hash. ~keep
@@ -352,13 +355,13 @@ mod tests {
             .expect("write lang hash and manifest");
 
         assert!(
-            crate::cli::cache::is_lang_cached("sample-crate", "python", &old_key, "inputs-hash"),
+            crate::cli::cache::is_lang_cached("sample-crate", "python", &old_key),
             "querying with the version that wrote the cache must still be a hit"
         );
 
         let new_key = compute_lang_hash_for_version("0.64.0", IR, "python", CONFIG);
         assert!(
-            !crate::cli::cache::is_lang_cached("sample-crate", "python", &new_key, "inputs-hash"),
+            !crate::cli::cache::is_lang_cached("sample-crate", "python", &new_key),
             "a newer alef querying the same on-disk language cache for byte-identical inputs \
              must be a miss, or `alef generate` reports the language up to date and skips it"
         );
@@ -373,13 +376,13 @@ mod tests {
             .expect("write stage hash and manifest");
 
         assert!(
-            crate::cli::cache::is_stage_cached("sample-crate", "readme", &old_key, "inputs-hash"),
+            crate::cli::cache::is_stage_cached("sample-crate", "readme", &old_key),
             "querying with the version that wrote the cache must still be a hit"
         );
 
         let new_key = compute_stage_hash_for_version("0.64.0", IR, "readme", CONFIG, &[]);
         assert!(
-            !crate::cli::cache::is_stage_cached("sample-crate", "readme", &new_key, "inputs-hash"),
+            !crate::cli::cache::is_stage_cached("sample-crate", "readme", &new_key),
             "a newer alef querying the same on-disk stage cache must be a miss, or `alef generate` \
              reports the stage up to date and skips it"
         );

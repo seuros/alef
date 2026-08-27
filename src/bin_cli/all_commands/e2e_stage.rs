@@ -53,7 +53,6 @@ pub(crate) fn run(
     api: &ApiSurface,
     base_dir: &Path,
     config_toml: &str,
-    inputs_hash: &str,
     sources_hash: &str,
     alef_toml_bytes: &[u8],
     clean: bool,
@@ -149,7 +148,6 @@ pub(crate) fn run(
         base_dir,
         &ir_json,
         config_toml,
-        inputs_hash,
         sources_hash,
         alef_toml_bytes,
         &fixture_hash,
@@ -168,7 +166,6 @@ pub(crate) fn run(
         base_dir,
         &ir_json,
         config_toml,
-        inputs_hash,
         sources_hash,
         alef_toml_bytes,
         &fixture_hash,
@@ -208,7 +205,6 @@ fn run_e2e_substage(
     base_dir: &Path,
     ir_json: &str,
     config_toml: &str,
-    inputs_hash: &str,
     sources_hash: &str,
     alef_toml_bytes: &[u8],
     fixture_hash: &[u8],
@@ -227,7 +223,7 @@ fn run_e2e_substage(
     // `generator_error` handling inside is unchanged: it is a distinct, softer failure this
     // closure already knew how to survive before this wrapping existed. ~keep
     let stage_result: anyhow::Result<()> = (|| {
-        if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash, inputs_hash) {
+        if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
             tracing::info!("  [e2e] up to date (skipping)");
             let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
             deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
@@ -305,7 +301,6 @@ fn run_test_apps_substage(
     base_dir: &Path,
     ir_json: &str,
     config_toml: &str,
-    inputs_hash: &str,
     sources_hash: &str,
     alef_toml_bytes: &[u8],
     fixture_hash: &[u8],
@@ -321,7 +316,7 @@ fn run_test_apps_substage(
 
     // Same wrapping, same rationale, as `run_e2e_substage` above. ~keep
     let stage_result: anyhow::Result<()> = (|| {
-        if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash, inputs_hash) {
+        if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash) {
             tracing::info!("  [test-apps] up to date (skipping)");
             let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
             let mut registry_e2e_config = e2e_config.clone();

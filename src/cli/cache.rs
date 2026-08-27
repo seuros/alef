@@ -191,7 +191,7 @@ fn hashes_dir(crate_name: &str) -> PathBuf {
 /// runs (`hash::compute_file_hash` against the embedded value), so a tree that passes verify
 /// passes here; unstamped outputs (`generated_header: false`, create-once seeds) have nothing
 /// to compare and keep the existence-only rule. ~keep
-pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey, inputs_hash: &str) -> bool {
+pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{lang}.hash"));
     let manifest_path = dir.join(format!("{lang}.manifest"));
@@ -200,7 +200,7 @@ pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey, inputs
             if cached.trim() != lang_hash.as_str() {
                 return false;
             }
-            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path, inputs_hash)
+            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path)
         }
         Err(_) => false,
     }
@@ -1008,7 +1008,7 @@ pub fn write_toml_merge_provenance(
 /// and [`stamped_outputs_agree_with_disk`]'s doc for why an unstamped output (`generated_header:
 /// false`, create-once seeds) keeps the existence-only rule instead of forcing a permanent miss.
 /// ~keep
-pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey, inputs_hash: &str) -> bool {
+pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{stage}.hash"));
     let manifest_path = dir.join(format!("{stage}.manifest"));
@@ -1017,7 +1017,7 @@ pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey, inp
             if cached.trim() != stage_hash.as_str() {
                 return false;
             }
-            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path, inputs_hash)
+            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path)
         }
         Err(_) => false,
     }

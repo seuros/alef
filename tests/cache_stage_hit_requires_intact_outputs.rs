@@ -24,7 +24,6 @@ use alef::core::hash::{CommentStyle, compute_file_hash, header, inject_hash_line
 
 const CRATE_NAME: &str = "sample-crate";
 const STAGE: &str = "e2e";
-const INPUTS_HASH: &str = "inputs-hash-for-this-fixture";
 const BODY: &str = "def test_record_value():\n    assert True\n";
 
 /// Write a file stamped exactly the way generation stamps one: alef header, then the
@@ -57,7 +56,7 @@ fn a_stamped_stage_output_edited_after_generation_turns_the_cache_hit_into_a_mis
 
     let key = record_manifest(&[stamped.clone(), unstamped.clone()]);
     assert!(
-        cache::is_stage_cached(CRATE_NAME, STAGE, &key, INPUTS_HASH),
+        cache::is_stage_cached(CRATE_NAME, STAGE, &key),
         "an untouched tree whose manifested outputs all agree with their stamps must be a hit; \
          without this the miss assertions below would pass for the wrong reason"
     );
@@ -65,14 +64,14 @@ fn a_stamped_stage_output_edited_after_generation_turns_the_cache_hit_into_a_mis
     let pristine = fs::read_to_string(&stamped).expect("read stamped output");
     fs::write(&stamped, format!("{pristine}# a hand edit\n")).expect("append to the stamped output");
     assert!(
-        !cache::is_stage_cached(CRATE_NAME, STAGE, &key, INPUTS_HASH),
+        !cache::is_stage_cached(CRATE_NAME, STAGE, &key),
         "a manifested stage output edited after generation must be a cache MISS; as a hit, the \
          stage is dropped from the work set before anything reads the file it just vouched for"
     );
 
     fs::write(&stamped, &pristine).expect("restore the stamped output");
     assert!(
-        cache::is_stage_cached(CRATE_NAME, STAGE, &key, INPUTS_HASH),
+        cache::is_stage_cached(CRATE_NAME, STAGE, &key),
         "restoring the file byte-for-byte must restore the hit; the check must key on content, \
          not on the file having been touched"
     );
@@ -81,24 +80,22 @@ fn a_stamped_stage_output_edited_after_generation_turns_the_cache_hit_into_a_mis
     // compare against, so it keeps the existence-only rule rather than forcing a permanent miss.
     fs::write(&unstamped, "# a different hand-grown fixture set\n").expect("edit the unstamped output");
     assert!(
-        cache::is_stage_cached(CRATE_NAME, STAGE, &key, INPUTS_HASH),
+        cache::is_stage_cached(CRATE_NAME, STAGE, &key),
         "an output with no alef:hash: stamp has no stamp to disagree with and must not be \
          treated as tampering"
     );
 
-    // A different inputs hash must NOT invalidate the stamps. The per-file `alef:hash:` is
-    // computed over the file's own content alone; folding a whole-tree fingerprint into it is
-    // exactly the churn this recipe was split to stop (one edited source restamped 3,436
-    // generated files). Stale-tree detection lives in the recorded generation fingerprint
-    // instead, not in every file's stamp. ~keep
-    assert!(
-        cache::is_stage_cached(CRATE_NAME, STAGE, &key, "some-other-inputs-hash"),
-        "a per-file stamp is content-only and must not move when unrelated generation inputs do"
-    );
+    // The per-file `alef:hash:` is computed over the file's own content alone; folding a
+    // whole-tree fingerprint into it is exactly the churn this recipe was split to stop (one
+    // edited source restamped 3,436 generated files). This used to be asserted here by passing a
+    // *different* inputs hash and demanding a hit. The predicate no longer accepts one at all, so
+    // the property is now enforced by the signature rather than by this test -- stale-tree
+    // detection lives in the recorded generation fingerprint (`cache::stale_crate_names`,
+    // consumed by `alef verify`), never in an individual file's stamp. ~keep
 
     fs::remove_file(&stamped).expect("delete a manifested output");
     assert!(
-        !cache::is_stage_cached(CRATE_NAME, STAGE, &key, INPUTS_HASH),
+        !cache::is_stage_cached(CRATE_NAME, STAGE, &key),
         "a missing manifested output must still be a miss"
     );
 }

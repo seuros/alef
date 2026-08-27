@@ -148,14 +148,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             this_e2e_config
                         };
                         let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
-                        // Computed before the cache check -- `is_stage_cached` needs the same
-                        // `inputs_hash` every stamped e2e output was stamped under to tell a
-                        // hand-edited suite from an untouched one, not just whether it still
-                        // exists. ~keep
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                        let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
-                        if cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash, &inputs_hash) {
+                        if cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             grand_count += cached_paths.len();
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
@@ -417,12 +412,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = format!("test-apps-{selector}");
                         let previous_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                         let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
-                        // Computed before the cache check -- see the matching comment on the `e2e`
-                        // stage above for why `is_stage_cached` needs this. ~keep
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                        let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
-                        if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash, &inputs_hash) {
+                        if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
                                 &cached_paths,
@@ -678,12 +670,12 @@ mod tests {
             .expect("record the scoped run");
 
         assert!(
-            cache::is_stage_cached("sample-crate", &scoped_key, &scoped_hash, "inputs-hash"),
+            cache::is_stage_cached("sample-crate", &scoped_key, &scoped_hash),
             "a repeat of the same scoped run must still hit its own cache"
         );
         let full_hash = cache::compute_stage_hash(ir_json, &full_key, config_toml, &[]);
         assert!(
-            !cache::is_stage_cached("sample-crate", &full_key, &full_hash, "inputs-hash"),
+            !cache::is_stage_cached("sample-crate", &full_key, &full_hash),
             "an unscoped run must regenerate rather than inherit a --lang-scoped run's partial output"
         );
         assert!(
