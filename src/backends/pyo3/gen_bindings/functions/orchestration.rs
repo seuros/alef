@@ -74,17 +74,16 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     let options_return_types =
         crate::backends::pyo3::gen_bindings::types::options_return_typeddict_names(api, dto, reexported_types);
 
-    // The question an adapter's RETURN value (or a streaming adapter's item) has to answer is
-    // "does `options.py` publish this name", which is `options_dataclass_types` OR
-    // `options_return_types` -- not `options_dataclass_types` alone. A plain function wrapper
-    // already asks the union (`options_type_names` further below, and `function_return_converters`
-    // checks `options_return_types` directly); `adapter_return_converter`/`streaming_item_converter`
-    // used to be handed only the input-dataclass half, so an adapter whose return/item type was
-    // `is_return_type`-only (published as a `TypedDict`, never an input dataclass) never matched,
-    // never got its `_from_native_*` converter called, and never got imported from `.options` for
-    // one -- while `api.py`'s own import classification below (which DOES consult the union) still
-    // resolved the wrapper's bare `-> ReturnType` annotation to the `.options` name. The annotation
-    // named the public type; the `return` statement handed back the untouched native pyclass. ~keep
+    // The question a RETURN value (a plain function's, an adapter's, or a streaming adapter's
+    // item) has to answer is "does `options.py` publish this name", which is
+    // `options_dataclass_types` OR `options_return_types` -- not `options_dataclass_types` alone
+    // and not `options_return_types` alone. `api.py`'s own import classification
+    // (`options_type_names` further below) already consults the union, so a return type that is
+    // a public *input* dataclass (not a return-only `TypedDict`) still gets imported from
+    // `.options` and named in the `-> ReturnType` annotation. `adapter_return_converter` /
+    // `streaming_item_converter` (adapters) and `emit_function_wrappers` / `function_return_converters`
+    // (plain functions) must all be handed this union, not either half alone, or the annotation
+    // names the public type while the body hands back the untouched native pyclass. ~keep
     let options_publishable_return_types: std::collections::HashSet<String> =
         options_dataclass_types.union(&options_return_types).cloned().collect();
 
@@ -315,7 +314,11 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         .collect();
 
     // A wrapper returning a type `options.py` publishes calls that type's `_from_native_*`
-    // converter, so `api.py` has to import it alongside the type itself.
+    // converter, so `api.py` has to import it alongside the type itself. The publishable set is
+    // the union (`options_publishable_return_types`), not `options_return_types` alone: a plain
+    // function's return type is routinely a public *input* dataclass rather than a return-only
+    // `TypedDict`, and the narrower set left that shape's converter uncalled and unimported --
+    // the same asymmetry `adapter_return_converter`/`streaming_item_converter` already avoid. ~keep
     let function_return_converters: std::collections::BTreeSet<String> = api
         .functions
         .iter()
@@ -328,7 +331,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
             },
             _ => None,
         })
-        .filter(|name| options_return_types.contains(*name))
+        .filter(|name| options_publishable_return_types.contains(*name))
         .map(|name| crate::backends::pyo3::gen_bindings::types::from_native_converter_name(name))
         .collect();
 
@@ -408,7 +411,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         &data_enum_names,
         &return_type_names,
         &reexported_names,
-        &options_return_types,
+        &options_publishable_return_types,
     );
 
     for adapter in adapters {

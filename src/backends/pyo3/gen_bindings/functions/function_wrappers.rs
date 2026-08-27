@@ -25,7 +25,7 @@ pub(super) fn emit_function_wrappers(
     data_enum_names: &AHashSet<&str>,
     return_type_names: &AHashSet<String>,
     reexported_names: &AHashSet<&str>,
-    options_return_types: &std::collections::HashSet<String>,
+    options_publishable_return_types: &std::collections::HashSet<String>,
 ) {
     for func in &api.functions {
         if exclude_functions.contains(&func.name) {
@@ -86,9 +86,13 @@ pub(super) fn emit_function_wrappers(
 
         // `_rust.` is the private extension module. Prefixing it is right only while the public
         // package has no type of its own under that name -- which is a question for the emitter
-        // that writes `options.py`, not a rule to restate here. `options_return_types` names the
-        // return types `options.py` does define, and those are what `__init__.py` re-exports and
-        // what a consumer therefore imports. ~keep
+        // that writes `options.py`, not a rule to restate here. `options_publishable_return_types`
+        // is the union of the public *input* dataclasses and the return-only `TypedDict`s
+        // (mirrors `orchestration.rs`'s `options_publishable_return_types` doc) -- a plain
+        // function's return type is routinely a dataclass `options.py` also accepts as a param
+        // elsewhere, not only a return-only `TypedDict`, and checking the narrower TypedDict-only
+        // set alone left that shape's `-> ReturnType` annotation naming the public dataclass while
+        // the body handed back the untouched native pyclass. ~keep
         let return_leaf = match &func.return_type {
             crate::core::ir::TypeRef::Named(name) => Some(name.as_str()),
             crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
@@ -97,7 +101,7 @@ pub(super) fn emit_function_wrappers(
             },
             _ => None,
         };
-        let public_return_leaf = return_leaf.filter(|name| options_return_types.contains(*name));
+        let public_return_leaf = return_leaf.filter(|name| options_publishable_return_types.contains(*name));
         let needs_native_prefix = return_leaf.is_some_and(|name| {
             return_type_names.contains(name) && !reexported_names.contains(name) && public_return_leaf.is_none()
         });

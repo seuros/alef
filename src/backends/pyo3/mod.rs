@@ -9,6 +9,8 @@ mod gen_stubs;
 #[cfg(test)]
 mod kwarg_unpack_tests;
 #[cfg(test)]
+mod plain_function_dataclass_return_conversion_tests;
+#[cfg(test)]
 mod public_return_type_tests;
 mod py_signature;
 #[cfg(test)]
