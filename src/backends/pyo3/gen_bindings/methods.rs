@@ -142,8 +142,7 @@ pub(super) fn gen_module_init(module_name: &str, api: &ApiSurface, config: &Reso
         lines.push(format!("    m.add_function(wrap_pyfunction!({register_fn}, m)?)?;"));
     }
     // it under the bare `unregister_*` name via `#[pyo3(name = ...)]`. Without this
-    for unregister_fn in
-        crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(&config.trait_bridges, api)
+    for unregister_fn in crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(&config.trait_bridges, api)
     {
         lines.push(format!(
             "    m.add_function(wrap_pyfunction!(_alef_{unregister_fn}, m)?)?;"

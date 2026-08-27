@@ -22,7 +22,9 @@ sources = ["src/lib.rs"]
 
 [crates.python]
 module_name = "_test_lib"
-generate_stubs = true
+
+[crates.python.stubs]
+output = "packages/python/src/"
 "#,
     )
     .unwrap();

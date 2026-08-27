@@ -8,7 +8,9 @@ fn active_configs<'a>(
     configs: &'a [TraitBridgeConfig],
     api: &ApiSurface,
 ) -> impl Iterator<Item = &'a TraitBridgeConfig> {
-    configs.iter().filter(move |c| super::active_bridge_trait(c, api).is_some())
+    configs
+        .iter()
+        .filter(move |c| super::active_bridge_trait(c, api).is_some())
 }
 
 /// Register function names for `#[pymodule]` wiring, restricted to bridges PyO3 actually emits.
@@ -29,14 +31,18 @@ pub fn collect_bridge_register_fns(configs: &[TraitBridgeConfig], api: &ApiSurfa
 ///
 /// Only bridges that define an `unregister_fn` AND that PyO3 actually emits are included.
 pub fn collect_bridge_unregister_fns(configs: &[TraitBridgeConfig], api: &ApiSurface) -> Vec<String> {
-    active_configs(configs, api).filter_map(|c| c.unregister_fn.clone()).collect()
+    active_configs(configs, api)
+        .filter_map(|c| c.unregister_fn.clone())
+        .collect()
 }
 
 /// Collect clear function names for api.py pass-through wrappers.
 ///
 /// Only bridges that define a `clear_fn` AND that PyO3 actually emits are included.
 pub fn collect_bridge_clear_fns(configs: &[TraitBridgeConfig], api: &ApiSurface) -> Vec<String> {
-    active_configs(configs, api).filter_map(|c| c.clear_fn.clone()).collect()
+    active_configs(configs, api)
+        .filter_map(|c| c.clear_fn.clone())
+        .collect()
 }
 
 /// Imports needed by trait bridge generated code.

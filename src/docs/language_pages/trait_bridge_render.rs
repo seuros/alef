@@ -51,6 +51,7 @@ mod tests {
     use super::render_trait_bridges;
     use crate::core::backend::TraitBridgeRegistrationSurface;
     use crate::core::config::{Language, TraitBridgeConfig};
+    use crate::core::ir::TypeDef;
     use crate::docs::test_helpers::{empty_api, make_test_config};
 
     /// The regression this guards against: a docs-layer implementation that fabricates a
@@ -62,12 +63,24 @@ mod tests {
         let mut config = make_test_config();
         config.trait_bridges.push(TraitBridgeConfig {
             trait_name: "SampleTrait".to_owned(),
+            registry_getter: Some("sample::registry::get_sample_registry".to_owned()),
             register_fn: Some("register_sample".to_owned()),
             unregister_fn: Some("unregister_sample".to_owned()),
             clear_fn: Some("clear_samples".to_owned()),
             ..Default::default()
         });
-        let api = empty_api();
+        // The bridged trait must resolve in `api.types` and the bridge must carry a
+        // `registry_getter`, or the backend correctly reports no registration surface and there is
+        // nothing for this page to render. Both are what a real configured bridge looks like; an
+        // `empty_api()` fixture asserted against a trait that does not exist instead pinned a
+        // surface the backend would never emit. ~keep
+        let mut api = empty_api();
+        api.types.push(TypeDef {
+            name: "SampleTrait".to_owned(),
+            rust_path: "sample::SampleTrait".to_owned(),
+            is_trait: true,
+            ..Default::default()
+        });
 
         let rendered = render_trait_bridges(&api, &config, Language::Python);
 

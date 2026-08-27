@@ -405,7 +405,23 @@ fn test_trait_bridge_register_fns_in_api_py_and_all() {
     let api = ApiSurface {
         crate_name: "test_lib".to_string(),
         version: "0.1.0".to_string(),
-        types: vec![],
+        // Both bridges below name these traits. A bridge whose trait is absent from the surface
+        // emits no `#[pyfunction]`, so the api.py wrapper this test asserts would reference a
+        // symbol that was never generated -- the exact build break the emit gates now prevent. ~keep
+        types: vec![
+            TypeDef {
+                name: "TextBackend".to_string(),
+                rust_path: "test_lib::TextBackend".to_string(),
+                is_trait: true,
+                ..Default::default()
+            },
+            TypeDef {
+                name: "EmbeddingBackend".to_string(),
+                rust_path: "test_lib::EmbeddingBackend".to_string(),
+                is_trait: true,
+                ..Default::default()
+            },
+        ],
         functions: vec![FunctionDef {
             name: "extract_file".to_string(),
             rust_path: "test_lib::extract_file".to_string(),
