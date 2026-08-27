@@ -2,6 +2,7 @@ use crate::cli::cache;
 use crate::cli::pipeline::helpers::{check_precondition_named, run_command_streamed};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash;
+use crate::process::{configure_process_group, kill_process_tree, termination};
 use anyhow::Context as _;
 use rayon::prelude::*;
 use std::path::Path;
@@ -94,6 +95,12 @@ enum TestAppOutcome {
 /// kills + reaps the process so no orphan listener survives the run.
 struct MockServerHandle {
     child: std::process::Child,
+    /// Registers the child's process group for Ctrl-C forwarding (`crate::process::termination`).
+    /// The mock-server is spawned into its own group (see `start_mock_server`) precisely so
+    /// `kill_process_tree` below can reach a descendant it starts, not just the direct child --
+    /// spawning into a group without this registration would trade an orphan on timeout for one
+    /// on Ctrl-C instead. ~keep
+    _tracked: termination::TrackedProcessGroup,
     /// Env vars to inject into every test-app `run` command:
     /// - `MOCK_SERVER_URL` (always)
     /// - `MOCK_SERVERS` JSON map (when the server printed it)
@@ -106,7 +113,10 @@ struct MockServerHandle {
 impl Drop for MockServerHandle {
     fn drop(&mut self) {
         drop(self.child.stdin.take());
-        let _ = self.child.kill();
+        // Kills the whole process group, not just the direct child: a mock-server that itself
+        // backgrounds a descendant (or is later swapped for one that does) must not leave it
+        // running past this guard's own lifetime. ~keep
+        kill_process_tree(&mut self.child);
         let _ = self.child.wait();
     }
 }
@@ -178,13 +188,19 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
         bin_path.display(),
         fixtures_dir.display()
     );
-    let mut child = std::process::Command::new(&bin_path)
+    let mut command = std::process::Command::new(&bin_path);
+    command
         .arg(&fixtures_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    // Its own process group, so a descendant it starts can be reached by `kill_process_tree`
+    // instead of surviving as an orphan when `MockServerHandle` is dropped. ~keep
+    configure_process_group(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn e2e mock-server: {}", bin_path.display()))?;
+    let tracked = termination::track(&child);
 
     let stdout = child
         .stdout
@@ -250,7 +266,11 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
         env_vars.push(("MOCK_SERVERS".to_string(), servers));
     }
 
-    Ok(Some(MockServerHandle { child, env_vars }))
+    Ok(Some(MockServerHandle {
+        child,
+        _tracked: tracked,
+        env_vars,
+    }))
 }
 
 /// Run the registry-mode test app for each language.
@@ -558,6 +578,110 @@ run = "test \"$ALLOW_PRIVATE_NETWORK\" = true"
         assert!(
             stale.is_empty(),
             "a crate with no recorded generation baseline must not be reported stale: {stale:?}"
+        );
+    }
+
+    const SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    const SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn is_alive(pid: i32) -> bool {
+        // SAFETY: signal 0 performs error checking only and sends nothing.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    fn wait_until_gone(pid: i32) -> bool {
+        let deadline = std::time::Instant::now() + SETTLE_LIMIT;
+        while std::time::Instant::now() < deadline {
+            if !is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+        !is_alive(pid)
+    }
+
+    /// Blocks until `marker` holds a live pid and returns it.
+    fn announced_pid(marker: &Path) -> i32 {
+        let deadline = std::time::Instant::now() + SETTLE_LIMIT;
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no pid was ever announced in the marker file"
+            );
+            if let Ok(contents) = std::fs::read_to_string(marker)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+                && is_alive(pid)
+            {
+                return pid;
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+    }
+
+    /// Spawns a probe into its own process group and tracks it exactly the way
+    /// `start_mock_server` does, without going through the real (alef-generated) mock-server
+    /// binary. `script` is the shell script the probe runs.
+    fn spawn_tracked_probe(script: &str) -> (std::process::Child, termination::TrackedProcessGroup) {
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        configure_process_group(&mut command);
+        let child = command.spawn().expect("spawn the tracked probe");
+        let tracked = termination::track(&child);
+        (child, tracked)
+    }
+
+    /// Regression for #520: `MockServerHandle::drop` used to `Child::kill` the direct mock-server
+    /// process alone. A descendant it starts -- or that a future mock-server implementation
+    /// starts -- kept running past the guard's own lifetime, exactly the "kills the direct child,
+    /// not its descendants" shape already fixed for the timed pipeline helpers
+    /// (`crate::process::timed`, `helpers::timeout_tests`) but not for this untimed, manually
+    /// dropped one. Builds a `MockServerHandle` around a script that backgrounds a grandchild and
+    /// announces its pid, drops the handle, and asserts the grandchild is gone -- asserting only
+    /// that `Drop` ran would prove nothing, since the orphaning code already ran its kill branch
+    /// too. ~keep
+    #[test]
+    fn dropping_a_mock_server_handle_kills_a_backgrounded_grandchild() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let marker = directory.path().join("grandchild.pid");
+        let script = format!("sleep 60 & echo $! > {}; sleep 60", marker.display());
+        let (child, tracked) = spawn_tracked_probe(&script);
+
+        let grandchild = announced_pid(&marker);
+        assert!(is_alive(grandchild), "grandchild must be running before the drop");
+
+        drop(MockServerHandle {
+            child,
+            _tracked: tracked,
+            env_vars: Vec::new(),
+        });
+
+        assert!(
+            wait_until_gone(grandchild),
+            "grandchild {grandchild} survived MockServerHandle's drop"
+        );
+    }
+
+    /// Negative control for the test above: a handle around a script with no descendants at all
+    /// must still be reaped cleanly on drop, proving the tree-kill isn't itself broken for the
+    /// ordinary case (no hang, no leftover zombie).
+    #[test]
+    fn dropping_a_mock_server_handle_with_no_descendants_reaps_cleanly() {
+        let (child, tracked) = spawn_tracked_probe("exit 0");
+        let pid = child.id().cast_signed();
+
+        drop(MockServerHandle {
+            child,
+            _tracked: tracked,
+            env_vars: Vec::new(),
+        });
+
+        assert!(
+            wait_until_gone(pid),
+            "a plain child with no descendants must still be reaped on drop"
         );
     }
 }
