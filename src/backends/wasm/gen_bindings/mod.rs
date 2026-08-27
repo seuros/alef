@@ -342,9 +342,10 @@ impl Backend for WasmBackend {
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         crate::codegen::config_gen::validate_rust_default_functions(api)?;
-        // wrapper delegates to the core crate (which resolves the cfg) and emits no `#[cfg]` gate,
-        // so two same-named entries would otherwise produce duplicate `#[wasm_bindgen]` fns.
-        let api = &crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
+        // Must run before dedup -- see `cfg::drop_cfg_disabled_functions`. ~keep
+        let enabled_features = expand_configured_features(config, config.features_for_language(Language::Wasm));
+        let sorted = crate::backends::ir_order::with_sorted_items(api);
+        let api = &cfg::drop_cfg_disabled_functions(sorted, &enabled_features).with_deduped_functions();
 
         let wasm_config = config.wasm.as_ref();
         let mut exclude_functions = wasm_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
@@ -361,7 +362,6 @@ impl Backend for WasmBackend {
         let env_shims = wasm_config.map(|c| c.env_shims.clone()).unwrap_or_default();
         let prefix = config.wasm_type_prefix();
 
-        let enabled_features = expand_configured_features(config, config.features_for_language(Language::Wasm));
         for typ in &api.types {
             if is_gated_behind_disabled_feature(&typ.cfg, &enabled_features) {
                 exclude_types.push(typ.name.clone());

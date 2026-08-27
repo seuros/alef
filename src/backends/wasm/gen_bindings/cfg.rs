@@ -91,6 +91,30 @@ pub(super) fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     shared_cfg::collect_cfg_features(api)
 }
 
+/// Drop functions whose own cfg gate is unsatisfied by `enabled_features`, before
+/// `ApiSurface::with_deduped_functions` runs on whatever remains.
+///
+/// Dedup (`codegen::fn_dedup::dedup_same_name_functions`) collapses a same-named real-impl/stub
+/// pair into one entry whose `cfg` is the OR of both members'. For a genuinely mutually-exclusive
+/// `feature = "X"` / `not(feature = "X")` pair that OR is a tautology (`any(X, not(X))` is always
+/// true), so the merged entry survives any later cfg check regardless of which feature the binding
+/// actually enables -- while `WasmBackend::generate_bindings` still emits a call through the
+/// *real* member's `rust_path` (a deep, feature-gated module path, not a stable crate-root
+/// re-export that resolves the cfg internally). A binding that never enables that feature then
+/// ends up with an unconditional call into a module the core crate compiled out under it.
+///
+/// Dropping the disabled variant first means at most one member of a mutually-exclusive pair ever
+/// reaches dedup: exactly the one already known to compile in under this binding's own feature
+/// set. Dedup then either has nothing left to merge (its own gate survives `prepend_cfg`
+/// untouched), or -- the "one unconditional wrapper plus one conditionally-true variant" shape it
+/// exists for -- both survive and the merge is safe, because this filter has already agreed both
+/// belong. ~keep
+pub(super) fn drop_cfg_disabled_functions(mut api: ApiSurface, enabled_features: &[String]) -> ApiSurface {
+    api.functions
+        .retain(|f| !is_gated_behind_disabled_feature(&f.cfg, enabled_features));
+    api
+}
+
 fn parse_cfg_list(s: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut depth = 0usize;
@@ -121,3 +145,7 @@ fn parse_cfg_list(s: &str) -> Vec<String> {
     }
     result
 }
+
+#[cfg(test)]
+#[path = "cfg_dedup_tests.rs"]
+mod cfg_dedup_tests;
