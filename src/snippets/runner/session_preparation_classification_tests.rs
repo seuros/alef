@@ -652,3 +652,153 @@ fn an_unset_hook_budget_falls_back_to_the_snippet_timeout() {
     assert_eq!(shared.resolved_before_timeout_secs(), 42);
     assert_eq!(separate.resolved_before_timeout_secs(), 900);
 }
+
+fn go_snippet() -> Snippet {
+    Snippet {
+        id: None,
+        path: "example.md".into(),
+        language: crate::snippets::types::Language::Go,
+        title: None,
+        code: "package main\n\nfunc main() {}\n".into(),
+        start_line: 1,
+        block_index: 0,
+        annotation: None,
+        metadata: SnippetMetadata::default(),
+        source_origin: SourceOrigin {
+            path: "example.md".into(),
+            line: 1,
+            block_index: 0,
+        },
+    }
+}
+
+fn go_session_fixture() -> crate::snippets::session::ValidationSession {
+    crate::snippets::session::ValidationSession {
+        language: crate::snippets::types::Language::Go,
+        working_directory: std::path::PathBuf::from("."),
+        manifest: None,
+        fingerprint: "fixture".into(),
+        env: Default::default(),
+        include_paths: Vec::new(),
+        rust_features: Vec::new(),
+        rust_dependencies: Default::default(),
+    }
+}
+
+/// Task #505: a consumer's CI run reported 141 Go snippets as genuine `ld: cannot find -l<name>`
+/// failures, when the real cause in every one was that `alef build` had simply not run yet. This
+/// drives the real `GoValidator`/`finalize_result` bucketing pipeline -- not `is_dependency_error`
+/// in isolation -- over every linker phrasing for "the named library does not exist" that this
+/// module now recognizes: GNU ld and Apple ld (both confirmed against the original consumer
+/// report) and LLVM `lld` (confirmed absent from the classifier until this task, reachable via
+/// `-fuse-ld=lld`). A session is threaded through so the message asserts against the real
+/// "run `alef build` first" ordering wording, matching the shape the original bug actually hit
+/// (a session-backed run whose artifact just was not built yet). ~keep
+#[test]
+fn finalize_result_buckets_every_captured_go_linker_missing_library_form_as_unavailable() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "GNU ld (Linux gcc/clang default)",
+            "# example.test/module\n/usr/bin/ld: cannot find -lsample_ffi: No such file or directory\n\
+             collect2: error: ld returned 1 exit status\n",
+        ),
+        (
+            "Apple ld (macOS clang default)",
+            "# example.test/module\nld: library not found for -lsample_ffi\n\
+             clang: error: linker command failed with exit code 1 (use -v to see invocation)\n",
+        ),
+        (
+            "LLVM lld (-fuse-ld=lld)",
+            "# example.test/module\nld.lld: error: unable to find library -lsample_ffi\n\
+             clang: error: linker command failed with exit code 1 (use -v to see invocation)\n",
+        ),
+    ];
+    let validator = crate::snippets::validators::go::GoValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let session = go_session_fixture();
+
+    for (platform, raw_output) in cases {
+        let outcome = ValidationOutcome {
+            status: SnippetStatus::Fail,
+            message: Some((*raw_output).to_string()),
+            duration_ms: 5,
+        };
+
+        let result = finalize_result(
+            &go_snippet(),
+            &validator,
+            &config,
+            Some(&session),
+            ValidationLevel::Compile,
+            outcome,
+        );
+
+        assert_eq!(
+            result.status,
+            SnippetStatus::Unavailable,
+            "{platform}: a missing linked library must bucket as unavailable, not a real failure: {result:?}"
+        );
+        assert!(
+            result.unresolved_dependency,
+            "{platform}: must be flagged as an unresolved dependency: {result:?}"
+        );
+        let message = result.message.as_deref().unwrap_or_default();
+        assert!(
+            message.contains("run `alef build` first"),
+            "{platform}: a session-backed reclassification must point at the real remedy: {message}"
+        );
+        assert!(
+            message.contains("sample_ffi"),
+            "{platform}: the original linker diagnostic must survive in the message: {message}"
+        );
+    }
+}
+
+/// Negative control for the table above: a genuine compile error in the snippet's own code must
+/// still bucket as `Fail`, never be swept into `Unavailable` by a pattern widened too far to tell
+/// "not built yet" from "does not compile". Without this test, the fix above is indistinguishable
+/// from "call every Go failure unavailable" -- exactly the regression the design constraint on
+/// this task warns against. ~keep
+#[test]
+fn finalize_result_keeps_a_real_go_compile_error_as_fail_not_unavailable() {
+    let validator = crate::snippets::validators::go::GoValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let diagnostic = "./snippet.go:3:10: cannot use \"text\" (untyped string constant) as int value in assignment";
+    let outcome = ValidationOutcome {
+        status: SnippetStatus::Fail,
+        message: Some(diagnostic.to_string()),
+        duration_ms: 5,
+    };
+
+    let result = finalize_result(
+        &go_snippet(),
+        &validator,
+        &config,
+        Some(&go_session_fixture()),
+        ValidationLevel::Compile,
+        outcome,
+    );
+
+    assert_eq!(result.status, SnippetStatus::Fail, "got: {result:?}");
+    assert!(
+        !result.unresolved_dependency,
+        "a real compile error must not be flagged as a dependency gap"
+    );
+    assert_eq!(
+        result.message.as_deref(),
+        Some(diagnostic),
+        "a real compile error's message must stay the compiler's own text verbatim: {result:?}"
+    );
+    assert!(
+        !result.message.as_deref().unwrap_or_default().contains("alef build"),
+        "a real compile error must never tell the reader to rebuild toolchains: {result:?}"
+    );
+}

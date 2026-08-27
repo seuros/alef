@@ -357,10 +357,14 @@ impl SnippetValidator for GoValidator {
     /// only starts once every earlier stage succeeded), then fails once it reaches the artifact
     /// `alef build` produces — the one the package's own `#cgo LDFLAGS: -l<name>` directive names
     /// — and that artifact is not on disk yet. GNU `ld` reports that as `cannot find -l<name>`;
-    /// Apple's linker as `library not found for -l<name>`; both are usually followed by a
-    /// `collect2: error: ld returned 1 exit status` summary line, deliberately NOT matched here —
-    /// like rustc's `aborting due to`/`could not compile` summary lines elsewhere in this module,
-    /// it carries no root-cause signal and must never gate a match on its own.
+    /// Apple's linker as `library not found for -l<name>`; LLVM's `lld` (reached via
+    /// `-fuse-ld=lld`, e.g. a CI toolchain tuned for faster links) as `unable to find library
+    /// -l<name>` (`lld/ELF/Driver.cpp`'s `searchLibraryBaseName`) — a third, distinct phrasing
+    /// task #505 added after confirming neither of the other two patterns already covered it.
+    /// Each is usually followed by a `collect2: error: ld returned 1 exit status` (GNU) or
+    /// `clang: error: linker command failed` (Apple/lld) summary line, deliberately NOT matched
+    /// here — like rustc's `aborting due to`/`could not compile` summary lines elsewhere in this
+    /// module, it carries no root-cause signal and must never gate a match on its own.
     ///
     /// Unconditional on the library name, matching the precedent already set by
     /// `SwiftValidator::is_dependency_error`'s `no such module` and `ZigValidator`'s `unable to
@@ -375,7 +379,9 @@ impl SnippetValidator for GoValidator {
     /// match — a real defect (a stale build, an ABI mismatch, or the generator emitting the wrong
     /// symbol name), never a build-ordering problem, so that shape keeps its `Fail`. ~keep
     fn is_dependency_error(&self, output: &str) -> bool {
-        let missing_library = (output.contains("cannot find -l") || output.contains("library not found for -l"))
+        let missing_library = (output.contains("cannot find -l")
+            || output.contains("library not found for -l")
+            || output.contains("unable to find library -l"))
             && !output.contains("undefined reference to")
             && !output.contains("Undefined symbols for architecture");
         missing_library

@@ -239,6 +239,17 @@ ld: library not found for -lsample_ffi
 clang: error: linker command failed with exit code 1 (use -v to see invocation)
 ";
 
+/// LLVM's `lld` (reached via `-fuse-ld=lld`, common on CI toolchains tuned for faster links)
+/// phrases the identical missing-artifact condition as its own third string
+/// (`lld/ELF/Driver.cpp`'s `searchLibraryBaseName`) — neither the GNU nor the Apple pattern above
+/// matches it, so a Go snippet corpus linked with `lld` fell back to a genuine `Fail` until task
+/// #505 added this case. ~keep
+const GO_MISSING_LINKER_LIBRARY_LLD: &str = "\
+# github.com/sample/module
+ld.lld: error: unable to find library -lsample_ffi
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+";
+
 /// The library WAS found and loaded; a symbol inside it does not match. That is a real defect —
 /// a stale build, an ABI mismatch, or the generator emitting the wrong symbol name — never a
 /// build-ordering problem, and must not be laundered into `Unavailable` just because a linker
@@ -269,6 +280,15 @@ fn go_missing_linked_library_apple_ld_is_a_missing_dependency() {
 }
 
 #[test]
+fn go_missing_linked_library_lld_is_a_missing_dependency() {
+    assert!(
+        GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_LLD),
+        "LLVM lld's `unable to find library -l<name>` is the same missing-artifact shape: \
+         {GO_MISSING_LINKER_LIBRARY_LLD}"
+    );
+}
+
+#[test]
 fn go_linker_undefined_reference_is_not_a_missing_dependency() {
     assert!(
         !GoValidator.is_dependency_error(GO_LINKER_UNDEFINED_REFERENCE),
@@ -282,6 +302,18 @@ fn go_linker_undefined_reference_is_not_a_missing_dependency() {
 #[test]
 fn go_missing_library_mixed_with_a_real_undefined_reference_is_not_a_missing_dependency() {
     let output = format!("{GO_MISSING_LINKER_LIBRARY_GNU}{GO_LINKER_UNDEFINED_REFERENCE}");
+    assert!(
+        !GoValidator.is_dependency_error(&output),
+        "a run mixing a genuine unresolved-symbol defect with a missing-library diagnostic must \
+         not be relabeled: {output}"
+    );
+}
+
+/// Same mixed-output guard for the `lld` phrasing specifically: the exclusion clauses must gate on
+/// `undefined reference to` regardless of which of the three missing-library patterns preceded it.
+#[test]
+fn go_missing_library_lld_mixed_with_a_real_undefined_reference_is_not_a_missing_dependency() {
+    let output = format!("{GO_MISSING_LINKER_LIBRARY_LLD}{GO_LINKER_UNDEFINED_REFERENCE}");
     assert!(
         !GoValidator.is_dependency_error(&output),
         "a run mixing a genuine unresolved-symbol defect with a missing-library diagnostic must \
