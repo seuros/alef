@@ -306,7 +306,16 @@ impl TsMapContext<'_> {
             TypeRef::Json => "any".to_string(),
             TypeRef::Duration => "number".to_string(),
             TypeRef::Optional(inner) => format!("{} | undefined", self.map_type(inner)),
-            TypeRef::Vec(inner) => format!("{}[]", self.map_type(inner)),
+            // `[]` binds tighter than `|` in TypeScript, so appending it to an unparenthesized
+            // union type only applies to the union's last operand: `T | undefined[]` parses as
+            // `T | (undefined[])`, not `(T | undefined)[]`. `TypeRef::Optional` is the only arm
+            // above that renders a top-level union, so it is the only element type that needs
+            // the parens; every other arm (`Named`, `Vec`, `Map`, primitives) already renders a
+            // single type reference `[]` can suffix unambiguously. ~keep
+            TypeRef::Vec(inner) => match inner.as_ref() {
+                TypeRef::Optional(_) => format!("({})[]", self.map_type(inner)),
+                _ => format!("{}[]", self.map_type(inner)),
+            },
             TypeRef::Map(key, value) => {
                 let key_ts = self.map_type(key);
                 if key_ts == "string" {

@@ -347,6 +347,56 @@ fn vec_maps_to_element_array() {
     assert_eq!(ctx.map_type(&ty), "string[]");
 }
 
+/// `Vec<Option<String>>` must render as `(string | undefined)[]`, not `string | undefined[]`.
+/// TypeScript's `[]` suffix binds tighter than `|`, so an unparenthesized union followed by `[]`
+/// only arrays the union's last operand — `string | undefined[]` parses as
+/// `string | (undefined[])`, describing a completely different (and wrong) type: a value that is
+/// either a bare string or an array of `undefined`s, never an array containing possibly-absent
+/// strings.
+///
+/// Revert symptom: reverting the `TypeRef::Vec` match arm back to the unconditional
+/// `format!("{}[]", ...)` makes this assert `"(string | undefined)[]"` fail because `map_type`
+/// instead returns the unparenthesized `"string | undefined[]"`.
+#[test]
+fn vec_of_optional_wraps_union_before_appending_array_suffix() {
+    let api = empty_api();
+    let mut ctx = TsMapContext {
+        api: &api,
+        exclude_types: &AHashSet::default(),
+        opaque_type_names: &AHashSet::default(),
+        prefix: "Alef",
+        in_progress: AHashSet::default(),
+        resolved_names: ahash::AHashMap::default(),
+        decls: Vec::new(),
+    };
+    let ty = TypeRef::Vec(Box::new(TypeRef::Optional(Box::new(TypeRef::String))));
+    assert_eq!(ctx.map_type(&ty), "(string | undefined)[]");
+}
+
+/// The same nested shape one level deeper (`Vec<Vec<Option<String>>>`) must parenthesize at the
+/// level the union actually occurs, not just the outermost `[]`.
+///
+/// Revert symptom: reverting the fix makes this assert `"(string | undefined)[][]"` fail because
+/// the inner recursive call returns the unparenthesized `"string | undefined[]"`, which the outer
+/// `Vec` arm then suffixes as `"string | undefined[][]"`.
+#[test]
+fn nested_vec_of_optional_parenthesizes_at_the_right_level() {
+    let api = empty_api();
+    let mut ctx = TsMapContext {
+        api: &api,
+        exclude_types: &AHashSet::default(),
+        opaque_type_names: &AHashSet::default(),
+        prefix: "Alef",
+        in_progress: AHashSet::default(),
+        resolved_names: ahash::AHashMap::default(),
+        decls: Vec::new(),
+    };
+    let ty = TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::Optional(Box::new(
+        TypeRef::String,
+    ))))));
+    assert_eq!(ctx.map_type(&ty), "(string | undefined)[][]");
+}
+
 #[test]
 fn optional_appends_undefined() {
     let api = empty_api();
