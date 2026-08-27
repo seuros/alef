@@ -779,6 +779,14 @@ mod tests {
 
     #[test]
     fn docs_nested_bytes_generated_rust_compiles() {
+        // This spawns a real `cargo check`, which takes cargo's machine-wide package-cache
+        // lock. `REAL_CARGO_LOCK`'s doc records that lock actually being contended during
+        // this crate's own suite ("Blocking waiting for file lock on package cache"), so
+        // every in-process test that launches real cargo has to serialize against the rest.
+        // `--offline` narrows the window but does not remove it: the index read still locks.
+        // Cross-process contention (a concurrent `alef` run in another worktree) is outside
+        // what a process-local mutex can reach -- this closes the in-process half only. ~keep
+        let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
         let (lines, expression) = render_rust_arg(
             "input",
             &serde_json::json!({"bytes": "document.pdf"}),
