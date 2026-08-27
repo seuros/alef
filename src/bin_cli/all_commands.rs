@@ -11,7 +11,11 @@ mod all_commands_run_setup;
 mod docs_stage;
 mod e2e_stage;
 mod preflight;
-mod stage_failures;
+// `pub(crate)`, not private: `bin_cli::core_commands::generate` reuses `StageFailures` for the
+// identical hazard `alef generate` had -- a per-crate post-build failure must not skip the
+// terminal `finalize_hashes` call and must not deny every later crate its own regeneration. See
+// that module's doc and `core_commands/generate.rs`'s use of it. ~keep
+pub(crate) mod stage_failures;
 use all_commands_run_setup::{
     create_once_overwrite, refused_snippet_dir_paths, report_deferred_formatting, sync_registry_versions_before_all,
 };

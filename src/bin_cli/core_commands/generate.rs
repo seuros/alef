@@ -1,11 +1,14 @@
 //! `alef generate`'s command-arm body, split out of `core_commands.rs` for the
-//! file-modularization cap. Pure extraction of the `Commands::Generate` match arm --
-//! no behaviour change.
+//! file-modularization cap. Originally a pure extraction of the `Commands::Generate` match arm
+//! with no behaviour change; since then it has picked up its own fixes, notably deferring a
+//! per-crate post-build failure into `StageFailures` instead of hard-returning before the
+//! terminal stamp call (task #546) -- see `stage_failures`'s doc comment above the crate loop.
 
 use anyhow::Result;
 
 use crate::cli::{cache, dispatch, pipeline};
 
+use crate::bin_cli::all_commands::stage_failures::StageFailures;
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
 use crate::bin_cli::helpers::*;
@@ -46,6 +49,10 @@ pub(crate) fn handle_generate(
     // other phase's frozen files. ~keep
     let mut refusals = pipeline::WriteReport::default();
     let mut grand_total_generated: usize = 0;
+    // A post-build failure (below) must not skip this crate's terminal `finalize_hashes` call,
+    // and must not deny every later crate its own regeneration -- see the doc on the
+    // `complete_generated_artifacts` call site for the exact hazard this closes. ~keep
+    let mut stage_failures = StageFailures::new();
     for resolved_cfg in &crates_to_process {
         let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
         pipeline::warn_missing_formatters(&languages);
@@ -365,9 +372,22 @@ pub(crate) fn handle_generate(
         // this mirrors that ordering here. Surface refusals before a post-build error,
         // not after -- see the identical guard (and its full rationale) on
         // `all_commands.rs`'s "All" arm. ~keep
+        // Deferred into `stage_failures` rather than `?`/`return Err`: a bare early return here
+        // used to abort not just the rest of THIS crate's stages but every later crate in
+        // `crates_to_process` too, and -- the defect this task exists to close -- it skipped the
+        // single terminal `finalize_hashes(&current_gen_paths, ..)` call below entirely. Every
+        // language's binding/service-API/public-API/stub output for THIS crate had already been
+        // written with its header (no hash line yet, by the two-pass design `finalize_hashes`'s
+        // own doc describes) before this post-build step ever runs, so skipping the stamp left
+        // that output on disk permanently unstamped: a later run whose content matches (cache-hit)
+        // never rewrites it and so never gets another chance to stamp it either. One backend's
+        // post-build failure (a missing toolchain, a bad `flutter_rust_bridge_codegen` run) must
+        // not orphan every other language's freshly-written output this way. Mirrors the identical
+        // fix already shipped for `alef all` (`all_commands.rs`'s `stage_failures.record(...)` at
+        // its own `complete_generated_artifacts` call site) -- see `StageFailures`'s module doc for
+        // the general hazard and task #186 for the multi-crate half of it. ~keep
         if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
-            pipeline::report_refused_writes(&refusals);
-            return Err(error);
+            stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
         }
 
         // Fold in every path a post-build step writes unguarded (see
@@ -463,8 +483,19 @@ pub(crate) fn handle_generate(
         }
         // Final stamp, after post-build AND formatting have both settled every byte this
         // run will ship -- see the ordering comment above `complete_generated_artifacts`
-        // for why an intermediate stamp before formatting is not enough. ~keep
-        pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+        // for why an intermediate stamp before formatting is not enough.
+        //
+        // Sweeping (not the plain path-tracked `finalize_hashes`), matching `all_commands.rs`'s
+        // terminal stamp: a language `pipeline::generate` dropped as a per-language cache hit
+        // contributes no files to `current_gen_paths` beyond whatever `read_lang_manifest`
+        // recorded, and a run interrupted between an earlier write and this stamp (machine sleep,
+        // a killed process) can leave a marker-carrying file on disk that no in-memory list this
+        // run computed ever names. `generate_sweep_roots` -- computed here instead of at its
+        // original call site further down, which needed it only for the orphan sweep -- rederives
+        // every such file's hash straight from its own on-disk content, so neither gap can leave a
+        // file permanently unstamped. ~keep
+        let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
+        pipeline::finalize_hashes_sweeping(&current_gen_paths, &cleanup_roots, &sources_hash, &alef_toml_bytes)?;
         // Records this crate's generation-inputs fingerprint centrally, once, now that
         // generation for it has completed successfully -- the replacement for folding
         // `inputs_hash` into every file's own stamp. See `core::hash`'s module doc and
@@ -500,7 +531,10 @@ pub(crate) fn handle_generate(
             .values()
             .flat_map(|paths| paths.iter().cloned())
             .collect();
-        let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
+        // `cleanup_roots` was already computed above, ahead of the terminal
+        // `finalize_hashes_sweeping` call, which needed it first -- `generate_sweep_roots` is a
+        // pure function of `languages`/`lang`/`resolved_cfg`/`base_dir`, none of which change
+        // between there and here, so reusing the one value is correct, not merely convenient.
         let previous_paths: Vec<_> = previous_generation_owned.into_values().flatten().collect();
         // `cleanup_roots` doubles as the disk-scan candidate list: `sweep_manifest_orphans`
         // only actually scans a root once it has independently verified both `previous_paths`
@@ -536,5 +570,11 @@ pub(crate) fn handle_generate(
     }
     pipeline::report_refused_writes(&refusals);
     tracing::info!("Generated {grand_total_generated} files");
+    // Every crate's write, format and finalize-hash phases already ran and already wrote their
+    // output by the time we reach here, deferred post-build failures included -- see
+    // `stage_failures`'s doc comment above the loop. Surfacing them now (instead of at the point
+    // of failure) is what lets the run still exit non-zero and name everything that went wrong,
+    // without withholding any of the regeneration this invocation could still do. ~keep
+    stage_failures.into_result()?;
     Ok(None)
 }
