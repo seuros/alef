@@ -135,6 +135,9 @@ pub enum CommentStyle {
     Hash,
     /// `/* block comment */` (C headers)
     Block,
+    /// `; line comment`   (INI-family formats -- `.npmrc`, which pnpm/npm's `ini` parser reads
+    /// with `;` as the conventional comment prefix, alongside `#`.)
+    Semicolon,
 }
 
 /// Return the standard alef header as a comment block.
@@ -197,6 +200,7 @@ fn render_header(style: CommentStyle, body: &str) -> String {
     match style {
         CommentStyle::DoubleSlash => body.lines().map(|l| format!("// {l}\n")).collect(),
         CommentStyle::Hash => body.lines().map(|l| format!("# {l}\n")).collect(),
+        CommentStyle::Semicolon => body.lines().map(|l| format!("; {l}\n")).collect(),
         CommentStyle::Block => {
             let mut out = String::from("/*\n");
             for line in body.lines() {

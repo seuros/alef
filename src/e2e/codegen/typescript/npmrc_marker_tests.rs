@@ -10,7 +10,7 @@
 use super::*;
 use crate::core::config::NewAlefConfig;
 
-fn generated_npmrc_content() -> String {
+fn generated_npmrc_file() -> crate::core::backend::GeneratedFile {
     let cfg: NewAlefConfig = toml::from_str(
         r#"
 [workspace]
@@ -38,11 +38,13 @@ result_var = "result"
         .generate(&[], &e2e, &resolved, &[], &[], &[], &[])
         .expect("generate ok");
     files
-        .iter()
+        .into_iter()
         .find(|f| f.path.ends_with(".npmrc"))
         .expect("node codegen must emit .npmrc")
-        .content
-        .clone()
+}
+
+fn generated_npmrc_content() -> String {
+    generated_npmrc_file().content
 }
 
 /// Asserts through the real guard function (`hash::content_has_alef_marker`) rather than a
@@ -64,5 +66,36 @@ fn content_with_no_marker_is_not_recognised_by_the_ownership_guard() {
     assert!(
         !crate::core::hash::content_has_alef_marker(content),
         "content with no alef marker must not be recognised as alef-owned, got: {content}"
+    );
+}
+
+/// Regression for alef task #509: `alef adopt` classified an already-marked `.npmrc` as
+/// unstampable and fell back to recording it in the presence-only `.alef-ownership.toml`
+/// bucket, even though this generator proves the format markable by marking it itself.
+///
+/// Asserted generically -- "whatever path this generator self-marks must be a path
+/// `cli::pipeline::generate::write`'s marker table can also stamp" -- rather than hardcoding
+/// `.npmrc`'s extension, so the test still catches the drift if a future generator change moves
+/// the marker to a different self-marked path this table has not been taught about. If `.npmrc`
+/// is ever dropped from `write::marker_header_syntax`, this fails with "generator marks a path
+/// adopt cannot stamp"; that is the exact symptom `alef adopt --write` reproduced before this
+/// task's fix, where the file was recorded as owned instead of ever having its own bytes
+/// stamped.
+#[test]
+fn every_path_the_generator_self_marks_is_stampable_by_adopt() {
+    let file = generated_npmrc_file();
+    assert!(
+        crate::core::hash::content_has_alef_marker(&file.content),
+        "precondition: the generator must actually self-mark this path for the test below to \
+         mean anything, got: {}",
+        file.content
+    );
+    assert!(
+        crate::cli::pipeline::is_markable_path(&file.path),
+        "generator marks a path adopt cannot stamp: {} carries an alef marker in its generated \
+         content, but `write::marker_header_syntax` has no comment syntax registered for it -- \
+         `alef adopt --write` would record this path in `.alef-ownership.toml` instead of \
+         stamping the marker onto the bytes on disk",
+        file.path.display()
     );
 }

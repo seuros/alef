@@ -1,5 +1,6 @@
 mod binary;
 mod create_once_seeds;
+mod npmrc_marker;
 
 use super::*;
 use crate::core::backend::GeneratedFile;

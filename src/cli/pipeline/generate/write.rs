@@ -289,6 +289,16 @@ pub(super) enum MarkerSyntax {
 ///   Scaffolded `generated_header: true` (`scaffold/languages/poly.rs`) for every FFI target,
 ///   so it was silently unstamped the same way `Rakefile`/`Makevars*` were before those were
 ///   listed here, and for the same reason: nothing before this entry reported the mismatch.
+/// - `.npmrc` — INI grammar, read by pnpm/npm's `ini` parser, which treats `;` (and `#`) as a
+///   line comment; alef's own node/napi e2e generator (`e2e::codegen::typescript::mod`) already
+///   self-marks it with a hand-rolled `; <marker>` line, proving the format is markable. Matched
+///   on file *name* for the same structural reason as `.clang-format`: a single-leading-dot
+///   dotfile reports no extension. Deliberately **not** added to [`marker_comment_style`] (the
+///   ownership predicate) alongside this: a consumer tree's `.npmrc` predates this entry and may
+///   carry an older, unrecognised marker wording (alef #509), so treating a missing marker here
+///   as proof of foreign authorship would freeze exactly those files — the create-once trap this
+///   function's doc warns against. `alef adopt` is the door out for them; this entry only lets
+///   that door's `stamp_for_adoption` succeed instead of falling back to the ownership record.
 ///
 /// `Rakefile` and `Makevars*` are emitted `generated_header: true` (`scaffold/languages/ruby.rs`,
 /// `scaffold/languages/r.rs`), so before they were listed here `ensure_generated_header` was
@@ -336,6 +346,7 @@ pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
             return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash));
         }
         Some(".clang-format") => return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
+        Some(".npmrc") => return Some(MarkerSyntax::Comment(hash::CommentStyle::Semicolon)),
         _ => {}
     }
     // Case-folded, unlike the ownership predicate above. An extension's case is a spelling
