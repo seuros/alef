@@ -280,12 +280,13 @@ fn gen_enum_omits_host_cfg_variant_entirely_when_feature_not_configured() {
 
 /// A foreign-crate cfg-gated variant's declaration stays unconditional regardless of
 /// `configured_features` -- see `enum_variant_declaration_without_cfg_attribute`'s doc comment:
-/// proving it disabled here, while `codegen::conversions::gen_enum_from_*_cfg`'s catch-all
-/// computation (wasm's own `ConversionConfig` does not thread `configured_features` into it)
-/// still assumes it might exist, would make that now-superfluous catch-all unreachable -- the
-/// same defect shape one level down. This intentionally documents the current, narrower scope of
-/// wasm's fix: only a HOST-owned variant is resolved definitively; a foreign one keeps the
-/// pre-existing conservative "always declared" behavior. ~keep
+/// `gen_enum` calls it directly and it hardcodes `None` for a foreign variant no matter what its
+/// own caller passed in, so `gen_enum`'s declaration path is architecturally independent of
+/// wasm's `ConversionConfig.configured_features` (that field now IS threaded, so the conversion
+/// side's catch-all suppression for a proven-unreachable foreign variant is live -- see alef
+/// #538 -- but the declaration side deliberately stays unconditional; see
+/// `enum_variant_declaration_without_cfg_attribute`'s own doc comment for why: only a HOST-owned
+/// variant's declaration is ever resolved definitively). ~keep
 #[test]
 fn gen_enum_keeps_foreign_cfg_variant_unconditionally_regardless_of_configured_features() {
     let enum_def = EnumDef {

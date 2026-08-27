@@ -644,6 +644,12 @@ impl Backend for WasmBackend {
             } else {
                 Some(&text_field_enum_names)
             },
+            // See `enums::gen_enum`'s doc comment and `configured_features_set` above: this is
+            // the same set already threaded into the enum declaration path, now also reaching the
+            // conversion path so a foreign cfg-gated variant proven unreachable here suppresses
+            // its now-provably-dead `_ => Default::default()` catch-all instead of leaving one
+            // behind for `cargo clippy -- -D warnings` to trip on. ~keep
+            configured_features: Some(enabled_features.as_slice()),
             ..Default::default()
         };
         let convertible = crate::codegen::conversions::convertible_types(api);
