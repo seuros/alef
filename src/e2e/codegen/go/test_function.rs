@@ -191,7 +191,8 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    .with_result_is_byte_payload(call_config.effective_result_is_bytes(lang));
     let field_resolver = &call_field_resolver;
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides

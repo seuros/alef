@@ -118,6 +118,7 @@ pub fn render_test_function(
     .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, "rust"), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    .with_result_is_byte_payload(call_config.effective_result_is_bytes("rust"))
     // `with_ir_fields` only ever proves a bare field name optional (e.g. "chunks"), by
     // unanimity across every declaration of that name in the crate — it has no path context,
     // so a renderer walking a nested path like "results[0].chunks" never matches it once the

@@ -113,6 +113,28 @@ pub struct FieldResolver {
     /// `optional_fields`/`ir_reachable_fields` behaviour stands unchanged. See
     /// [`IrResultFieldMap`].
     pub(super) ir_result_field_map: IrResultFieldMap,
+    /// Whether the call's own declared Rust return type resolves to a raw byte payload
+    /// (`bytes::Bytes`, `Vec<u8>`, `[u8]`, `[u8; N]` — all collapsed to `TypeRef::Bytes` by
+    /// `extract::type_resolver`) rather than a struct. Populated via
+    /// `with_result_is_byte_payload`; `false` by default, matching every resolver built before
+    /// this flag existed.
+    ///
+    /// ~keep This is the ONE place every backend's `is_valid_for_result` /
+    /// `result_field_oracle_knows` call consults for "does a field path even make sense here" —
+    /// a byte payload has no fields at all, so ANY non-empty path is unconditionally rejected the
+    /// same way regardless of which backend asks. Before this flag existed the two anchored
+    /// oracles (`ir_result_field_map.root_type`, `ir_collection_map.root_type`) were `None` for a
+    /// byte-returning call exactly as they are for a call with no IR wired in at all —
+    /// `resolve_declared_result_type`'s `named_type` helper has no `Named` leaf to report for
+    /// `TypeRef::Bytes` — so the permissive "IR has never heard of this name" default silently
+    /// accepted a fixture's declared struct field path against a value that is not a struct.
+    /// Some backends independently learned to check the config-level `result_is_bytes` flag
+    /// before this existed (java/csharp/c/zig/swift/r); others (rust, go) checked only
+    /// `result_is_simple` and missed the byte-payload case entirely — two components reading the
+    /// same fact and disagreeing. Anchoring the answer here, once, is what a byte-returning call
+    /// site now has to opt into by passing this flag at construction rather than reimplementing
+    /// its own check.
+    pub(super) result_is_byte_payload: bool,
 }
 
 /// IR field facts keyed by owner type and anchored at the type a specific call returns, so a

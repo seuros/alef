@@ -345,6 +345,14 @@ impl FieldResolver {
     /// [`Self::is_known_via_sibling_field_config`]) another per-field config map already
     /// references the field even though `result_fields` doesn't.
     pub fn is_valid_for_result(&self, fixture_field: &str) -> bool {
+        // A byte payload has no fields at all, so no per-field distinction is possible: every
+        // non-empty path is rejected before any of the name-keyed or IR-anchored checks below get
+        // a chance to default-allow it the way they do for a call with simply no IR wired in. See
+        // `result_is_byte_payload`'s field doc for why this has to be a positive, call-specific
+        // fact rather than inferred from an absent anchored root type. ~keep
+        if self.result_is_byte_payload {
+            return false;
+        }
         let resolved = self.resolve(fixture_field);
         let first_segment = resolved.split('.').next().unwrap_or(resolved);
         let first_segment = first_segment.split('[').next().unwrap_or(first_segment);
@@ -416,6 +424,14 @@ impl FieldResolver {
     ///   `IrFieldShape::IrAbsent`; callers must fall back to their pre-oracle behaviour rather
     ///   than treat silence as rejection, or every IR-less call site would reject everything.
     pub fn result_field_oracle_knows(&self, fixture_field: &str) -> Option<bool> {
+        // Same positive byte-payload fact `is_valid_for_result` guards against, asked before any
+        // of the flat sets below get a chance to answer `None` (unknown) for a name they simply
+        // have never seen. `Some(false)` here — a definite refusal, not an abstention — is what
+        // lets `anchor_leaf` fall through to `anchor_leaf_via_result_fields` and still correctly
+        // find no compiling prefix. ~keep
+        if self.result_is_byte_payload {
+            return Some(false);
+        }
         if self.ir_reachable_fields.is_empty()
             && self.ir_known_excluded_fields.is_empty()
             && self.result_fields.is_empty()

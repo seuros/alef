@@ -98,6 +98,7 @@ impl FieldResolver {
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
+            result_is_byte_payload: false,
         }
     }
 
@@ -134,6 +135,7 @@ impl FieldResolver {
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
+            result_is_byte_payload: false,
         }
     }
 
@@ -180,6 +182,7 @@ impl FieldResolver {
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
+            result_is_byte_payload: false,
         }
     }
 
@@ -232,6 +235,7 @@ impl FieldResolver {
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
+            result_is_byte_payload: false,
         }
     }
 
@@ -268,6 +272,7 @@ impl FieldResolver {
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
+            result_is_byte_payload: false,
         }
     }
 
@@ -366,6 +371,22 @@ impl FieldResolver {
     pub(crate) fn with_ir_result_fields(mut self, mut map: IrResultFieldMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_result_field_map = map;
+        self
+    }
+
+    /// Declare that the call's own declared Rust return type resolves to a raw byte payload
+    /// (`bytes::Bytes`, `Vec<u8>`, `[u8]`, `[u8; N]`) rather than a struct — the call-specific
+    /// counterpart to [`crate::core::config::e2e::CallConfig::effective_result_is_bytes`], fed
+    /// either from that config flag or from the call's own resolved signature.
+    ///
+    /// Once set, [`Self::is_valid_for_result`] and [`Self::result_field_oracle_knows`] reject
+    /// EVERY non-empty field path unconditionally — a byte payload has no fields, so no per-field
+    /// distinction is possible or needed. `false` (the default every resolver already had before
+    /// this flag existed) leaves every other oracle's behaviour completely unchanged, so wiring
+    /// this in at a construction site can only turn an already-wrong accepted path into a
+    /// rejection, never the reverse. ~keep
+    pub fn with_result_is_byte_payload(mut self, is_byte_payload: bool) -> Self {
+        self.result_is_byte_payload = is_byte_payload;
         self
     }
 

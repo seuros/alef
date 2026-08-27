@@ -84,3 +84,7 @@ mod python_optional_index_tests;
 #[cfg(test)]
 #[path = "field_access/is_array_ir_fallback_tests.rs"]
 mod is_array_ir_fallback_tests;
+
+#[cfg(test)]
+#[path = "field_access/byte_payload_result_tests.rs"]
+mod byte_payload_result_tests;
