@@ -315,6 +315,53 @@ fn test_clean_doc_vec_macros_become_list_examples() {
     );
 }
 
+/// Table-driven regression coverage for the naive-substring-replace bug class: a short
+/// bare-word term (`vec`, `crate`) is a literal prefix of an unrelated longer English word
+/// (`vector`, `crater`), and a plain `str::replace` would silently corrupt that longer word.
+/// Each case pairs a corruption regression with the positive control proving the fix didn't
+/// just stop replacing the standalone term altogether. task #539. ~keep
+#[test]
+fn test_clean_doc_bare_word_terms_never_corrupt_longer_words() {
+    let cases: &[(&str, &str)] = &[
+        // Reported case: "empty vector" must not become "empty listtor". ~keep
+        ("The result is an empty vector.", "The result is an empty vector."),
+        // Positive control: a standalone "empty vec" must still become "empty list". ~keep
+        ("Returns an empty vec if nothing matched.", "Returns an empty list if nothing matched."),
+        // "this vec"/"this vector" share the same "vec" prefix relationship. ~keep
+        ("Clear this vector before reuse.", "Clear this vector before reuse."),
+        ("Clear this vec before reuse.", "Clear this list before reuse."),
+        // "this crate" -> "this library" has the same bare-word-prefix shape against
+        // "crater"/"craters" and is fixed with the same boundary-aware helper. ~keep
+        ("For this crater, additional caution is required.", "For this crater, additional caution is required."),
+        ("Everything defined in this crate is public API.", "Everything defined in this library is public API."),
+    ];
+
+    for (input, expected) in cases {
+        let cleaned = clean_doc(input, Language::Node);
+        assert_eq!(&cleaned, expected, "clean_doc({input:?}) mismatch");
+    }
+}
+
+/// Direct unit coverage of the boundary-aware helper itself, independent of the `clean_doc`
+/// pipeline: matches at the very start/end of the string, and a candidate match glued to a
+/// longer word on the left (not just the right) must also be rejected. ~keep
+#[test]
+fn test_replace_whole_word_respects_boundaries_on_both_sides() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        ("empty vector is returned", "empty vec", "empty list", "empty vector is returned"),
+        ("returns an empty vec when done", "empty vec", "empty list", "returns an empty list when done"),
+        ("vec at the very start", "vec", "list", "list at the very start"),
+        ("ends in a vec", "vec", "list", "ends in a list"),
+        ("prevec should not match", "vec", "list", "prevec should not match"),
+        ("vecinity should not match", "vec", "list", "vecinity should not match"),
+    ];
+
+    for (input, from, to, expected) in cases {
+        let actual = replace_whole_word(input, from, to);
+        assert_eq!(&actual, expected, "replace_whole_word({input:?}, {from:?}, {to:?})");
+    }
+}
+
 #[test]
 fn test_clean_doc_generic_rust_vec_terms_become_language_native() {
     let doc = "Uses Arc-wrapped tables: `Vec<Arc<Table>>`. Stores middleware in `Vec<Box<dyn ChunkMiddleware>>`. Serializes as Vec<Table> for JSON.";

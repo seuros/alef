@@ -1,10 +1,12 @@
 use crate::core::config::Language;
 
 mod heading_levels;
+mod terminology;
 
 #[cfg(test)]
 pub(crate) use heading_levels::check_monotonic_headings;
 pub(crate) use heading_levels::demote_headings_to_start_at;
+use terminology::replace_whole_word;
 
 /// Rust doc section headers that should be stripped for all non-Rust output.
 const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];
@@ -279,8 +281,11 @@ pub(crate) fn collapse_whitespace(s: &str) -> String {
 
 /// Replace Rust-centric terminology with language-neutral equivalents.
 pub(crate) fn replace_rust_terminology(doc: &str, lang: Language) -> String {
+    // "this crate" is a bare-word term, not delimited syntax -- a plain substring replace
+    // would also match inside "crater"/"craters" (e.g. "this crater"), so it goes through the
+    // boundary-aware helper instead of `.replace`. ~keep
+    let doc = replace_whole_word(doc, "this crate", "this library");
     let doc = doc
-        .replace("this crate", "this library")
         .replace("in this crate", "in this library")
         .replace("for this crate", "for this library")
         .replace(
@@ -336,7 +341,7 @@ pub(crate) fn replace_rust_type_terms(doc: &str, lang: Language) -> String {
             .replace("Vec<Vec<String>>", nested_string_list)
             .replace("Vec<String>", string_list)
             .replace("Vec<u8>", bytes);
-        replace_rust_generic_collection_terms(&line, lang)
+        let line = replace_rust_generic_collection_terms(&line, lang)
             .replace("&BTreeMap<String, String>", string_map)
             .replace("BTreeMap<String, String>", string_map)
             .replace("&HashMap<String, String>", string_map)
@@ -344,10 +349,13 @@ pub(crate) fn replace_rust_type_terms(doc: &str, lang: Language) -> String {
             .replace("`std.io.Error`", "an operating-system I/O error")
             .replace("`std::io::Error`", "an operating-system I/O error")
             .replace("vec![", "[")
-            .replace(".into()", "")
-            .replace("empty vec", "empty list")
-            .replace("this vec", "this list")
-            .replace("Arc-wrapped ", "shared ")
+            .replace(".into()", "");
+        // "empty vec"/"this vec" are bare-word terms, not `Vec<...>` type syntax -- a plain
+        // substring replace here would also match inside "vector" (e.g. "empty vector"),
+        // so these two use the boundary-aware helper instead of `.replace`. ~keep
+        let line = replace_whole_word(&line, "empty vec", "empty list");
+        let line = replace_whole_word(&line, "this vec", "this list");
+        line.replace("Arc-wrapped ", "shared ")
             .replace("Arc semantics in-memory", "shared in-memory ownership")
             .replace("`NodeContext.with_lazy_attributes`", "lazy attribute extraction")
             .replace("`NodeContext::with_lazy_attributes`", "lazy attribute extraction")
