@@ -122,6 +122,13 @@ fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_vio
     {
         return;
     }
+    // Spawns real `mvn` against a shared repository directory; see
+    // `test_support::REAL_MVN_LOCK`'s doc for why this must be held for the whole test. ~keep
+    let _mvn_lock = crate::test_support::RealMvnGuard::acquire();
+    let maven_repo_local = format!(
+        "-Dmaven.repo.local={}",
+        crate::test_support::maven_local_repo_dir().display()
+    );
 
     let config = test_config();
     let api = test_api();
@@ -164,7 +171,7 @@ fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_vio
         // below for the wrong reason and never even reaching the one it exists to prove.
         // Runners have real network access; only Maven's own offline flag was blocking it.
         // ~keep
-        .args(["-q", "validate"])
+        .args(["-q", "validate", &maven_repo_local])
         .current_dir(project_dir.path())
         .output()
         .expect("mvn runs");
@@ -190,7 +197,7 @@ fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_vio
         // Not `-o`: see the comment on the first `mvn` invocation above -- same reason,
         // and here an unresolved plugin would fail this `success()` assertion for a
         // network problem instead of a real checkstyle regression. ~keep
-        .args(["-q", "validate"])
+        .args(["-q", "validate", &maven_repo_local])
         .current_dir(project_dir.path())
         .output()
         .expect("mvn runs");

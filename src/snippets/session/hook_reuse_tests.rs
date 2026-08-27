@@ -179,8 +179,9 @@ fn a_timed_out_hook_is_charged_once_and_still_fails_every_target() {
         prepared.sessions.is_empty(),
         "a target whose hook timed out must not be handed a session"
     );
-    assert!(
-        elapsed < std::time::Duration::from_secs(timeout_secs * 2),
-        "the shared hook's timeout was paid more than once: {elapsed:?}"
+    crate::test_support::assert_elapsed_under(
+        "the shared hook's timeout was paid more than once",
+        elapsed,
+        std::time::Duration::from_secs(timeout_secs * 2),
     );
 }

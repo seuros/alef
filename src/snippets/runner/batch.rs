@@ -311,7 +311,7 @@ mod tests {
     };
     use crate::snippets::validators::{SnippetValidator, ValidatorRegistry};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     /// How long a probing validator waits for a sibling group to join it before giving up and
@@ -323,6 +323,11 @@ mod tests {
     struct ConcurrencyProbe {
         in_flight: AtomicUsize,
         peak: AtomicUsize,
+        /// The longest any single validator actually waited for a sibling to join it, in
+        /// milliseconds. `peak` alone can't distinguish "reached 2 quickly" from "gave up at the
+        /// full `CONCURRENCY_PROBE_TIMEOUT` and never saw a sibling" -- this is what lets the
+        /// final assertion report a real elapsed/bound/margin instead of just a bare count. ~keep
+        max_waited_millis: AtomicU64,
     }
 
     struct ProbingBatchValidator {
@@ -357,10 +362,13 @@ mod tests {
         ) -> Option<crate::snippets::error::Result<Vec<(SnippetStatus, Option<String>)>>> {
             let entered = self.probe.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.probe.peak.fetch_max(entered, Ordering::SeqCst);
-            let deadline = Instant::now() + CONCURRENCY_PROBE_TIMEOUT;
+            let started = Instant::now();
+            let deadline = started + CONCURRENCY_PROBE_TIMEOUT;
             while self.probe.peak.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(1));
             }
+            let waited_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            self.probe.max_waited_millis.fetch_max(waited_millis, Ordering::SeqCst);
             self.probe.in_flight.fetch_sub(1, Ordering::SeqCst);
             let language = self.language;
             Some(Ok(snippets
@@ -434,6 +442,15 @@ mod tests {
         let summary = run_validation(&snippets, &registry, &batch_config()).expect("validation completes");
 
         assert_eq!(summary.results.len(), 2);
+        // A miss here means some validator gave up at the full `CONCURRENCY_PROBE_TIMEOUT`
+        // without ever seeing a sibling join it -- report how close that wait came to its bound
+        // before the bare peak count below, so a future failure is self-diagnosing. ~keep
+        let waited = Duration::from_millis(probe.max_waited_millis.load(Ordering::SeqCst));
+        crate::test_support::assert_elapsed_under(
+            "the slowest validator waited for a sibling group to join it",
+            waited,
+            CONCURRENCY_PROBE_TIMEOUT,
+        );
         assert_eq!(probe.peak.load(Ordering::SeqCst), 2);
     }
 

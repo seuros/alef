@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 /// The single lock serializing every test in this crate that mutates the process-global current
 /// directory. See the module docs for why one shared lock is required rather than one per module.
@@ -141,6 +142,56 @@ impl RealCargoGuard {
     }
 }
 
+/// The single lock serializing every test in this crate that spawns a REAL `mvn` subprocess
+/// against [`maven_local_repo_dir`].
+///
+/// alef task #529's Maven-specific follow-up: `java_checkstyle.rs`'s and `java_pom_compiler.rs`'s
+/// three bite tests each shell out to a real `mvn`, and a prior audit flagged that all three used
+/// to share the developer's ambient `~/.m2` -- a machine-global resource a genuinely different
+/// process (a different worktree's own `mvn`/`cargo` run) could also be touching, with none of
+/// this crate's own locks reaching it. Pinning `-Dmaven.repo.local` to a per-worktree, per-run
+/// tempdir was rejected before: it closes the cross-worktree hazard but pays a full cold plugin
+/// download on every single test run, which is not an acceptable trade for three tests that
+/// already take real wall-clock time. [`maven_local_repo_dir`] instead pins the repository to a
+/// path scoped to *this checkout* (`target/mvn-repo-cache-test`, derived from `CARGO_MANIFEST_DIR`
+/// at compile time) -- so two different worktrees never share one repository directory (the
+/// cross-worktree hazard the original audit flagged is closed the same way `CWD_LOCK`/
+/// `SKIP_COMMANDS_LOCK`/`REAL_CARGO_LOCK` close their own machine-global resources), while a
+/// second run in the *same* worktree reuses whatever the first run already downloaded instead of
+/// paying a cold download again. That still leaves one race this lock exists to close: this
+/// crate's own three mvn-driving tests running concurrently under `cargo test`'s default
+/// parallelism would otherwise all populate that one shared per-worktree cache directory at once,
+/// which is exactly the concurrent-write shape that made the ambient `~/.m2` unsafe in the first
+/// place, just at smaller scope. ~keep
+pub(crate) static REAL_MVN_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard that holds [`REAL_MVN_LOCK`] for its lifetime. Every test that spawns a real `mvn`
+/// subprocess against [`maven_local_repo_dir`] must acquire this for the whole span during which
+/// that subprocess might run. See [`REAL_MVN_LOCK`]'s doc for why a dedicated lock and a dedicated
+/// repository directory are both required.
+pub(crate) struct RealMvnGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl RealMvnGuard {
+    /// Locks [`REAL_MVN_LOCK`] for the caller's scope.
+    pub(crate) fn acquire() -> Self {
+        let lock = REAL_MVN_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        Self { _lock: lock }
+    }
+}
+
+/// The Maven local repository directory every real `mvn` invocation in this crate's test suite
+/// must be pinned to via `-Dmaven.repo.local=<path>`, instead of the ambient `~/.m2` every other
+/// process on the machine (including a completely different worktree's own build) also reads and
+/// writes. See [`REAL_MVN_LOCK`]'s doc for the full rationale, including why this is a persistent
+/// per-worktree cache rather than a fresh tempdir per test run.
+pub(crate) fn maven_local_repo_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("mvn-repo-cache-test")
+}
+
 /// Build a [`std::process::Command`] for `program`, pre-pinned to [`std::env::temp_dir`].
 ///
 /// `cargo test` runs every test as a thread in one process (see the module docs), so a spawn
@@ -158,6 +209,31 @@ pub(crate) fn spawn_from_stable_dir(program: &str) -> std::process::Command {
     let mut command = std::process::Command::new(program);
     command.current_dir(std::env::temp_dir());
     command
+}
+
+/// Assert that `elapsed` stayed under `bound`, embedding both values and the signed margin
+/// between them in the panic message.
+///
+/// alef task #529: `cargo test --lib` had one transient failure under concurrent machine load
+/// that a prior audit narrowed to "one of the wall-clock-bounded assertions in this suite, CPU
+/// starved by a different process's build running in a different worktree" but could not name,
+/// because every candidate's bare `assert!(elapsed < bound, ..)` reported only the elapsed side
+/// -- never the bound it was measured against or how close the run actually came to it. Route a
+/// bounded wall-clock assertion through this helper instead of hand-writing that comparison so
+/// the *next* occurrence identifies itself without another audit: the panic states the measured
+/// elapsed time, the asserted bound, and their margin, so a razor-thin or negative margin next to
+/// an otherwise-clean run reads as "starved, not broken." `context` names what the bound is
+/// timing, so the panic still reads standalone without the caller's source. This only changes
+/// what a failure reports -- it must never be used to raise, lower, or otherwise pick a bound;
+/// that stays the call site's decision. ~keep
+pub(crate) fn assert_elapsed_under(context: &str, elapsed: Duration, bound: Duration) {
+    let margin = bound.as_secs_f64() - elapsed.as_secs_f64();
+    assert!(
+        elapsed < bound,
+        "{context}: elapsed {elapsed:?}, bound {bound:?}, margin {margin:+.3}s -- a negative \
+         margin here next to an otherwise-clean run is the signature of CPU starvation from a \
+         concurrent process, not a defect in the code under test"
+    );
 }
 
 /// `cargo sort --check` conformance for the table ORDER of a generated `Cargo.toml`.
@@ -580,6 +656,43 @@ mod git_hermeticity_tests {
             String::from_utf8_lossy(&branch.stdout).trim(),
             "main",
             "the fixture branch name must be pinned by the helper, not inherited from the host"
+        );
+    }
+}
+
+#[cfg(test)]
+mod assert_elapsed_under_tests {
+    use super::assert_elapsed_under;
+    use std::time::Duration;
+
+    /// The common, non-flaky case: elapsed comfortably under bound must not panic.
+    #[test]
+    fn does_not_panic_when_elapsed_is_under_the_bound() {
+        assert_elapsed_under("probe", Duration::from_millis(100), Duration::from_secs(1));
+    }
+
+    /// The failure this helper exists for: the panic message must carry the elapsed value, the
+    /// bound, and a margin -- not just "it was too slow" -- so a future occurrence is
+    /// self-diagnosing without another audit. ~keep
+    #[test]
+    fn panics_with_elapsed_bound_and_margin_when_over_the_bound() {
+        let result = std::panic::catch_unwind(|| {
+            assert_elapsed_under("probe", Duration::from_millis(1200), Duration::from_secs(1));
+        });
+        let error = result.expect_err("elapsed over the bound must panic");
+        let message = *error.downcast::<String>().expect("panic payload is a String");
+        assert!(message.contains("probe"), "message must name the context: {message}");
+        assert!(
+            message.contains("1.2s"),
+            "message must state the measured elapsed: {message}"
+        );
+        assert!(
+            message.contains("1s"),
+            "message must state the asserted bound: {message}"
+        );
+        assert!(
+            message.contains("margin -0.200s"),
+            "message must state the signed margin between elapsed and bound: {message}"
         );
     }
 }

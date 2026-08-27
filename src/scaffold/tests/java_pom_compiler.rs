@@ -129,6 +129,13 @@ fn test_scaffold_java_compiler_plugin_excludes_prevent_alef_scratch_duplicate_cl
     {
         return;
     }
+    // Spawns real `mvn` against a shared repository directory; see
+    // `test_support::REAL_MVN_LOCK`'s doc for why this must be held for the whole test. ~keep
+    let _mvn_lock = crate::test_support::RealMvnGuard::acquire();
+    let maven_repo_local = format!(
+        "-Dmaven.repo.local={}",
+        crate::test_support::maven_local_repo_dir().display()
+    );
 
     let config = test_config();
     let api = test_api();
@@ -160,7 +167,7 @@ fn test_scaffold_java_compiler_plugin_excludes_prevent_alef_scratch_duplicate_cl
 
         std::process::Command::new("mvn")
             // Not `-o`: see the comment on the checkstyle bite test above -- same reason.
-            .args(["-q", "compile", "-Dcheckstyle.skip=true"])
+            .args(["-q", "compile", "-Dcheckstyle.skip=true", &maven_repo_local])
             .current_dir(project_dir.path())
             .output()
             .expect("mvn runs")
@@ -217,6 +224,13 @@ fn test_scaffold_java_javadoc_plugin_source_file_includes_prevent_test_source_le
     {
         return;
     }
+    // Spawns real `mvn` against a shared repository directory; see
+    // `test_support::REAL_MVN_LOCK`'s doc for why this must be held for the whole test. ~keep
+    let _mvn_lock = crate::test_support::RealMvnGuard::acquire();
+    let maven_repo_local = format!(
+        "-Dmaven.repo.local={}",
+        crate::test_support::maven_local_repo_dir().display()
+    );
 
     let config = test_config();
     let api = test_api();
@@ -252,7 +266,7 @@ fn test_scaffold_java_javadoc_plugin_source_file_includes_prevent_test_source_le
             // -Dcheckstyle.skip=true: a direct goal invocation still runs earlier
             // phase-bound executions (checkstyle is bound to `validate`), and this test
             // is isolating the javadoc plugin's own behavior, not checkstyle's.
-            .args(["-q", "javadoc:javadoc", "-Dcheckstyle.skip=true"])
+            .args(["-q", "javadoc:javadoc", "-Dcheckstyle.skip=true", &maven_repo_local])
             .current_dir(project_dir.path())
             .output()
             .expect("mvn runs")

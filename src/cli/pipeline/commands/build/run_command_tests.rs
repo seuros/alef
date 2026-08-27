@@ -119,9 +119,10 @@ fn run_run_command_is_killed_at_a_shorter_than_default_timeout() {
         error.to_string().contains("exceeded 1s timeout"),
         "error should name the configured 1s ceiling, not the 1800s default: {error:#}"
     );
-    assert!(
-        elapsed < std::time::Duration::from_secs(3),
-        "must be killed at the configured 1s ceiling rather than running to completion: {elapsed:?}"
+    crate::test_support::assert_elapsed_under(
+        "must be killed at the configured 1s ceiling rather than running to completion",
+        elapsed,
+        std::time::Duration::from_secs(3),
     );
 }
 
@@ -173,10 +174,10 @@ fn configured_build_command_timeout_reaches_the_post_build_run_command_step() {
     let error = result.expect_err("a sleep 3 post-build step under a configured 1s ceiling must fail");
     let message = format!("{error:#}");
     assert!(message.contains("exceeded 1s timeout"), "got: {message}");
-    assert!(
-        elapsed < std::time::Duration::from_secs(3),
-        "the configured 1s ceiling must fire before the sleep completes or the 1800s default \
-         would: {elapsed:?}"
+    crate::test_support::assert_elapsed_under(
+        "the configured 1s ceiling must fire before the sleep completes or the 1800s default would",
+        elapsed,
+        std::time::Duration::from_secs(3),
     );
 }
 

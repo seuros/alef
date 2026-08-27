@@ -327,9 +327,13 @@ mod process_tests {
 
     /// Reads the pid a fixture shell wrote to `marker`, waiting for it to appear.
     fn announced_pid(marker: &std::path::Path) -> i32 {
-        let deadline = Instant::now() + PROCESS_SETTLE_LIMIT;
+        let started = Instant::now();
         loop {
-            assert!(Instant::now() < deadline, "the fixture never announced a pid");
+            crate::test_support::assert_elapsed_under(
+                "the fixture never announced a pid",
+                started.elapsed(),
+                PROCESS_SETTLE_LIMIT,
+            );
             if let Ok(contents) = std::fs::read_to_string(marker)
                 && let Ok(pid) = contents.trim().parse::<i32>()
             {
@@ -384,9 +388,10 @@ mod process_tests {
         let holder = announced_pid(&marker);
 
         assert!(success, "the command's own exit status must still be reported");
-        assert!(
-            elapsed < super::OUTPUT_DRAIN_GRACE + PROCESS_SETTLE_LIMIT,
-            "draining a leaked pipe holder took {elapsed:?}, which is not bounded by the drain grace"
+        crate::test_support::assert_elapsed_under(
+            "draining a leaked pipe holder took longer than the drain grace",
+            elapsed,
+            super::OUTPUT_DRAIN_GRACE + PROCESS_SETTLE_LIMIT,
         );
         assert!(
             wait_until_gone(holder),

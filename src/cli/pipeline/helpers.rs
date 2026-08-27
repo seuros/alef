@@ -840,10 +840,10 @@ mod tests {
             stdout.contains("direct-child-output"),
             "the direct child's own output must still be captured: {stdout}"
         );
-        assert!(
-            elapsed < std::time::Duration::from_secs(8),
-            "must return within the output drain grace period, not hang for the leaked \
-             descendant's full sleep: {elapsed:?}"
+        crate::test_support::assert_elapsed_under(
+            "must return within the output drain grace period, not hang for the leaked descendant's full sleep",
+            elapsed,
+            std::time::Duration::from_secs(8),
         );
     }
 
@@ -858,9 +858,10 @@ mod tests {
 
         let (stdout, _stderr) = result.expect("a plain command exits zero");
         assert!(stdout.contains("quick"), "output must be captured: {stdout}");
-        assert!(
-            elapsed < std::time::Duration::from_secs(2),
-            "a command with no leaked descendants must not pay the drain grace period: {elapsed:?}"
+        crate::test_support::assert_elapsed_under(
+            "a command with no leaked descendants must not pay the drain grace period",
+            elapsed,
+            std::time::Duration::from_secs(2),
         );
     }
 
