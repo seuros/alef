@@ -245,6 +245,14 @@ mod tests {
     /// Regression coverage for task #511: struct-form named field initializers used to emit
     /// `field: field` unconditionally, tripping `clippy::redundant_field_names` on every
     /// no-op field in generated enum conversions. Table-driven over the collapse rule itself.
+    ///
+    /// Task #548 re-verified this same helper against every non-collapsible shape a naive
+    /// substring/prefix match could get wrong: a method call (`.clone()`), a function call
+    /// wrapping the identifier, a deref, a differently-named binding, and a raw identifier field
+    /// paired with either its own bare form (must collapse -- `Foo { r#type }` is valid
+    /// shorthand) or a differing expression (must not). All pass unchanged because `field_init`
+    /// only ever compares `expr` to `field_name` by exact string equality, never a substring or
+    /// prefix match. ~keep
     #[test]
     fn field_init_collapses_only_when_expr_is_exactly_the_field_name() {
         let cases: &[(&str, &str, &str)] = &[
@@ -257,6 +265,19 @@ mod tests {
             // conversion of the same field -> must NOT collapse (exact-equality boundary, not
             // a prefix/substring match).
             ("id", "identifier", "id: identifier"),
+            // Method call on the field's own binding -> not a bare identifier -> must NOT
+            // collapse, even though `bar` is a prefix of `bar.clone()`.
+            ("bar", "bar.clone()", "bar: bar.clone()"),
+            // Function call wrapping the identifier -> must NOT collapse.
+            ("bar", "into_x(bar)", "bar: into_x(bar)"),
+            // Deref of the identifier -> must NOT collapse.
+            ("bar", "*bar", "bar: *bar"),
+            // Raw identifier field with an identical raw-identifier expr -> collapses. `Foo {
+            // r#type }` is valid shorthand syntax, so this is a real no-op field like any other.
+            ("r#type", "r#type", "r#type"),
+            // Raw identifier field whose expr is NOT the same raw identifier -> must NOT
+            // collapse.
+            ("r#type", "r#type.to_string()", "r#type: r#type.to_string()"),
         ];
         for (field_name, expr, expected) in cases {
             assert_eq!(
