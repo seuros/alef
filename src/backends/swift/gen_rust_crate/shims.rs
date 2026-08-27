@@ -8,11 +8,11 @@
 //!   - for async fns, blocks on a current-thread Tokio runtime
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type_enum_aware_ref, bridge_type_with_handles, enum_from_string_fn_name, needs_json_bridge,
-    needs_json_bridge_with_handles, swift_bridge_rust_type,
+    bridge_result_ok_type_with_handles, bridge_type_enum_aware_ref, bridge_type_with_handles, enum_from_string_fn_name,
+    needs_json_bridge, needs_json_bridge_with_handles, swift_bridge_rust_type,
 };
 use crate::backends::swift::naming::swift_rust_shim_ident as swift_ident;
-use crate::core::ir::{FunctionDef, TypeRef};
+use crate::core::ir::{FunctionDef, PrimitiveType, TypeRef};
 use heck::ToSnakeCase;
 use std::collections::{HashMap, HashSet};
 
@@ -404,14 +404,14 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
             ("usize".to_string(), true)
         }
     } else if f.error_type.is_some() {
-        let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+        let ok_ty = bridge_result_ok_type_with_handles(&effective_return_type, handle_returned_types);
         if matches!(effective_return_type, TypeRef::Unit) {
             ("Result<(), String>".to_string(), true)
         } else {
             (format!("Result<{ok_ty}, String>"), true)
         }
     } else if forced_fallible {
-        let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+        let ok_ty = bridge_result_ok_type_with_handles(&effective_return_type, handle_returned_types);
         if matches!(effective_return_type, TypeRef::Unit) {
             ("Result<(), String>".to_string(), true)
         } else {
@@ -472,7 +472,18 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         ));
     }
 
-    let json_wrap_ok = needs_json_bridge_with_handles(&f.return_type, handle_returned_types);
+    // `result_ok_needs_json_bridge_with_handles` widens the plain check with the u64/i64 Result
+    // gap (see its doc comment), but only when this shim's return really is a `Result<_, String>`
+    // (`f.error_type.is_some()` or `forced_fallible` -- see the matching `ok_ty` computation
+    // above): a bare, non-`Result` `u64`/`i64` return never reaches swift-bridge-ir's panicking
+    // path and must keep its native type, not be forced through JSON. ~keep
+    let is_result_return = f.error_type.is_some() || forced_fallible;
+    let json_wrap_ok = needs_json_bridge_with_handles(&f.return_type, handle_returned_types)
+        || (is_result_return
+            && matches!(
+                &effective_return_type,
+                TypeRef::Primitive(PrimitiveType::U64) | TypeRef::Primitive(PrimitiveType::I64)
+            ));
 
     let wrap_named = |t: &str| -> String {
         if unit_enum_names.contains(t) {

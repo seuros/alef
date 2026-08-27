@@ -521,3 +521,121 @@ fn mut_dto_param_plus_a_return_value_is_rejected_naming_the_function() {
         "diagnostic must name the function: {message}"
     );
 }
+
+/// Regression test for the alef CI `generated-output-gate` panic: swift-bridge-ir 0.1.59's
+/// `BridgedType::to_alpha_numeric_underscore_name` (`bridged_type.rs:1986`) has a match arm for
+/// every Rust integer primitive width except `u64`/`i64`; those two fall through to an
+/// unconditional `todo!()`. Every `Result<Ok, String>` alef emits reaches that function (see
+/// `result_ok_needs_json_bridge_with_handles`'s doc comment for why), so a fallible free function
+/// declaring `Result<u64, String>` panicked `alef generate`'s own swift post-build, not just a
+/// downstream consumer's build. Bridging the ok type through JSON avoids the panicking match arm
+/// entirely.
+#[test]
+fn fallible_function_returning_u64_bridges_through_json_not_a_bare_u64() {
+    let mut f = function(vec![]);
+    f.return_type = TypeRef::Primitive(crate::core::ir::PrimitiveType::U64);
+    f.is_async = false;
+
+    let type_paths = HashMap::new();
+    let empty_str = HashSet::new();
+    let handle_returned_types = HashSet::new();
+    let capsule_types = std::collections::HashMap::new();
+    let opaque_types = ahash::AHashSet::default();
+    let context = shim_context(
+        &type_paths,
+        &empty_str,
+        &empty_str,
+        &empty_str,
+        &handle_returned_types,
+        &capsule_types,
+        &opaque_types,
+    );
+
+    let shim = emit_function_shim(&f, &context).expect("emit_function_shim");
+
+    assert!(
+        shim.contains("Result<String, String>"),
+        "u64 Ok type must be bridged through JSON to dodge swift-bridge-ir's todo!() on \
+         u64/i64, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains("Result<u64, String>"),
+        "must never declare the panic-triggering Result<u64, String>, got:\n{shim}"
+    );
+    assert!(
+        shim.contains("serde_json::to_string(&v)"),
+        "the u64 value must be JSON-serialized to match the declared String Ok type, got:\n{shim}"
+    );
+}
+
+/// Mirror of `fallible_function_returning_u64_bridges_through_json_not_a_bare_u64` for `i64`:
+/// swift-bridge-ir's `to_alpha_numeric_underscore_name` match is missing both 64-bit integer
+/// arms, not just the unsigned one.
+#[test]
+fn fallible_function_returning_i64_bridges_through_json_not_a_bare_i64() {
+    let mut f = function(vec![]);
+    f.return_type = TypeRef::Primitive(crate::core::ir::PrimitiveType::I64);
+    f.is_async = false;
+
+    let type_paths = HashMap::new();
+    let empty_str = HashSet::new();
+    let handle_returned_types = HashSet::new();
+    let capsule_types = std::collections::HashMap::new();
+    let opaque_types = ahash::AHashSet::default();
+    let context = shim_context(
+        &type_paths,
+        &empty_str,
+        &empty_str,
+        &empty_str,
+        &handle_returned_types,
+        &capsule_types,
+        &opaque_types,
+    );
+
+    let shim = emit_function_shim(&f, &context).expect("emit_function_shim");
+
+    assert!(
+        shim.contains("Result<String, String>"),
+        "i64 Ok type must be bridged through JSON to dodge swift-bridge-ir's todo!() on \
+         u64/i64, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains("Result<i64, String>"),
+        "must never declare the panic-triggering Result<i64, String>, got:\n{shim}"
+    );
+}
+
+/// The u64/i64 JSON-bridge above is scoped to the `Result` position only: a bare, infallible
+/// `u64` return never reaches swift-bridge-ir's panicking path and must keep its native type,
+/// not be forced through JSON needlessly.
+#[test]
+fn infallible_function_returning_u64_keeps_native_type() {
+    let mut f = unit_function("count", vec![]);
+    f.return_type = TypeRef::Primitive(crate::core::ir::PrimitiveType::U64);
+
+    let type_paths = HashMap::new();
+    let empty_str = HashSet::new();
+    let handle_returned_types = HashSet::new();
+    let capsule_types = std::collections::HashMap::new();
+    let opaque_types = ahash::AHashSet::default();
+    let context = shim_context(
+        &type_paths,
+        &empty_str,
+        &empty_str,
+        &empty_str,
+        &handle_returned_types,
+        &capsule_types,
+        &opaque_types,
+    );
+
+    let shim = emit_function_shim(&f, &context).expect("emit_function_shim");
+
+    assert!(
+        shim.contains("-> u64"),
+        "an infallible u64 return must keep its native type, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains("serde_json::to_string"),
+        "an infallible u64 return must not be JSON-bridged, got:\n{shim}"
+    );
+}

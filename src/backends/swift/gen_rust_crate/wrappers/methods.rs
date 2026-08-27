@@ -8,10 +8,10 @@
 //! Enum wrappers live in `enums.rs`.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type_enum_aware_ref, enum_from_string_fn_name, needs_json_bridge, needs_json_bridge_with_handles,
-    swift_bridge_rust_type,
+    bridge_result_ok_type_with_handles, bridge_type_enum_aware_ref, enum_from_string_fn_name, needs_json_bridge,
+    needs_json_bridge_with_handles, swift_bridge_rust_type,
 };
-use crate::core::ir::{ReceiverKind, TypeDef, TypeRef};
+use crate::core::ir::{PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 use crate::core::keywords::swift_ident;
 use heck::ToSnakeCase;
 use std::collections::{HashMap, HashSet};
@@ -96,10 +96,7 @@ pub(crate) fn emit_type_method_shims(
         let forced_fallible = has_fallible_enum_param && method.error_type.is_none();
 
         let return_ty = if method.error_type.is_some() || forced_fallible {
-            let ok_ty = crate::backends::swift::gen_rust_crate::type_bridge::bridge_type_with_handles(
-                &method.return_type,
-                handle_returned_types,
-            );
+            let ok_ty = bridge_result_ok_type_with_handles(&method.return_type, handle_returned_types);
             if matches!(method.return_type, TypeRef::Unit) {
                 "Result<(), String>".to_string()
             } else {
@@ -204,7 +201,17 @@ pub(crate) fn emit_type_method_shims(
         };
         let method_call = format!("{inner_access}.{method_snake}({call_args_str})");
 
-        let json_wrap_ok = needs_json_bridge_with_handles(&method.return_type, handle_returned_types);
+        // See `result_ok_needs_json_bridge_with_handles`'s doc comment: only widen the plain
+        // json-bridge check with the u64/i64 Result gap when this method's return really is a
+        // `Result<_, String>` (matching the `ok_ty` computation above) -- a bare, non-`Result`
+        // `u64`/`i64` getter never reaches swift-bridge-ir's panicking path. ~keep
+        let is_result_return = method.error_type.is_some() || forced_fallible;
+        let json_wrap_ok = needs_json_bridge_with_handles(&method.return_type, handle_returned_types)
+            || (is_result_return
+                && matches!(
+                    &method.return_type,
+                    TypeRef::Primitive(PrimitiveType::U64) | TypeRef::Primitive(PrimitiveType::I64)
+                ));
         let wrap_return = |source: String| -> String {
             if json_wrap_ok {
                 return format!("serde_json::to_string(&({source})).expect(\"serializable return\")");
@@ -534,5 +541,73 @@ mod tests {
             "got:\n{out}"
         );
         assert!(!out.contains("panic!"), "got:\n{out}");
+    }
+
+    /// Regression test for the alef CI `generated-output-gate` panic: swift-bridge-ir 0.1.59's
+    /// `BridgedType::to_alpha_numeric_underscore_name` (`bridged_type.rs:1986`) has a match arm
+    /// for every Rust integer primitive width except `u64`/`i64`; those two fall through to an
+    /// unconditional `todo!()`. Every `Result<Ok, String>` alef emits reaches that function
+    /// (see `result_ok_needs_json_bridge_with_handles`'s doc comment for why), so declaring
+    /// `Result<u64, String>` on a fallible method panicked `alef generate`'s own swift build,
+    /// not just a downstream consumer's. Bridging the ok type through JSON avoids the
+    /// panicking match arm entirely.
+    #[test]
+    fn fallible_method_returning_u64_bridges_through_json_not_a_bare_u64() {
+        let method = crate::core::ir::MethodDef {
+            name: "count".to_string(),
+            return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U64),
+            receiver: Some(ReceiverKind::Ref),
+            error_type: Some("ClientError".to_string()),
+            ..Default::default()
+        };
+        let ty = opaque_type("Client", vec![method]);
+        let enum_names = HashSet::new();
+        let handle_returned_types = HashSet::new();
+        let type_paths = HashMap::new();
+
+        let out = emit_type_method_shims(&ty, "sample_crate", &type_paths, &handle_returned_types, &enum_names);
+
+        assert!(
+            out.contains("-> Result<String, String>"),
+            "u64 Ok type must be bridged through JSON to dodge swift-bridge-ir's todo!() on \
+             u64/i64, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Result<u64, String>"),
+            "must never declare the panic-triggering Result<u64, String>, got:\n{out}"
+        );
+        assert!(
+            out.contains("serde_json::to_string(&v)"),
+            "the u64 value must be JSON-serialized to match the declared String Ok type, got:\n{out}"
+        );
+    }
+
+    /// The u64/i64 JSON-bridge in `fallible_method_returning_u64_bridges_through_json_not_a_bare_u64`
+    /// is scoped to the `Result` position only: a bare, infallible `u64` return never reaches
+    /// swift-bridge-ir's panicking path and must keep its native type.
+    #[test]
+    fn infallible_method_returning_u64_keeps_native_type() {
+        let method = crate::core::ir::MethodDef {
+            name: "count".to_string(),
+            return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U64),
+            receiver: Some(ReceiverKind::Ref),
+            error_type: None,
+            ..Default::default()
+        };
+        let ty = opaque_type("Client", vec![method]);
+        let enum_names = HashSet::new();
+        let handle_returned_types = HashSet::new();
+        let type_paths = HashMap::new();
+
+        let out = emit_type_method_shims(&ty, "sample_crate", &type_paths, &handle_returned_types, &enum_names);
+
+        assert!(
+            out.contains("-> u64"),
+            "an infallible u64 getter must keep its native type, got:\n{out}"
+        );
+        assert!(
+            !out.contains("serde_json::to_string"),
+            "an infallible u64 getter must not be JSON-bridged, got:\n{out}"
+        );
     }
 }

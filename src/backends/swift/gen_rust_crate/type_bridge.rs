@@ -101,6 +101,43 @@ pub(crate) fn field_needs_json_bridge(ty: &TypeRef, optional: bool) -> bool {
     needs_json_bridge(ty) || optional && matches!(ty, TypeRef::Vec(_))
 }
 
+/// Returns true when `ty`, used as the `Ok` type of a swift-bridge `Result<Ok, String>`, hits a
+/// third swift-bridge-ir 0.1.59 codegen gap distinct from the two documented on
+/// [`needs_json_bridge`]: `BridgedType::to_alpha_numeric_underscore_name` (`bridged_type.rs:1986`)
+/// has a match arm for every Rust integer/float primitive width EXCEPT `u64`/`i64` -- those two
+/// fall through to an unconditional `todo!()`. Every `Result<Ok, String>` alef emits hits this
+/// function unconditionally: the error side is always the plain `String` alef hardcodes, which is
+/// never pointer-passed and never a single-value ("zero-byte") encoding, so
+/// `BuiltInResult::is_custom_result_type()` is always `true` and the panicking naming call always
+/// runs while swift-bridge builds the Result's internal C struct name. `String` itself is
+/// unaffected: alef's `Ok`-side `String` never hits this arm because swift-bridge parses owned
+/// `String` as its own `Bridgeable` type with its own override of this method, not as the
+/// `StdLib` variant this match is on.
+///
+/// Scoped to the `Result` position only -- callers must not use this for a bare, non-`Result`
+/// return or parameter, which never reaches `to_alpha_numeric_underscore_name` and stays
+/// unaffected (verified against the gate fixture's `total()`/`round_trip_cost()` getters, which
+/// return `u64`/`f64` directly with no `Result` wrapper and generate cleanly). ~keep
+pub(crate) fn result_ok_needs_json_bridge_with_handles(ty: &TypeRef, handle_types: &HashSet<String>) -> bool {
+    needs_json_bridge_with_handles(ty, handle_types)
+        || matches!(
+            ty,
+            TypeRef::Primitive(PrimitiveType::U64) | TypeRef::Primitive(PrimitiveType::I64)
+        )
+}
+
+/// `bridge_type_with_handles`, but for the `Ok` type of a `Result<Ok, String>` extern
+/// declaration: routes through [`result_ok_needs_json_bridge_with_handles`] instead of
+/// [`needs_json_bridge_with_handles`], so a `u64`/`i64` `Ok` type is declared `String` (and the
+/// caller must serialize the value with `serde_json` to match) instead of reaching
+/// swift-bridge-ir's `todo!()`.
+pub(crate) fn bridge_result_ok_type_with_handles(ty: &TypeRef, handle_types: &HashSet<String>) -> String {
+    if result_ok_needs_json_bridge_with_handles(ty, handle_types) {
+        return "String".to_string();
+    }
+    bridge_type_with_handles(ty, handle_types)
+}
+
 /// Returns true when `ty` produces a token-stream representation with no angle brackets,
 /// i.e. it is safe as the inner type of a `Vec<T>` in a swift-bridge extern block.
 pub(crate) fn is_bridge_leaf(ty: &TypeRef) -> bool {

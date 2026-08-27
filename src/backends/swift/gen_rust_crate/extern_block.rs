@@ -4,8 +4,8 @@
 //! Trait bridge extern blocks live in `trait_bridge.rs`.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type, bridge_type_enum_and_serde_struct_aware, bridge_type_enum_aware, bridge_type_enum_aware_ref,
-    bridge_type_with_handles, is_vec_of_enum, needs_json_bridge,
+    bridge_result_ok_type_with_handles, bridge_type, bridge_type_enum_and_serde_struct_aware, bridge_type_enum_aware,
+    bridge_type_enum_aware_ref, bridge_type_with_handles, is_vec_of_enum, needs_json_bridge,
 };
 use crate::backends::swift::gen_rust_crate::wrappers::is_unbridgeable_getter;
 use crate::core::config::AdapterConfig;
@@ -264,7 +264,7 @@ pub(crate) fn emit_extern_block_for_type_methods(
         let params_str = params.join(", ");
 
         let return_ty = if method.error_type.is_some() {
-            let ok_ty = bridge_type_with_handles(&method.return_type, handle_returned_types);
+            let ok_ty = bridge_result_ok_type_with_handles(&method.return_type, handle_returned_types);
             if matches!(method.return_type, TypeRef::Unit) {
                 "Result<(), String>".to_string()
             } else {
@@ -461,7 +461,7 @@ pub(crate) fn emit_extern_block_for_functions(
         let return_ty = if is_capsule_return {
             "usize".to_string()
         } else if f.error_type.is_some() {
-            let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+            let ok_ty = bridge_result_ok_type_with_handles(&effective_return_type, handle_returned_types);
             if matches!(effective_return_type, TypeRef::Unit) {
                 "Result<(), String>".to_string()
             } else {
