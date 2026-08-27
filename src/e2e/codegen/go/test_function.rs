@@ -2,7 +2,6 @@
 
 use crate::codegen::naming::{go_free_function_name, go_param_name, go_type_name, to_go_name};
 use crate::e2e::escape::go_string_literal;
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::fmt::Write as FmtWrite;
@@ -171,28 +170,8 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &fixture.tags,
         &fixture.input,
     );
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    let lang = "go";
-    // Anchor the IR-derived result-field oracle (`with_ir_result_fields`) at the call's declared
-    // Rust return type, mirroring the rust/python/java/csharp/elixir e2e generators. Purely
-    // additive: `result_field_oracle_knows` only ever REFUSES what it positively knows the root
-    // type lacks; an unresolved root leaves every anchored answer disabled. ~keep
-    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
-        call_config,
-        lang,
-        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
-    );
-    let call_field_resolver = FieldResolver::new(
-        e2e_config.effective_fields(call_config),
-        e2e_config.effective_fields_optional(call_config),
-        e2e_config.effective_result_fields(call_config),
-        e2e_config.effective_fields_array(call_config),
-        &std::collections::HashSet::new(),
-    )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
-    .with_result_is_byte_payload(call_config.effective_result_is_bytes(lang));
+    let lang = call_resolver::LANG;
+    let call_field_resolver = call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs);
     let field_resolver = &call_field_resolver;
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides
@@ -1015,6 +994,9 @@ impl client::TestClientRenderer for GoTestClientRenderer {
         }
     }
 }
+
+#[path = "test_function/call_resolver.rs"]
+mod call_resolver;
 
 #[cfg(test)]
 #[path = "test_function/declared_error_value_tests.rs"]

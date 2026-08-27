@@ -51,7 +51,7 @@ src/e2e/codegen/elixir/assertions.rs 1451
 src/e2e/codegen/go/assertions.rs 1436
 src/e2e/codegen/go/setup.rs 1190
 src/e2e/codegen/go/snippet.rs 2054
-src/e2e/codegen/go/test_function.rs 1020
+src/e2e/codegen/go/test_function.rs 1003
 src/e2e/codegen/go/tests.rs 1397
 src/e2e/codegen/java/assertions.rs 1352
 src/e2e/codegen/kotlin/test_method.rs 1167
@@ -63,7 +63,7 @@ src/e2e/codegen/r/assertions.rs 1049
 src/e2e/codegen/ruby/examples.rs 1168
 src/e2e/codegen/rust/assertions.rs 1613
 src/e2e/codegen/rust/http.rs 1065
-src/e2e/codegen/swift/assertions.rs 1203
+src/e2e/codegen/swift/assertions.rs 1075
 src/e2e/codegen/swift/tests.rs 1201
 src/e2e/codegen/typescript/assertions.rs 1332
 src/e2e/codegen/typescript/test_file/tests.rs 1569
