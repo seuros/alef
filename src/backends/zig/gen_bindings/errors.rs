@@ -62,16 +62,38 @@ pub(crate) fn emit_error_set(error: &ErrorDef, out: &mut String) {
     out.push_str("};\n");
 }
 
+/// The Zig error-set expression a function's own `error_type` resolves to when it names no
+/// declared error set (and at least one is declared -- an empty crate falls back to `anyerror`
+/// instead, see `resolve_zig_error_type`). Every declared set already carries both members
+/// (`emit_error_set` injects them unconditionally), so this is exactly what an
+/// untyped-but-fallible function already gets from `wrapper_return_type`, and
+/// `_error_with_message` on it falls through every `if (E == ...)` arm to the same
+/// `UnknownFfiError` a real mismatch deserves. ~keep
+const UNMATCHED_ERROR_SET: &str = "error{OutOfMemory,UnknownFfiError}";
+
 /// Map a Rust error_type (e.g. `"anyhow::Error"`, `"SampleCrateError"`) to a
-/// Zig error-set identifier. If the path's last segment matches a declared
-/// error set, use it; otherwise fall back to the first declared error set
-/// (the project's main error type).
+/// Zig error-set expression. If the path's last segment matches a declared
+/// error set by name, use it.
+///
+/// A mismatch (a foreign type like `anyhow::Error`, or an extraction-resolved
+/// name none of the crate's declared sets carry) used to fall back to "the
+/// first declared error set" on the theory that a crate typically has one
+/// primary error type. That guess is silently wrong for any crate with more
+/// than one declared error set: nothing here can tell "the crate's one true
+/// error type, spelled unusually" apart from "an unrelated second error type
+/// this function has nothing to do with," so guessing attributes the
+/// function to a real, wrong, unrelated declared error instead of an honest
+/// unknown. The safe answer is [`UNMATCHED_ERROR_SET`], not a specific named
+/// identity. ~keep
 pub(crate) fn resolve_zig_error_type(error_type: &str, declared: &[String]) -> String {
     let last = error_type.rsplit("::").next().unwrap_or(error_type);
     if declared.iter().any(|d| d == last) {
         return last.to_string();
     }
-    declared.first().cloned().unwrap_or_else(|| "anyerror".to_string())
+    if declared.is_empty() {
+        return "anyerror".to_string();
+    }
+    UNMATCHED_ERROR_SET.to_string()
 }
 
 #[cfg(test)]
@@ -163,23 +185,116 @@ mod tests {
         );
     }
 
-    /// Zig's error union is a pure function of the IR's `error_type` string: a name that matches a
-    /// declared error set selects it, and anything else silently takes the first declared set.
-    /// That is why an `error_type` misresolved to `anyhow::Error` surfaces as a function carrying
-    /// some unrelated crate error set — nothing in the Zig backend needs fixing for it, and
-    /// nothing in the Zig backend can detect it either. ~keep
+    /// A qualified Rust path resolves by its last path segment against the declared error sets.
+    /// Asserted against the SECOND declared set specifically: matching only ever against a
+    /// single declared set can't distinguish real name-matching from the position-based
+    /// fallback this module used to have (see the regression test below). ~keep
     #[test]
-    fn resolve_zig_error_type_falls_back_to_the_first_declared_set_for_anyhow() {
+    fn resolve_zig_error_type_matches_a_qualified_path_against_the_second_declared_set() {
         let declared = vec!["FirstError".to_string(), "SampleCrateError".to_string()];
-        assert_eq!(resolve_zig_error_type("anyhow::Error", &declared), "FirstError");
         assert_eq!(
             resolve_zig_error_type("crate::error::SampleCrateError", &declared),
             "SampleCrateError"
         );
     }
 
+    /// Regression: `resolve_zig_error_type` used to fall back to "the first declared error set"
+    /// for any `error_type` that matched no declared name (a foreign `anyhow::Error`, or an
+    /// extraction-resolved name none of the crate's declared sets carry) -- silently attributing
+    /// the function to a real, wrong, unrelated declared error. Traced from a consumer whose
+    /// functions were typed with a completely unrelated crate error enum because their true
+    /// error type failed to match any declared name. The fix must never resolve a mismatch to
+    /// either real declared identifier. ~keep
+    #[test]
+    fn resolve_zig_error_type_never_falls_back_to_an_unrelated_declared_set() {
+        let declared = vec!["FirstError".to_string(), "SampleCrateError".to_string()];
+        let resolved = resolve_zig_error_type("anyhow::Error", &declared);
+        assert_ne!(
+            resolved, "FirstError",
+            "must not masquerade as the unrelated first-declared set"
+        );
+        assert_ne!(
+            resolved, "SampleCrateError",
+            "must not masquerade as the unrelated second-declared set"
+        );
+        assert_eq!(resolved, UNMATCHED_ERROR_SET);
+    }
+
     #[test]
     fn resolve_zig_error_type_yields_anyerror_without_any_declared_set() {
         assert_eq!(resolve_zig_error_type("SampleCrateError", &[]), "anyerror");
+    }
+
+    /// Integration-level fixtures for the same regression, exercised through
+    /// `functions::wrapper_return_type` -- the actual function-signature generator every free
+    /// function's return type goes through -- rather than the raw resolver alone. The fixture
+    /// crate declares two unrelated error enums (`FirstError`, `SecondError`); each test below
+    /// states explicitly which one the function under test actually returns. ~keep
+    mod wrapper_return_type_integration {
+        use crate::backends::zig::gen_bindings::functions::wrapper_return_type;
+        use crate::core::ir::{FunctionDef, TypeRef};
+
+        fn declared_two_errors() -> Vec<String> {
+            vec!["FirstError".to_string(), "SecondError".to_string()]
+        }
+
+        fn fallible_function(name: &str, error_type: &str) -> FunctionDef {
+            FunctionDef {
+                name: name.to_string(),
+                return_type: TypeRef::Unit,
+                error_type: Some(error_type.to_string()),
+                ..FunctionDef::default()
+            }
+        }
+
+        /// The regression itself: a function whose Rust return type is `Result<_, SecondError>`
+        /// -- the SECOND declared error, not the crate's first -- must resolve to `SecondError`,
+        /// never to `FirstError` merely because `FirstError` was declared first. ~keep
+        #[test]
+        fn a_function_returning_the_second_declared_error_resolves_to_it() {
+            let f = fallible_function("uses_second_error", "SecondError");
+            let return_ty = wrapper_return_type(&f, &declared_two_errors(), &Default::default(), &Default::default());
+
+            assert!(
+                return_ty.starts_with("SecondError!"),
+                "a function returning `Result<_, SecondError>` must be typed `SecondError!...`, got: {return_ty}"
+            );
+            assert!(
+                !return_ty.contains("FirstError"),
+                "must never carry the unrelated first-declared error: {return_ty}"
+            );
+        }
+
+        /// Negative control: a function that genuinely returns the crate's first-declared error
+        /// must still resolve to it. Without this, the regression test above would pass trivially
+        /// if the fix broke ordinary matching instead of just the mismatch fallback. ~keep
+        #[test]
+        fn a_function_returning_the_first_declared_error_still_resolves_to_it() {
+            let f = fallible_function("uses_first_error", "FirstError");
+            let return_ty = wrapper_return_type(&f, &declared_two_errors(), &Default::default(), &Default::default());
+
+            assert!(
+                return_ty.starts_with("FirstError!"),
+                "a function returning `Result<_, FirstError>` must be typed `FirstError!...`, got: {return_ty}"
+            );
+        }
+
+        /// A function whose own error type names neither declared error must never be attributed
+        /// to one of them -- the exact shape of the reported defect (three functions returning a
+        /// crate's real, unrelated error enum instead of their own). ~keep
+        #[test]
+        fn a_function_with_an_unmatched_error_type_is_never_mislabeled_as_a_declared_set() {
+            let f = fallible_function("uses_foreign_error", "anyhow::Error");
+            let return_ty = wrapper_return_type(&f, &declared_two_errors(), &Default::default(), &Default::default());
+
+            assert!(
+                !return_ty.starts_with("FirstError!") && !return_ty.starts_with("SecondError!"),
+                "an unmatched error type must never be attributed to an unrelated declared error, got: {return_ty}"
+            );
+            assert!(
+                return_ty.contains("UnknownFfiError"),
+                "the safe fallback must still admit UnknownFfiError so `_error_with_message` compiles: {return_ty}"
+            );
+        }
     }
 }
