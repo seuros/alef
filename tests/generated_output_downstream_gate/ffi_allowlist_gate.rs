@@ -28,11 +28,14 @@
 //! reference -- so the crate-level entry had nothing left to allow.
 //!
 //! [`dead_entry_check_catches_a_planted_orphan`] is this lane's own anti-vacuity proof: it
-//! falsely claims `clippy::collapsible_if` -- an entry `lib_rs.rs` still actively allows, and
-//! one this lane's own `KNOWN_DEAD_LINT_NAMES` audit deliberately left out because the fixture
-//! genuinely trips it (confirmed by hand: stripping the *entire* crate-level list and running
-//! plain `cargo clippy` reports it) -- is dead, and asserts the lane reports the claim as false.
-//! A lane that cannot go red on a live entry masquerading as dead has examined nothing.
+//! falsely claims `clippy::missing_safety_doc` -- an entry `lib_rs.rs` still actively allows,
+//! and one this lane's own `KNOWN_DEAD_LINT_NAMES` audit deliberately left out because the
+//! fixture genuinely trips it (confirmed by hand: stripping the *entire* crate-level list and
+//! running plain `cargo clippy` reports it) -- is dead, and asserts the lane reports the claim
+//! as false. A lane that cannot go red on a live entry masquerading as dead has examined
+//! nothing. `clippy::collapsible_if` filled this role until the FFI free-handle guards were
+//! collapsed into let-chains (commit `8893f7550`), which made it genuinely dead too; picking a
+//! lint that is still demonstrably live is the fix, not relaxing what this test asserts.
 //!
 //! This lane intentionally does **not** assert that every entry `lib_rs.rs` currently allows
 //! fires against this one synthetic fixture. Most of those entries are defensive for code
@@ -76,15 +79,67 @@ const KNOWN_DEAD_LINT_NAMES: &[&str] = &[
     "dropping_references",
 ];
 
-/// Delete every crate-level `#![allow(...)]` line, leaving the rest of the source untouched.
+/// Delete every crate-level `#![allow(...)]` attribute, single-line or wrapped across
+/// multiple lines, leaving the rest of the source untouched.
+///
+/// `lib_rs.rs` renders its longer allow lists as `#![allow(\n    clippy::foo,\n    ...\n)]`
+/// once the list has enough entries to wrap (see `src/backends/ffi/gen_bindings/lib_rs.rs`).
+/// A filter that only matched a single line starting with `#![allow(` *and* ending with `)]`
+/// on that same line left a wrapped block's opening line, its bare lint names, and its
+/// closing `)]` all in the file -- syntactically valid and still suppressing every lint
+/// inside it, so the strip silently did nothing to that block. That is exactly why this
+/// lane's `dead_entry_check_catches_a_planted_orphan` reported an empty fired-lint set: the
+/// crate-level `#![allow(..., clippy::collapsible_if)]` block is multi-line, survived the old
+/// filter untouched, and its source-level `#![allow(...)]` overrides a command-line `-W`. ~keep
 fn strip_crate_level_allows(source: &str) -> String {
-    let mut stripped: String = source
-        .lines()
-        .filter(|line| !(line.starts_with("#![allow(") && line.ends_with(")]")))
-        .collect::<Vec<_>>()
-        .join("\n");
-    stripped.push('\n');
+    let mut stripped = String::new();
+    let mut in_wrapped_allow_block = false;
+    for line in source.lines() {
+        if in_wrapped_allow_block {
+            if line.trim_end().ends_with(")]") {
+                in_wrapped_allow_block = false;
+            }
+            continue;
+        }
+        if line.starts_with("#![allow(") {
+            if !line.trim_end().ends_with(")]") {
+                in_wrapped_allow_block = true;
+            }
+            continue;
+        }
+        stripped.push_str(line);
+        stripped.push('\n');
+    }
     stripped
+}
+
+#[cfg(test)]
+mod strip_crate_level_allows_tests {
+    use super::strip_crate_level_allows;
+
+    #[test]
+    fn strips_a_single_line_allow_block() {
+        let source = "#![allow(dead_code, unused_imports)]\nfn main() {}\n";
+        assert_eq!(strip_crate_level_allows(source), "fn main() {}\n");
+    }
+
+    #[test]
+    fn strips_a_wrapped_multi_line_allow_block() {
+        let source = "#![allow(\n    clippy::foo,\n    clippy::bar\n)]\nfn main() {}\n";
+        assert_eq!(strip_crate_level_allows(source), "fn main() {}\n");
+    }
+
+    #[test]
+    fn strips_two_allow_blocks_of_mixed_shape() {
+        let source = "#![allow(dead_code)]\n#![allow(\n    clippy::foo,\n    clippy::bar\n)]\n\nfn main() {}\n";
+        assert_eq!(strip_crate_level_allows(source), "\nfn main() {}\n");
+    }
+
+    #[test]
+    fn leaves_a_non_crate_level_allow_untouched() {
+        let source = "#[allow(dead_code)]\nfn main() {}\n";
+        assert_eq!(strip_crate_level_allows(source), source);
+    }
 }
 
 /// Every `warning`-level lint code `cargo clippy` reports for the crate at `dir`, with `lints`
@@ -175,18 +230,24 @@ fn ffi_crate_level_allow_list_known_dead_entries_stay_dead() {
 fn dead_entry_check_catches_a_planted_orphan() {
     resolve_tools(&[&CARGO]);
     let tree = emit_tree(Sabotage::None);
-    // `clippy::collapsible_if` is not in KNOWN_DEAD_LINT_NAMES because it is not dead: the
-    // fixture's generated free functions emit the nested if/if-let shape this lint covers (see
-    // `generated_ffi_crate_allows_collapsible_if_for_its_own_free_functions` in
-    // clippy_allowlist.rs), and it was one of the three lints a plain, un-narrowed `cargo
-    // clippy` reported when this file's own audit stripped the whole crate-level list by hand.
-    // Falsely claiming it dead here and asserting the lane still reports it as firing is the
-    // guard against a check that passes merely because it always agrees with the claim it is
-    // handed. ~keep
-    let still_firing = lint_names_that_still_fire(&tree, &["clippy::collapsible_if"]);
+    // `clippy::missing_safety_doc` is not in KNOWN_DEAD_LINT_NAMES because it is not dead: it
+    // is one of `lib_rs.rs`'s active crate-level allows (see the second `#![allow(...)]` block
+    // there), and this fixture's generated constructor and free-function wrappers -- e.g.
+    // `toolkit_session_new`, `toolkit_summarize`, `toolkit_count_tokens` -- are `pub unsafe
+    // extern "C" fn`s whose doc comments carry no `# Safety` section at all (unlike the
+    // handle-`_free` wrappers, which do), so clippy's `missing_safety_doc` fires on each one.
+    // Confirmed by hand: stripping the whole crate-level list and running plain `cargo clippy`
+    // reports it. `clippy::collapsible_if` filled this role until the FFI free-handle guards
+    // were collapsed into let-chains (commit `8893f7550`), which made the nested if/if-let
+    // shape it used to catch stop being emitted and left it genuinely dead -- exactly the class
+    // of drift this lane exists to catch, just aimed at its own planted orphan instead of a
+    // real crate-level entry. Falsely claiming `missing_safety_doc` dead here and asserting the
+    // lane still reports it as firing is the guard against a check that passes merely because
+    // it always agrees with the claim it is handed. ~keep
+    let still_firing = lint_names_that_still_fire(&tree, &["clippy::missing_safety_doc"]);
     assert_eq!(
         still_firing,
-        vec!["clippy::collapsible_if".to_string()],
+        vec!["clippy::missing_safety_doc".to_string()],
         "falsely claiming a lint that still fires in this fixture is dead must be reported by \
          this lane, or the lane is vacuous: got {still_firing:?}"
     );
