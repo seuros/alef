@@ -424,7 +424,7 @@ pub(super) fn render_test_file(
     }
     helper_functions.push_str(&item_texts_helper);
 
-    prune_unreferenced_from_imports(
+    import_lines::prune_unreferenced_from_imports(
         &mut thirdparty_from,
         &[helper_functions.as_str(), fixtures_body.as_str()],
     );
@@ -461,34 +461,6 @@ pub(super) fn references_identifier(source: &str, name: &str) -> bool {
         offset = start + name.len().max(1);
     }
     false
-}
-
-/// Narrow each `from <module> import <names>` line to the names the emitted unit actually
-/// references, dropping any line left with no names.
-///
-/// The import candidates are over-approximated from config (call args, option types, enum and
-/// nested types, trait-bridge teardown functions), so the emitted unit is the authority on which
-/// of them are real references. Pruning against it keeps the two directions of the invariant in
-/// one place: nothing referenced goes unimported, and nothing imported goes unreferenced. ~keep
-fn prune_unreferenced_from_imports(imports: &mut Vec<String>, emitted: &[&str]) {
-    let pruned: Vec<String> = imports
-        .iter()
-        .filter_map(|line| {
-            let Some((prefix, names)) = line.split_once(" import ") else {
-                return Some(line.clone());
-            };
-            let kept: Vec<&str> = names
-                .split(", ")
-                .map(str::trim)
-                .filter(|name| emitted.iter().any(|source| references_identifier(source, name)))
-                .collect();
-            if kept.is_empty() {
-                return None;
-            }
-            Some(format!("{prefix} import {}", kept.join(", ")))
-        })
-        .collect();
-    *imports = pruned;
 }
 
 /// Emit `_alef_e2e_text`, the scalar coercion both the enum `equals` assertion and

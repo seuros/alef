@@ -24,7 +24,6 @@ src/backends/jni/gen_shims/tests.rs 1020
 src/backends/kotlin/gen_bindings/object_wrapper/tests.rs 1142
 src/backends/php/gen_bindings/type_stubs/type_stubs_tests.rs 1093
 src/backends/swift/gen_bindings/dto.rs 1207
-src/backends/wasm/gen_bindings/mod.rs 1130
 src/backends/wasm/trait_bridge.rs 1187
 src/backends/zig/gen_bindings/functions.rs 1494
 src/cli/cache.rs 1189

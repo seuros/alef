@@ -62,6 +62,57 @@ pub fn enum_variant_declaration(
     }
 }
 
+/// Like [`enum_variant_declaration`], but for a target enum macro that cannot express a
+/// conditionally-compiled variant at all -- resolves every decision to fully present (`Keep {
+/// cfg: None }`) or fully absent (`Drop`), never `Keep { cfg: Some(_) }`.
+///
+/// wasm-bindgen's `#[wasm_bindgen]` is exactly such a macro: it parses an enum's variants from
+/// the raw `syn::ItemEnum` token stream -- before cfg-stripping removes a disabled variant from
+/// the item -- and unconditionally generates code (`IntoWasmAbi`, `TryFromJsValue`, ...)
+/// referencing every variant it saw. Attaching `#[cfg(...)]` to only the variant's own
+/// declaration line, mirroring what a host-owned variant's conversion arm carries, leaves that
+/// generated code referencing a variant the compiler has already dropped: `E0599: no variant ...
+/// found`, reported AT the declaration line that (correctly, syntactically) still names the
+/// variant. See rustwasm/wasm-bindgen#2058 -- confirmed against the macro's own parser
+/// (`wasm-bindgen-macro-support::parser`, which walks `self.variants.iter()` with no cfg
+/// awareness) and codegen (`wasm-bindgen-macro-support::codegen::ToTokens for ast::Enum`, whose
+/// `cast_clauses` unconditionally maps every variant name), not merely inferred from the error
+/// shape. ~keep
+///
+/// A host-owned variant's gate is therefore evaluated directly against `configured_features`
+/// here -- REQUIRED, unlike `enum_variant_declaration`'s optional parameter, because this caller
+/// has no compiler-deferred escape hatch to fall back on the way a `#[cfg(...)]`-gated arm does.
+/// A foreign-owned variant defers to `enum_variant_declaration` with `None`, keeping it always
+/// unconditionally present exactly as before this function existed: proving a foreign variant
+/// disabled here, while the conversion side's catch-all computation (which does not thread
+/// `configured_features`) still assumes it might exist, would reopen the same "declaration and
+/// conversion disagree" defect one level down. ~keep
+#[must_use]
+pub fn enum_variant_declaration_without_cfg_attribute(
+    variant: &EnumVariant,
+    is_host_enum: bool,
+    configured_features: &HashSet<&str>,
+) -> VariantDeclaration {
+    if is_host_enum {
+        return match variant.cfg.as_deref() {
+            None => VariantDeclaration::Keep { cfg: None },
+            Some(cfg) if crate::core::ir::cfg_feature_satisfied(Some(cfg), configured_features) => {
+                VariantDeclaration::Keep { cfg: None }
+            }
+            Some(_) => VariantDeclaration::Drop,
+        };
+    }
+    // Foreign: unchanged conservative behavior. This function exists only to work around
+    // wasm-bindgen's inability to express per-variant cfg on a HOST-owned variant's own
+    // declaration -- a foreign variant's declaration was already unconditional (never carried a
+    // `#[cfg(...)]` attribute) before this function existed, so it stays unconditional here too.
+    // Proving a foreign variant disabled would let this declaration disagree with the catch-all
+    // `codegen::conversions::gen_enum_from_*_cfg` still emits for it, since wasm's own
+    // `ConversionConfig` does not thread `configured_features` into that computation -- passing
+    // `None` here keeps the two in lockstep the same way they already were. ~keep
+    enum_variant_declaration(variant, is_host_enum, None)
+}
+
 /// Whether `cfg` (a foreign-owned variant's gate) is proven unsatisfied by this binding's own
 /// configured feature set. Reuses [`crate::core::ir::cfg_feature_satisfied`], the canonical cfg
 /// evaluator every other cfg-gating decision in alef defers to, rather than re-parsing the cfg

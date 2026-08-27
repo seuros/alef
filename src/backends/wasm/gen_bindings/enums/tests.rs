@@ -42,7 +42,7 @@ fn make_enum(name: &str, variants: &[&str]) -> EnumDef {
 #[test]
 fn gen_enum_produces_wasm_bindgen_attribute() {
     let e = make_enum("Color", &["Red", "Green", "Blue"]);
-    let result = gen_enum(&e, "Wasm", "", None);
+    let result = gen_enum(&e, "Wasm", "", &std::collections::HashSet::new());
     assert!(result.contains("#[wasm_bindgen]"));
     assert!(result.contains("pub enum WasmColor"));
     assert!(!result.contains("js_name = \"Color\""));
@@ -113,7 +113,7 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
         version: Default::default(),
     };
 
-    let output = gen_enum(&e, "Wasm", "", None);
+    let output = gen_enum(&e, "Wasm", "", &std::collections::HashSet::new());
     assert!(
         output.contains("pub struct WasmFormatMetadata"),
         "a payload-carrying default-tagged enum must become a discriminator struct, \
@@ -148,7 +148,7 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
 #[test]
 fn gen_enum_empty_variants_no_panic() {
     let e = make_enum("Empty", &[]);
-    let result = gen_enum(&e, "", "", None);
+    let result = gen_enum(&e, "", "", &std::collections::HashSet::new());
     assert!(result.contains("pub enum Empty"));
     assert!(!result.contains("to_api_str"));
 }
@@ -157,7 +157,7 @@ fn gen_enum_empty_variants_no_panic() {
 fn gen_enum_to_api_str_snake_case() {
     let mut e = make_enum("FinishReason", &["Stop", "ToolCalls", "Length", "ContentFilter"]);
     e.serde_rename_all = Some("snake_case".to_string());
-    let result = gen_enum(&e, "Wasm", "", None);
+    let result = gen_enum(&e, "Wasm", "", &std::collections::HashSet::new());
     assert!(result.contains("pub fn to_api_str(self) -> &'static str"));
     assert!(result.contains("Self::Stop => \"stop\""));
     assert!(result.contains("Self::ToolCalls => \"tool_calls\""));
@@ -170,7 +170,7 @@ fn gen_enum_to_api_str_explicit_rename_overrides_rename_all() {
     let mut e = make_enum("Role", &["User", "Assistant"]);
     e.serde_rename_all = Some("snake_case".to_string());
     e.variants[0].serde_rename = Some("human".to_string());
-    let result = gen_enum(&e, "Wasm", "", None);
+    let result = gen_enum(&e, "Wasm", "", &std::collections::HashSet::new());
     assert!(result.contains("Self::User => \"human\""));
     assert!(result.contains("Self::Assistant => \"assistant\""));
 }
@@ -178,23 +178,25 @@ fn gen_enum_to_api_str_explicit_rename_overrides_rename_all() {
 #[test]
 fn gen_enum_to_api_str_no_rename_all_uses_variant_name() {
     let e = make_enum("Status", &["Active", "Inactive"]);
-    let result = gen_enum(&e, "", "", None);
+    let result = gen_enum(&e, "", "", &std::collections::HashSet::new());
     assert!(result.contains("Self::Active => \"Active\""));
     assert!(result.contains("Self::Inactive => \"Inactive\""));
 }
 
-/// alef #536's shape: a HOST-owned cfg-gated variant's wrapper declaration must carry the
-/// identical `#[cfg(...)]` its conversion arm already carries (`codegen::conversions`'
-/// `enum_cfg_gate_tests.rs` covers the arm side), and `to_api_str`'s match over the wrapper's own
-/// `Self` must gate that SAME variant's arm identically -- otherwise `to_api_str` itself becomes
-/// non-exhaustive the moment the feature is off, independent of the `From` impls entirely. This
-/// is exactly the reported defect: `WasmRenderMode::Extended` existed unconditionally in the wrapper
-/// while its conversion arm was gated, so the two disagreed about whether the variant existed.
-/// Load-bearing gating: a fixture with no `cfg` at all (or the feature always compiled in) cannot
-/// reproduce alef #536, since the wrapper's declaration and its match arms would trivially stay
-/// in lockstep by coincidence, not by construction. ~keep
+/// alef #536/#538's shape, corrected: `#[wasm_bindgen]` cannot express a per-variant `#[cfg(...)]`
+/// guard at all -- see `gen_enum`'s doc comment and
+/// `codegen::conversions::enum_variant_declaration_without_cfg_attribute`'s doc comment
+/// (rustwasm/wasm-bindgen#2058) for why the earlier fix here, which mirrored the arm's
+/// `#[cfg(...)]` onto the wrapper's own declaration, was itself invalid: the macro parses
+/// variants before cfg-stripping runs and unconditionally generates code referencing every one it
+/// saw, so a declared-but-conditionally-compiled variant produces `E0599: no variant ... found`
+/// pointing AT the declaration line. The correct fix resolves a host-owned cfg-gated variant
+/// definitively at generation time: fully present with no `#[cfg(...)]` attribute anywhere, or
+/// fully absent. This is the positive control -- the gating feature IS in `configured_features`,
+/// so `Extended` must be declared, and declared unconditionally (no `#[cfg(...)]` token at all,
+/// anywhere in the output, or wasm-bindgen's expansion breaks exactly as described above). ~keep
 #[test]
-fn gen_enum_attaches_host_cfg_guard_to_wrapper_declaration_and_matches() {
+fn gen_enum_declares_host_cfg_variant_unconditionally_when_feature_configured() {
     let enum_def = EnumDef {
         name: "RenderMode".to_string(),
         rust_path: "core_crate::RenderMode".to_string(),
@@ -211,29 +213,81 @@ fn gen_enum_attaches_host_cfg_guard_to_wrapper_declaration_and_matches() {
         ],
         ..Default::default()
     };
+    let configured: std::collections::HashSet<&str> = ["extended-mode"].into_iter().collect();
 
-    let output = gen_enum(&enum_def, "Wasm", "core_crate", None);
+    let output = gen_enum(&enum_def, "Wasm", "core_crate", &configured);
 
     assert!(
-        output.contains("#[cfg(feature = \"extended-mode\")]\n    Extended = 1,"),
-        "the wrapper's own declaration must gate the host-owned variant identically to its \
-         conversion arm, got:\n{output}"
+        !output.contains("#[cfg("),
+        "a wasm_bindgen enum must never carry a #[cfg(...)] attribute on any variant, got:\n{output}"
     );
     assert!(
-        output.contains("#[cfg(feature = \"extended-mode\")]\n            Self::Extended =>"),
-        "to_api_str's match arm over the wrapper's own type must carry the identical guard so the \
-         match stays exhaustive whichever way the feature resolves, got:\n{output}"
+        output.contains("Extended = 1,"),
+        "the configured variant must be declared unconditionally, got:\n{output}"
+    );
+    assert!(
+        output.contains("Self::Extended => "),
+        "to_api_str must handle the configured variant, got:\n{output}"
+    );
+    assert!(
+        output.contains("Some(Self::Extended)"),
+        "from_api_str must handle the configured variant, got:\n{output}"
     );
 }
 
-/// `gen_enum`'s foreign-variant proof path, exercised directly (see that function's doc comment
-/// for why WASM's own production call site still passes `None`): with the gating feature proven
-/// absent from `configured_features`, the wrapper must not declare the variant at all -- a
-/// shipped library that can never produce it must not advertise it. Load-bearing gating: a
-/// fixture with every feature enabled cannot reproduce this, since the variant would then be
-/// legitimately reachable. ~keep
+/// Negative control for the test above, and the actual #536/#538 regression test: the gating
+/// feature is NOT in `configured_features` (mirrors a consumer dependency built without it), so
+/// `Extended` must be omitted from the wrapper entirely -- not declared behind a `#[cfg(...)]`
+/// guard (invalid, see above), just genuinely absent, along with every reference to it in
+/// `to_api_str`/`from_api_str`. Load-bearing gating: a fixture with every feature enabled, or no
+/// `cfg` at all, cannot reproduce this -- it would pass whether or not generation-time resolution
+/// actually ran. ~keep
 #[test]
-fn gen_enum_drops_foreign_variant_proven_unreachable_by_configured_features() {
+fn gen_enum_omits_host_cfg_variant_entirely_when_feature_not_configured() {
+    let enum_def = EnumDef {
+        name: "RenderMode".to_string(),
+        rust_path: "core_crate::RenderMode".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Fast".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extended".to_string(),
+                cfg: Some(r#"feature = "extended-mode""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let configured: std::collections::HashSet<&str> = ["other-feature"].into_iter().collect();
+
+    let output = gen_enum(&enum_def, "Wasm", "core_crate", &configured);
+
+    assert!(
+        !output.contains("#[cfg("),
+        "a wasm_bindgen enum must never carry a #[cfg(...)] attribute on any variant, got:\n{output}"
+    );
+    assert!(
+        !output.contains("Extended"),
+        "an unconfigured host-owned variant must not be declared or referenced at all, got:\n{output}"
+    );
+    assert!(
+        output.contains("Fast = 0,"),
+        "the still-configured variant must remain, got:\n{output}"
+    );
+}
+
+/// A foreign-crate cfg-gated variant's declaration stays unconditional regardless of
+/// `configured_features` -- see `enum_variant_declaration_without_cfg_attribute`'s doc comment:
+/// proving it disabled here, while `codegen::conversions::gen_enum_from_*_cfg`'s catch-all
+/// computation (wasm's own `ConversionConfig` does not thread `configured_features` into it)
+/// still assumes it might exist, would make that now-superfluous catch-all unreachable -- the
+/// same defect shape one level down. This intentionally documents the current, narrower scope of
+/// wasm's fix: only a HOST-owned variant is resolved definitively; a foreign one keeps the
+/// pre-existing conservative "always declared" behavior. ~keep
+#[test]
+fn gen_enum_keeps_foreign_cfg_variant_unconditionally_regardless_of_configured_features() {
     let enum_def = EnumDef {
         name: "RoutingStrategy".to_string(),
         rust_path: "dep_crate::RoutingStrategy".to_string(),
@@ -252,15 +306,15 @@ fn gen_enum_drops_foreign_variant_proven_unreachable_by_configured_features() {
     };
     let configured: std::collections::HashSet<&str> = ["other-feature"].into_iter().collect();
 
-    let output = gen_enum(&enum_def, "Wasm", "core_crate", Some(&configured));
+    let output = gen_enum(&enum_def, "Wasm", "core_crate", &configured);
 
     assert!(
-        !output.contains("Extra"),
-        "a provably unreachable variant must not appear at all, got:\n{output}"
+        !output.contains("#[cfg("),
+        "a wasm_bindgen enum must never carry a #[cfg(...)] attribute on any variant, got:\n{output}"
     );
     assert!(
-        output.contains("Primary = 0,"),
-        "the still-reachable variant must remain, got:\n{output}"
+        output.contains("Extra = 1,"),
+        "a foreign-crate variant must stay unconditionally declared, got:\n{output}"
     );
 }
 

@@ -100,3 +100,31 @@ pub(super) fn finalize_stdlib_and_bare_imports(
     stdlib_imports.sort_by(|a, b| (a.starts_with("from "), a).cmp(&(b.starts_with("from "), b)));
     thirdparty_bare.sort();
 }
+
+/// Narrow each `from <module> import <names>` line to the names the emitted unit actually
+/// references, dropping any line left with no names.
+///
+/// The import candidates are over-approximated from config (call args, option types, enum and
+/// nested types, trait-bridge teardown functions), so the emitted unit is the authority on which
+/// of them are real references. Pruning against it keeps the two directions of the invariant in
+/// one place: nothing referenced goes unimported, and nothing imported goes unreferenced. ~keep
+pub(super) fn prune_unreferenced_from_imports(imports: &mut Vec<String>, emitted: &[&str]) {
+    let pruned: Vec<String> = imports
+        .iter()
+        .filter_map(|line| {
+            let Some((prefix, names)) = line.split_once(" import ") else {
+                return Some(line.clone());
+            };
+            let kept: Vec<&str> = names
+                .split(", ")
+                .map(str::trim)
+                .filter(|name| emitted.iter().any(|source| references_identifier(source, name)))
+                .collect();
+            if kept.is_empty() {
+                return None;
+            }
+            Some(format!("{prefix} import {}", kept.join(", ")))
+        })
+        .collect();
+    *imports = pruned;
+}
