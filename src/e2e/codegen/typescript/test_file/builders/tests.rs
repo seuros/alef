@@ -641,8 +641,84 @@ fn a_field_keyed_by_its_wire_name_is_accepted() {
         &mut Default::default(),
     );
 
-    assert!(
-        expression.contains("10"),
-        "a key spelled with the field's wire name must build, not abort: {expression}"
+    // ~keep Asserting the exact key, not just that "10" appears: `snake_to_camel` applied
+    // directly to the wire-shaped fixture key ("maxCharacters", already camelCase) would leave
+    // it unchanged and pass this assertion too if it only checked the value — see task #475,
+    // where exactly that vacuous shape let a wire/host-name divergence ship as `Missing field`
+    // at runtime. The correct key is the napi-rs public name of the *Rust* field
+    // (`to_node_name("max_chars")` = `maxChars`), not a casing of the wire spelling.
+    assert_eq!(expression, "{ maxChars: 10 } as Options");
+}
+
+/// Regression for task #475: a field whose wire name (`#[serde(rename)]`) diverges from its
+/// napi-rs public JS name (`to_node_name(&field.name)`, always camelCase off the Rust field
+/// name — see `napi::gen_bindings::types`) must resolve the JS object-literal key through the
+/// Rust field, not a generic camelCase of the (possibly wire-shaped) fixture key. Before the
+/// fix, `snake_to_camel("type")` left the wire key unchanged, emitting `{ type: "function" }`
+/// against a binding that exposes the field as `toolType`, which napi-rs rejected at runtime
+/// with `Missing field 'toolType'`.
+#[test]
+fn node_field_keyed_by_a_wire_name_that_diverges_from_its_js_name_resolves_the_js_name() {
+    let type_defs = [TypeDef {
+        name: "ExampleTool".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "tool_type".into(),
+            ty: TypeRef::String,
+            serde_rename: Some("type".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let expression = ts_builder_expression(
+        serde_json::json!({"type": "function"}).as_object().expect("object"),
+        "ExampleTool",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "",
+        &[],
+        &mut Default::default(),
     );
+
+    assert_eq!(expression, "{ toolType: \"function\" } as ExampleTool");
+}
+
+/// Same divergence, exercised on the WASM setter-builder path (`lang == "wasm"`, the ordinary
+/// non-tagged-enum struct branch) rather than the node object-literal path above — wasm-bindgen
+/// getters/setters are named with the identical `to_node_name(&field.name)` policy (see
+/// `wasm::gen_bindings::types::gen_getter`), so the same wire-vs-host divergence produced
+/// `_u0.type = "function"` (an assignment to a property the generated class does not have)
+/// instead of `_u0.toolType = "function"`.
+#[test]
+fn wasm_field_keyed_by_a_wire_name_that_diverges_from_its_js_name_resolves_the_js_name() {
+    let type_defs = [TypeDef {
+        name: "ExampleTool".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "tool_type".into(),
+            ty: TypeRef::String,
+            serde_rename: Some("type".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let expression = ts_builder_expression(
+        serde_json::json!({"type": "function"}).as_object().expect("object"),
+        "WasmExampleTool",
+        &Default::default(),
+        "wasm",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "Wasm",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert!(expression.contains("_u0.toolType = \"function\""), "{expression}");
 }

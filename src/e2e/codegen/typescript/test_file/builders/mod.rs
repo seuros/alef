@@ -244,6 +244,39 @@ fn to_bigint_literal(value_expr: &str) -> String {
     format!("BigInt({trimmed})")
 }
 
+/// Find the `FieldDef` on `owner_type` that fixture key `key` refers to, matching either the
+/// field's Rust name or its wire name (`#[serde(rename = ...)]` / a container `rename_all`) —
+/// a fixture may key a field either way, exactly as `refuse_undeclared_json_keys` accepts both
+/// spellings as declared.
+fn resolve_owner_field<'a>(owner_type: Option<&'a TypeDef>, key: &str) -> Option<&'a crate::core::ir::FieldDef> {
+    let definition = owner_type?;
+    definition.fields.iter().find(|field| {
+        field.name == key
+            || crate::codegen::naming::wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                definition.serde_rename_all.as_deref(),
+            ) == key
+    })
+}
+
+/// Resolve the napi-rs / wasm-bindgen public JS field identifier for fixture key `key` on
+/// `owner_type`. Both backends compute the public field name as `to_node_name(&field.name)` off
+/// the Rust field (see `napi::gen_bindings::types` and `wasm::gen_bindings::types::gen_getter`),
+/// never from the field's wire name, so a fixture keyed by the wire spelling (a field whose
+/// `#[serde(rename = ...)]` diverges from its `#[napi(js_name = ...)]`/wasm-bindgen `js_name`,
+/// e.g. `#[serde(rename = "type")]` + `#[napi(js_name = "toolType")]`) must still resolve
+/// through the Rust field, not a generic camelCase of the wire key itself — camelCasing the
+/// literal fixture key produced `type: "function"` where the binding required `toolType`,
+/// throwing `Missing field 'toolType'` at runtime. Falls back to a generic camelCase of `key`
+/// when no declared field matches (arbitrary/opaque payloads; enum tag keys are renamed
+/// separately by the caller). ~keep
+fn node_field_public_key(owner_type: Option<&TypeDef>, key: &str) -> String {
+    resolve_owner_field(owner_type, key)
+        .map(|field| crate::codegen::naming::to_node_name(&field.name))
+        .unwrap_or_else(|| snake_to_camel(key))
+}
+
 /// Panics if `obj` contains a key that `type_name`'s declared fields (in `type_defs`) don't
 /// cover — the single check shared by every node-lang JSON-object-literal builder in this
 /// module, so the snippet path (which binds the literal to a typed `const`, see
@@ -371,7 +404,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             let js_key = if lang == "node" {
                 match serde_tag_for_this_type {
                     Some(tag) if key == tag => "kind".to_string(),
-                    _ => snake_to_camel(key),
+                    _ => node_field_public_key(owner_type, key),
                 }
             } else {
                 snake_to_camel(key)
@@ -394,9 +427,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                         json_to_js(&preprocessed)
                     }
                 } else {
-                    let field_type = owner_type
-                        .and_then(|definition| definition.fields.iter().find(|field| field.name == *key))
-                        .map(|field| &field.ty);
+                    let field_type = resolve_owner_field(owner_type, key).map(|field| &field.ty);
                     node_value_expression(
                         &preprocessed,
                         key,
@@ -453,14 +484,12 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     let ir_owner_name = type_name.strip_prefix(wasm_type_prefix).unwrap_or(type_name);
     let owner_type = type_defs.iter().find(|definition| definition.name == ir_owner_name);
     for (key, val) in obj {
-        let camel_key = snake_to_camel(key);
+        let camel_key = node_field_public_key(owner_type, key);
         let field_pointer = json_pointer_child(pointer, key);
-        let field_type = owner_type
-            .and_then(|definition| definition.fields.iter().find(|field| field.name == *key))
-            .map(|field| match &field.ty {
-                crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
-                other => other,
-            });
+        let field_type = resolve_owner_field(owner_type, key).map(|field| match &field.ty {
+            crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+            other => other,
+        });
         if let Some(file) = docs_files.iter().find(|file| file.field == field_pointer) {
             stmts.push(
                 crate::e2e::template_env::render(
@@ -659,12 +688,14 @@ fn node_value_expression(
             let fields = object
                 .iter()
                 .map(|(name, value)| {
-                    let nested_field_type = nested_type
-                        .and_then(|definition| definition.fields.iter().find(|field| field.name == *name))
-                        .map(|field| &field.ty);
+                    let nested_field = resolve_owner_field(nested_type, name);
+                    let nested_field_type = nested_field.map(|field| &field.ty);
+                    let js_key = nested_field
+                        .map(|field| crate::codegen::naming::to_node_name(&field.name))
+                        .unwrap_or_else(|| snake_to_camel(name));
                     format!(
                         "{}: {}",
-                        snake_to_camel(name),
+                        js_key,
                         node_value_expression(
                             value,
                             name,
