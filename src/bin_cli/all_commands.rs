@@ -14,7 +14,6 @@ mod preflight;
 mod stage_failures;
 use all_commands_run_setup::{
     create_once_overwrite, refused_snippet_dir_paths, report_deferred_formatting, sync_registry_versions_before_all,
-    warn_if_snippet_validation_needs_build,
 };
 use stage_failures::StageFailures;
 
@@ -133,6 +132,25 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 } else {
                     tracing::info!("Running all for: {}", format_languages(&languages));
                 }
+
+                // Recorded before `extract`/`generate` make their first mutation -- see
+                // `cache::generation_record`'s in-progress marker doc for why this survives the
+                // process being killed outright (a file write, not a `Drop` guard) and why it
+                // lives in the gitignored `.alef/` cache rather than a committed record
+                // (alef#268). `--clean` is exactly the case this protects: it removes before it
+                // writes, so an interruption between the two can leave the tree with LESS than
+                // it started with, and this marker is what lets a later `alef verify` tell that
+                // apart from ordinary staleness. A marker already present here means the
+                // PREVIOUS run for this crate was interrupted before it finished; this run
+                // overwrites it with its own fresh start and, on success, clears it below. ~keep
+                if cache::generation_record::generation_in_progress(&base_dir, &resolved_cfg.name) {
+                    tracing::warn!(
+                        crate_name = %resolved_cfg.name,
+                        "recovering from an incomplete previous generation run for this crate -- \
+                         it was interrupted before finishing; regenerating it fully now"
+                    );
+                }
+                cache::generation_record::mark_generation_in_progress(&base_dir, &resolved_cfg.name)?;
 
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
@@ -536,7 +554,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 tracing::info!("Generating docs...");
-                warn_if_snippet_validation_needs_build(resolved_cfg);
+                // No pre-flight "this needs a build" warning here (task #542): a static check
+                // keyed on `docs.snippets.validation_level` alone cannot know whether a prior
+                // `alef build` already satisfied it, so it fired on every run regardless of
+                // outcome -- exactly the "which command am I" anti-pattern the deleted
+                // `build_dependency::enforce_build_dependency` gate already illustrated once (see
+                // `docs::tests::snippet_build_dependency_removed`). `docs::enforce_snippet_summary`
+                // reports the real, evidence-based signal after validation actually runs instead. ~keep
                 let docs_api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let doc_languages = resolve_doc_languages(resolved_cfg, None)?;
                 // `generate_docs_stage` hands back every page it rendered even when a later step
@@ -730,6 +754,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // `cache::generation_record`. Reuses the `inputs_hash` already computed above
                 // for the stage cache rather than re-deriving it. ~keep
                 cache::record_inputs_hash(&base_dir, &resolved_cfg.name, &inputs_hash)?;
+                // This crate's run reached the point `record_inputs_hash` just marked as its
+                // successful baseline -- clear the in-progress marker set above so it is
+                // indistinguishable from a crate that was never interrupted at all. ~keep
+                cache::generation_record::clear_generation_in_progress(&base_dir, &resolved_cfg.name)?;
 
                 // Reported only now, after finalisation, the orphan sweep and docs have
                 // all run. Raising at the point of failure is what made the release

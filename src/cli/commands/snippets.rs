@@ -48,6 +48,18 @@ pub enum SnippetsAction {
         /// ~keep
         #[arg(long = "lang", value_delimiter = ',', num_args = 1..)]
         languages: Option<Vec<String>>,
+
+        /// Override `[docs.snippets].validation_level` for this run (`syntax`, `typecheck`,
+        /// `compile`, or `run`).
+        ///
+        /// `alef all`/`alef docs` never build a language's real artifacts in the same
+        /// invocation (see `docs::enforce_snippet_summary`'s doc comment), so a
+        /// `compile`/`typecheck`/`run` `validation_level` reliably downgrades to
+        /// `unresolved_dependency` there until a separate `alef build` runs. This flag is the
+        /// explicit way to ask for real compile-level checking after that build, without
+        /// weakening `validation_level` for every other caller of this config (task #542). ~keep
+        #[arg(long)]
+        level: Option<String>,
     },
 
     /// Parse a single file and print its code blocks.
@@ -118,7 +130,8 @@ pub fn run(action: SnippetsAction) -> ExitCode {
             strict,
             cache,
             languages,
-        } => run_check(&config, strict, cache != "off", languages.as_deref()),
+            level,
+        } => run_check(&config, strict, cache != "off", languages.as_deref(), level.as_deref()),
         SnippetsAction::Parse { file } => run_parse(&file),
         SnippetsAction::Audit {
             snippets,
@@ -210,7 +223,13 @@ fn run_list(snippets: &[PathBuf], languages: Option<&Vec<String>>) -> ExitCode {
     }
 }
 
-fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages: Option<&[String]>) -> ExitCode {
+fn run_check(
+    config_path: &Path,
+    force_strict: bool,
+    use_cache: bool,
+    languages: Option<&[String]>,
+    level_override: Option<&str>,
+) -> ExitCode {
     let (_, resolved) = match crate::bin_cli::helpers::load_config(config_path) {
         Ok(config) => config,
         Err(error) => {
@@ -248,12 +267,13 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
             return ExitCode::FAILURE;
         }
     };
-    let level = config
-        .validation_level
-        .as_deref()
-        .unwrap_or("syntax")
-        .parse::<ValidationLevel>()
-        .unwrap_or(ValidationLevel::Syntax);
+    let level = match resolve_check_level(level_override, config.validation_level.as_deref()) {
+        Ok(level) => level,
+        Err(error) => {
+            tracing::error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let strict = force_strict || config.strict;
     // An unrecognised `--lang` must not silently widen the run back to everything: an
     // empty-but-`Some` filter reads to discovery as "match nothing", and the run would then exit
@@ -379,6 +399,26 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// Resolve `check`'s effective validation level: an explicit `--level` wins outright, otherwise
+/// `[docs.snippets].validation_level` (defaulting to `syntax`).
+///
+/// The two sides are validated differently on purpose (task #542). `--level` is a one-off flag
+/// whose entire purpose is requesting a specific level; a typo there must fail loudly rather than
+/// silently downgrade to `syntax`, which would defeat the flag. The config value keeps its
+/// existing lax fallback (an unrecognised string silently becomes `syntax`) for backward
+/// compatibility -- changing that now would fail configs that previously loaded fine. ~keep
+fn resolve_check_level(level_override: Option<&str>, configured: Option<&str>) -> Result<ValidationLevel, String> {
+    match level_override {
+        Some(raw) => raw
+            .parse::<ValidationLevel>()
+            .map_err(|error| format!("invalid --level value `{raw}`: {error}")),
+        None => Ok(configured
+            .unwrap_or("syntax")
+            .parse::<ValidationLevel>()
+            .unwrap_or(ValidationLevel::Syntax)),
     }
 }
 
@@ -572,7 +612,7 @@ fn report_audit(report: &crate::snippets::audit::AuditReport) -> bool {
 /// The pass/fail verdict is [`crate::snippets::gaps::GapReport::is_failure`] — this function is
 /// output only, so `check` and `gaps` (which prints the same findings through
 /// `crate::bin_cli::output::line` instead) cannot drift on which findings actually fail a run.
-fn log_gaps(report: &crate::snippets::gaps::GapReport) {
+pub(super) fn log_gaps(report: &crate::snippets::gaps::GapReport) {
     for reference in &report.missing_references {
         tracing::error!(
             "snippet gap: missing include target {}:{} -> {}",
@@ -727,7 +767,10 @@ fn run_parse(file: &Path) -> ExitCode {
 /// not exist. A missing `--docs` root was worse -- nothing walks it eagerly, so `audit` reported
 /// "Audit clean" over a documentation tree it never opened. See
 /// `discovery::missing_configured_directories` for the policy both share. ~keep
-fn reject_missing_configured_directories(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf]) -> Result<(), ExitCode> {
+pub(super) fn reject_missing_configured_directories(
+    snippet_dirs: &[PathBuf],
+    docs_dirs: &[PathBuf],
+) -> Result<(), ExitCode> {
     let checked = [
         (discovery::SNIPPET_DIRECTORY_KIND, snippet_dirs),
         (discovery::DOCUMENTATION_DIRECTORY_KIND, docs_dirs),
@@ -810,174 +853,10 @@ fn run_audit(
     }
 }
 
-/// One `alef snippets gaps` invocation, grouped so the call stays under clippy's argument
-/// threshold.
-struct GapInvocation<'a> {
-    snippet_dirs: &'a [PathBuf],
-    docs_dirs: &'a [PathBuf],
-    required_languages: Option<&'a [String]>,
-    /// The raw `--include-base-path` list, before the docs-root fallback. Unset-ness is only
-    /// observable here. ~keep
-    include_base_paths: &'a [PathBuf],
-    strict: bool,
-}
-
-fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
-    let GapInvocation {
-        snippet_dirs,
-        docs_dirs,
-        required_languages,
-        include_base_paths,
-        strict,
-    } = *invocation;
-    if let Err(code) = reject_missing_configured_directories(snippet_dirs, docs_dirs) {
-        return code;
-    }
-    // An unrecognised `--required-languages` value must not silently drop out of the parity
-    // check: it used to (`Language::from_fence_tag` returning `Unknown` was filtered away with
-    // no message), so a typo -- or reaching for a session target name like `kotlin_android`
-    // instead of its fence tag `kotlin` -- quietly shrank the comparison instead of failing it.
-    // ~keep
-    let required: Vec<Language> = match required_languages
-        .map(|languages| {
-            languages
-                .iter()
-                .map(|language| crate::snippets::types::resolve_required_language(language))
-                .collect::<Result<Vec<Language>, String>>()
-        })
-        .transpose()
-    {
-        Ok(required) => required.unwrap_or_default(),
-        Err(error) => {
-            tracing::error!("invalid --required-languages entry: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let resolved_base_paths: Vec<PathBuf> = if include_base_paths.is_empty() {
-        docs_dirs.to_vec()
-    } else {
-        include_base_paths.to_vec()
-    };
-    let configured_references = match crate::snippets::gaps::coverage_ledger_references(snippet_dirs) {
-        Ok(references) => references,
-        Err(error) => {
-            tracing::error!("reading generated snippet coverage: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let config = GapConfig {
-        docs_dirs: docs_dirs.to_vec(),
-        snippet_dirs: snippet_dirs.to_vec(),
-        required_languages: required,
-        include_base_paths: resolved_base_paths,
-        configured_references,
-        exclude: Vec::new(),
-    };
-    let report = match detect_gaps(&config) {
-        Ok(report) => report,
-        Err(err) => {
-            tracing::error!("detecting gaps: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // `include_base_paths` is only reported unset when the run actually found a `--8<--` target
-    // that would have used it -- an Astro/MDX-only docs tree never does. ~keep
-    let unset = crate::snippets::gap_coverage::unset_gap_inputs(
-        docs_dirs,
-        &config.required_languages,
-        include_base_paths,
-        report.coverage.mkdocs_include_references,
-    );
-    // Printed on every run, gaps or none. A coverage report that appears only alongside
-    // findings is absent from precisely the runs whose scope a reader needs to weigh. ~keep
-    for line in report.coverage.report_lines() {
-        crate::bin_cli::output::line(line);
-    }
-    for line in crate::snippets::gap_coverage::unset_input_lines(&unset, strict) {
-        crate::bin_cli::output::line(line);
-    }
-    let unconfigured_failure = strict && crate::snippets::gap_coverage::has_vacuous_input(&unset);
-    if unconfigured_failure {
-        tracing::error!(
-            "--strict: the gap check cannot pass unconfigured — an unset input above left a check class \
-             with nothing to compare, so a clean result would prove nothing"
-        );
-    }
-    if !report.has_gaps() {
-        crate::bin_cli::output::line("No gaps found.");
-        return if unconfigured_failure {
-            ExitCode::FAILURE
-        } else {
-            ExitCode::SUCCESS
-        };
-    }
-    if !report.missing_references.is_empty() {
-        crate::bin_cli::output::line(format!(
-            "Missing include targets ({}):",
-            report.missing_references.len()
-        ));
-        for reference in &report.missing_references {
-            crate::bin_cli::output::line(format!(
-                "  {}:{} → {}",
-                reference.source.display(),
-                reference.line,
-                reference.target.display()
-            ));
-        }
-    }
-    if !report.unreferenced_snippets.is_empty() {
-        crate::bin_cli::output::line(format!(
-            "Unreferenced snippets ({}):",
-            report.unreferenced_snippets.len()
-        ));
-        for path in &report.unreferenced_snippets {
-            crate::bin_cli::output::line(format!("  {}", path.display()));
-        }
-    }
-    if !report.missing_language_variants.is_empty() {
-        crate::bin_cli::output::line(format!(
-            "Missing language variants ({}):",
-            report.missing_language_variants.len()
-        ));
-        for variant in &report.missing_language_variants {
-            crate::bin_cli::output::line(format!("  {} — {}", variant.group.display(), variant.language));
-        }
-    }
-    if !report.skips_without_reason.is_empty() {
-        crate::bin_cli::output::line(format!("Skips without reason ({}):", report.skips_without_reason.len()));
-        for location in &report.skips_without_reason {
-            crate::bin_cli::output::line(format!(
-                "  {}:{} (block {})",
-                location.path.display(),
-                location.line,
-                location.block_index
-            ));
-        }
-    }
-    if !report.unknown_languages.is_empty() {
-        crate::bin_cli::output::line(format!("Unknown languages ({}):", report.unknown_languages.len()));
-        for unknown in &report.unknown_languages {
-            crate::bin_cli::output::line(format!(
-                "  {}:{} tag={}",
-                unknown.path.display(),
-                unknown.line,
-                unknown.tag
-            ));
-        }
-    }
-    // Mirrors `run_check`/`run_configured_audit_and_gaps`: structural findings (missing include
-    // targets, missing language variants, undocumented skips, unknown fence languages) always
-    // fail; an unreferenced-only finding fails only under `strict`, same as `check`. This used
-    // to fail unconditionally on ANY finding here, so `gaps` and `check` disagreed about the
-    // identical unreferenced-snippet-only case. ~keep
-    if report.is_failure(strict) || unconfigured_failure {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
-}
-
 mod accounting;
+mod gaps_command;
+
+use gaps_command::{GapInvocation, run_gaps};
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,6 @@
 //! Pre-flight and cross-cutting helper functions for `alef all`'s `handle`, split out of
 //! `all_commands.rs` for the file-modularization cap: version resolution/sync before the run,
-//! deferred-formatting reporting, snippet-validation build-artifact warnings, and the
+//! deferred-formatting reporting, snippet-validation refusal correlation, and the
 //! create-once overwrite policy.
 
 use anyhow::{Context as _, Result};
@@ -21,52 +21,6 @@ use crate::cli::pipeline;
 /// formatter error. ~keep
 pub(crate) fn report_deferred_formatting(crate_name: &str, deferred: &[crate::e2e::format::DeferredFormatting]) {
     crate::e2e::format::warn_deferred_for_crate(crate_name, deferred);
-}
-
-/// Whether `docs.snippets.validation_level` runs snippets against a built
-/// language artifact rather than just parsing/checking syntax.
-///
-/// `alef all` never builds those artifacts: its own doc comment scopes it to
-/// "generate + stubs + scaffold + readme + docs + sync + e2e", and the only
-/// build it performs is the narrow one in `complete_generated_artifacts`
-/// (post-build hooks plus, only for `Language::Ffi`, the native cdylib --
-/// see `bin_cli/helpers.rs`). The full per-language build
-/// (`pipeline::build`, e.g. `npm run build` / `mvn compile` / `swift build` /
-/// `zig build`) only runs from the standalone `alef build` command. A
-/// `typecheck`/`compile`/`run` level configured without that build having
-/// run separately fails every affected snippet with a toolchain error whose
-/// real cause -- the missing artifact -- is not stated anywhere. ~keep
-pub(crate) fn snippet_validation_needs_build_artifacts(validation_level: Option<&str>) -> bool {
-    matches!(
-        validation_level.map(str::to_ascii_lowercase).as_deref(),
-        Some("typecheck" | "compile" | "run")
-    )
-}
-
-/// Surface the unbuilt-artifact precondition above, once per crate, before the
-/// docs stage runs snippet validation -- so it is diagnosable at the top of
-/// the run instead of inferred from a flood of per-snippet compiler errors
-/// further down. Does not skip or gate the docs stage: `alef all` has no way
-/// to know here whether a prior `alef build` already satisfied it. ~keep
-pub(crate) fn warn_if_snippet_validation_needs_build(config: &crate::core::config::ResolvedCrateConfig) {
-    let Some(level) = config
-        .docs
-        .as_ref()
-        .and_then(|docs| docs.snippets.as_ref())
-        .and_then(|snippets| snippets.validation_level.as_deref())
-    else {
-        return;
-    };
-    if !snippet_validation_needs_build_artifacts(Some(level)) {
-        return;
-    }
-    tracing::warn!(
-        "[{}] docs.snippets.validation_level = \"{level}\" checks snippets against built language \
-         artifacts, but `alef all` does not build them -- run `alef build` first. If those artifacts \
-         are missing or stale, snippet validation fails with per-snippet toolchain errors whose real \
-         cause is the missing build, not the snippet.",
-        config.name
-    );
 }
 
 /// Paths this run's ownership guard refused to write that fall inside the crate's

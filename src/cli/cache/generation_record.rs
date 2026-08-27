@@ -24,7 +24,15 @@
 //! against yet", not as a failure, so a repo that has never generated under this record's
 //! format (every consumer, immediately after upgrading to this version) is silently skipped
 //! rather than reported stale. The first `alef generate`/`alef all` after upgrading creates
-//! it. ~keep
+//! it.
+//!
+//! This module also owns a second, deliberately UNcommitted record alongside the fingerprint
+//! above: the per-crate in-progress marker ([`mark_generation_in_progress`] /
+//! [`clear_generation_in_progress`] / [`generation_in_progress`]), which answers "did this
+//! crate's most recent run finish" so an `alef all --clean` killed mid-run leaves a signal
+//! `alef verify` can read instead of reporting the resulting absences as ordinary staleness
+//! (alef#268). See [`mark_generation_in_progress`]'s doc for why it lives in the gitignored
+//! `.alef/` cache rather than next to [`GENERATION_RECORD`] here. ~keep
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -161,6 +169,83 @@ pub fn record_inputs_hash(base_dir: &Path, crate_name: &str, inputs_hash: &str) 
     Ok(())
 }
 
+/// File name of the per-crate "a generation run started and has not yet finished" marker.
+/// Lives under `.alef/<crate_name>/`, never at the repo root next to [`GENERATION_RECORD`].
+///
+/// This is deliberately the gitignored `.alef/` cache, not a committed record, and that is the
+/// load-bearing decision in this module (see alef#268). [`GENERATION_RECORD`] answers "what was
+/// this crate's generation-inputs fingerprint as of its last SUCCESSFUL run" and is committed
+/// because every checkout must agree on that baseline. This marker answers a different, purely
+/// local question: "does a run against *this working tree, right now* need to be treated as
+/// having died mid-flight". A fresh clone has no `.alef/` at all, so it can never inherit a stale
+/// in-progress marker from a machine or CI run that happened to be killed -- the marker starts
+/// every checkout in the same "no run in flight" state a clean tree is already in. Committing it
+/// would invert that: a marker written before an interrupted run and accidentally committed
+/// would tell every future clone, forever, that generation never finished, with no run left to
+/// clear it. See `read_before_write`/`verify-before-acting`-flavoured reasoning in `cache.rs`'s
+/// `OWNERSHIP_MANIFEST` doc for why the *other* records in this family choose the opposite
+/// answer -- they encode provenance a fresh clone must inherit; this encodes in-flight process
+/// state a fresh clone must never inherit. ~keep
+const GENERATION_IN_PROGRESS_MARKER: &str = "generation-in-progress";
+
+fn generation_in_progress_marker_path(base_dir: &Path, crate_name: &str) -> std::path::PathBuf {
+    base_dir
+        .join(super::CACHE_DIR)
+        .join(crate_name)
+        .join(GENERATION_IN_PROGRESS_MARKER)
+}
+
+/// Content of the marker file -- a note for a human who opens it directly, not a format any
+/// caller parses. See [`generation_in_progress`]: existence alone is the whole signal. ~keep
+const GENERATION_IN_PROGRESS_MARKER_CONTENT: &str = "\
+alef generation in progress -- if this file is still here, the run that created it did not
+finish; rerun `alef all`/`alef generate` for this crate.
+";
+
+/// Record that a generation run for `crate_name` has started but not yet completed.
+///
+/// Callers must call this once per crate, before the first mutation that crate's run makes
+/// (before `--clean`'s removal, before any file write) -- see [`clear_generation_in_progress`]
+/// for the other half. A plain file write, not a `Drop` guard or a signal handler: the whole
+/// point is to survive the process being KILLED outright, which runs neither. ~keep
+pub fn mark_generation_in_progress(base_dir: &Path, crate_name: &str) -> anyhow::Result<()> {
+    super::validate_cache_crate_name(crate_name)?;
+    let path = generation_in_progress_marker_path(base_dir, crate_name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, GENERATION_IN_PROGRESS_MARKER_CONTENT)?;
+    Ok(())
+}
+
+/// Clear the marker [`mark_generation_in_progress`] wrote, once `crate_name`'s run has
+/// completed successfully. Idempotent: clearing an already-absent marker is not an error, so a
+/// caller never has to special-case "this is the first run for this crate".
+pub fn clear_generation_in_progress(base_dir: &Path, crate_name: &str) -> anyhow::Result<()> {
+    match std::fs::remove_file(generation_in_progress_marker_path(base_dir, crate_name)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether `crate_name`'s most recent generation run started but never completed, per
+/// [`mark_generation_in_progress`]/[`clear_generation_in_progress`].
+pub fn generation_in_progress(base_dir: &Path, crate_name: &str) -> bool {
+    generation_in_progress_marker_path(base_dir, crate_name).is_file()
+}
+
+/// Names, from `crate_names`, of every crate whose last generation run did not complete --
+/// the batch form of [`generation_in_progress`], mirroring [`stale_crate_names`]'s shape so
+/// `alef verify` can compute both in the same style. ~keep
+pub fn incomplete_crate_names<'a>(base_dir: &Path, crate_names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    crate_names
+        .into_iter()
+        .filter(|name| generation_in_progress(base_dir, name))
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +350,65 @@ mod tests {
         );
 
         assert_eq!(stale, vec!["moved-crate".to_string()]);
+    }
+
+    /// Positive control for the in-progress marker: a crate nobody has ever marked, or one that
+    /// was marked and then cleared (the ordinary successful-run shape), must read as complete.
+    /// Without this the "reports incomplete" tests below would not prove the check fired --
+    /// it could report every crate incomplete unconditionally and still pass them. ~keep
+    #[test]
+    fn generation_in_progress_is_false_for_a_crate_never_marked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!generation_in_progress(dir.path(), "my-crate"));
+    }
+
+    #[test]
+    fn mark_then_clear_returns_to_not_in_progress() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        mark_generation_in_progress(dir.path(), "my-crate").expect("mark");
+        assert!(generation_in_progress(dir.path(), "my-crate"));
+
+        clear_generation_in_progress(dir.path(), "my-crate").expect("clear");
+        assert!(
+            !generation_in_progress(dir.path(), "my-crate"),
+            "a crate whose run completed must be indistinguishable from one never marked"
+        );
+    }
+
+    /// Simulates a process killed after `mark_generation_in_progress` but before
+    /// `clear_generation_in_progress` ever ran -- the exact failure mode alef#268 describes.
+    /// No `clear` call happens in this test on purpose. ~keep
+    #[test]
+    fn generation_in_progress_survives_as_true_when_never_cleared() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        mark_generation_in_progress(dir.path(), "my-crate").expect("mark");
+        assert!(generation_in_progress(dir.path(), "my-crate"));
+    }
+
+    #[test]
+    fn clear_generation_in_progress_is_a_no_op_when_no_marker_was_ever_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        clear_generation_in_progress(dir.path(), "my-crate").expect("clearing an absent marker must not error");
+    }
+
+    #[test]
+    fn incomplete_crate_names_reports_only_the_marked_crate_in_a_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        mark_generation_in_progress(dir.path(), "interrupted-crate").expect("mark interrupted-crate");
+
+        let incomplete = incomplete_crate_names(dir.path(), ["stable-crate", "interrupted-crate"]);
+
+        assert_eq!(incomplete, vec!["interrupted-crate".to_string()]);
+    }
+
+    #[test]
+    fn incomplete_crate_names_is_empty_once_every_marked_crate_is_cleared() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        mark_generation_in_progress(dir.path(), "my-crate").expect("mark");
+        clear_generation_in_progress(dir.path(), "my-crate").expect("clear");
+
+        let incomplete = incomplete_crate_names(dir.path(), ["my-crate"]);
+
+        assert!(incomplete.is_empty());
     }
 }

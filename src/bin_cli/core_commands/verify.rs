@@ -65,12 +65,28 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
             Some((c.name.clone(), inputs_hash))
         })
         .collect();
-    let stale_crates = cache::stale_crate_names(
+    // Crates whose last `alef generate`/`alef all` run was interrupted before it finished --
+    // see `cache::generation_record`'s in-progress marker doc (alef#268) for why this is the
+    // right question to ask BEFORE reading `stale_crates`/`missing_generated_files` below: an
+    // interrupted `--clean` run can leave a crate with fewer files than it started with, and
+    // that absence must be diagnosed as "the run didn't finish", never as ordinary staleness a
+    // rerun coincidentally happens to also fix. ~keep
+    let incomplete_crates: Vec<String> =
+        cache::generation_record::incomplete_crate_names(&base_dir, crates_to_process.iter().map(|c| c.name.as_str()));
+    let has_incomplete_crates = !incomplete_crates.is_empty();
+
+    let stale_crates: Vec<String> = cache::stale_crate_names(
         &base_dir,
         current_inputs_hashes
             .iter()
             .map(|(name, hash)| (name.as_str(), hash.as_str())),
-    );
+    )
+    .into_iter()
+    // An incomplete crate is already reported under its own heading below; folding it into
+    // "stale" too would tell the operator to run the same remedy twice under two different
+    // diagnoses for the same crate. ~keep
+    .filter(|name| !incomplete_crates.contains(name))
+    .collect();
     let has_stale_crates = !stale_crates.is_empty();
 
     let mut snippet_coverage_issues = Vec::new();
@@ -120,25 +136,40 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
                 .map(|path| format!("[{}] {}", resolved_cfg.name, path.display())),
         );
         let found = find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
-        // `ignore_ephemeral` only ever narrows `missing`/`missing_gitignored` -- both are
-        // exclusively about paths ABSENT from disk. `frozen`/`managed_paths` (which feeds the
-        // orphan diff) are untouched: those checks are about the correctness of bytes that
-        // already exist, which "this output is ephemeral" says nothing about. ~keep
-        let (missing, missing_excluded) = resolved_cfg.verify.partition_ephemeral(found.missing, &base_dir);
-        let (missing_gitignored, gitignored_excluded) = resolved_cfg
-            .verify
-            .partition_ephemeral(found.missing_gitignored, &base_dir);
-        ephemeral_excluded_count += missing_excluded + gitignored_excluded;
-        missing_generated_files.extend(missing);
-        missing_gitignored_generated_files.extend(missing_gitignored);
-        frozen_generated_files.extend(found.frozen);
+        // `managed_paths` is what generation would produce for this crate's CURRENT sources
+        // and config -- computed fresh in memory, independent of whatever the last run left on
+        // disk -- so it stays correct and worth unioning into the orphan diff even for a crate
+        // whose last run was interrupted. `missing`/`missing_gitignored`/`frozen`/
+        // `stage_failures` below are all disk-vs-surface comparisons, which is exactly what an
+        // interrupted run corrupts; those are skipped for an incomplete crate and reported
+        // under their own "did not complete" heading instead. ~keep
         all_managed_paths.extend(found.managed_paths);
-        stage_failures.extend(
-            found
-                .stage_failures
-                .into_iter()
-                .map(|failure| format!("[{}] {failure}", resolved_cfg.name)),
-        );
+        if incomplete_crates.contains(&resolved_cfg.name) {
+            tracing::debug!(
+                crate_name = %resolved_cfg.name,
+                "skipping missing/frozen/stage-failure reporting for this crate: its last \
+                 generation run did not complete"
+            );
+        } else {
+            // `ignore_ephemeral` only ever narrows `missing`/`missing_gitignored` -- both are
+            // exclusively about paths ABSENT from disk. `frozen` (which feeds the orphan diff)
+            // is untouched: that check is about the correctness of bytes that already exist,
+            // which "this output is ephemeral" says nothing about. ~keep
+            let (missing, missing_excluded) = resolved_cfg.verify.partition_ephemeral(found.missing, &base_dir);
+            let (missing_gitignored, gitignored_excluded) = resolved_cfg
+                .verify
+                .partition_ephemeral(found.missing_gitignored, &base_dir);
+            ephemeral_excluded_count += missing_excluded + gitignored_excluded;
+            missing_generated_files.extend(missing);
+            missing_gitignored_generated_files.extend(missing_gitignored);
+            frozen_generated_files.extend(found.frozen);
+            stage_failures.extend(
+                found
+                    .stage_failures
+                    .into_iter()
+                    .map(|failure| format!("[{}] {failure}", resolved_cfg.name)),
+            );
+        }
 
         let Some(e2e_config) = &resolved_cfg.e2e else {
             continue;
@@ -332,9 +363,27 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         && untracked_records.is_empty()
         && !has_stage_failures
         && !has_missing_snippet_roots
+        && !has_incomplete_crates
     {
         crate::bin_cli::output::line("All bindings and versions are up to date.");
     } else {
+        // Printed first and named distinctly from every finding below: for these crates, the
+        // remaining sections describe an interrupted run's expected shape (files a `--clean`
+        // pass removed but never got to rewrite), not staleness a later source/config change
+        // caused. Reporting them as ordinary "missing"/"stale" would send an operator hunting
+        // for what changed upstream when the real cause is simpler -- the run never finished.
+        // See `cache::generation_record`'s in-progress marker doc (alef#268). ~keep
+        if has_incomplete_crates {
+            crate::bin_cli::output::line(
+                "The last generation run did not complete for the following crate(s) (interrupted \
+                 before it finished -- rerun `alef all`/`alef generate` for them; this is not \
+                 staleness, and other findings below for these crates may be an artifact of the \
+                 unfinished run):",
+            );
+            for name in &incomplete_crates {
+                crate::bin_cli::output::line(format_args!("  {name}"));
+            }
+        }
         if !stale.is_empty() {
             crate::bin_cli::output::line("Stale bindings detected:");
             for s in &stale {
@@ -442,6 +491,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         report_only,
     )?;
     super::ensure_required_records_tracked(&untracked_records, report_only)?;
+    super::ensure_generation_completed(&incomplete_crates, report_only)?;
     ensure_configured_snippet_directories_exist(&missing_snippet_roots, report_only)?;
     Ok(None)
 }

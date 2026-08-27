@@ -1,4 +1,6 @@
-use crate::docs::{attribute_capability_capped, attribute_declared_capped, attribute_results, attribute_unavailable};
+use crate::docs::snippet_summary::{
+    attribute_capability_capped, attribute_declared_capped, attribute_results, attribute_unavailable,
+};
 use crate::snippets::types::{
     DowngradeReason, Language, RunSummary, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
     ValidationResult,

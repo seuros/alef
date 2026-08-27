@@ -818,8 +818,9 @@ fn finalize_result(
     // expected: syntax checking was never supposed to resolve anything, so it stays a `Pass`. At
     // `Compile`/`TypeCheck`/`Run`, it means this run's environment could not back the validation
     // it just attempted — either because `alef build` never produced the artifact the snippet
-    // links or imports against (see `bin_cli::all_commands::warn_if_snippet_validation_needs_build`),
-    // or because no session is configured for this language at all, so it never had a manifest to
+    // links or imports against (reported by `docs::enforce_snippet_summary`, once validation has
+    // actually run and can say so with evidence), or because no session is configured for this
+    // language at all, so it never had a manifest to
     // resolve against in the first place -- see `dependency_reclassification` for that split.
     // Reported as `Unavailable` with `unresolved_dependency` set, not `Fail`: a `Fail` here would
     // be indistinguishable from a genuine emitter bug, which is exactly the defect this

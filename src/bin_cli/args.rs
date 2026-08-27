@@ -770,6 +770,47 @@ mod tests {
         assert!(json);
     }
 
+    /// Regression for task #542: `alef snippets check` had no way to request compile-level
+    /// checking for one invocation without weakening `[docs.snippets].validation_level` for
+    /// `alef all`/`alef docs`, which never build first and would then warn on every run for a
+    /// config that is entirely correct for `check`. `--level` is the explicit override. ~keep
+    #[test]
+    fn parses_snippets_check_level_override() {
+        let cli = Cli::try_parse_from([
+            "alef",
+            "snippets",
+            "check",
+            "--config",
+            "alef.toml",
+            "--level",
+            "compile",
+        ])
+        .expect("parse snippets check with --level");
+
+        let Commands::Snippets {
+            action: crate::cli::commands::snippets::SnippetsAction::Check { level, .. },
+        } = cli.command
+        else {
+            panic!("expected snippets check command");
+        };
+        assert_eq!(level, Some("compile".to_string()));
+    }
+
+    /// Negative control: `--level` is optional, and omitting it must not change parsing.
+    #[test]
+    fn snippets_check_level_defaults_to_unset() {
+        let cli = Cli::try_parse_from(["alef", "snippets", "check", "--config", "alef.toml"])
+            .expect("parse snippets check without --level");
+
+        let Commands::Snippets {
+            action: crate::cli::commands::snippets::SnippetsAction::Check { level, .. },
+        } = cli.command
+        else {
+            panic!("expected snippets check command");
+        };
+        assert_eq!(level, None);
+    }
+
     #[test]
     fn verify_is_strict_by_default_and_accepts_compatibility_flags() {
         let strict = Cli::try_parse_from(["alef", "verify"]).expect("strict verify command");

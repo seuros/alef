@@ -10,9 +10,9 @@ mod ownership;
 pub use ownership::is_scaffold_owned_path;
 
 /// The central generation-inputs record -- see [`generation_record`]'s module doc for what it
-/// replaces and why. Split into its own file rather than folded into this one for the same
-/// `file-modularization` reason [`ownership`] was. ~keep
-mod generation_record;
+/// replaces and why. Split into its own file for the same `file-modularization` reason
+/// [`ownership`] was; `pub(crate)`, not `pub` -- see that module's marker-fn doc. ~keep
+pub(crate) mod generation_record;
 pub use generation_record::{record_inputs_hash, recorded_inputs_hash, stale_crate_names};
 
 pub(super) const CACHE_DIR: &str = ".alef";

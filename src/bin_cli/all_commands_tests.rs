@@ -1,7 +1,6 @@
-use super::all_commands_run_setup::snippet_validation_needs_build_artifacts;
 use super::{
     create_once_overwrite, handle, refused_snippet_dir_paths, report_deferred_formatting,
-    sync_registry_versions_before_all, warn_if_snippet_validation_needs_build,
+    sync_registry_versions_before_all,
 };
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
@@ -190,8 +189,8 @@ fn all_never_calls_the_general_per_language_build_stage() {
         "`alef all`'s documented scope (\"generate + stubs + scaffold + readme + docs + sync + e2e\") \
          excludes building native artifacts; the only build all_commands.rs may trigger is the narrow \
          FFI-only one inside `complete_generated_artifacts`. If this now calls `pipeline::build` \
-         directly, `warn_if_snippet_validation_needs_build`'s precondition warning (and its doc \
-         comment) is stale and must be revisited alongside this test."
+         directly, `docs::enforce_snippet_summary`'s unresolved-dependency reporting (see its doc \
+         comment in `docs/mod.rs`) is stale and must be revisited alongside this test."
     );
 }
 
@@ -269,57 +268,6 @@ fn all_scopes_the_docs_stage_failure_blame_to_snippet_dir_refusals_not_the_run_w
          `refused_snippet_dir_paths` -- so a validation failure and a validation pass attribute \
          refusals identically"
     );
-}
-
-#[test]
-fn snippet_validation_needs_build_artifacts_is_true_only_for_toolchain_levels() {
-    assert!(snippet_validation_needs_build_artifacts(Some("typecheck")));
-    assert!(snippet_validation_needs_build_artifacts(Some("compile")));
-    assert!(snippet_validation_needs_build_artifacts(Some("run")));
-    assert!(
-        snippet_validation_needs_build_artifacts(Some("Compile")),
-        "the check must be case-insensitive since config values are user-authored TOML strings"
-    );
-
-    assert!(!snippet_validation_needs_build_artifacts(Some("syntax")));
-    assert!(!snippet_validation_needs_build_artifacts(None));
-    assert!(!snippet_validation_needs_build_artifacts(Some("bogus")));
-}
-
-fn write_config_with_snippet_validation_level(root: &std::path::Path, validation_level: &str) -> std::path::PathBuf {
-    let cargo_path = root.join("Cargo.toml");
-    std::fs::write(&cargo_path, "[package]\nname = \"sample-core\"\nversion = \"0.1.0\"\n").expect("write Cargo.toml");
-    let config_path = root.join("alef.toml");
-    let config = format!(
-        concat!(
-            "[workspace]\nlanguages = [\"zig\"]\n\n",
-            "[workspace.docs.snippets]\nvalidation_level = {:?}\n\n",
-            "[[crates]]\nname = \"sample-core\"\nsources = []\nversion_from = {:?}\n"
-        ),
-        validation_level,
-        cargo_path.to_string_lossy(),
-    );
-    std::fs::write(&config_path, config).expect("write alef.toml");
-    config_path
-}
-
-#[test]
-fn warn_if_snippet_validation_needs_build_reads_the_merged_validation_level_without_panicking() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let config_path = write_config_with_snippet_validation_level(temp.path(), "compile");
-    let configs = resolve(&config_path);
-    let config = configs.into_iter().next().expect("one crate");
-
-    let merged_level = config
-        .docs
-        .as_ref()
-        .and_then(|docs| docs.snippets.as_ref())
-        .and_then(|snippets| snippets.validation_level.as_deref());
-    assert_eq!(merged_level, Some("compile"));
-
-    // Only exercises the tracing::warn! side effect for panics; no subscriber is
-    // installed in this test so nothing is asserted about the emitted message itself.
-    warn_if_snippet_validation_needs_build(&config);
 }
 
 fn write_neutral_config(root: &std::path::Path, cargo_toml: &str, hash: &str) -> std::path::PathBuf {

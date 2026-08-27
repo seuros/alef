@@ -307,6 +307,114 @@ fn verify_command_reports_and_fails_on_a_real_orphaned_generated_file() {
         .expect("alef verify must pass again once the orphaned file is removed from disk");
 }
 
+/// alef#268: an `alef all --clean` killed mid-run leaves the tree missing files it just
+/// removed and never got to rewrite, with nothing recording that the run did not finish.
+/// `alef verify`'s next signal then names those absences, indistinguishable from ordinary
+/// staleness. This drives the real `Commands::Verify` dispatch path -- not a direct call into
+/// `cache::generation_record` -- against a real `alef all` output tree, the same shape as the
+/// orphan test above this one, so the assertion is about the wiring, not just the marker logic.
+///
+/// The interruption itself is simulated at the level that matters: `mark_generation_in_progress`
+/// is a plain file write, so a process actually being killed and a test calling it directly are
+/// indistinguishable to every reader of the marker (`alef verify` included) -- that is the whole
+/// point of choosing a file write over a `Drop` guard. Deleting the crate's bindings file
+/// afterward stands in for the file `--clean` removed and never got to rewrite -- deliberately
+/// the bindings-phase output, not a stubs/public-API one: only the bindings-phase cache check in
+/// `all_commands.rs` (`generated_files_match_disk`) re-derives from actual disk presence, so this
+/// is also what makes the recovery `alef all` call below actually rewrite the file rather than
+/// trust a still-valid content-hash cache that never looked at the disk. ~keep
+#[test]
+fn verify_reports_an_incomplete_generation_run_instead_of_ordinary_staleness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_diff_fixture_workspace(&root);
+    let _cwd = crate::test_support::CwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    crate::bin_cli::all_commands::handle(
+        Commands::All {
+            clean: false,
+            clobber_create_once_seeds: false,
+            strict: false,
+            skip_frb: true,
+            skip_snippet_validation: false,
+        },
+        &context,
+    )
+    .expect("alef all must succeed against the fixture");
+
+    // Positive control, run BEFORE any marker is written: a completed run must report
+    // normally, with no incomplete-run signal at all. Without this, the failure asserted
+    // below could not be pinned on the marker this test writes -- it could equally be a
+    // fixture that was never clean to begin with, or a fix that always claims "incomplete"
+    // regardless of the marker's presence. ~keep
+    super::handle(verify_command(), &context)
+        .expect("alef verify must pass on a tree alef all just produced, before any interruption");
+
+    // Simulate the interruption: a marker for this crate with no matching completion, plus a
+    // file `--clean` would have removed and not yet rewritten.
+    cache::generation_record::mark_generation_in_progress(&root, "test-lib").expect("mark test-lib as in progress");
+    let removed = root.join("crates/test-lib-py/src/lib.rs");
+    std::fs::remove_file(&removed).expect("simulate a file --clean removed but never rewrote");
+
+    let error = super::handle(verify_command(), &context)
+        .err()
+        .expect("alef verify must fail once a crate's last generation run did not complete");
+    let message = error.to_string();
+    assert!(
+        message.contains("did not complete") && message.contains("test-lib"),
+        "the failure must name the interrupted crate and diagnose it as an unfinished run, got: \
+         {message}"
+    );
+    assert!(
+        !message.contains("out of date"),
+        "an incomplete run must not be reported through the generic staleness gate -- the whole \
+         point is a distinct diagnosis; got: {message}"
+    );
+
+    // --report-only must downgrade this the same way it downgrades every other verify failure.
+    let report_only_error = super::handle(
+        Commands::Verify {
+            exit_code: false,
+            report_only: true,
+            compile: false,
+            lint: false,
+            lang: None,
+        },
+        &context,
+    )
+    .err();
+    assert!(
+        report_only_error.is_none(),
+        "--report-only must downgrade the incomplete-run finding to a non-fatal report, got: \
+         {report_only_error:?}"
+    );
+
+    // Recovery: rerunning `alef all` regenerates the missing file and clears the marker, so
+    // the crate becomes indistinguishable from one whose run was never interrupted.
+    crate::bin_cli::all_commands::handle(
+        Commands::All {
+            clean: false,
+            clobber_create_once_seeds: false,
+            strict: false,
+            skip_frb: true,
+            skip_snippet_validation: false,
+        },
+        &context,
+    )
+    .expect("alef all must succeed again and clear the in-progress marker");
+    assert!(
+        !cache::generation_record::incomplete_crate_names(&root, ["test-lib"]).contains(&"test-lib".to_string()),
+        "a successful rerun must clear the marker, not merely regenerate the missing file"
+    );
+    super::handle(verify_command(), &context)
+        .expect("alef verify must pass again once the interrupted run has been completed");
+}
+
 /// Regression test for the html-to-markdown freshness-gate incident: `alef verify`'s disk walk
 /// must never open a directory git considers ignored. Before `verify_gitignore::gitignored_dirs`
 /// existed, a dependency-fetch cache or build-output directory sitting anywhere in the tree --

@@ -137,7 +137,10 @@ fn an_ordinary_clean_run_emits_no_declared_capped_warning() {
 /// `alef all`) ever runs a full per-language build in the same invocation. Strict mode must not
 /// fail the run over it: doing so is indistinguishable, to an operator, from a genuine content
 /// defect, which is exactly what trained operators to distrust an `alef all` failure. It must
-/// still be loudly reported, just not as a bail. ~keep
+/// still be reported, just not as a bail and not (task #542) as a `warn`: a corpus that is
+/// *entirely* this expected shape is exactly the "config is correct for `alef snippets check
+/// --level compile`, but not for a plain `alef all`" case task #542 exists to stop warning about
+/// on every single generation run. ~keep
 #[traced_test]
 #[test]
 fn unresolved_dependency_unavailable_does_not_bail_even_in_strict_mode() {
@@ -152,7 +155,11 @@ fn unresolved_dependency_unavailable_does_not_bail_even_in_strict_mode() {
 
     assert!(
         logs_contain("unresolved dependency"),
-        "a demoted-to-warning unresolved dependency must still be reported loudly"
+        "a demoted unresolved dependency must still be reported"
+    );
+    assert!(
+        !logs_contain("WARN"),
+        "a corpus that is entirely the expected build-precondition gap must not warn (task #542)"
     );
 }
 
@@ -175,13 +182,16 @@ fn toolchain_missing_unavailable_still_bails_in_strict_mode() {
 }
 
 /// Regression for task #488: a corpus that is entirely `unresolved_dependency`-unavailable must
-/// still warn loudly that nothing reached the requested level, even though (per task #186, just
+/// still report that nothing reached the requested level, even though (per task #186, just
 /// above) it must not bail -- `alef docs`/`alef all` cannot guarantee a fresh build ran in the
 /// same invocation, so this is an expected shape for this pipeline, not a defect, but it must
-/// never be silent either. ~keep
+/// never be silent either. Task #542 narrows *how* loudly: since this exact shape is expected on
+/// every `alef all`/`alef docs` run configured for compile-level checking, it is reported at
+/// `info`, not `warn` -- see `unresolved_dependency_unavailable_does_not_bail_even_in_strict_mode`
+/// just above for the sibling report this pairs with. ~keep
 #[traced_test]
 #[test]
-fn checked_nothing_warns_loudly_without_bailing_even_in_strict_mode() {
+fn checked_nothing_reports_without_bailing_even_in_strict_mode() {
     let summary = RunSummary::from_results(vec![ValidationResult {
         status: SnippetStatus::Unavailable,
         unresolved_dependency: true,
@@ -192,7 +202,11 @@ fn checked_nothing_warns_loudly_without_bailing_even_in_strict_mode() {
 
     assert!(
         logs_contain("NOT ONE reached the requested level"),
-        "a corpus that checked nothing must warn loudly regardless of the bail decision"
+        "a corpus that checked nothing must report it regardless of the bail decision"
+    );
+    assert!(
+        !logs_contain("WARN"),
+        "a corpus that is entirely the expected build-precondition gap must not warn (task #542)"
     );
 }
 

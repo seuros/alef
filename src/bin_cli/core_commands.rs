@@ -543,6 +543,28 @@ pub(super) fn ensure_required_records_tracked(untracked: &[&'static str], report
     )
 }
 
+/// Fail `alef verify` when a crate's last generation run started but never finished --
+/// `cache::generation_record::mark_generation_in_progress` is written before the first
+/// mutation of a run and only cleared on success, so a marker still present here means the
+/// process that wrote it died mid-flight (alef#268). Kept as a distinct gate, with its own
+/// message, for the same reason [`ensure_required_records_tracked`] is: this is not staleness
+/// and `alef generate` is not automatically the fix a reader would infer from "out of date" --
+/// rerunning is correct, but the diagnosis has to say why, or it reads exactly like the
+/// missing-file staleness report this gate exists to distinguish from. `report_only`
+/// downgrades to a report, matching every other verify failure. ~keep
+pub(super) fn ensure_generation_completed(incomplete_crates: &[String], report_only: bool) -> Result<()> {
+    if report_only || incomplete_crates.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "the last generation run did not complete for: {names} -- it was interrupted before \
+         finishing. Rerun `alef all`/`alef generate` for the affected crate(s); this is not \
+         ordinary staleness, and any missing/frozen findings already reported for these crates \
+         may be an artifact of the unfinished run rather than drift",
+        names = incomplete_crates.join(", "),
+    )
+}
+
 #[cfg(test)]
 mod format_scope_tests;
 #[cfg(test)]

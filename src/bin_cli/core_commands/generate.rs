@@ -58,6 +58,21 @@ pub(crate) fn handle_generate(
         } else {
             tracing::info!("Generating bindings for: {}", format_languages(&languages));
         }
+        // Recorded before `extract`/`generate` make their first mutation -- see
+        // `cache::generation_record`'s in-progress marker doc for why this survives the
+        // process being killed outright (a file write, not a `Drop` guard) and why it lives
+        // in the gitignored `.alef/` cache rather than a committed record (alef#268). A
+        // marker already present here means the PREVIOUS run for this crate was interrupted
+        // before it finished; this run overwrites it with its own fresh start and, on
+        // success, clears it below. ~keep
+        if cache::generation_record::generation_in_progress(&base_dir, &resolved_cfg.name) {
+            tracing::warn!(
+                crate_name = %resolved_cfg.name,
+                "recovering from an incomplete previous generation run for this crate -- it was \
+                 interrupted before finishing; regenerating it fully now"
+            );
+        }
+        cache::generation_record::mark_generation_in_progress(&base_dir, &resolved_cfg.name)?;
         let api = pipeline::extract(resolved_cfg, config_path, clean)?;
         let files = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
         let regenerated_languages: std::collections::HashSet<_> = files.iter().map(|(language, _)| *language).collect();
@@ -459,6 +474,10 @@ pub(crate) fn handle_generate(
             &resolved_cfg.name,
             &crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes),
         )?;
+        // This crate's run reached the point `record_inputs_hash` just marked as its
+        // successful baseline -- clear the in-progress marker set above so it is
+        // indistinguishable from a crate that was never interrupted at all. ~keep
+        cache::generation_record::clear_generation_in_progress(&base_dir, &resolved_cfg.name)?;
 
         let previous_generation_owned: std::collections::HashMap<_, _> = languages
             .iter()

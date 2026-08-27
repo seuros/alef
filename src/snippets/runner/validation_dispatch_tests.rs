@@ -553,3 +553,120 @@ fn batching_validators_still_receive_the_group_budget_once() {
     assert!(singles.lock().expect("single timeouts").is_empty());
     assert_eq!(summary.passed, 3);
 }
+
+fn plain_rust_snippet(id: &str) -> Snippet {
+    Snippet {
+        id: Some(id.to_string()),
+        path: "example.md".into(),
+        language: crate::snippets::types::Language::Rust,
+        title: None,
+        code: format!("fn {id}() {{}}"),
+        start_line: 1,
+        block_index: 0,
+        annotation: None,
+        metadata: SnippetMetadata::default(),
+        source_origin: SourceOrigin {
+            path: "example.md".into(),
+            line: 1,
+            block_index: 0,
+        },
+    }
+}
+
+/// The "artifacts absent" half of task #542. Once a snippet's `compile`-level check has run and
+/// established (and cached) that it cannot back itself against a missing build artifact --
+/// `SnippetStatus::Unavailable` with `unresolved_dependency` set, exactly the shape
+/// `finalize_result` (in `runner.rs`, this module's parent) produces for that cause -- a later
+/// run with the identical snippet and session state must replay the cached verdict rather than
+/// re-invoking the validator. `alef
+/// all`/`alef docs` never build first (see `docs::enforce_snippet_summary`'s doc comment), so on
+/// a steady-state development loop this cache hit is the common case, and re-attempting a
+/// compiler invocation that can only fail the same way on every single run is exactly the cost
+/// `docs::generate_docs_stage_without_snippet_compile_validation`'s own doc comment already
+/// measured for a different caller (thousands of subprocess spawns to answer a question the cache
+/// already answered). ~keep
+#[test]
+fn a_cached_unresolved_dependency_result_is_replayed_without_reinvoking_the_validator() {
+    let singles = Arc::new(Mutex::new(0));
+    let batches = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(RecordingValidator {
+        language: crate::snippets::types::Language::Rust,
+        batches: Arc::clone(&batches),
+        singles: Arc::clone(&singles),
+    }));
+    let cache_directory = tempfile::tempdir().expect("cache directory");
+    let snippet = plain_rust_snippet("fixture_unbuilt");
+    let cached = ValidationResult {
+        unresolved_dependency: true,
+        ..result(
+            &snippet,
+            SnippetStatus::Unavailable,
+            ValidationLevel::Compile,
+            ValidationLevel::Compile,
+            Some("cannot find crate `sample_core`".into()),
+            1,
+        )
+    };
+    ValidationCache::new(cache_directory.path().into())
+        .store(&snippet, ValidationLevel::Compile, None, &cached)
+        .expect("cache entry");
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        changed_only: true,
+        cache_dir: Some(cache_directory.path().into()),
+        ..RunnerConfig::default()
+    };
+
+    let summary = run_validation(&[snippet], &registry, &config).expect("validation completes");
+
+    assert_eq!(
+        *singles.lock().expect("single count"),
+        0,
+        "a cache-hit snippet must never reach the validator's single-snippet path"
+    );
+    assert!(
+        batches.lock().expect("batch records").is_empty(),
+        "a cache-hit snippet must never reach the validator's batch path either"
+    );
+    assert_eq!(summary.results.len(), 1);
+    assert_eq!(summary.results[0].status, SnippetStatus::Unavailable);
+    assert!(summary.results[0].unresolved_dependency);
+    assert_eq!(summary.unresolved_dependency, 1);
+}
+
+/// The "artifacts present" half of task #542, and the one that matters: nothing about replaying a
+/// cached unavailable verdict above may turn into "compile-level validation never runs for real".
+/// With no matching cache entry -- the state right after a real `alef build` produces the
+/// artifact the snippet above was missing, which changes the session's content and therefore its
+/// cache key (see `session::fingerprint`'s doc comment on why built output must be inside the
+/// hashed tree) -- the validator must still be invoked and can still pass. ~keep
+#[test]
+fn an_uncached_snippet_still_reaches_the_validator_at_the_requested_level() {
+    let singles = Arc::new(Mutex::new(0));
+    let batches = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(RecordingValidator {
+        language: crate::snippets::types::Language::Rust,
+        batches: Arc::clone(&batches),
+        singles: Arc::clone(&singles),
+    }));
+    let cache_directory = tempfile::tempdir().expect("cache directory");
+    let snippet = plain_rust_snippet("fixture_built");
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        changed_only: true,
+        cache_dir: Some(cache_directory.path().into()),
+        ..RunnerConfig::default()
+    };
+
+    let summary = run_validation(&[snippet], &registry, &config).expect("validation completes");
+
+    assert_eq!(
+        batches.lock().expect("batch records").as_slice(),
+        &[(crate::snippets::types::Language::Rust, 1, false)],
+        "with no cache entry, the snippet must actually reach the validator's batch path"
+    );
+    assert_eq!(summary.passed, 1);
+    assert_eq!(summary.unresolved_dependency, 0);
+}

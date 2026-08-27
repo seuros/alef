@@ -204,6 +204,61 @@ fn deny_unclassified_ignores_which_source_strict_came_from() {
     }
 }
 
+/// Task #542: `--level` is the explicit escape hatch for requesting real compile-level checking
+/// (typically after `alef build`) without weakening `[docs.snippets].validation_level` for every
+/// other caller of the same config, chiefly `alef all`/`alef docs`, which never build first. It
+/// must win outright over the configured level, and a bad value must fail loudly rather than
+/// silently fall back to `syntax` the way an unrecognised *config* value already does -- the
+/// config side keeps that laxity for backward compatibility, but a one-off flag whose only job is
+/// requesting a level must not silently ignore a typo. ~keep
+#[test]
+fn resolve_check_level_prefers_an_explicit_override_over_the_configured_level() {
+    assert_eq!(
+        resolve_check_level(Some("compile"), Some("syntax")),
+        Ok(ValidationLevel::Compile),
+        "an explicit --level must win over a weaker configured level"
+    );
+    assert_eq!(
+        resolve_check_level(Some("syntax"), Some("run")),
+        Ok(ValidationLevel::Syntax),
+        "an explicit --level must win even when it requests something weaker than config"
+    );
+}
+
+#[test]
+fn resolve_check_level_falls_back_to_the_configured_level_when_unset() {
+    assert_eq!(
+        resolve_check_level(None, Some("typecheck")),
+        Ok(ValidationLevel::TypeCheck)
+    );
+    assert_eq!(
+        resolve_check_level(None, None),
+        Ok(ValidationLevel::Syntax),
+        "with neither set, the documented default is syntax"
+    );
+}
+
+#[test]
+fn resolve_check_level_rejects_an_invalid_override_instead_of_defaulting_to_syntax() {
+    let error = resolve_check_level(Some("bogus"), Some("syntax")).expect_err("an invalid --level must fail");
+    assert!(
+        error.contains("invalid --level value `bogus`"),
+        "the error must name the bad flag and its value, got: {error}"
+    );
+}
+
+/// Negative control mirroring the config-side laxity `resolve_check_level` deliberately keeps: an
+/// unrecognised *configured* value (never a CLI flag) still falls back to `syntax` silently,
+/// exactly as it did before `--level` existed. ~keep
+#[test]
+fn resolve_check_level_keeps_the_configured_side_lax_on_an_unrecognised_value() {
+    assert_eq!(
+        resolve_check_level(None, Some("bogus")),
+        Ok(ValidationLevel::Syntax),
+        "an unrecognised configured value must not newly become a hard error"
+    );
+}
+
 #[test]
 fn strict_coverage_rejects_every_non_validation_status() {
     assert!(is_incomplete_status(SnippetStatus::Skip));
