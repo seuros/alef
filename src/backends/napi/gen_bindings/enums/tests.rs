@@ -534,8 +534,13 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
     );
 
     // result/output direction: core enum -> JS object.
-    let core_to_binding =
-        crate::backends::napi::gen_bindings::methods::gen_tagged_enum_core_to_binding(&e, "demo", "Js", &struct_names);
+    let core_to_binding = crate::backends::napi::gen_bindings::methods::gen_tagged_enum_core_to_binding(
+        &e,
+        "demo",
+        "Js",
+        &struct_names,
+        None,
+    );
     assert!(
         core_to_binding.contains(
             r#"demo::FormatMetadata::Custom(custom) => Self { type_tag: "Custom".to_string(), custom: Some(custom) }"#

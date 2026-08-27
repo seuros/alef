@@ -2,7 +2,12 @@ use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::field_init::struct_field_init;
 use crate::core::ir::{CoreWrapper, EnumDef, FieldDef, TypeRef};
 
-pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, source_crate_name: &str) {
+pub(super) fn emit_from_mirror_to_core_enum(
+    out: &mut String,
+    en: &EnumDef,
+    source_crate_name: &str,
+    configured_features: Option<&[String]>,
+) {
     let name = &en.name;
     let core_ty = if en.rust_path.is_empty() {
         format!("{source_crate_name}::{name}")
@@ -25,8 +30,6 @@ pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, sour
             source_cfg => en.cfg.as_deref().unwrap_or(""),
         },
     ));
-
-    let has_cfg_variants = en.variants.iter().any(|v| v.cfg.is_some());
 
     for variant in &en.variants {
         let vname = &variant.name;
@@ -140,9 +143,21 @@ pub(super) fn emit_from_mirror_to_core_enum(out: &mut String, en: &EnumDef, sour
         }
     }
 
-    // When any variant carries a `#[cfg(feature = "X")]` attribute, the cfg is
-    // every feature combination; `#![allow(unreachable_patterns)]` at the crate
-    if has_cfg_variants {
+    // A foreign cfg-gated variant's arm is dropped unconditionally above, so whether a catch-all
+    // is still needed for it depends on whether this binding's own configured feature set proves
+    // the variant unreachable -- delegated to
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`, the same
+    // resolver every other Rust-emitting backend's enum conversion uses, so this bespoke Dart
+    // generator can't drift from that verdict (alef #547). `false` for `has_excluded_variants`:
+    // this binding->core direction only ever matches the mirror's OWN declared variants, which by
+    // construction never carries a gap the way the core->binding direction's `excluded_variants`
+    // can. ~keep
+    if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
+        en,
+        is_host_enum,
+        false,
+        configured_features,
+    ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"cfg-gated variant of {} not active in this build\"),\n",
             name
@@ -241,7 +256,12 @@ fn enum_variant_field_conv_to_core(binding: &str, field: &FieldDef) -> String {
     }
 }
 
-pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_crate_name: &str) {
+pub(super) fn emit_from_impl_for_enum(
+    out: &mut String,
+    en: &EnumDef,
+    source_crate_name: &str,
+    configured_features: Option<&[String]>,
+) {
     let name = &en.name;
     let core_ty = if en.rust_path.is_empty() {
         format!("{source_crate_name}::{name}")
@@ -260,8 +280,6 @@ pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_cra
             source_cfg => en.cfg.as_deref().unwrap_or(""),
         },
     ));
-
-    let has_cfg_variants = en.variants.iter().any(|v| v.cfg.is_some());
 
     for variant in &en.excluded_variants {
         let vname = &variant.name;
@@ -368,9 +386,20 @@ pub(super) fn emit_from_impl_for_enum(out: &mut String, en: &EnumDef, source_cra
         }
     }
 
-    // When any variant carries a `#[cfg(feature = "X")]` attribute, the cfg is
-    // every feature combination; `#![allow(unreachable_patterns)]` at the crate
-    if has_cfg_variants {
+    // A foreign cfg-gated variant's arm is dropped unconditionally above, so whether a catch-all
+    // is still needed for it depends on whether this binding's own configured feature set proves
+    // the variant unreachable -- delegated to
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`, the same
+    // resolver every other Rust-emitting backend's enum conversion uses, so this bespoke Dart
+    // generator can't drift from that verdict (alef #547). `!en.excluded_variants.is_empty()`
+    // covers the orthogonal gap this core->binding direction alone can have: a core variant this
+    // binding never generates an arm for at all, regardless of cfg. ~keep
+    if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
+        en,
+        is_host_enum,
+        !en.excluded_variants.is_empty(),
+        configured_features,
+    ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"cfg-gated variant of {} not active in this build\"),\n",
             name
@@ -527,13 +556,17 @@ mod tests {
         }
     }
 
-    /// A cfg-gated variant on a mirror enum emits a catch-all `_ => unreachable!()`
-    /// arm so the `From<CoreType>` match is exhaustive even when the feature is not
-    /// declared in the binding crate (E0004 guard).
+    /// A FOREIGN cfg-gated variant (`rust_path` rooted in a crate other than "mylib") emits a
+    /// catch-all `_ => unreachable!()` arm so the `From<CoreType>` match is exhaustive even when
+    /// `configured_features` is `None` (unknown -- not proven unreachable) -- see
+    /// `host_cfg_variant_keeps_its_arm_and_gate_in_both_directions` below for the sibling
+    /// host-owned case, which needs NO catch-all since its arm carries the identical `#[cfg(...)]`
+    /// guard as the variant itself. ~keep
     #[test]
     fn cfg_gated_variant_emits_catch_all_in_from_core_impl() {
         let en = EnumDef {
             name: "ImageOutputFormat".to_string(),
+            rust_path: "dep_crate::ImageOutputFormat".to_string(),
             variants: vec![
                 make_unit_variant("Native", None),
                 make_unit_variant("Png", None),
@@ -542,7 +575,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = String::new();
-        emit_from_impl_for_enum(&mut out, &en, "mylib");
+        emit_from_impl_for_enum(&mut out, &en, "mylib", None);
         assert!(
             out.contains("_ => unreachable!"),
             "expected catch-all `_ => unreachable!` arm in From<CoreType> impl, got:\n{out}"
@@ -558,6 +591,7 @@ mod tests {
     fn cfg_gated_variant_emits_catch_all_in_from_mirror_impl() {
         let en = EnumDef {
             name: "ImageOutputFormat".to_string(),
+            rust_path: "dep_crate::ImageOutputFormat".to_string(),
             variants: vec![
                 make_unit_variant("Native", None),
                 make_unit_variant("Png", None),
@@ -566,7 +600,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = String::new();
-        emit_from_mirror_to_core_enum(&mut out, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out, &en, "mylib", None);
         assert!(
             out.contains("_ => unreachable!"),
             "expected catch-all `_ => unreachable!` arm in From<Mirror> impl, got:\n{out}"
@@ -587,9 +621,9 @@ mod tests {
             ..Default::default()
         };
         let mut out_core = String::new();
-        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", None);
         let mut out_mirror = String::new();
-        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", None);
 
         assert!(
             !out_core.contains("_ => unreachable!"),
@@ -616,7 +650,7 @@ mod tests {
             ..Default::default()
         };
         let mut out_core = String::new();
-        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", None);
         assert_eq!(
             out_core.matches("#[cfg(feature = \"thumbnails\")]").count(),
             1,
@@ -624,7 +658,7 @@ mod tests {
         );
 
         let mut out_mirror = String::new();
-        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", None);
         assert_eq!(
             out_mirror.matches("#[cfg(feature = \"thumbnails\")]").count(),
             1,
@@ -643,14 +677,14 @@ mod tests {
             ..Default::default()
         };
         let mut out_core = String::new();
-        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", None);
         assert!(
             !out_core.contains("#[cfg("),
             "ungated enum must not emit #[cfg(...)] in From<CoreType> impl, got:\n{out_core}"
         );
 
         let mut out_mirror = String::new();
-        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", None);
         assert!(
             !out_mirror.contains("#[cfg("),
             "ungated enum must not emit #[cfg(...)] in From<Mirror> impl, got:\n{out_mirror}"
@@ -675,7 +709,7 @@ mod tests {
         };
 
         let mut out_core = String::new();
-        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", None);
         assert!(
             !out_core.contains("#[cfg(feature = \"testkit\")]"),
             "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out_core}"
@@ -686,7 +720,7 @@ mod tests {
         );
 
         let mut out_mirror = String::new();
-        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", None);
         assert!(
             !out_mirror.contains("#[cfg(feature = \"testkit\")]"),
             "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out_mirror}"
@@ -713,15 +747,27 @@ mod tests {
         };
 
         let mut out_core = String::new();
-        emit_from_impl_for_enum(&mut out_core, &en, "mylib");
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", None);
         assert_eq!(
             out_core.matches("#[cfg(feature = \"heic\")]").count(),
             1,
             "the host-owned variant's From<CoreType> arm must keep its #[cfg] guard, got:\n{out_core}"
         );
+        // alef #547: a host-owned cfg-gated variant's own arm carries the identical #[cfg(...)]
+        // guard as the variant itself, so the two always compile in or out together and the match
+        // stays exhaustive either way -- unlike the foreign case, no catch-all is ever needed
+        // here, regardless of `configured_features`.
+        assert!(
+            !out_core.contains("_ => unreachable!"),
+            "a host-owned cfg-gated variant alone must not trigger a catch-all, got:\n{out_core}"
+        );
 
         let mut out_mirror = String::new();
-        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib");
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", None);
+        assert!(
+            !out_mirror.contains("_ => unreachable!"),
+            "a host-owned cfg-gated variant alone must not trigger a catch-all, got:\n{out_mirror}"
+        );
         assert_eq!(
             out_mirror.matches("#[cfg(feature = \"heic\")]").count(),
             1,

@@ -52,6 +52,17 @@ impl Backend for ExtendrBackend {
         let enabled_features = effective_r_cfg_features(&deduped_api, config);
         let r_cfg_api = apply_r_cfg_policy(&deduped_api, &enabled_features);
         let api = &r_cfg_api;
+        // This binding's own configured feature set (already expanded through the core crate's
+        // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+        // provably unreachable for this binding -- see
+        // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. Distinct
+        // from `enabled_features` above: that set walks only HOST-owned cfg gates (via
+        // `collect_cfg_features`) whenever default Cargo features are on, to decide which
+        // host-owned cfg-gated functions/fields `extendr_module!` can expose unconditionally --
+        // the wrong question for a FOREIGN variant's reachability, which needs the real
+        // configured feature list instead. ~keep
+        let configured_enum_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::R));
         let core_import = config.core_import_name();
         let type_paths = build_type_path_lookup(api);
         // Sorted by name: `api.enums`' incoming order reflects source-extraction order, which is
@@ -555,6 +566,7 @@ impl Backend for ExtendrBackend {
                         e,
                         &core_import,
                         &type_paths,
+                        Some(configured_enum_features.as_slice()),
                     ));
                 }
                 if crate::codegen::conversions::can_generate_enum_conversion_from_core(e) {
@@ -562,6 +574,7 @@ impl Backend for ExtendrBackend {
                         e,
                         &core_import,
                         &type_paths,
+                        Some(configured_enum_features.as_slice()),
                     ));
                 }
             }

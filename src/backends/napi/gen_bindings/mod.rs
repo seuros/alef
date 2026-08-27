@@ -13,6 +13,8 @@ mod type_stubs;
 pub mod types;
 
 #[cfg(test)]
+mod cfg_variant_e2e_tests;
+#[cfg(test)]
 mod tests;
 
 use crate::backends::napi::type_map::NapiMapper;
@@ -570,6 +572,7 @@ impl Backend for NapiBackend {
                     &core_import,
                     &prefix,
                     &struct_names,
+                    Some(enabled_features.as_slice()),
                 ));
             } else if is_untagged_data_enum {
                 let binding_name = format!("{prefix}{}", e.name);

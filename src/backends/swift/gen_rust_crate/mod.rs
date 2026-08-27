@@ -11,6 +11,8 @@ pub(crate) mod cargo;
 mod cargo_excluded_features_tests;
 #[cfg(test)]
 mod cargo_sort_order_tests;
+#[cfg(test)]
+mod cfg_variant_e2e_tests;
 pub(crate) mod default_construction;
 mod deferred_noop;
 pub(crate) mod enums;
@@ -201,6 +203,18 @@ fn emit_lib_rs(
     configured_features: &HashSet<&str>,
 ) -> anyhow::Result<String> {
     let source_crate = crate_name.replace('-', "_");
+
+    // This binding's own configured feature set (already expanded through the core crate's
+    // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+    // provably unreachable for this binding -- see
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. Distinct from
+    // `configured_features` above: that set is widened with every HOST-owned cfg feature name
+    // `collect_cfg_features` finds (`feature_gate::effective_swift_codegen_features`), to decide
+    // which host-owned cfg-gated methods this bridge crate can expose unconditionally -- the
+    // wrong question for a FOREIGN variant's reachability, which needs the real configured
+    // feature list instead. ~keep
+    let configured_enum_features =
+        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Swift));
 
     let type_paths = build_type_path_lookup(api);
 
@@ -662,7 +676,12 @@ fn emit_lib_rs(
     out.push_str(&deferred_noop::emit_shims(&noop_def_types, &visible_types));
 
     for en in &visible_enums {
-        out.push_str(&enums::emit_enum_wrapper(en, &source_crate, &type_paths));
+        out.push_str(&enums::emit_enum_wrapper(
+            en,
+            &source_crate,
+            &type_paths,
+            Some(configured_enum_features.as_slice()),
+        ));
         out.push('\n');
     }
     let function_shim_context = shims::FunctionShimContext {

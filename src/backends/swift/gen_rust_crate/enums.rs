@@ -9,7 +9,12 @@ use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::EnumDef;
 use std::collections::HashMap;
 
-pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &HashMap<String, String>) -> String {
+pub(crate) fn emit_enum_wrapper(
+    en: &EnumDef,
+    source_crate: &str,
+    type_paths: &HashMap<String, String>,
+    configured_features: Option<&[String]>,
+) -> String {
     let mut out = String::new();
     let source_path = resolve_type_path(&en.name, source_crate, type_paths);
     // `en.rust_path` (not `source_path`, which `type_paths` can remap) is the same fact
@@ -43,8 +48,6 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
         },
     ));
     out.push_str("        match val {\n");
-
-    let has_cfg_variants = en.variants.iter().any(|v| v.cfg.is_some());
 
     for variant in &en.variants {
         // A variant merged in from a foreign `[[crates.source_crates]]` crate carries that
@@ -92,9 +95,20 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
         ));
     }
 
-    // 2. Any `variants` entry carries a `#[cfg(feature = "X")]` gate: when that feature
-    // `#![allow(unreachable_patterns)]` at the crate root suppresses the redundant-arm
-    if !en.excluded_variants.is_empty() || has_cfg_variants {
+    // A foreign cfg-gated variant's arm is dropped unconditionally above, so whether a catch-all
+    // is still needed for it depends on whether this binding's own configured feature set proves
+    // the variant unreachable -- delegated to
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`, the same
+    // resolver every other Rust-emitting backend's enum conversion uses, so this bespoke Swift
+    // generator can't drift from that verdict (alef #547). `!en.excluded_variants.is_empty()`
+    // covers the orthogonal gap this match alone can have: a core variant this binding never
+    // generates an arm for at all, regardless of cfg. ~keep
+    if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
+        en,
+        is_host_enum,
+        !en.excluded_variants.is_empty(),
+        configured_features,
+    ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"bridge enum variant of {} not exposed in binding\"),\n",
             en.name
@@ -256,7 +270,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             out.contains("fn __alef_mode_from_swift_string"),
             "expected the from-string helper for a fieldless enum, got:\n{out}"
@@ -294,7 +308,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             !out.contains("__alef_auth_header_format_from_swift_string"),
             "expected no from-string helper for an enum with a tuple variant, got:\n{out}"
@@ -316,20 +330,24 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             !out.contains("fn __alef_"),
             "expected no from-string helper for an enum with a struct variant, got:\n{out}"
         );
     }
 
-    /// When any variant in the primary list carries a `#[cfg(...)]` gate the
-    /// From-impl match must emit a `_ => unreachable!()` catch-all arm so it
-    /// remains exhaustive when that feature is inactive (E0004 guard).
+    /// When a FOREIGN variant in the primary list carries a `#[cfg(...)]` gate not proven
+    /// unreachable (`configured_features: None` is "unknown"), the From-impl match must emit a
+    /// `_ => unreachable!()` catch-all arm so it remains exhaustive when that feature is inactive
+    /// (E0004 guard). See `host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_from_string_helper`
+    /// below for the sibling host-owned case, which needs NO catch-all since its arm carries the
+    /// identical `#[cfg(...)]` guard as the variant itself. ~keep
     #[test]
     fn cfg_gated_variant_emits_catch_all_in_from_impl() {
         let en = EnumDef {
             name: "ImageOutputFormat".to_string(),
+            rust_path: "dep_crate::ImageOutputFormat".to_string(),
             variants: vec![
                 make_unit_variant("Jpeg", None),
                 make_unit_variant("Heif", Some(r#"feature = "heic""#)),
@@ -339,7 +357,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             out.contains("_ => unreachable!"),
             "expected catch-all `_ => unreachable!` arm when cfg-gated variant present, got:\n{out}"
@@ -362,7 +380,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             !out.contains("_ => unreachable!"),
             "unexpected catch-all arm in From impl for fully-covered enum:\n{out}"
@@ -380,7 +398,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             out.contains("_ => unreachable!"),
             "expected catch-all arm when excluded_variants is non-empty, got:\n{out}"
@@ -406,7 +424,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             !out.contains("#[cfg(feature = \"testkit\")]"),
             "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{out}"
@@ -439,7 +457,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             out.contains("fn __alef_tier_strategy_from_swift_string"),
             "the helper is still emitted for the enum's remaining unit variants, got:\n{out}"
@@ -468,7 +486,7 @@ mod tests {
             ..Default::default()
         };
         let type_paths = std::collections::HashMap::new();
-        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths, None);
         assert!(
             out.contains("mylib::ImageOutputFormat::Heif => Self::Heif,"),
             "the host-owned variant's From-impl arm must still be emitted, got:\n{out}"
@@ -481,6 +499,14 @@ mod tests {
             out.matches("#[cfg(feature = \"heic\")]").count(),
             2,
             "both the From-impl arm and the from-string arm must carry the #[cfg] guard, got:\n{out}"
+        );
+        // alef #547: a host-owned cfg-gated variant's own arm carries the identical #[cfg(...)]
+        // guard as the variant itself, so the two always compile in or out together and the match
+        // stays exhaustive either way -- unlike the foreign case, no catch-all is ever needed
+        // here, regardless of `configured_features`.
+        assert!(
+            !out.contains("_ => unreachable!"),
+            "a host-owned cfg-gated variant alone must not trigger a catch-all, got:\n{out}"
         );
     }
 }

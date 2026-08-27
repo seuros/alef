@@ -14,6 +14,8 @@
 use super::super::ExtendrBackend;
 use super::make_config;
 use crate::core::backend::Backend;
+use crate::core::config::ResolvedCrateConfig;
+use crate::core::config::new_config::NewAlefConfig;
 use crate::core::ir::*;
 
 fn gated_variant(name: &str, cfg: Option<&str>) -> EnumVariant {
@@ -22,6 +24,18 @@ fn gated_variant(name: &str, cfg: Option<&str>) -> EnumVariant {
         cfg: cfg.map(str::to_string),
         ..Default::default()
     }
+}
+
+/// Like `make_config`, but with `configured_feature` set under `[crates.r]` -- used to prove a
+/// foreign cfg-gated variant reachable (or not) via
+/// `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features` (alef #547). ~keep
+fn make_config_with_feature(configured_feature: &str) -> ResolvedCrateConfig {
+    let toml_src = format!(
+        "[workspace]\nlanguages = [\"r\"]\n[[crates]]\nname = \"test-lib\"\nsources = [\"src/lib.rs\"]\n\
+         [crates.r]\npackage_name = \"testlib\"\nfeatures = [\"{configured_feature}\"]\n"
+    );
+    let cfg: NewAlefConfig = toml::from_str(&toml_src).unwrap();
+    cfg.resolve().unwrap().remove(0)
 }
 
 fn returning_function(name: &str, enum_name: &str) -> FunctionDef {
@@ -34,8 +48,12 @@ fn returning_function(name: &str, enum_name: &str) -> FunctionDef {
 }
 
 fn generate_r(api: &ApiSurface) -> String {
+    generate_r_with_config(api, &make_config())
+}
+
+fn generate_r_with_config(api: &ApiSurface, config: &ResolvedCrateConfig) -> String {
     ExtendrBackend
-        .generate_bindings(api, &make_config())
+        .generate_bindings(api, config)
         .expect("extendr generation")
         .iter()
         .map(|f| format!("// ==== {} ====\n{}", f.path.display(), f.content))
@@ -111,8 +129,14 @@ fn host_owned_cfg_gated_variant_keeps_arm_under_matching_cfg_guard() {
 /// Fails on pre-fix code the same way as the host-owned test: the original code never dropped
 /// any arm and never guarded any arm, so `External::Bar` (and `foreign_crate::External::Bar`)
 /// appear unconditionally in pre-fix output -- the `!out.contains(...)` assertions below fail.
+///
+/// `make_config()` configures no features at all, so the gating feature "extra" is provably NOT
+/// configured for this binding -- the foreign `Bar` variant can never exist in this build. Per
+/// alef #547, the catch-all must therefore be OMITTED (it would otherwise be an unreachable
+/// pattern under `-D warnings`); see the sibling positive-control test below for the case where
+/// the feature IS configured. ~keep
 #[test]
-fn foreign_owned_cfg_gated_variant_drops_arm_entirely() {
+fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_arm_and_catch_all() {
     let api = ApiSurface {
         enums: vec![EnumDef {
             name: "External".to_string(),
@@ -147,9 +171,44 @@ fn foreign_owned_cfg_gated_variant_drops_arm_entirely() {
         "a foreign crate's cfg gate must never be forwarded into this generated crate:\n{out}"
     );
     assert!(
+        !out.contains("_ => Self::default(),"),
+        "a foreign cfg-gated variant proven unreachable by this binding's own configured feature \
+         set must not leave behind an unreachable catch-all (a cargo clippy -D warnings failure), \
+         got:\n{out}"
+    );
+}
+
+/// Positive control for the test above: when the gating feature IS configured (so the foreign
+/// variant is NOT proven unreachable), the catch-all must still be emitted -- otherwise the fix
+/// would have overcorrected into "never emit a catch-all," which trades one build failure
+/// (unreachable pattern) for another (non-exhaustive match, since the arm itself is still always
+/// dropped for a foreign variant). ~keep
+#[test]
+fn foreign_owned_cfg_gated_variant_not_proven_unreachable_keeps_catch_all() {
+    let api = ApiSurface {
+        enums: vec![EnumDef {
+            name: "External".to_string(),
+            rust_path: "foreign_crate::External".to_string(),
+            variants: vec![
+                gated_variant("Foo", None),
+                gated_variant("Bar", Some(r#"feature = "extra""#)),
+            ],
+            ..Default::default()
+        }],
+        functions: vec![returning_function("get_external", "External")],
+        ..Default::default()
+    };
+
+    let out = generate_r_with_config(&api, &make_config_with_feature("extra"));
+
+    assert!(
+        !out.contains("External::Bar"),
+        "a foreign crate's cfg-gated variant must not be named anywhere in the conversion output:\n{out}"
+    );
+    assert!(
         out.contains("_ => Self::default(),"),
-        "dropping the foreign-owned variant's arm must still leave the match exhaustive via the \
-         catch-all:\n{out}"
+        "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
+         match stays exhaustive, got:\n{out}"
     );
 }
 

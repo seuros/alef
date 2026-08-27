@@ -4,7 +4,7 @@ use crate::{
     codegen::{
         cfg::is_host_owned_rust_path,
         conversions::{
-            enum_conversion_needs_catch_all,
+            enum_conversion_needs_catch_all_for_features,
             helpers::{
                 sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
             },
@@ -304,6 +304,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
     core_import: &str,
     prefix: &str,
     struct_names: &ahash::AHashSet<String>,
+    configured_features: Option<&[String]>,
 ) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
@@ -474,9 +475,18 @@ pub(super) fn gen_tagged_enum_core_to_binding(
         })
         .collect::<Vec<_>>();
 
-    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    let has_excluded_variants =
-        enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty());
+    // A foreign cfg-gated variant's arm is dropped unconditionally (see `napi_variant_cfg`
+    // above), so whether a catch-all is still needed for it depends on whether this binding's own
+    // configured feature set proves the variant unreachable -- delegated to
+    // `codegen::conversions::enum_conversion_needs_catch_all_for_features`, the same resolver
+    // every `ConversionConfig`-driven enum conversion already uses, so this bespoke
+    // tagged-data-enum generator can't drift from that verdict (alef #547). ~keep
+    let has_excluded_variants = enum_conversion_needs_catch_all_for_features(
+        enum_def,
+        is_host_enum,
+        !enum_def.excluded_variants.is_empty(),
+        configured_features,
+    );
 
     crate::backends::napi::template_env::render(
         "gen_tagged_enum_core_to_binding.jinja",
@@ -550,7 +560,7 @@ mod tests {
             "the host-owned variant's arm must carry its #[cfg] guard exactly once, got:\n{binding_to_core}"
         );
 
-        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names, None);
         assert!(
             core_to_binding.contains("mylib::VisitorResult::Thumbnail"),
             "the host-owned variant's arm must still be emitted, got:\n{core_to_binding}"
@@ -592,7 +602,7 @@ mod tests {
             "a foreign-crate cfg-gated variant must not be referenced, got:\n{binding_to_core}"
         );
 
-        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names, None);
         assert!(
             !core_to_binding.contains("#[cfg(feature = \"testkit\")]"),
             "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{core_to_binding}"
@@ -622,7 +632,7 @@ mod tests {
             "ungated enum must not emit #[cfg(...)], got:\n{binding_to_core}"
         );
 
-        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names, None);
         assert!(
             !core_to_binding.contains("#[cfg("),
             "ungated enum must not emit #[cfg(...)], got:\n{core_to_binding}"
