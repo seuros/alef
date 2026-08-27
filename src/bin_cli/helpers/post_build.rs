@@ -17,7 +17,7 @@ use anyhow::Result;
 /// that fix for `alef generate`'s post-build phase: a Swift codegen defect that fails `cargo
 /// build` must not also hide whatever Kotlin/Android, Wasm, or Dart's post-build would have
 /// reported for the same run.
-/// Whether `language` has any post-build step configured (`build_config_with_config(config)`
+/// Whether `language` has any post-build step configured (`generate_post_build_config(config)`
 /// resolves and `post_build` is non-empty) -- the same predicate [`run_required_post_builds`]
 /// uses to decide whether to run one, factored out so a caller can ask the question without
 /// running anything.
@@ -26,7 +26,7 @@ fn language_has_post_build_steps(
     config: &crate::core::config::ResolvedCrateConfig,
 ) -> bool {
     crate::cli::registry::try_get_backend(language)
-        .and_then(|backend| backend.build_config_with_config(config))
+        .and_then(|backend| backend.generate_post_build_config(config))
         .is_some_and(|build_config| !build_config.post_build.is_empty())
 }
 
@@ -80,7 +80,7 @@ pub(super) fn run_required_post_builds(
         .iter()
         .filter_map(|&language| {
             let backend = crate::cli::registry::try_get_backend(language)?;
-            let build_config = backend.build_config_with_config(config)?;
+            let build_config = backend.generate_post_build_config(config)?;
             if build_config.post_build.is_empty() {
                 return None;
             }

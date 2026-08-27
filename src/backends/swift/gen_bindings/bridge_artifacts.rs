@@ -55,8 +55,11 @@ pub(crate) fn find_swift_bridge_out_dir(binding_crate_name: &str) -> Option<Path
 /// `consult_build_output` gates whether `target/`'s swift-bridge build output is read at
 /// all. It must be `false` from [`super::generate`] (the `alef generate` path) and `true`
 /// only from the [`PostBuildStep::MaterializeSwiftBridge`] post-build step
-/// (`cli::pipeline::commands::build`), which runs unconditionally after `alef generate`
-/// and `alef build` both trigger this crate's own `cargo build` via `complete_generated_artifacts`.
+/// (`cli::pipeline::commands::build`), which runs unconditionally after `alef generate`'s
+/// `complete_generated_artifacts` triggers a cheap `cargo check` of this crate
+/// (`SwiftBackend::generate_post_build_config`, task #541) and after `alef build` triggers a
+/// real `cargo build --release` (`SwiftBackend::build_config_with_config`) -- both populate the
+/// same `OUT_DIR` via this crate's own `build.rs`, so either satisfies `find_swift_bridge_out_dir`.
 ///
 /// The two calls used to be one, unconditionally reading `target/`, and that was the alef
 /// #A/#B bug: `target/`'s build directory is a side effect of *this same command's own*
@@ -112,10 +115,11 @@ pub(crate) fn emit_swift_bridge_files(
                  #define RUST_BRIDGE_C_H\n\
                  \n\
                  // Placeholder header for the RustBridgeC SwiftPM target.\n\
-                 // `alef build` (or `alef generate`, which builds this crate as a post-build\n\
-                 // step) populates this header automatically once `{binding_crate_name}` builds.\n\
+                 // `alef build` (or `alef generate`, which checks this crate as a cheap\n\
+                 // post-build step) populates this header automatically once\n\
+                 // `{binding_crate_name}` has been checked or built at least once.\n\
                  // The typedefs below are the minimum required for SwiftBridgeCore.swift\n\
-                 // to compile before the full cargo build has been run.\n\
+                 // to compile before that has happened.\n\
                  \n\
                  #include <stdbool.h>\n\
                  #include <stdint.h>\n\

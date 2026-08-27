@@ -488,6 +488,21 @@ pub trait Backend: Send + Sync {
     fn build_config_with_config(&self, _config: &ResolvedCrateConfig) -> Option<BuildConfig> {
         self.build_config()
     }
+
+    /// Post-build config for the contractually no-build `alef generate`/`alef all` paths
+    /// (`bin_cli::helpers::complete_generated_artifacts`), as opposed to `build_config_with_config`,
+    /// which is also used by `alef build`'s own dispatch and may legitimately invoke a real,
+    /// expensive compile.
+    ///
+    /// Default implementation returns `build_config_with_config(config)` verbatim: most backends'
+    /// post-build steps (`PatchFile`, `PostProcessFile`, frb's codegen `RunCommand`, ...) are
+    /// already cheap and generate-appropriate, so there is nothing to downgrade. A backend whose
+    /// post-build step genuinely compiles something (Swift's swift-bridge crate, task #541)
+    /// overrides this to substitute a cheaper equivalent for the generate path while leaving
+    /// `build_config_with_config` untouched for `alef build`. ~keep
+    fn generate_post_build_config(&self, config: &ResolvedCrateConfig) -> Option<BuildConfig> {
+        self.build_config_with_config(config)
+    }
 }
 
 #[cfg(test)]

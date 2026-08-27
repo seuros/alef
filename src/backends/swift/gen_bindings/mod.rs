@@ -94,6 +94,46 @@ pub(crate) fn swift_package_root(base_dir: &str, has_explicit_output: bool) -> P
     }
 }
 
+/// The binding crate name, SwiftPM package root, and Cargo manifest path shared by both
+/// `build_config_with_config` (the real, release-mode `alef build` config) and
+/// `generate_post_build_config` (the cheap, check-mode `alef generate`/`alef all` config) --
+/// factored out so the two post-build configs can never disagree on which crate they are
+/// pointing `cargo` at. ~keep
+struct SwiftBuildPaths {
+    binding_crate_name: String,
+    package_root: String,
+    manifest_path: &'static str,
+}
+
+/// Derive `SwiftBuildPaths` from `config`.
+///
+/// The literal `--manifest-path` baked into `build_config()` is only correct for a single,
+/// default-location crate. `gen_rust_crate::emit` writes the swift-bridge Rust crate to
+/// `<package_root>/rust` (see that function's own use of `swift_package_root`), so the manifest
+/// path any `cargo` invocation runs against must be derived from the SAME `package_root` rather
+/// than staying independent of `config.output_paths` -- a multi-crate workspace or an explicit
+/// `[crates.output] swift` override moves `package_root` away from the default `packages/swift`,
+/// and a manifest path that does not move with it points `cargo` at a `Cargo.toml` that was
+/// never written there. `RunCommand::args` requires `&'static str`; the path is only known once
+/// `config` is in hand, so it is leaked once per process -- the same pattern
+/// `cli::pipeline::commands::build::build_languages` already uses for a comparable
+/// computed-crate-name case. ~keep
+fn swift_build_paths(config: &ResolvedCrateConfig) -> SwiftBuildPaths {
+    let binding_crate_name = format!("{}-swift", config.name);
+
+    let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
+    let package_root = swift_package_root(&base_dir, config.explicit_output.swift.is_some());
+
+    let manifest_path = package_root.join("rust").join("Cargo.toml");
+    let manifest_path: &'static str = Box::leak(manifest_path.to_string_lossy().into_owned().into_boxed_str());
+
+    SwiftBuildPaths {
+        binding_crate_name,
+        package_root: package_root.to_string_lossy().to_string(),
+        manifest_path,
+    }
+}
+
 impl Backend for SwiftBackend {
     fn name(&self) -> &str {
         "swift"
@@ -670,34 +710,49 @@ impl Backend for SwiftBackend {
 
     fn build_config_with_config(&self, config: &ResolvedCrateConfig) -> Option<BuildConfig> {
         let mut build_config = self.build_config()?;
+        let paths = swift_build_paths(config);
 
-        let binding_crate_name = format!("{}-swift", config.name);
-
-        let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
-        let package_root = swift_package_root(&base_dir, config.explicit_output.swift.is_some());
-
-        // The literal `--manifest-path` baked into `build_config()` above is only correct for a
-        // single, default-location crate. `gen_rust_crate::emit` writes the swift-bridge Rust
-        // crate to `<package_root>/rust` (see that function's own use of `swift_package_root`),
-        // so the manifest path the actual `cargo build` runs against must be derived from the
-        // SAME `package_root` rather than staying independent of `config.output_paths` -- a
-        // multi-crate workspace or an explicit `[crates.output] swift` override moves
-        // `package_root` away from the default `packages/swift`, and a manifest path that does
-        // not move with it points `cargo build` at a `Cargo.toml` that was never written there.
-        // `RunCommand::args` requires `&'static str`; the path is only known once `config` is in
-        // hand, so it is leaked once per process -- the same pattern
-        // `cli::pipeline::commands::build::build_languages` already uses for a comparable
-        // computed-crate-name case. ~keep
-        let manifest_path = package_root.join("rust").join("Cargo.toml");
-        let manifest_path: &'static str = Box::leak(manifest_path.to_string_lossy().into_owned().into_boxed_str());
         build_config.post_build[0] = PostBuildStep::RunCommand {
             cmd: "cargo",
-            args: vec!["build", "--manifest-path", manifest_path, "--release"],
+            args: vec!["build", "--manifest-path", paths.manifest_path, "--release"],
         };
 
         build_config.post_build.push(PostBuildStep::MaterializeSwiftBridge {
-            binding_crate_name,
-            package_root: package_root.to_string_lossy().to_string(),
+            binding_crate_name: paths.binding_crate_name,
+            package_root: paths.package_root,
+        });
+
+        Some(build_config)
+    }
+
+    /// The post-build config `alef generate`/`alef all` run (`complete_generated_artifacts`,
+    /// never `alef build`'s own dispatch).
+    ///
+    /// `build_config_with_config` above compiles the swift-bridge crate in **release** mode --
+    /// correct for `alef build`, which needs a real linkable artifact, but wrong for generation:
+    /// generation only needs the `SwiftBridgeCore.swift`/`{crate}.swift`/`RustBridgeC.h` trio
+    /// `MaterializeSwiftBridge` copies out of `OUT_DIR`, and that trio is written by this crate's
+    /// own `build.rs` (`gen_rust_crate::cargo::emit_build_rs`), which does nothing but run
+    /// `swift_bridge_build::parse_bridges` (a `syn` source parse) and is executed identically by
+    /// `cargo check` and `cargo build` -- Cargo always runs a package's build script before
+    /// checking or building it, regardless of profile. `cargo check` skips the codegen,
+    /// optimization, and linking `--release` performs on top of that, which is what turned a
+    /// contractually no-build `alef generate` into a multi-minute compile (task #541). Swapping
+    /// `build`/`--release` for a bare `check` here, while `build_config_with_config` keeps the
+    /// real release build for `alef build`, is the whole fix: same `OUT_DIR` contents, none of
+    /// the compilation `alef generate` was never supposed to do. ~keep
+    fn generate_post_build_config(&self, config: &ResolvedCrateConfig) -> Option<BuildConfig> {
+        let mut build_config = self.build_config()?;
+        let paths = swift_build_paths(config);
+
+        build_config.post_build[0] = PostBuildStep::RunCommand {
+            cmd: "cargo",
+            args: vec!["check", "--manifest-path", paths.manifest_path],
+        };
+
+        build_config.post_build.push(PostBuildStep::MaterializeSwiftBridge {
+            binding_crate_name: paths.binding_crate_name,
+            package_root: paths.package_root,
         });
 
         Some(build_config)
@@ -836,6 +891,101 @@ swift = "custom/output/Sources/TestLib"
             vec!["build", "--manifest-path", "custom/output/rust/Cargo.toml", "--release"],
             "manifest path must follow the explicit [crates.output] swift override, not stay \
              pinned to the packages/swift/rust default; got: {manifest_path_args:?}"
+        );
+    }
+
+    /// Positive control for task #541: `alef build`'s post-build config (`build_config_with_config`,
+    /// the config `cli::pipeline::commands::build`'s own dispatch loop runs) must still perform a
+    /// real `cargo build --release` of the swift-bridge crate. If this regresses to something
+    /// cheaper, `alef build` would ship a Swift package that was never actually compiled.
+    #[test]
+    fn build_config_with_config_still_compiles_for_the_real_build_path() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .expect("test config must parse");
+        let config = cfg.resolve().expect("test config must resolve").remove(0);
+
+        let build_config = SwiftBackend
+            .build_config_with_config(&config)
+            .expect("swift backend must produce a build config");
+
+        let cargo_args: Vec<&str> = build_config
+            .post_build
+            .iter()
+            .find_map(|step| match step {
+                PostBuildStep::RunCommand { cmd, args } if *cmd == "cargo" => Some(args.clone()),
+                _ => None,
+            })
+            .expect("alef build's swift config must have a cargo RunCommand post-build step");
+
+        assert!(
+            cargo_args.contains(&"build") && cargo_args.contains(&"--release"),
+            "alef build must still compile the swift-bridge crate in release mode: {cargo_args:?}"
+        );
+    }
+
+    /// THE FIX for task #541: `alef generate`/`alef all` are contractually no-build steps, but
+    /// Swift's post-build used to invoke the exact same `cargo build --release` as `alef build`
+    /// itself -- a cold release compile the consumer measured at 12m37s inside what was supposed
+    /// to be a cheap generate-only step. `generate_post_build_config` is the config
+    /// `bin_cli::helpers::post_build::run_required_post_builds` (the generate-only caller) now
+    /// resolves instead of `build_config_with_config`. This asserts its cargo invocation is a
+    /// bare `check` -- no `build`, no `--release` -- so the underlying crate's build script (the
+    /// only thing that actually needs to run to materialize the swift-bridge Swift/header trio)
+    /// executes without paying for codegen, optimization, or linking.
+    #[test]
+    fn generate_post_build_config_only_checks_never_compiles() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .expect("test config must parse");
+        let config = cfg.resolve().expect("test config must resolve").remove(0);
+
+        let build_config = SwiftBackend
+            .generate_post_build_config(&config)
+            .expect("swift backend must produce a generate-time post-build config");
+
+        let cargo_args: Vec<&str> = build_config
+            .post_build
+            .iter()
+            .find_map(|step| match step {
+                PostBuildStep::RunCommand { cmd, args } if *cmd == "cargo" => Some(args.clone()),
+                _ => None,
+            })
+            .expect("alef generate's swift config must have a cargo RunCommand post-build step");
+
+        assert_eq!(
+            cargo_args,
+            vec!["check", "--manifest-path", "packages/swift/rust/Cargo.toml"],
+            "alef generate must only `cargo check` the swift-bridge crate, never `build`/`--release`, \
+             or it re-introduces the no-build contract violation task #541 fixed: {cargo_args:?}"
+        );
+
+        // The materialization step must still run after the (now cheap) cargo invocation --
+        // otherwise generation would never pick up fresh OUT_DIR content at all.
+        assert!(
+            build_config
+                .post_build
+                .iter()
+                .any(|step| matches!(step, PostBuildStep::MaterializeSwiftBridge { .. })),
+            "generate_post_build_config must still re-materialize the swift-bridge trio after \
+             the cargo check step: {:?}",
+            build_config.post_build
         );
     }
 }
