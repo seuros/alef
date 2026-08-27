@@ -71,6 +71,9 @@ impl Backend for Pyo3Backend {
             .map(|t| t.name.clone())
             .collect();
         for bridge in &config.trait_bridges {
+            if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
+                continue;
+            }
             if bridge.bind_via == crate::core::config::BridgeBinding::OptionsField
                 && let Some(alias) = &bridge.type_alias
             {
@@ -152,6 +155,7 @@ impl Backend for Pyo3Backend {
         let bridge_type_aliases: Vec<String> = config
             .trait_bridges
             .iter()
+            .filter(|b| crate::backends::pyo3::trait_bridge::active_bridge_trait(b, api).is_some())
             .filter_map(|b| b.type_alias.clone())
             .collect();
         let conversion_opaque_set: AHashSet<String> =
@@ -265,8 +269,8 @@ impl Backend for Pyo3Backend {
         let bridge_duck_register_fns: AHashSet<&str> = config
             .trait_bridges
             .iter()
-            .filter(|b| b.registry_getter.is_some() && api.types.iter().any(|t| t.is_trait && t.name == b.trait_name))
-            .filter_map(|b| b.register_fn.as_deref())
+            .filter(|b| crate::backends::pyo3::trait_bridge::active_bridge_trait(b, api).is_some())
+            .filter_map(|b| crate::codegen::generators::trait_bridge::bridge_register_symbol(b))
             .collect();
         let mut py_exclude_types: ahash::AHashSet<String> = config
             .python
@@ -619,6 +623,9 @@ impl Backend for Pyo3Backend {
 
         // Trait marker classes — emit empty #[pyclass] structs for plugin traits so they can be
         for bridge_cfg in &config.trait_bridges {
+            if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
+                continue;
+            }
             let trait_name = &bridge_cfg.trait_name;
             if !emitted_pyclass_names.insert(trait_name) {
                 continue;
@@ -652,7 +659,7 @@ impl Backend for Pyo3Backend {
                 },
             ));
             for bridge_cfg in &config.trait_bridges {
-                if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+                if let Some(trait_type) = crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge_cfg, api) {
                     let bridge = crate::backends::pyo3::trait_bridge::gen_trait_bridge(
                         trait_type,
                         bridge_cfg,
@@ -798,18 +805,25 @@ impl Backend for Pyo3Backend {
 
     fn trait_bridge_registration_surface(
         &self,
-        _api: &ApiSurface,
+        api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> Vec<crate::core::backend::TraitBridgeRegistrationSurface> {
         config
             .trait_bridges
             .iter()
-            .filter(|bridge| bridge.is_active_for("pyo3"))
-            .map(|bridge| crate::core::backend::TraitBridgeRegistrationSurface {
-                trait_name: bridge.trait_name.clone(),
-                register_symbol: bridge.register_fn.clone(),
-                unregister_symbol: bridge.unregister_fn.clone(),
-                clear_symbol: bridge.clear_fn.clone(),
+            .filter_map(|bridge| {
+                crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api)?;
+                let surface = crate::core::backend::TraitBridgeRegistrationSurface {
+                    trait_name: bridge.trait_name.clone(),
+                    register_symbol: crate::codegen::generators::trait_bridge::bridge_register_symbol(bridge)
+                        .map(str::to_owned),
+                    unregister_symbol: bridge.unregister_fn.clone(),
+                    clear_symbol: bridge.clear_fn.clone(),
+                };
+                let emits_nothing = surface.register_symbol.is_none()
+                    && surface.unregister_symbol.is_none()
+                    && surface.clear_symbol.is_none();
+                (!emits_nothing).then_some(surface)
             })
             .collect()
     }

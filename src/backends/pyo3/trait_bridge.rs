@@ -23,6 +23,21 @@ use crate::core::ir::{ApiSurface, TypeDef};
 use std::collections::{HashMap, HashSet};
 use visitor_bridge::gen_visitor_bridge;
 
+/// The `exclude_languages` spellings that name this target: the language (`"python"`) and the
+/// backend (`"pyo3"`). Both are honoured so a consumer who names either one gets the same answer
+/// from every site that asks. ~keep
+pub const TARGET_SPELLINGS: [&str; 2] = ["python", "pyo3"];
+
+/// The trait a bridge wraps, when PyO3 emits that bridge at all.
+///
+/// Every PyO3 site that decides whether a bridge exists — the `#[pyclass]` marker, the emitted
+/// bridge struct, the module-init registration, and `Pyo3Backend::trait_bridge_registration_surface`
+/// — asks this, so they cannot disagree and leave one pass referring to a symbol another pass
+/// never wrote. ~keep
+pub fn active_bridge_trait<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) -> Option<&'a TypeDef> {
+    crate::codegen::generators::trait_bridge::active_bridge_trait_def(bridge, api, &TARGET_SPELLINGS)
+}
+
 pub fn gen_trait_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,

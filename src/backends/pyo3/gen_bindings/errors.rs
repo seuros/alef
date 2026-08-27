@@ -263,12 +263,15 @@ pub(super) fn gen_init_py(
             .collect();
         names.extend(crate::backends::pyo3::trait_bridge::collect_bridge_register_fns(
             trait_bridges,
+            api,
         ));
         names.extend(crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(
             trait_bridges,
+            api,
         ));
         names.extend(crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(
             trait_bridges,
+            api,
         ));
         names.extend(adapters.iter().map(|a| a.name.clone()));
         names.sort();
@@ -428,12 +431,15 @@ pub(super) fn gen_init_py(
     }
     all_items.extend(crate::backends::pyo3::trait_bridge::collect_bridge_register_fns(
         trait_bridges,
+        api,
     ));
     all_items.extend(crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(
         trait_bridges,
+        api,
     ));
     all_items.extend(crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(
         trait_bridges,
+        api,
     ));
     all_items.extend(adapters.iter().map(|a| a.name.clone()));
     all_items.extend(needed_enums);

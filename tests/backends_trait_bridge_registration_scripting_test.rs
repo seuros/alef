@@ -16,6 +16,7 @@ use alef::backends::kotlin::KotlinBackend;
 use alef::backends::magnus::MagnusBackend;
 use alef::backends::napi::NapiBackend;
 use alef::backends::php::PhpBackend;
+use alef::backends::pyo3::Pyo3Backend;
 use alef::backends::rustler::RustlerBackend;
 use alef::backends::swift::SwiftBackend;
 use alef::backends::wasm::WasmBackend;
@@ -594,4 +595,145 @@ fn extendr_reports_nothing_when_the_bridge_excludes_either_spelling_of_the_targe
              nothing is left to document; got {surfaces:?}"
         );
     }
+}
+
+/// `alef.toml` may set `[crates.python.stubs]` to opt into `.pyi` generation; the dotted-key form
+/// is equivalent TOML to a nested `[crates.python.stubs]` table. ~keep
+fn pyo3_config_with_stubs() -> ResolvedCrateConfig {
+    minimal_config("python", "stubs.output = \"stubs\"\n")
+}
+
+fn generated_pyi_text(config: &ResolvedCrateConfig) -> String {
+    Pyo3Backend
+        .generate_type_stubs(&plugin_api(), config)
+        .unwrap_or_else(|error| panic!("pyo3: stub generation failed: {error}"))
+        .iter()
+        .map(|file| file.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Positive control: a bridge with `registry_getter` set registers on every PyO3 surface — the
+/// `#[pymodule]` body, the reported registration surface, and the `.pyi` stub. This is the
+/// baseline the negative tests below must differ from -- the fix must not just "emit nothing,
+/// always".
+#[test]
+fn pyo3_surface_names_the_pymodule_registered_functions() {
+    let config = pyo3_config_with_stubs();
+    let surface = only_surface(&Pyo3Backend, &config);
+
+    assert_eq!(surface.register_symbol.as_deref(), Some(REGISTER_FN));
+    assert_eq!(surface.unregister_symbol.as_deref(), Some(UNREGISTER_FN));
+    assert_eq!(surface.clear_symbol.as_deref(), Some(CLEAR_FN));
+
+    let generated = generated_text(&Pyo3Backend, &config);
+    assert_declares(
+        &Pyo3Backend,
+        &generated,
+        &format!("m.add_function(wrap_pyfunction!({REGISTER_FN}, m)?)?;"),
+    );
+    assert_declares(
+        &Pyo3Backend,
+        &generated,
+        &format!("m.add_function(wrap_pyfunction!(_alef_{UNREGISTER_FN}, m)?)?;"),
+    );
+    assert_declares(
+        &Pyo3Backend,
+        &generated,
+        &format!("m.add_function(wrap_pyfunction!(_alef_{CLEAR_FN}, m)?)?;"),
+    );
+
+    let stub = generated_pyi_text(&config);
+    assert!(
+        stub.contains(&format!("def {REGISTER_FN}(")),
+        "the .pyi stub must declare the register function the pymodule actually exports:\n{stub}"
+    );
+}
+
+/// The crux regression: `register_fn` without `registry_getter` makes every backend's
+/// `gen_registration_fn` write nothing, so the `#[pymodule]` body must not reference the missing
+/// `#[pyfunction]` -- doing so is a Rust `cannot find value` compile error, not a missing binding.
+/// `unregister_fn`/`clear_fn` need no `registry_getter` and must be unaffected.
+#[test]
+fn pyo3_reports_no_register_symbol_and_the_pymodule_omits_it_without_a_registry_getter() {
+    let mut config = pyo3_config_with_stubs();
+    config.trait_bridges[0].registry_getter = None;
+
+    let surface = only_surface(&Pyo3Backend, &config);
+    assert_eq!(
+        surface.register_symbol, None,
+        "gen_registration_fn emits no #[pyfunction] without a registry_getter, so no pymodule \
+         export exists"
+    );
+    assert_eq!(surface.unregister_symbol.as_deref(), Some(UNREGISTER_FN));
+    assert_eq!(surface.clear_symbol.as_deref(), Some(CLEAR_FN));
+
+    let generated = generated_text(&Pyo3Backend, &config);
+    assert!(
+        !generated.contains(&format!("wrap_pyfunction!({REGISTER_FN}")),
+        "the #[pymodule] body must not wrap a #[pyfunction] no pass emitted:\n{generated}"
+    );
+    assert_declares(
+        &Pyo3Backend,
+        &generated,
+        &format!("m.add_function(wrap_pyfunction!(_alef_{UNREGISTER_FN}, m)?)?;"),
+    );
+
+    let stub = generated_pyi_text(&config);
+    assert!(
+        !stub.contains(&format!("def {REGISTER_FN}(")),
+        "the .pyi stub must not declare a register function the native module never exports:\n{stub}"
+    );
+}
+
+#[test]
+fn pyo3_emits_no_bridge_and_reports_no_surface_when_the_target_is_excluded() {
+    for excluded in ["python", "pyo3"] {
+        let mut config = pyo3_config_with_stubs();
+        config.trait_bridges[0].exclude_languages = vec![excluded.to_owned()];
+
+        let surfaces = Pyo3Backend.trait_bridge_registration_surface(&plugin_api(), &config);
+        let generated = generated_text(&Pyo3Backend, &config);
+
+        assert_eq!(
+            surfaces.len(),
+            0,
+            "`exclude_languages = [\"{excluded}\"]` suppresses the pymodule registration, so \
+             nothing is left to document; got {surfaces:?}"
+        );
+        assert!(
+            !generated.contains(REGISTER_FN),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the register #[pyfunction] too"
+        );
+        assert!(
+            !generated.contains("PySamplePluginBridge"),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the bridge wrapper struct"
+        );
+
+        let stub = generated_pyi_text(&config);
+        assert!(
+            !stub.contains(REGISTER_FN),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the .pyi stub declaration too"
+        );
+    }
+}
+
+#[test]
+fn pyo3_emits_no_bridge_when_the_bridged_trait_is_absent_from_the_api_surface() {
+    let config = pyo3_config_with_stubs();
+    let api = api_without_the_trait();
+
+    let surfaces = Pyo3Backend.trait_bridge_registration_surface(&api, &config);
+    let generated = generated_text_for(&Pyo3Backend, &api, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "no trait means gen_trait_bridge never ran, so there is no pymodule export to document; \
+         got {surfaces:?}"
+    );
+    assert!(
+        !generated.contains(REGISTER_FN),
+        "the #[pymodule] body would wrap a #[pyfunction] no pass emitted:\n{generated}"
+    );
 }

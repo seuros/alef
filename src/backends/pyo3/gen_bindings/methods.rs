@@ -122,6 +122,9 @@ pub(super) fn gen_module_init(module_name: &str, api: &ApiSurface, config: &Reso
 
     // name (declared via `#[pyclass(name = "<Trait>")]` in mod.rs) still matches the trait so
     for bridge_cfg in &config.trait_bridges {
+        if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
+            continue;
+        }
         let trait_name = &bridge_cfg.trait_name;
         if registered.insert(trait_name.clone()) {
             lines.push(format!("    m.add_class::<Py{trait_name}Marker>()?;"));
@@ -135,16 +138,18 @@ pub(super) fn gen_module_init(module_name: &str, api: &ApiSurface, config: &Reso
         lines.push(format!("    m.add_function(wrap_pyfunction!({}, m)?)?;", func.name));
     }
 
-    for register_fn in crate::backends::pyo3::trait_bridge::collect_bridge_register_fns(&config.trait_bridges) {
+    for register_fn in crate::backends::pyo3::trait_bridge::collect_bridge_register_fns(&config.trait_bridges, api) {
         lines.push(format!("    m.add_function(wrap_pyfunction!({register_fn}, m)?)?;"));
     }
     // it under the bare `unregister_*` name via `#[pyo3(name = ...)]`. Without this
-    for unregister_fn in crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(&config.trait_bridges) {
+    for unregister_fn in
+        crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(&config.trait_bridges, api)
+    {
         lines.push(format!(
             "    m.add_function(wrap_pyfunction!(_alef_{unregister_fn}, m)?)?;"
         ));
     }
-    for clear_fn in crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(&config.trait_bridges) {
+    for clear_fn in crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(&config.trait_bridges, api) {
         lines.push(format!("    m.add_function(wrap_pyfunction!(_alef_{clear_fn}, m)?)?;"));
     }
 

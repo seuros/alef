@@ -293,8 +293,13 @@ pub(super) fn emit_function_wrappers(
         .collect();
 
     // These functions are emitted as #[pyfunction] in the native Rust module but are not in
+    // the facade only when PyO3 actually wrote them: the bridge must target this language and
+    // (for `register_fn`) carry `registry_getter` too — see `bridge_register_symbol`. ~keep
     for bridge in trait_bridges {
-        let Some(register_fn) = bridge.register_fn.as_deref() else {
+        if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
+            continue;
+        }
+        let Some(register_fn) = crate::codegen::generators::trait_bridge::bridge_register_symbol(bridge) else {
             continue;
         };
         if emitted_function_names.contains(register_fn) {
@@ -311,7 +316,7 @@ pub(super) fn emit_function_wrappers(
         ));
     }
 
-    for unregister_fn in crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(trait_bridges) {
+    for unregister_fn in crate::backends::pyo3::trait_bridge::collect_bridge_unregister_fns(trait_bridges, api) {
         if emitted_function_names.contains(&unregister_fn) {
             continue;
         }
@@ -321,7 +326,7 @@ pub(super) fn emit_function_wrappers(
         ));
     }
 
-    for clear_fn in crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(trait_bridges) {
+    for clear_fn in crate::backends::pyo3::trait_bridge::collect_bridge_clear_fns(trait_bridges, api) {
         if emitted_function_names.contains(&clear_fn) {
             continue;
         }

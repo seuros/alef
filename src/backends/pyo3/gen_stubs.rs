@@ -246,6 +246,9 @@ pub fn gen_stubs(
         .unwrap_or_default();
     let options_types = crate::backends::pyo3::gen_bindings::options_dataclass_type_names(api, &stub_reexported_types);
     for bridge in trait_bridges {
+        if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
+            continue;
+        }
         let is_protocol_bridge =
             bridge.bind_via == crate::core::config::BridgeBinding::OptionsField || bridge.register_fn.is_some();
         if !is_protocol_bridge {
@@ -346,7 +349,10 @@ pub fn gen_stubs(
         .map(|f| f.name.as_str())
         .collect();
     for bridge in trait_bridges {
-        if let Some(register_fn) = bridge.register_fn.as_deref()
+        if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
+            continue;
+        }
+        if let Some(register_fn) = crate::codegen::generators::trait_bridge::bridge_register_symbol(bridge)
             && !declared_function_names.contains(register_fn)
         {
             let backend_type = if protocol_trait_names.contains(&bridge.trait_name) {
