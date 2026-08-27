@@ -717,6 +717,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     &sources_hash,
                     &alef_toml_bytes,
                 )?;
+                // Records this crate's generation-inputs fingerprint centrally, once, now that
+                // generation for it has completed successfully -- the replacement for folding
+                // `inputs_hash` into every file's own stamp. See `core::hash`'s module doc and
+                // `cache::generation_record`. Reuses the `inputs_hash` already computed above
+                // for the stage cache rather than re-deriving it. ~keep
+                cache::record_inputs_hash(&base_dir, &resolved_cfg.name, &inputs_hash)?;
 
                 // Reported only now, after finalisation, the orphan sweep and docs have
                 // all run. Raising at the point of failure is what made the release

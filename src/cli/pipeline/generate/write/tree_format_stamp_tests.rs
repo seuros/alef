@@ -18,10 +18,6 @@ const SOURCES_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123
 
 const ALEF_TOML: &[u8] = b"[workspace]\nlanguages = [\"python\"]\n";
 
-fn inputs_hash() -> String {
-    hash::compute_inputs_hash(SOURCES_HASH, ALEF_TOML)
-}
-
 /// Write an alef-marked Rust file, creating parents. Returns the absolute path.
 ///
 /// `relative` is joined one component at a time: `Path::join("a/b")` keeps the literal `/`
@@ -72,7 +68,7 @@ fn path_set(paths: &[&PathBuf]) -> HashSet<PathBuf> {
 }
 
 fn stale_paths(root: &Path) -> Vec<String> {
-    verify_walk(root, &inputs_hash())
+    verify_walk(root)
         .expect("verify walk")
         .into_iter()
         .map(|mismatch| mismatch.path)

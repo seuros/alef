@@ -1,6 +1,7 @@
 use super::external_types::merge_external_type_roots;
 use super::filtering::{
-    apply_exclude_fields, apply_filters, expand_include_list, is_type_excluded, unmatched_exclude_entries,
+    apply_exclude_fields, apply_filters, expand_include_list, is_type_excluded, redundant_generic_exclude_entries,
+    unmatched_exclude_entries,
 };
 use super::sanitizer::{TypeSanitization, sanitize_type_ref, sanitize_unknown_types};
 use super::validation::validate_extracted_api;
@@ -362,6 +363,7 @@ mod external_type_roots;
 mod fixed_size_arrays;
 mod ir_cache_version_salt;
 mod param_provenance;
+mod redundant_exclude_entries;
 
 fn make_unsupported_method(type_name: &str, method_name: &str) -> crate::core::ir::UnsupportedPublicItem {
     crate::core::ir::UnsupportedPublicItem {

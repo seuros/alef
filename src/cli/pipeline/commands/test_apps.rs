@@ -7,40 +7,25 @@ use rayon::prelude::*;
 use std::path::Path;
 use tracing::{error, info, warn};
 
-/// Directory names never worth descending into while looking for alef-marked test-app
-/// source files: vendored/build output that is either huge (defeating the point of a
-/// cheap pre-flight check) or, for `.git`, never alef-managed. Deliberately small and
-/// local rather than shared with `format.rs`'s own skip list -- that list also excludes
-/// language-specific build dirs (`_build`, `zig-out`, ...) this check has no reason to
-/// walk into either, but the two lists are free to diverge without either one changing
-/// the other's behavior. ~keep
-const STALE_CHECK_SKIP_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "vendor",
-    "__pycache__",
-    ".venv",
-    ".dart_tool",
-    ".gradle",
-    "build",
-    "dist",
-];
-
-/// Names in `names` whose `<registry output>/<name>/` tree contains at least one
-/// alef-marked, hash-stamped file whose embedded `alef:hash:` no longer matches what
-/// today's sources + `alef.toml` would stamp.
+/// Names in `names` whose `<registry output>/<name>/` directory exists, when `config`'s
+/// crate-wide generation-inputs fingerprint no longer matches what
+/// `cache::generation_record` recorded for it at its last successful `alef generate`/`alef
+/// all` run.
 ///
-/// Reuses the exact stamp [`crate::cli::pipeline::generate::finalize_hashes`] embeds
-/// (`core::hash::compute_inputs_hash` + `compute_file_hash`) instead of deriving a
-/// second staleness signal, so this can never disagree with what `alef verify` or the
-/// next `alef test-apps generate` would find for the same file. A registry-mode test
-/// app that fails while running against stale generated sources reads exactly like a
-/// real regression; this exists so `test_apps_run` can name the actual cause up front
-/// instead of leaving an operator to chase a wrong-cause failure through the harness. A
-/// missing/unreadable registry directory or an unhashable config is not itself
-/// staleness — this only reports files it could actually compare, matching `verify`'s
-/// own "examined nothing" caution. ~keep
+/// Reuses the exact central record `alef verify` compares against
+/// (`cache::generation_record::recorded_inputs_hash`) instead of deriving a second
+/// staleness signal, so this can never disagree with what `alef verify` would find for the
+/// crate. A registry-mode test app that fails while running against stale generated
+/// sources reads exactly like a real regression; this exists so `test_apps_run` can name
+/// the actual cause up front instead of leaving an operator to chase a wrong-cause failure
+/// through the harness.
+///
+/// Deliberately crate-scoped, not per-file: `core::hash::compute_file_hash` no longer takes
+/// a generation-inputs argument (see its doc), so there is no per-file staleness signal left
+/// to walk test-app directories for. A crate with no recorded baseline yet (every consumer,
+/// immediately after upgrading to this version) is not staleness — this only reports a crate
+/// it could actually compare against a real baseline, matching `verify`'s own "examined
+/// nothing" caution. ~keep
 fn stale_test_app_names(
     config: &ResolvedCrateConfig,
     config_path: &Path,
@@ -55,48 +40,19 @@ fn stale_test_app_names(
     };
     let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
     let inputs_hash = hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
-    let output_root = base_dir.join(&e2e.registry.output);
+    let Some(recorded) = cache::recorded_inputs_hash(base_dir, &config.name) else {
+        return Vec::new();
+    };
+    if recorded == inputs_hash {
+        return Vec::new();
+    }
 
+    let output_root = base_dir.join(&e2e.registry.output);
     names
         .iter()
-        .filter(|name| directory_has_stale_marker(&output_root.join(name), &inputs_hash))
+        .filter(|name| output_root.join(name).is_dir())
         .cloned()
         .collect()
-}
-
-/// Whether any alef-marked, hash-stamped file under `dir` disagrees with `inputs_hash`.
-/// See [`stale_test_app_names`] for what "disagrees" means and why it is safe to reuse
-/// the embedded stamp instead of regenerating.
-fn directory_has_stale_marker(dir: &Path, inputs_hash: &str) -> bool {
-    if !dir.is_dir() {
-        return false;
-    }
-    let walker = walkdir::WalkDir::new(dir).into_iter().filter_entry(|entry| {
-        !entry.file_type().is_dir()
-            || entry
-                .file_name()
-                .to_str()
-                .is_none_or(|name| !STALE_CHECK_SKIP_DIRS.contains(&name))
-    });
-    for entry in walker.filter_map(Result::ok) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        if !hash::content_has_alef_marker(&content) {
-            continue;
-        }
-        let Some(embedded) = hash::extract_hash(&content) else {
-            continue;
-        };
-        let stripped = hash::strip_hash_line(&content);
-        if hash::compute_file_hash(inputs_hash, &stripped) != embedded {
-            return true;
-        }
-    }
-    false
 }
 
 /// Log one `tracing::warn!` per stale target named by [`stale_test_app_names`], naming the
@@ -531,30 +487,16 @@ run = "test \"$ALLOW_PRIVATE_NETWORK\" = true"
         );
     }
 
-    /// Builds file content carrying a real alef header, marker, and an `alef:hash:` line
-    /// stamped for `inputs_hash` -- mirroring exactly what `finalize_hashes` writes, so the
-    /// staleness check under test reads a realistic file rather than a hand-rolled stand-in.
-    fn marked_file_with_hash(body: &str, inputs_hash: &str) -> String {
+    /// Builds file content carrying a real alef header, marker, and an `alef:hash:` line --
+    /// mirroring exactly what `finalize_hashes` writes, so fixtures below look like realistic
+    /// test-app output. `stale_test_app_names` no longer reads this file's own stamp (see its
+    /// doc: `core::hash::compute_file_hash` takes no generation-inputs argument any more), only
+    /// whether the directory containing it exists -- the staleness signal itself comes from
+    /// `cache::record_inputs_hash`/`cache::recorded_inputs_hash`.
+    fn marked_file(body: &str) -> String {
         let with_header = format!("{}{body}", hash::header(hash::CommentStyle::DoubleSlash));
-        let file_hash = hash::compute_file_hash(inputs_hash, &with_header);
+        let file_hash = hash::compute_file_hash(&with_header);
         hash::inject_hash_line(&with_header, &file_hash)
-    }
-
-    #[test]
-    fn stale_marker_detects_hash_mismatch_and_clears_on_match() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let inputs_hash = "a".repeat(64);
-        let fresh = marked_file_with_hash("print('ok')\n", &inputs_hash);
-        std::fs::write(dir.path().join("app.py"), &fresh).expect("write");
-
-        assert!(
-            !directory_has_stale_marker(dir.path(), &inputs_hash),
-            "a stamp matching the given inputs hash must not be reported stale"
-        );
-        assert!(
-            directory_has_stale_marker(dir.path(), &"b".repeat(64)),
-            "a stamp computed against a different inputs hash must be reported stale"
-        );
     }
 
     /// Regression for #134: `test_apps_run` must be able to tell an operator that a target's
@@ -576,24 +518,46 @@ run = "test \"$ALLOW_PRIVATE_NETWORK\" = true"
         let target_dir = base.join(registry_output).join("python");
         std::fs::create_dir_all(&target_dir).expect("mkdir");
         let target_file = target_dir.join("app.py");
+        std::fs::write(&target_file, marked_file("print('old')\n")).expect("write test-app output");
 
-        // Stamped against an inputs hash that cannot match today's sources + alef.toml.
-        std::fs::write(&target_file, marked_file_with_hash("print('old')\n", &"0".repeat(64))).expect("write stale");
+        // A recorded baseline that cannot match today's sources + alef.toml.
+        cache::record_inputs_hash(base, &config.name, &"0".repeat(64)).expect("seed stale baseline");
         let stale = stale_test_app_names(&config, no_config_path(), base, &["python".to_string()]);
         assert_eq!(
             stale,
             vec!["python".to_string()],
-            "an outdated stamp must be reported as a stale target"
+            "an outdated recorded baseline must flag its target as stale"
         );
 
-        // Stamped against exactly what today's sources_hash + alef.toml bytes produce.
+        // Regenerate: record exactly what today's sources_hash + alef.toml bytes produce.
         let sources_hash = cache::sources_hash(&config.sources).expect("sources hash");
         let inputs_hash = hash::compute_inputs_hash(&sources_hash, &cache::read_alef_toml_bytes(no_config_path()));
-        std::fs::write(&target_file, marked_file_with_hash("print('new')\n", &inputs_hash)).expect("write fresh");
+        cache::record_inputs_hash(base, &config.name, &inputs_hash).expect("record fresh baseline");
         let fresh = stale_test_app_names(&config, no_config_path(), base, &["python".to_string()]);
         assert!(
             fresh.is_empty(),
-            "a stamp matching current inputs must not be reported stale: {fresh:?}"
+            "a baseline matching current inputs must not be reported stale: {fresh:?}"
+        );
+    }
+
+    /// The migration-graceful half: a crate with no recorded baseline yet -- every crate in
+    /// every consumer repo immediately after upgrading to this version, before the first `alef
+    /// generate`/`alef all` run -- must not be reported stale. Getting this wrong would turn a
+    /// silent, advisory pre-flight check into a spurious warning on every upgrade. ~keep
+    #[test]
+    fn stale_test_app_names_is_silent_with_no_recorded_baseline_yet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let config = resolved_config();
+        let registry_output = &config.e2e.as_ref().expect("e2e config").registry.output;
+        let target_dir = base.join(registry_output).join("python");
+        std::fs::create_dir_all(&target_dir).expect("mkdir");
+        std::fs::write(target_dir.join("app.py"), marked_file("print('ok')\n")).expect("write test-app output");
+
+        let stale = stale_test_app_names(&config, no_config_path(), base, &["python".to_string()]);
+        assert!(
+            stale.is_empty(),
+            "a crate with no recorded generation baseline must not be reported stale: {stale:?}"
         );
     }
 }

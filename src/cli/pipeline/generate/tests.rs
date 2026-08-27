@@ -814,7 +814,7 @@ file_safety = { exclude = ["target/**"] }
     }
 
     /// Invariant: after `write` + simulated format-pass + `finalize_hashes`, the
-    /// embedded `alef:hash:` must cover both generation inputs and the finalized file body.
+    /// embedded `alef:hash:` must cover the finalized file body.
     #[test]
     fn test_finalize_hashes_embeds_per_file_content_hash() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -835,8 +835,7 @@ file_safety = { exclude = ["target/**"] }
 
         let finalised = std::fs::read_to_string(&file_path).expect("read finalised");
         let embedded = crate::core::hash::extract_hash(&finalised).expect("hash must be present");
-        let inputs_hash = crate::core::hash::compute_inputs_hash(sources_hash, alef_toml_bytes);
-        let expected = crate::core::hash::compute_file_hash(&inputs_hash, content_after_format);
+        let expected = crate::core::hash::compute_file_hash(content_after_format);
         assert_eq!(embedded, expected, "embedded hash must cover the finalized file body");
 
         let reformatted = format!("{content_after_format}\n// formatter added this line\n");
@@ -844,7 +843,7 @@ file_safety = { exclude = ["target/**"] }
         let after_reformat = std::fs::read_to_string(&file_path).expect("read after reformat");
         let _still_embedded = crate::core::hash::extract_hash(&after_reformat);
         assert_ne!(
-            crate::core::hash::compute_file_hash(&inputs_hash, &after_reformat),
+            crate::core::hash::compute_file_hash(&after_reformat),
             expected,
             "editing generated output must invalidate its embedded hash"
         );
@@ -901,8 +900,7 @@ file_safety = { exclude = ["target/**"] }
         let finalised = std::fs::read_to_string(&file_path).expect("read finalised");
 
         let embedded = crate::core::hash::extract_hash(&finalised).expect("hash must be present");
-        let inputs_hash = crate::core::hash::compute_inputs_hash(sources_hash, alef_toml_bytes);
-        let expected = crate::core::hash::compute_file_hash(&inputs_hash, gofmt_output);
+        let expected = crate::core::hash::compute_file_hash(gofmt_output);
         assert_eq!(embedded, expected, "embedded hash must cover Go file content");
 
         let stripped = crate::core::hash::strip_hash_line(&finalised);
@@ -941,8 +939,7 @@ file_safety = { exclude = ["target/**"] }
         let finalised = std::fs::read_to_string(&file_path).expect("read finalised");
 
         let embedded = crate::core::hash::extract_hash(&finalised).expect("hash must be present");
-        let inputs_hash = crate::core::hash::compute_inputs_hash(sources_hash, alef_toml_bytes);
-        let expected = crate::core::hash::compute_file_hash(&inputs_hash, swift_content);
+        let expected = crate::core::hash::compute_file_hash(swift_content);
         assert_eq!(embedded, expected, "embedded hash must cover Swift file content");
     }
 

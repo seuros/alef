@@ -446,6 +446,15 @@ pub(crate) fn handle_generate(
         // run will ship -- see the ordering comment above `complete_generated_artifacts`
         // for why an intermediate stamp before formatting is not enough. ~keep
         pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+        // Records this crate's generation-inputs fingerprint centrally, once, now that
+        // generation for it has completed successfully -- the replacement for folding
+        // `inputs_hash` into every file's own stamp. See `core::hash`'s module doc and
+        // `cache::generation_record`. ~keep
+        cache::record_inputs_hash(
+            &base_dir,
+            &resolved_cfg.name,
+            &crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes),
+        )?;
 
         let previous_generation_owned: std::collections::HashMap<_, _> = languages
             .iter()

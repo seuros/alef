@@ -338,11 +338,87 @@ fn check_include_functions(api: &ApiSurface, include_functions: &[String]) -> an
     Ok(())
 }
 
-/// Warn once per `[crates.exclude]` entry that matches nothing in the extracted surface.
+/// Warn once per `[crates.exclude]` entry that matches nothing at all, and separately trace (at
+/// debug) an entry that redundantly excludes a public item alef already knows it can never
+/// extract. The two are split because only the first can hide a real mistake -- see
+/// [`unmatched_exclude_entries`] and [`redundant_generic_exclude_entries`] for why. ~keep
 fn warn_unmatched_exclude_entries(api: &ApiSurface, exclude: &ExcludeConfig) {
-    for (list, entry) in unmatched_exclude_entries(api, exclude) {
-        tracing::warn!(entry = %entry, "exclude.{list} entry did not match any extracted item");
+    for (list, entry) in redundant_generic_exclude_entries(api, exclude) {
+        tracing::debug!(
+            entry = %entry,
+            "exclude.{list} entry redundantly excludes a public item alef never extracts (generic \
+             without explicit monomorphization metadata); the entry is harmless, not stale"
+        );
     }
+    for (list, entry) in unmatched_exclude_entries(api, exclude) {
+        tracing::warn!(
+            entry = %entry,
+            "exclude.{list} entry matched no extracted or diagnosed item; expected if it names a \
+             private item, an item already excluded via attribute, or one dropped by an unmet cfg \
+             -- otherwise check for a typo"
+        );
+    }
+}
+
+/// Whether a `types`-list entry already names something in the extracted (non-diagnostic)
+/// surface -- a real, currently-effective exclusion, shared by [`unmatched_exclude_entries`] and
+/// [`redundant_generic_exclude_entries`] so the two only disagree on how to classify a miss here,
+/// not on what counts as a hit. ~keep
+fn type_entry_extracted(api: &ApiSurface, entry: &str) -> bool {
+    api.types
+        .iter()
+        .any(|typ| type_identity_matches(entry, &typ.name, &typ.rust_path))
+        || api
+            .enums
+            .iter()
+            .any(|enm| type_identity_matches(entry, &enm.name, &enm.rust_path))
+        || api
+            .errors
+            .iter()
+            .any(|err| type_identity_matches(entry, &err.name, &err.rust_path))
+}
+
+/// The `functions`-list counterpart to [`type_entry_extracted`].
+fn function_entry_extracted(api: &ApiSurface, entry: &str) -> bool {
+    api.functions.iter().any(|func| func.name == entry)
+}
+
+/// The `methods`-list counterpart to [`type_entry_extracted`].
+fn method_entry_extracted(api: &ApiSurface, entry: &str) -> bool {
+    api.types
+        .iter()
+        .any(|typ| typ.methods.iter().any(|m| format!("{}.{}", typ.name, m.name) == entry))
+        || api.services.iter().any(|service| {
+            service
+                .configurators
+                .iter()
+                .any(|m| format!("{}.{}", service.name, m.name) == entry)
+        })
+}
+
+/// A short-name/path/is-generic view of every `unsupported_public_items` entry, shared by
+/// [`unmatched_exclude_entries`] and [`redundant_generic_exclude_entries`] so the two agree on
+/// what counts as a proven, non-typo name.
+///
+/// The `bool` records whether `reason` names alef's inability to extract generics specifically.
+/// [`unmatched_exclude_entries`] ignores it: ANY recorded diagnostic, regardless of reason, proves
+/// the entry names a real item and must not warn as if it were a typo. Only
+/// [`redundant_generic_exclude_entries`] reason-gates on it, because only the generic case is
+/// specific and correct enough to explain at DEBUG -- a future non-generic diagnostic reason must
+/// still count as a match (no warning) without being mis-described as "generic". ~keep
+fn unsupported_short_names(api: &ApiSurface) -> Vec<(&str, &str, &str, bool)> {
+    api.unsupported_public_items
+        .iter()
+        .map(|item| {
+            let short = item.item_path.rsplit("::").next().unwrap_or(item.item_path.as_str());
+            (
+                item.item_kind.as_str(),
+                short,
+                item.item_path.as_str(),
+                item.reason.contains("generic"),
+            )
+        })
+        .collect()
 }
 
 /// Every `[crates.exclude]` entry that matches nothing, as `(list name, entry)`.
@@ -350,71 +426,97 @@ fn warn_unmatched_exclude_entries(api: &ApiSurface, exclude: &ExcludeConfig) {
 /// An exclusion is only ever observable by what it removes, so a typo'd entry excludes nothing
 /// and reports nothing. `exclude.fields` already warns (see
 /// [`apply_exclude_fields_with_warnings`]); this extends the same diagnostic to the three lists
-/// that had none. Warn rather than fail: an entry may legitimately name a cfg-gated item that is
-/// absent under the currently enabled features. Kept separate from the `tracing` call so the
-/// matching is assertable without installing a subscriber. ~keep
+/// that had none. Warn rather than fail: an entry may legitimately name a private item, an item
+/// already excluded via attribute, or a cfg-gated item absent under the currently enabled
+/// features -- none of those leave any record here, so they are indistinguishable from a typo at
+/// this layer (see [`redundant_generic_exclude_entries`] for the one case that IS distinguishable).
+/// Kept separate from the `tracing` call so the matching is assertable without installing a
+/// subscriber. ~keep
 pub(super) fn unmatched_exclude_entries(api: &ApiSurface, exclude: &ExcludeConfig) -> Vec<(&'static str, String)> {
+    let unsupported = unsupported_short_names(api);
     let mut unmatched = Vec::new();
-    let unsupported_short_names: Vec<(&str, &str, &str)> = api
-        .unsupported_public_items
-        .iter()
-        .map(|item| {
-            let short = item.item_path.rsplit("::").next().unwrap_or(item.item_path.as_str());
-            (item.item_kind.as_str(), short, item.item_path.as_str())
-        })
-        .collect();
 
     for entry in &exclude.types {
-        let matched = api
-            .types
-            .iter()
-            .any(|typ| type_identity_matches(entry, &typ.name, &typ.rust_path))
-            || api
-                .enums
+        let matched = type_entry_extracted(api, entry)
+            || unsupported
                 .iter()
-                .any(|enm| type_identity_matches(entry, &enm.name, &enm.rust_path))
-            || api
-                .errors
-                .iter()
-                .any(|err| type_identity_matches(entry, &err.name, &err.rust_path))
-            || unsupported_short_names
-                .iter()
-                .any(|(_, short, path)| type_identity_matches(entry, short, path));
+                .any(|(_, short, path, _)| type_identity_matches(entry, short, path));
         if !matched {
             unmatched.push(("types", entry.clone()));
         }
     }
 
     for entry in &exclude.functions {
-        let matched = api.functions.iter().any(|func| func.name == *entry)
-            || unsupported_short_names
+        let matched = function_entry_extracted(api, entry)
+            || unsupported
                 .iter()
-                .any(|(kind, short, _)| *kind == "function" && short == entry);
+                .any(|(kind, short, _, _)| *kind == "function" && short == entry);
         if !matched {
             unmatched.push(("functions", entry.clone()));
         }
     }
 
     for entry in &exclude.methods {
-        let matched = api
-            .types
-            .iter()
-            .any(|typ| typ.methods.iter().any(|m| format!("{}.{}", typ.name, m.name) == *entry))
-            || api.services.iter().any(|service| {
-                service
-                    .configurators
-                    .iter()
-                    .any(|m| format!("{}.{}", service.name, m.name) == *entry)
-            })
-            || unsupported_short_names
+        let matched = method_entry_extracted(api, entry)
+            || unsupported
                 .iter()
-                .any(|(kind, short, _)| *kind == "method" && short == entry);
+                .any(|(kind, short, _, _)| *kind == "method" && short == entry);
         if !matched {
             unmatched.push(("methods", entry.clone()));
         }
     }
 
     unmatched
+}
+
+/// `[crates.exclude]` entries that redundantly name a public item alef recorded as unrepresentable
+/// (generic without explicit monomorphization metadata), as `(list name, entry)`.
+///
+/// alef never extracts a generic item, so excluding one can never remove anything -- but unlike a
+/// truly unmatched entry, this case is provable: the item's existence and the reason it was never
+/// extracted both come from `unsupported_public_items`, not from silence. A private item, an item
+/// already excluded via `#[alef(skip)]`/`#[doc(hidden)]`, an item dropped by an unmet `cfg`, and a
+/// genuine typo all produce identical silence in the IR and stay indistinguishable in
+/// [`unmatched_exclude_entries`] -- downgrading that case would risk hiding a real typo. This case
+/// carries positive proof instead, so it alone can safely drop to a quieter diagnostic. ~keep
+pub(super) fn redundant_generic_exclude_entries(
+    api: &ApiSurface,
+    exclude: &ExcludeConfig,
+) -> Vec<(&'static str, String)> {
+    let unsupported = unsupported_short_names(api);
+    let mut redundant = Vec::new();
+
+    for entry in &exclude.types {
+        if !type_entry_extracted(api, entry)
+            && unsupported
+                .iter()
+                .any(|(_, short, path, is_generic)| *is_generic && type_identity_matches(entry, short, path))
+        {
+            redundant.push(("types", entry.clone()));
+        }
+    }
+
+    for entry in &exclude.functions {
+        if !function_entry_extracted(api, entry)
+            && unsupported
+                .iter()
+                .any(|(kind, short, _, is_generic)| *is_generic && *kind == "function" && short == entry)
+        {
+            redundant.push(("functions", entry.clone()));
+        }
+    }
+
+    for entry in &exclude.methods {
+        if !method_entry_extracted(api, entry)
+            && unsupported
+                .iter()
+                .any(|(kind, short, _, is_generic)| *is_generic && *kind == "method" && short == entry)
+        {
+            redundant.push(("methods", entry.clone()));
+        }
+    }
+
+    redundant
 }
 
 /// Expand the include list by transitively discovering all types referenced by fields,

@@ -33,12 +33,11 @@ fn assert_pipeline_stamps(file: &crate::core::backend::GeneratedFile) {
          searches for, got:\n{on_disk}"
     );
 
-    let inputs_hash = hash::compute_inputs_hash("sources", b"[workspace]\n");
     let body = hash::strip_hash_line(&on_disk);
-    let stamped = hash::inject_hash_line(&body, &hash::compute_file_hash(&inputs_hash, &body));
+    let stamped = hash::inject_hash_line(&body, &hash::compute_file_hash(&body));
     assert_eq!(
         hash::extract_hash(&stamped),
-        Some(hash::compute_file_hash(&inputs_hash, &hash::strip_hash_line(&stamped))),
+        Some(hash::compute_file_hash(&hash::strip_hash_line(&stamped))),
         "{path}: the injected alef:hash: line must re-verify the way `alef verify` derives it"
     );
 }

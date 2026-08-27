@@ -24,10 +24,11 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     let config_path = &context.config_path;
     let (_workspace, resolved) = load_config(config_path)?;
     let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
-    // Not "inputs-hash mode": the embedded per-file hash folds in the file's own
-    // content (see `core::hash`'s module doc), so this also catches hand-edited
-    // or reverted generated output, not only stale generation inputs. ~keep
-    tracing::info!("Verifying alef-generated files (per-file inputs+content hash)");
+    // Two separate checks, not one: the embedded per-file `alef:hash:` is a pure content
+    // hash (catches a hand-edit or reverted generated output), and the crate-scoped
+    // `stale_crates` check below catches generation inputs (sources/alef.toml) moving since
+    // the last generate. See `core::hash`'s module doc for why they were split. ~keep
+    tracing::info!("Verifying alef-generated files (per-file content hash + crate-scoped inputs hash)");
     let base_dir = std::env::current_dir()?;
 
     let missing_snippet_roots: Vec<String> = crates_to_process
@@ -38,19 +39,37 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
 
     let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
-    let all_inputs_hashes: Vec<String> = crates_to_process
-        .iter()
-        .filter_map(|c| cache::sources_hash(&c.sources).ok())
-        .map(|sh| crate::core::hash::compute_inputs_hash(&sh, &alef_toml_bytes))
-        .collect();
-
     // One walk, two answers. `stale` is the verdict; `scan_coverage` is how much of the tree
     // that verdict is about. Deriving the second from a second walk would let the report
     // describe a file set the verdict never saw -- see `verify_coverage`'s module doc. ~keep
     let (scanned, scan_coverage) = super::super::verify_scan::scan(&base_dir);
     let marked_paths: std::collections::HashSet<std::path::PathBuf> =
         scanned.iter().map(|(path, _, _)| path.clone()).collect();
-    let stale = stale_among(&scanned, &all_inputs_hashes);
+    // Pure per-file content check -- see `crate::core::hash::compute_file_hash`'s doc for why
+    // it takes no generation-inputs argument. This catches a hand-edit to any generated file;
+    // it does NOT by itself catch a crate whose sources/alef.toml changed but whose generated
+    // bytes happen to be unaffected -- that coarser question is `stale_crates`, below. ~keep
+    let stale = stale_among(&scanned);
+
+    // Crate-scoped generation-inputs staleness -- the replacement for what the old per-file
+    // hash used to (over-)report: whether each crate's Rust sources + alef.toml still match
+    // what `cache::generation_record` recorded at its last successful `alef generate`/`alef
+    // all` run. A crate with no recorded baseline yet (every crate in every consumer repo,
+    // immediately after upgrading to this version, before the next generate) is silently
+    // skipped rather than reported -- see `cache::generation_record`'s module doc. ~keep
+    let current_inputs_hashes: Vec<(String, String)> = crates_to_process
+        .iter()
+        .filter_map(|c| {
+            let sources_hash = cache::sources_hash(&c.sources).ok()?;
+            let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
+            Some((c.name.clone(), inputs_hash))
+        })
+        .collect();
+    let stale_crates = cache::stale_crate_names(
+        &base_dir,
+        current_inputs_hashes.iter().map(|(name, hash)| (name.as_str(), hash.as_str())),
+    );
+    let has_stale_crates = !stale_crates.is_empty();
 
     let mut snippet_coverage_issues = Vec::new();
     // `verify_walk_multi` only sees files that already exist on disk; a file
@@ -299,6 +318,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     }
 
     if stale.is_empty()
+        && !has_stale_crates
         && !has_missing_files
         && !has_missing_gitignored_files
         && !has_adoptable_frozen_files
@@ -319,9 +339,23 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
                 crate::bin_cli::output::line(format_args!("  {}", s.path));
                 if tracing::enabled!(tracing::Level::DEBUG) {
                     crate::bin_cli::output::line(format_args!("    embedded:  {}", s.embedded));
-                    let computed_str = s.computed.join(", ");
-                    crate::bin_cli::output::line(format_args!("    computed:  {computed_str}"));
+                    crate::bin_cli::output::line(format_args!("    computed:  {}", s.computed));
                 }
+            }
+        }
+        // Distinct from `stale` above: a hand-edit to a file's own bytes versus a crate whose
+        // generation inputs no longer match what it was last generated against. Named
+        // separately because the remedy differs from ordinary stale bindings only in scope --
+        // rerun `alef generate`/`alef all` for the crate and let it discover whether any
+        // output byte actually changed. ~keep
+        if has_stale_crates {
+            crate::bin_cli::output::line(
+                "Crates whose generation inputs (Rust sources or alef.toml) changed since their \
+                 last successful `alef generate`/`alef all` run (this does not mean every file \
+                 changed -- rerun to find out which, if any, did):",
+            );
+            for name in &stale_crates {
+                crate::bin_cli::output::line(format_args!("  {name}"));
             }
         }
         if has_missing_files {
@@ -393,6 +427,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     }
     super::super::verify_outcome::ensure_success(
         !stale.is_empty()
+            || has_stale_crates
             || has_missing_files
             || has_missing_gitignored_files
             || has_adoptable_frozen_files

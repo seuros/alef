@@ -747,21 +747,28 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
 /// Inject the per-file `alef:hash:` line into every alef-headered file in
 /// `paths`. Run *after* every formatter (`format_generated`, `fmt_post_generate`).
 ///
-/// The embedded hash covers the generation inputs and the final formatted file
-/// body. Running this after all formatters makes manual output edits detectable
+/// The embedded hash covers only the final formatted file body — see
+/// [`hash::compute_file_hash`]'s doc for why it no longer folds in generation
+/// inputs. Running this after all formatters makes manual output edits detectable
 /// without treating Alef's own formatting pass as drift.
 ///
 /// Files that don't carry the alef header marker (scaffold-once Cargo.toml,
 /// composer.json, package.json, lockfiles) are skipped — alef has
 /// no claim on them. The Ruby gemspec and `.rubocop.yml` are NOT in this category — both carry
 /// the alef header (`generated_header: true`) and are alef-owned, overwritten on every `alef build`.
+///
+/// `sources_hash`/`alef_toml_bytes` are still accepted, unused, rather than dropped from the
+/// signature: ~15 call sites across every generation command already compute them for sibling
+/// bookkeeping calls in the same scope (`cache::write_stage_hash`, `cache::write_lang_manifest`,
+/// ...), and a caller that has completed a full crate generation should instead call
+/// `cache::record_inputs_hash` once, separately — see `core::hash`'s module doc and
+/// `cache::generation_record` for where the generation-inputs fingerprint now lives. Prefixed
+/// with `_` because this function's own body has no remaining use for them. ~keep
 pub fn finalize_hashes(
     paths: &std::collections::HashSet<std::path::PathBuf>,
-    sources_hash: &str,
-    alef_toml_bytes: &[u8],
+    _sources_hash: &str,
+    _alef_toml_bytes: &[u8],
 ) -> anyhow::Result<usize> {
-    let inputs_hash = hash::compute_inputs_hash(sources_hash, alef_toml_bytes);
-
     let updated: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     paths.par_iter().try_for_each(|path| -> anyhow::Result<()> {
         let content = match std::fs::read_to_string(path) {
@@ -773,7 +780,7 @@ pub fn finalize_hashes(
         }
 
         let stripped = hash::strip_hash_line(&content);
-        let file_hash = hash::compute_file_hash(&inputs_hash, &stripped);
+        let file_hash = hash::compute_file_hash(&stripped);
         let final_content = hash::inject_hash_line(&stripped, &file_hash);
 
         if final_content == content {

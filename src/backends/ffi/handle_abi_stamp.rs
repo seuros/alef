@@ -32,8 +32,7 @@ pub(crate) fn assert_stamped_before_hashing(content: &str, what: &str) {
         "{what}: the stamp must survive hash-line stripping, i.e. be part of the hashed body"
     );
 
-    let inputs_hash = "0".repeat(64);
-    let finalized = inject_hash_line(&body, &compute_file_hash(&inputs_hash, &body));
+    let finalized = inject_hash_line(&body, &compute_file_hash(&body));
     assert_eq!(
         extract_stamp(&finalized, HANDLE_ABI_STAMP_KEY).as_deref(),
         Some(HANDLE_ABI_VERSION),
@@ -41,7 +40,7 @@ pub(crate) fn assert_stamped_before_hashing(content: &str, what: &str) {
     );
     assert_eq!(
         extract_hash(&finalized),
-        Some(compute_file_hash(&inputs_hash, &strip_hash_line(&finalized))),
+        Some(compute_file_hash(&strip_hash_line(&finalized))),
         "{what}: the embedded hash must re-verify over the stamped content"
     );
 }
@@ -77,8 +76,7 @@ mod tests {
     #[test]
     fn stamping_after_the_hash_line_hides_the_hash_from_verify() {
         let unstamped = headered("fn main() {}\n");
-        let inputs_hash = "0".repeat(64);
-        let hashed = inject_hash_line(&unstamped, &compute_file_hash(&inputs_hash, &unstamped));
+        let hashed = inject_hash_line(&unstamped, &compute_file_hash(&unstamped));
         assert!(extract_hash(&hashed).is_some(), "control: hashing alone is readable");
 
         assert_eq!(

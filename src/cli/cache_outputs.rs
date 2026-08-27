@@ -51,14 +51,19 @@ pub(crate) fn outputs_exist(manifest_path: &Path) -> bool {
 }
 
 /// Whether every stamped file in `manifest_path` still hashes to its own embedded `alef:hash:`
-/// value under `inputs_hash`.
+/// value.
 ///
 /// This is the same comparison `alef verify` runs, so a tree that passes verify passes here.
 /// Paths that are absent (already a miss via [`outputs_exist`]), unreadable as UTF-8, or carry no
 /// marker return `true`: the question is "was a stamped file modified after alef wrote it", and
 /// only a stamped file can be asked. Unstamped outputs -- `generated_header: false`, create-once
-/// seeds -- must keep the existence-only rule or a warm run would never hit again. ~keep
-pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path, inputs_hash: &str) -> bool {
+/// seeds -- must keep the existence-only rule or a warm run would never hit again.
+///
+/// `inputs_hash` is accepted, unused, purely so [`super::cache::is_lang_cached`] -- its one
+/// caller -- keeps its own existing signature and every one of *its* callers stays unchanged:
+/// see [`crate::core::hash::compute_file_hash`]'s doc for why the per-file stamp no longer
+/// takes a generation-inputs argument at all. ~keep
+pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path, _inputs_hash: &str) -> bool {
     let Ok(manifest) = fs::read_to_string(manifest_path) else {
         return false;
     };
@@ -69,7 +74,7 @@ pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path, inputs_hash:
         let Some(embedded) = crate::core::hash::extract_hash(&content) else {
             continue;
         };
-        if crate::core::hash::compute_file_hash(inputs_hash, &content) != embedded {
+        if crate::core::hash::compute_file_hash(&content) != embedded {
             tracing::debug!(
                 path = line,
                 "manifested output no longer matches its embedded alef:hash:; treating the cache entry as a miss"

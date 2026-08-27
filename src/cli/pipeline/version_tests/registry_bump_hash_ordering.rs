@@ -8,19 +8,22 @@ use super::*;
 /// into `compute_inputs_hash`'s `alef.toml` fingerprint — unlike the `[workspace] alef_version`
 /// pin, which `strip_alef_version_pin` deliberately excludes because nothing branches on it.
 ///
-/// Because it is a real input, `sync_versions` must have already written the bumped value to
-/// `alef.toml` on disk *before* it re-derives `inputs_hash` and stamps `alef:hash:` into the
-/// files it just rewrote (`finalize_hashes`, called from the `finalize_paths` block). Before the
-/// fix, `sync_registry_package_versions` (which performs that write) ran *after* the
-/// `finalize_hashes` call, so every file `sync_versions` rewrote in the same run was stamped
-/// against the pre-bump `inputs_hash` — stale from the moment it was written, because the very
-/// next re-derivation of `inputs_hash` (any later `alef verify` or `alef generate`) sees the
-/// post-bump `alef.toml` and computes a different value.
+/// Because it is a real input, the bumped version must already be rendered into
+/// `test_apps/rust/Cargo.toml`'s own body *before* `sync_versions` stamps `alef:hash:` into
+/// the files it just rewrote (`finalize_hashes`, called from the `finalize_paths` block).
+/// Before the fix, `sync_registry_package_versions` (which performs the `alef.toml` write
+/// that `effective_package_for` later reads to render the bumped body) ran *after* the
+/// `finalize_hashes` call for a differently-ordered predecessor of this stamp recipe, so a
+/// file `sync_versions` rewrote in the same run could be stamped against content that was
+/// about to change again — stale from the moment it was written.
 ///
-/// This test reproduces the ordering bug directly: it re-derives `inputs_hash` from the
-/// post-run `alef.toml` and Rust sources exactly as `alef verify` does, and asserts the
-/// `alef:hash:` line embedded in a file `sync_versions` rewrote in this same run
-/// (`test_apps/rust/Cargo.toml`, rewritten by `sync_rust_test_app_version`) matches. ~keep
+/// The per-file `alef:hash:` stamp no longer folds `inputs_hash` in at all (see
+/// `core::hash::compute_file_hash`'s doc), so this test now pins the narrower, still-real
+/// invariant that recipe change left standing: the embedded hash must cover the file's own
+/// **final** on-disk bytes, not an intermediate pre-rewrite body. It asserts the `alef:hash:`
+/// line embedded in a file `sync_versions` rewrote in this same run
+/// (`test_apps/rust/Cargo.toml`, rewritten by `sync_rust_test_app_version`) matches a fresh
+/// content-only hash of that file's actual final bytes. ~keep
 #[test]
 fn sync_versions_stamps_rewritten_files_fresh_against_post_bump_alef_toml() {
     use crate::core::config::NewAlefConfig;
@@ -89,7 +92,6 @@ fn sync_versions_stamps_rewritten_files_fresh_against_post_bump_alef_toml() {
     let cfg: NewAlefConfig = toml::from_str(alef_toml).expect("parse alef.toml");
     let mut resolved = cfg.resolve().expect("resolve config");
     let resolved_cfg = resolved.remove(0);
-    let source_hash_paths = resolved_cfg.source_hash_paths();
 
     std::env::set_current_dir(root).expect("set_current_dir");
     // no_regen = true: isolates the bug to the first `finalize_hashes` block over `updated` —
@@ -100,24 +102,22 @@ fn sync_versions_stamps_rewritten_files_fresh_against_post_bump_alef_toml() {
     let _ = std::env::set_current_dir(&original_cwd);
     sync_result.expect("sync_versions ok");
 
-    // Re-derive `inputs_hash` exactly as `alef verify` does: from the *current* (post-run)
-    // `alef.toml` bytes and the crate's Rust sources.
-    let post_run_alef_toml_bytes = crate::cli::cache::read_alef_toml_bytes(&alef_toml_path);
-    let sources_hash = crate::cli::cache::sources_hash(&source_hash_paths).expect("compute sources hash");
-    let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &post_run_alef_toml_bytes);
-
+    // The per-file stamp no longer depends on generation inputs at all (see
+    // `core::hash::compute_file_hash`'s doc) -- what this test still pins down is that
+    // `sync_versions` finalizes the hash line *after* it finishes rewriting the dependency
+    // version, not before, so the embedded value matches the file's actual final bytes.
     let rewritten = std::fs::read_to_string(test_apps_rust_dir.join("Cargo.toml"))
         .expect("read test_apps/rust/Cargo.toml after sync_versions");
     let embedded_hash = crate::core::hash::extract_hash(&rewritten)
         .expect("test_apps/rust/Cargo.toml must carry an alef:hash: line after sync_versions");
     let stripped = crate::core::hash::strip_hash_line(&rewritten);
-    let expected_hash = crate::core::hash::compute_file_hash(&inputs_hash, &stripped);
+    let expected_hash = crate::core::hash::compute_file_hash(&stripped);
 
     assert_eq!(
         embedded_hash, expected_hash,
-        "test_apps/rust/Cargo.toml must verify FRESH against the post-bump alef.toml — it was \
-         rewritten by this very sync_versions run and must not be stamped against a stale \
-         (pre-registry-bump) inputs_hash. embedded={embedded_hash} expected={expected_hash}\n\n\
-         file content:\n{rewritten}"
+        "test_apps/rust/Cargo.toml's embedded alef:hash: must cover the file's own final, \
+         post-registry-bump bytes — it was rewritten by this very sync_versions run and must \
+         not be stamped against stale (pre-bump) content. embedded={embedded_hash} \
+         expected={expected_hash}\n\nfile content:\n{rewritten}"
     );
 }

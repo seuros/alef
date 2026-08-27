@@ -476,12 +476,20 @@ pub mod precommit {
     ///
     /// Increment when:
     /// - the domain separator in `compute_inputs_hash` changes
+    /// - the per-file `alef:hash:` stamp recipe (`compute_file_hash`) changes
     /// - a structural codegen change means existing generated files are
     ///   incompatible with the new generator
     ///
     /// Do NOT increment for dependency version bumps, style fixes, or any
-    /// change that does not affect `compute_inputs_hash` output.
-    pub const CODEGEN_FORMAT_VERSION: &str = "2";
+    /// change that does not affect `compute_inputs_hash`/`compute_file_hash` output.
+    ///
+    /// Bumped 2 -> 3 when the per-file stamp stopped folding `inputs_hash` into
+    /// `compute_file_hash` (see `core::hash`'s module doc, "Migration from v0.21.0 —
+    /// v0.71.x"): every previously-stamped file's `alef:hash:` value is unreproducible
+    /// under the new recipe, so this bump is what makes `alef verify` report that
+    /// one-time transition instead of silently comparing against a golden vector that
+    /// no longer matches what the code computes.
+    pub const CODEGEN_FORMAT_VERSION: &str = "3";
 }
 
 /// Wire-representation generations for the FFI ABI surfaces that binding
