@@ -481,6 +481,23 @@ sources = ["src/lib.rs"]
         )
     }
 
+    /// `assert_eq!` for a `package_dir` result compared against a forward-slash literal
+    /// expectation.
+    ///
+    /// `package_dir`'s Java arm (always) and an explicitly configured Kotlin/Kotlin Android's
+    /// route through `resolve_helpers::strip_trailing_components`, which rebuilds the returned
+    /// `PathBuf` component-by-component (`path_components[..split].iter().collect()`) -- that
+    /// reconstruction inserts the *host* separator between components even when the original
+    /// string was already forward-slash literal, so the result renders with `\` on Windows
+    /// regardless of how the input was spelled (alef task #527). `package_dir` itself must keep
+    /// returning the host separator: its callers feed real shell commands (`cd {output_dir} &&
+    /// gradle`, `mvn -f {output_dir}/pom.xml`). Compare through `portable_path_string` here
+    /// instead. ~keep
+    fn assert_package_dir_eq(actual: String, expected: &str, message: &str) {
+        let actual = crate::test_support::portable_path_string(std::path::Path::new(&actual));
+        assert_eq!(actual, expected, "{message}");
+    }
+
     #[test]
     fn resolved_lint_config_inherits_workspace_when_crate_unset() {
         let r = resolved_one(
@@ -620,7 +637,11 @@ tokio = "1"
         assert_eq!(r.package_dir(Language::Wasm), format!("crates/{}-wasm", r.name));
         assert_eq!(r.package_dir(Language::Ruby), "packages/ruby");
         assert_eq!(r.package_dir(Language::Go), "packages/go");
-        assert_eq!(r.package_dir(Language::Java), "packages/java");
+        assert_package_dir_eq(
+            r.package_dir(Language::Java),
+            "packages/java",
+            "Java default project root",
+        );
         assert_eq!(r.package_dir(Language::Kotlin), "packages/kotlin");
         assert_eq!(r.package_dir(Language::KotlinAndroid), "packages/kotlin-android");
     }
@@ -768,15 +789,15 @@ kotlin = "{output}"
             ))
         };
 
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("sdk/kotlin").package_dir(Language::Kotlin),
             "sdk/kotlin",
-            "a configured bare project root must be the directory the gradle command targets"
+            "a configured bare project root must be the directory the gradle command targets",
         );
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("sdk/kotlin/src/main/kotlin/dev/demo").package_dir(Language::Kotlin),
             "sdk/kotlin",
-            "a configured Kotlin source directory must resolve to the project root above it"
+            "a configured Kotlin source directory must resolve to the project root above it",
         );
     }
 
@@ -805,15 +826,15 @@ java = "{output}"
             ))
         };
 
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("sdk/java/").package_dir(Language::Java),
             "sdk/java",
-            "a configured bare project root must be the directory mvn targets"
+            "a configured bare project root must be the directory mvn targets",
         );
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("sdk/java/src/main/java/").package_dir(Language::Java),
             "sdk/java",
-            "a configured Maven source directory must resolve to the project root above it"
+            "a configured Maven source directory must resolve to the project root above it",
         );
     }
 
@@ -843,16 +864,16 @@ kotlin_android = "{output}"
             ))
         };
 
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("android/sdk").package_dir(Language::KotlinAndroid),
             "android/sdk",
-            "a configured project root must be the directory the gradle command targets"
+            "a configured project root must be the directory the gradle command targets",
         );
-        assert_eq!(
+        assert_package_dir_eq(
             with_output("android/sdk/src/main/kotlin/dev/demo").package_dir(Language::KotlinAndroid),
             "android/sdk",
             "a configured Kotlin source directory must resolve to the project root above it, the \
-             same way the backend's ProjectLayout resolves it"
+             same way the backend's ProjectLayout resolves it",
         );
     }
 

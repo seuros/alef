@@ -405,8 +405,17 @@ mod find_built_artifact_tests {
             message.contains("deps"),
             "error should name the rejected deps/ copy, got: {message}"
         );
+        // `deps_dir` above was built by joining one already-slashed literal ("target/release/
+        // deps"), while the production code under test joins each component separately
+        // (`native_dir.join("deps")`) -- on Windows those two constructions render with
+        // different mixes of `\` and `/` for the identical file, so the raw `.display()` strings
+        // do not substring-match even though both name the same path. Compare through
+        // `portable_path_string` instead of `.display()` directly. ~keep
+        let portable_message = message.replace('\\', "/");
         assert!(
-            message.contains(&deps_dir.join("libsample_ffi.so").display().to_string()),
+            portable_message.contains(&crate::test_support::portable_path_string(
+                &deps_dir.join("libsample_ffi.so")
+            )),
             "error should include the deps/ copy's path so an operator can inspect it, got: {message}"
         );
     }

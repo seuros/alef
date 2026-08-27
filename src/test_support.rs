@@ -485,6 +485,26 @@ pub(crate) fn git_commit_all(root: &Path, message: &str) {
     assert!(status.success(), "git commit must succeed for a history fixture");
 }
 
+/// Render `path` the way a portable test assertion should compare it: forward slashes only,
+/// regardless of the host OS.
+///
+/// `Path::to_string_lossy`/`Path::display` render using the *host* separator. A test that then
+/// compares the result against a forward-slash literal, or checks a forward-slash-shaped suffix
+/// like `.ends_with("/LICENSE")`, passes only on Unix and fails on Windows even when the path
+/// itself is correct for that platform — the path is right, the raw-string comparison is not
+/// portable (alef task #527). Two different Windows renderings of the *same* logical path can
+/// also disagree with each other: `PathBuf::join` inserts the native separator only BETWEEN the
+/// pieces it is given, so `root.join("target/release/deps")` (one already-slashed literal, never
+/// split) keeps its embedded `/` untouched while `root.join("target").join("release").join
+/// ("deps")` (three separate calls) renders fully `\`-joined on Windows — two strings that name
+/// the same file but do not string-match each other until both are normalized here. Route every
+/// such comparison through this helper instead of hand-rolling `.replace('\\', "/")` at each call
+/// site; it only touches the *rendering*, so a test that would still legitimately fail (wrong
+/// component, missing segment) still fails after normalization. ~keep
+pub(crate) fn portable_path_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// Write `content` to `root/relative`, creating parent directories as needed.
 pub(crate) fn write_file(root: &Path, relative: &str, content: &str) -> PathBuf {
     let path = root.join(relative);
@@ -560,6 +580,55 @@ mod git_hermeticity_tests {
             String::from_utf8_lossy(&branch.stdout).trim(),
             "main",
             "the fixture branch name must be pinned by the helper, not inherited from the host"
+        );
+    }
+}
+
+#[cfg(test)]
+mod portable_path_string_tests {
+    use super::portable_path_string;
+    use std::path::Path;
+
+    /// The behavior this crate's own test suite (run on macOS/Linux) never exercises for free:
+    /// a `\`-separated rendering, the shape `Path::to_string_lossy` actually produces on
+    /// Windows. Fed in explicitly here so the normalization is proven on any host, not just
+    /// assumed. ~keep
+    #[test]
+    fn replaces_every_backslash_with_a_forward_slash() {
+        assert_eq!(
+            portable_path_string(Path::new("packages\\java\\src")),
+            "packages/java/src"
+        );
+    }
+
+    /// A path with no backslashes at all -- the common case on Unix hosts -- must render
+    /// unchanged, so the helper is a normalization, not a rewrite of unrelated content.
+    #[test]
+    fn leaves_a_forward_slash_path_unchanged() {
+        assert_eq!(
+            portable_path_string(Path::new("packages/java/src")),
+            "packages/java/src"
+        );
+    }
+
+    /// A path mixing both separators -- the exact shape `PathBuf::join` can produce when one
+    /// joined piece was itself a pre-slashed literal (see the helper's doc) -- must fully
+    /// normalize, proving this is a blanket replace and not a prefix/suffix-shaped check.
+    #[test]
+    fn normalizes_a_path_mixing_both_separators() {
+        assert_eq!(
+            portable_path_string(Path::new("root\\target/release/deps\\lib.so")),
+            "root/target/release/deps/lib.so"
+        );
+    }
+
+    /// A genuinely different path must still compare different after normalization -- proving
+    /// this helper cannot mask a real mismatch, only a separator-rendering one.
+    #[test]
+    fn does_not_equate_genuinely_different_paths() {
+        assert_ne!(
+            portable_path_string(Path::new("packages\\java")),
+            portable_path_string(Path::new("packages\\kotlin"))
         );
     }
 }

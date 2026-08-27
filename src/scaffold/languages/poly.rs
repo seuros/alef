@@ -377,6 +377,25 @@ fn toml_array<S: AsRef<str>>(entries: &[S]) -> String {
     format!("[\n{inner}\n]")
 }
 
+/// Force forward slashes in a directory value about to be embedded in generated `poly.toml`
+/// text.
+///
+/// `poly.toml` is a portable manifest, committed once and then parsed by every consumer of the
+/// scaffolded repo regardless of which OS ran `alef scaffold`. Most `ResolvedCrateConfig::
+/// package_dir` results are literal forward-slash strings, but Java's (and an explicitly
+/// configured Kotlin/Kotlin Android's) project root is rebuilt through `PathBuf::join`, which
+/// inserts the *host* separator -- on Windows that is `\`. `\` is a TOML basic-string escape
+/// character, so a raw Windows path landing in `root = "{dir}"` either fails to parse outright
+/// (an escape sequence TOML doesn't recognize, e.g. `\d`) or silently mangles the value (a
+/// recognized one, e.g. `\r` becoming a literal carriage return) -- corrupting the checked-in
+/// file for every other consumer, not just the machine that generated it. `package_dir` itself
+/// must keep returning the host separator: its other callers feed real shell commands (`cd
+/// {output_dir} && gradle`, `mvn -f {output_dir}/pom.xml`) that need it. Normalize only at this
+/// text-embedding boundary. ~keep
+fn portable_dir(dir: &str) -> String {
+    dir.replace('\\', "/")
+}
+
 /// Emit a `[hooks.pre-commit.commands.<name>]` job that `poly lint` runs ONCE
 /// over the whole project (`workspace = true`), from `dir`, delegating to an
 /// external linter poly does not bundle (rubocop, golangci-lint, ktlint, credo,
@@ -386,6 +405,7 @@ fn toml_array<S: AsRef<str>>(entries: &[S]) -> String {
 /// (the per-file `[tools.*]` catalog tier cannot) — see the poly workspace-hook
 /// runner. Type-checkers and project-graph linters belong here, not in `[tools]`.
 fn workspace_hook(name: &str, dir: &str, run: &str, files_glob: &str) -> String {
+    let dir = portable_dir(dir);
     format!(
         "\n[hooks.pre-commit.commands.{name}]\n\
          run = \"{run}\"\n\
@@ -520,7 +540,7 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     // same file forever. Declaring the catalog tool hands the language to `mix
     // format`; poly ≥0.19.6 then drops its own reindenter for Elixir. ~keep
     if has(Language::Elixir) {
-        let dir = config.package_dir(Language::Elixir);
+        let dir = portable_dir(&config.package_dir(Language::Elixir));
         out.push_str(&format!("[tools.mix]\nenabled = true\nroot = \"{dir}\"\n\n"));
     }
 
@@ -556,7 +576,7 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     // and its native config. Absent toolchains are skipped by poly, so a consumer
     // that lacks e.g. maven simply doesn't run checkstyle.
     if has(Language::Python) {
-        let py_dir = config.package_dir(Language::Python);
+        let py_dir = portable_dir(&config.package_dir(Language::Python));
         // pyrefly takes the dir as an argument rather than via `root`.
         out.push_str(&format!(
             "\n[hooks.pre-commit.commands.pyrefly]\nrun = \"pyrefly check {py_dir}\"\nworkspace = true\nfiles = \"{py_dir}/**/*.py\"\n"
@@ -694,5 +714,36 @@ mod tests {
                 "{rule} missing from fmt disable list"
             );
         }
+    }
+
+    /// Guards [`portable_dir`] directly against a Windows-shaped input, since this crate's own
+    /// test suite runs on macOS/Linux and never exercises a real `\`-separated `PathBuf::
+    /// to_string_lossy` result: `ResolvedCrateConfig::package_dir`'s Java arm only produces one
+    /// on a Windows host (see the function's doc for why). A mixed-separator input is included
+    /// to prove this is a blanket replace, not a prefix/suffix-shaped check. ~keep
+    #[test]
+    fn portable_dir_replaces_every_backslash_with_a_forward_slash() {
+        assert_eq!(portable_dir("packages\\java"), "packages/java");
+        assert_eq!(portable_dir("packages/java"), "packages/java");
+        assert_eq!(portable_dir("sdk\\java/nested\\deep"), "sdk/java/nested/deep");
+    }
+
+    /// End-to-end guard for the bug this module fixes: a `workspace_hook` built from a
+    /// Windows-separated `dir` must still emit `poly.toml` text that is valid, parseable TOML --
+    /// `\` is a basic-string escape character, so an un-normalized Windows path here can corrupt
+    /// or (for a byte sequence TOML happens to recognize as an escape) silently mangle the
+    /// checked-in file for every other consumer. ~keep
+    #[test]
+    fn workspace_hook_normalizes_a_windows_separated_dir_into_valid_toml() {
+        let hook = workspace_hook("checkstyle", "packages\\java", "mvn -q checkstyle:check", "**/*.java");
+        assert!(
+            !hook.contains('\\'),
+            "no backslash may reach the emitted poly.toml text: {hook}"
+        );
+        assert!(hook.contains("root = \"packages/java\""));
+        assert!(hook.contains("files = \"packages/java/**/*.java\""));
+
+        let wrapped = format!("[hooks]\nstages = [\"pre-commit\"]\n{hook}");
+        toml::from_str::<toml::Value>(&wrapped).expect("normalized hook text must be valid TOML");
     }
 }

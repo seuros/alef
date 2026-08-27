@@ -69,7 +69,11 @@ fn language_files(files: &[GeneratedFile]) -> Vec<&GeneratedFile> {
     files
         .iter()
         .filter(|f| {
-            let p = f.path.to_string_lossy();
+            // `.ends_with("/LICENSE")`/`.ends_with(".cargo/config.toml")` below are
+            // forward-slash-shaped suffix checks, so `f.path` must be rendered portably rather
+            // than with `to_string_lossy()`'s host separator -- see
+            // `crate::test_support::portable_path_string`'s doc (alef task #527). ~keep
+            let p = crate::test_support::portable_path_string(&f.path);
             p != "poly.toml"
                 && p != "rustfmt.toml"
                 && !p.ends_with("rust-toolchain.toml")
