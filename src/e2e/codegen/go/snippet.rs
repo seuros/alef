@@ -1,8 +1,7 @@
 use crate::codegen::naming::{go_error_type_name, go_free_function_name, go_type_name, to_go_name};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
-use crate::e2e::config::E2eConfig;
-use crate::e2e::fixture::Fixture;
+use crate::e2e::{config::E2eConfig, fixture::Fixture};
 use anyhow::{Result, bail};
 
 use super::setup::build_args_and_setup;
