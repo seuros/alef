@@ -351,8 +351,35 @@ impl SnippetValidator for GoValidator {
     /// text — so it is the ambiguous shape task #130 rejected for `TS2304`, and accepting it
     /// turns a codegen defect into an `Unavailable` shrug (see `runner::finalize_result`). The
     /// package-resolution diagnostics name the module itself and stay.
+    ///
+    /// A missing FFI shared library manifests through the *linker*, not the compiler: `go build`
+    /// parses and type-checks the generated cgo package cleanly (linking is the last stage, and
+    /// only starts once every earlier stage succeeded), then fails once it reaches the artifact
+    /// `alef build` produces — the one the package's own `#cgo LDFLAGS: -l<name>` directive names
+    /// — and that artifact is not on disk yet. GNU `ld` reports that as `cannot find -l<name>`;
+    /// Apple's linker as `library not found for -l<name>`; both are usually followed by a
+    /// `collect2: error: ld returned 1 exit status` summary line, deliberately NOT matched here —
+    /// like rustc's `aborting due to`/`could not compile` summary lines elsewhere in this module,
+    /// it carries no root-cause signal and must never gate a match on its own.
+    ///
+    /// Unconditional on the library name, matching the precedent already set by
+    /// `SwiftValidator::is_dependency_error`'s `no such module` and `ZigValidator`'s `unable to
+    /// find`: this method receives only raw toolchain text, with no access to the specific
+    /// artifact name this session expects (`ffi_lib_name` is per-consumer config resolved deep in
+    /// `core::config`, never threaded through the validator trait), so nothing in this file can
+    /// verify the missing name against ground truth. What the text alone DOES prove: reaching this
+    /// exact linker diagnostic means compilation already succeeded, so the failure is categorically
+    /// a missing artifact, never a snippet defect — that holds no matter whose library is missing.
+    /// What stays excluded on purpose: `undefined reference to`/`Undefined symbols for
+    /// architecture` mean the library WAS found and loaded and some symbol inside it does not
+    /// match — a real defect (a stale build, an ABI mismatch, or the generator emitting the wrong
+    /// symbol name), never a build-ordering problem, so that shape keeps its `Fail`. ~keep
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("cannot find package")
+        let missing_library = (output.contains("cannot find -l") || output.contains("library not found for -l"))
+            && !output.contains("undefined reference to")
+            && !output.contains("Undefined symbols for architecture");
+        missing_library
+            || output.contains("cannot find package")
             || output.contains("no required module")
             || output.contains("cannot find module providing package")
     }

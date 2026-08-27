@@ -221,6 +221,74 @@ fn go_missing_module_is_still_a_missing_dependency() {
     );
 }
 
+/// The GNU `ld` shape task #505 exists for: `go build` finished compiling and type-checking the
+/// generated cgo package (linking is the last stage) and only then discovered that `alef build`
+/// never produced the artifact the package's own `#cgo LDFLAGS: -lsample_ffi` names. Every
+/// snippet in a corpus with no build step hits this identically. ~keep
+const GO_MISSING_LINKER_LIBRARY_GNU: &str = "\
+# github.com/sample/module
+/usr/bin/ld: cannot find -lsample_ffi: No such file or directory
+collect2: error: ld returned 1 exit status
+";
+
+/// Apple's linker names the same missing-artifact condition differently; developers off Linux CI
+/// must get the same reclassification. ~keep
+const GO_MISSING_LINKER_LIBRARY_APPLE: &str = "\
+# github.com/sample/module
+ld: library not found for -lsample_ffi
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+";
+
+/// The library WAS found and loaded; a symbol inside it does not match. That is a real defect —
+/// a stale build, an ABI mismatch, or the generator emitting the wrong symbol name — never a
+/// build-ordering problem, and must not be laundered into `Unavailable` just because a linker
+/// diagnostic is present. ~keep
+const GO_LINKER_UNDEFINED_REFERENCE: &str = "\
+# github.com/sample/module
+/usr/bin/ld: /tmp/go-link/000000.o: in function `main.main`:
+main.go:8: undefined reference to `sample_convert_missing_symbol`
+collect2: error: ld returned 1 exit status
+";
+
+#[test]
+fn go_missing_linked_library_gnu_ld_is_a_missing_dependency() {
+    assert!(
+        GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_GNU),
+        "GNU ld's `cannot find -l<name>` proves compilation succeeded and only the artifact is \
+         missing: {GO_MISSING_LINKER_LIBRARY_GNU}"
+    );
+}
+
+#[test]
+fn go_missing_linked_library_apple_ld_is_a_missing_dependency() {
+    assert!(
+        GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_APPLE),
+        "Apple ld's `library not found for -l<name>` is the same missing-artifact shape: \
+         {GO_MISSING_LINKER_LIBRARY_APPLE}"
+    );
+}
+
+#[test]
+fn go_linker_undefined_reference_is_not_a_missing_dependency() {
+    assert!(
+        !GoValidator.is_dependency_error(GO_LINKER_UNDEFINED_REFERENCE),
+        "`undefined reference to` means the library loaded and a symbol inside it is wrong -- a \
+         real defect, not an unbuilt artifact: {GO_LINKER_UNDEFINED_REFERENCE}"
+    );
+}
+
+/// A genuine `cannot find -l<name>` alongside an `undefined reference to` in the same output must
+/// not be relabeled wholesale -- mirrors `rust_mixed_output_is_not_a_missing_dependency`. ~keep
+#[test]
+fn go_missing_library_mixed_with_a_real_undefined_reference_is_not_a_missing_dependency() {
+    let output = format!("{GO_MISSING_LINKER_LIBRARY_GNU}{GO_LINKER_UNDEFINED_REFERENCE}");
+    assert!(
+        !GoValidator.is_dependency_error(&output),
+        "a run mixing a genuine unresolved-symbol defect with a missing-library diagnostic must \
+         not be relabeled: {output}"
+    );
+}
+
 /// Swift's `cannot find 'x' in scope` is the direct analogue of `TS2304` / `E0425`. ~keep
 #[test]
 fn swift_unresolved_name_is_not_a_missing_dependency() {
@@ -278,6 +346,11 @@ fn every_validator_answers_both_directions() {
             "java",
             JavaValidator.is_dependency_error(JAVA_MISSING_PACKAGE),
             JavaValidator.is_dependency_error(JAVA_MISSING_MEMBER),
+        ),
+        (
+            "go",
+            GoValidator.is_dependency_error(GO_MISSING_LINKER_LIBRARY_GNU),
+            GoValidator.is_dependency_error(GO_LINKER_UNDEFINED_REFERENCE),
         ),
     ];
     for (language, positive, negative) in cases {
