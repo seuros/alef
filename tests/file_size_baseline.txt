@@ -30,7 +30,6 @@ src/backends/zig/gen_bindings/functions.rs 1494
 src/cli/cache.rs 2303
 src/cli/commands/validate_versions.rs 1022
 src/cli/pipeline/generate/header_freshness.rs 1622
-src/cli/pipeline/generate/orphans.rs 1066
 src/cli/pipeline/generate/scaffold.rs 1067
 src/cli/pipeline/generate/tests.rs 2453
 src/cli/pipeline/version_tests/sync_versions.rs 1276
