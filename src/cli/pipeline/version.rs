@@ -89,6 +89,27 @@ fn warn_refused_matches(surface: &str, pattern: &str, refused: usize) {
     );
 }
 
+/// Warn that a *declared* version-sync target -- a `sync.text_replacements` entry a consumer
+/// named explicitly -- was not rewritten to the new version.
+///
+/// This is a stronger claim than an ordinary skipped rewrite: a consumer that lists a path here
+/// is asking alef to keep that file's version pin current, so a refused write leaves the repo
+/// internally inconsistent (this file stale, everything else current) with nothing at regen time
+/// connecting the refusal to the sync contract it just broke. The break only surfaces later, at
+/// `alef validate versions`, far from the cause -- so this stays a WARN emitted right here rather
+/// than a hard error: failing `sync_versions` itself would turn one unwritable file into a stop
+/// for the whole `alef all` pipeline, which is worse than the staleness it prevents. `alef
+/// validate versions` remains the authoritative hard gate for the drift this leaves behind. ~keep
+fn warn_sync_target_not_updated(path: &std::path::Path, version: &str, reason: &str) {
+    warn!(
+        path = %path.display(),
+        expected_version = version,
+        "version-sync: declared sync.text_replacements target was not updated to {version} -- {reason}. \
+         This file is a named version-sync target, so it is now pinned to a stale version until the \
+         write succeeds or the file is removed from sync.text_replacements"
+    );
+}
+
 /// Sync version from Cargo.toml to all package manifest files.
 ///
 /// When `no_regen` is `false` (the default for direct CLI invocations), this
@@ -658,36 +679,71 @@ pub fn sync_versions(
                             Ok(path) => {
                                 if !writable.allows(&path) {
                                     refused += 1;
+                                    warn_sync_target_not_updated(
+                                        &path,
+                                        &version,
+                                        "the path is git-ignored (build staging or another disposable copy)",
+                                    );
                                     continue;
                                 }
                                 text_replacement_paths.insert(path.clone());
-                                if let Ok(content) = std::fs::read_to_string(&path)
-                                    && catch_all_rewrite_is_permitted(&path, &content)
-                                {
-                                    let pep440 = to_pep440(&version);
-                                    let rubygems = to_rubygems_prerelease(&version);
-                                    let r_ver = to_r_version(&version);
-                                    let search = replacement
-                                        .search
-                                        .replace("{python_version}", &pep440)
-                                        .replace("{ruby_version}", &rubygems)
-                                        .replace("{r_version}", &r_ver)
-                                        .replace("{version}", &version);
-                                    let replace = replacement
-                                        .replace
-                                        .replace("{python_version}", &pep440)
-                                        .replace("{ruby_version}", &rubygems)
-                                        .replace("{r_version}", &r_ver)
-                                        .replace("{version}", &version);
-                                    if let Ok(re) = regex::Regex::new(&search) {
-                                        let new_content = re.replace_all(&content, replace.as_str()).to_string();
-                                        if new_content != content {
-                                            if let Err(e) = std::fs::write(&path, &new_content) {
-                                                debug!("Could not write {}: {e}", path.display());
-                                            } else {
-                                                updated.push(path.to_string_lossy().to_string());
+                                match std::fs::read_to_string(&path) {
+                                    Ok(content) => {
+                                        if !catch_all_rewrite_is_permitted(&path, &content) {
+                                            warn_sync_target_not_updated(
+                                                &path,
+                                                &version,
+                                                "alef's ownership guard refused the write (no alef \
+                                                 marker on a stampable file, so it reads as hand-written)",
+                                            );
+                                            continue;
+                                        }
+                                        let pep440 = to_pep440(&version);
+                                        let rubygems = to_rubygems_prerelease(&version);
+                                        let r_ver = to_r_version(&version);
+                                        let search = replacement
+                                            .search
+                                            .replace("{python_version}", &pep440)
+                                            .replace("{ruby_version}", &rubygems)
+                                            .replace("{r_version}", &r_ver)
+                                            .replace("{version}", &version);
+                                        let replace = replacement
+                                            .replace
+                                            .replace("{python_version}", &pep440)
+                                            .replace("{ruby_version}", &rubygems)
+                                            .replace("{r_version}", &r_ver)
+                                            .replace("{version}", &version);
+                                        match regex::Regex::new(&search) {
+                                            Ok(re) => {
+                                                let new_content =
+                                                    re.replace_all(&content, replace.as_str()).to_string();
+                                                if new_content != content {
+                                                    if let Err(e) = std::fs::write(&path, &new_content) {
+                                                        warn_sync_target_not_updated(
+                                                            &path,
+                                                            &version,
+                                                            &format!("the write failed: {e}"),
+                                                        );
+                                                    } else {
+                                                        updated.push(path.to_string_lossy().to_string());
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn_sync_target_not_updated(
+                                                    &path,
+                                                    &version,
+                                                    &format!("the configured search regex is invalid: {e}"),
+                                                );
                                             }
                                         }
+                                    }
+                                    Err(e) => {
+                                        warn_sync_target_not_updated(
+                                            &path,
+                                            &version,
+                                            &format!("could not read file: {e}"),
+                                        );
                                     }
                                 }
                             }

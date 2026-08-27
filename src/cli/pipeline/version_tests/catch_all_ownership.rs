@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::config::{ResolvedCrateConfig, SyncConfig, TextReplacement};
+use tracing_test::traced_test;
 
 /// A crate config whose ONLY version-sync work is the two catch-all paths, so a
 /// rewrite observed here can only have come from them and not from a named-filename
@@ -170,5 +171,92 @@ fn text_replacement_leaves_a_stampable_file_that_carries_no_marker() {
         std::fs::read_to_string(root.join("hand.yaml")).expect("read hand.yaml"),
         hand_written,
         "text_replacements must honour the same ownership predicate as the semver catch-all"
+    );
+}
+
+/// alef#478: an ownership-guard refusal on a *declared* `sync.text_replacements` target must
+/// not be silent. Before the fix, `hand.yaml` above was refused with no signal connecting the
+/// refusal to the fact that a named version-sync contract had just gone unfulfilled -- this test
+/// pins the warning that now fires, naming the file, the expected version, and the reason. ~keep
+#[traced_test]
+#[test]
+fn text_replacement_refusal_warns_that_the_declared_sync_target_went_unwritten() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let root = temporary.path();
+    seed_crate(root);
+
+    std::fs::write(root.join("hand.yaml"), "version: 9.9.9\n").expect("hand-written yaml");
+
+    run_sync(
+        root,
+        &catch_all_config(
+            root,
+            SyncConfig {
+                extra_paths: Vec::new(),
+                text_replacements: vec![TextReplacement {
+                    path: "hand.yaml".to_string(),
+                    search: r"version: [0-9.]+".to_string(),
+                    replace: "version: {version}".to_string(),
+                }],
+            },
+        ),
+    );
+
+    assert!(
+        logs_contain("declared sync.text_replacements target was not updated to 1.2.3"),
+        "expected a sync-target-not-updated warning naming the expected version"
+    );
+    assert!(
+        logs_contain("ownership guard refused the write"),
+        "expected the warning to name the refusal reason"
+    );
+    assert!(
+        logs_contain("hand.yaml"),
+        "expected the warning to name the refused file"
+    );
+}
+
+/// The negative control for the warning above: a `sync.text_replacements` target alef is free
+/// to write (it carries alef's own marker) produces no such warning -- the guard's refusal, not
+/// merely being a declared sync target, is what triggers it. ~keep
+#[traced_test]
+#[test]
+fn text_replacement_success_does_not_warn_that_the_sync_target_went_unwritten() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let root = temporary.path();
+    seed_crate(root);
+
+    let owned = format!(
+        "{}\nversion: 9.9.9\n",
+        crate::core::hash::header(crate::core::hash::CommentStyle::Hash)
+    );
+    std::fs::write(root.join("owned.yaml"), &owned).expect("alef-owned yaml");
+
+    run_sync(
+        root,
+        &catch_all_config(
+            root,
+            SyncConfig {
+                extra_paths: Vec::new(),
+                text_replacements: vec![TextReplacement {
+                    path: "owned.yaml".to_string(),
+                    search: r"version: [0-9.]+".to_string(),
+                    replace: "version: {version}".to_string(),
+                }],
+            },
+        ),
+    );
+
+    let after = std::fs::read_to_string(root.join("owned.yaml")).expect("read owned.yaml");
+    assert!(
+        after.contains("1.2.3") && !after.contains("9.9.9"),
+        "an alef-owned text_replacements target must still be rewritten, got:\n{after}"
+    );
+
+    assert!(
+        !logs_contain("was not updated"),
+        "a successfully-written sync target must not warn that it went unwritten"
     );
 }
