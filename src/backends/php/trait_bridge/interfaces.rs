@@ -3,8 +3,23 @@ use minijinja::context;
 use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
 use crate::codegen::generators::trait_bridge::is_native_marshalled_struct;
 use crate::core::config::TraitBridgeConfig;
+use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeDef, TypeRef};
 use std::collections::HashMap;
+
+/// The PSR-4 class name [`gen_visitor_interface`] declares for `trait_name` -- and therefore the
+/// file basename the `GeneratedFile` it backs must be written to.
+///
+/// Exposed so the call site (`gen_bindings::rust_bindings::generate_bindings`) can name the file
+/// from the same formula that names the class, instead of recomputing the suffix independently.
+/// The previous call site used `format!("{trait_name}.php")` for every trait bridge, visitor and
+/// registration alike, which happened to match [`gen_registration_interface`]'s unsuffixed class
+/// name but not this function's `{trait_name}Interface` -- so a visitor interface's file basename
+/// never matched the class PHP would find inside it, and no PSR-4 autoloader could resolve the
+/// class (alef #485). ~keep
+pub fn visitor_interface_class_name(trait_name: &str) -> String {
+    format!("{trait_name}Interface")
+}
 
 /// PHP type hint for a callback param/return that is a known serde struct: the native
 /// `#[php_class]` the runtime bridge now passes/expects. The class lives in the same PHP
@@ -83,12 +98,13 @@ pub fn gen_visitor_interface(
     namespace: &str,
     type_paths: &HashMap<String, String>,
 ) -> String {
-    let interface_name = format!("{}Interface", bridge_cfg.trait_name);
+    let interface_name = visitor_interface_class_name(&bridge_cfg.trait_name);
     let context_type = bridge_cfg.context_type.as_deref().unwrap_or("mixed");
     let result_type = bridge_cfg.result_type.as_deref().unwrap_or("mixed");
     let mut out = String::with_capacity(2048);
 
     out.push_str("<?php\n\n");
+    out.push_str(&hash::header(CommentStyle::DoubleSlash));
     out.push_str("declare(strict_types=1);\n\n");
     out.push_str(&crate::backends::php::template_env::render(
         "php_namespace.jinja",
@@ -188,6 +204,7 @@ pub fn gen_registration_interface(
     let mut out = String::with_capacity(2048);
 
     out.push_str("<?php\n\n");
+    out.push_str(&hash::header(CommentStyle::DoubleSlash));
     out.push_str("declare(strict_types=1);\n\n");
     out.push_str(&crate::backends::php::template_env::render(
         "php_namespace.jinja",

@@ -11,6 +11,8 @@ pub mod service_api;
 mod tests;
 mod type_stubs;
 pub mod types;
+#[cfg(test)]
+mod visitor_interface_tests;
 
 use crate::core::backend::{
     Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,

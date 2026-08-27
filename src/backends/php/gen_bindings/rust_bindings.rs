@@ -873,7 +873,18 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 )
             };
 
-            let interface_filename = format!("{}.php", bridge_cfg.trait_name);
+            // The file basename must match the class name the content above actually declares --
+            // PSR-4 requires it, and a visitor bridge's class is `{trait_name}Interface`, not
+            // `{trait_name}` (see `visitor_interface_class_name`'s doc for the alef #485 incident
+            // this guards against). Naming both from the same helper, rather than recomputing the
+            // suffix here, is what keeps this call site from drifting from `gen_visitor_interface`
+            // again. ~keep
+            let interface_class_name = if is_visitor_bridge {
+                crate::backends::php::trait_bridge::visitor_interface_class_name(&bridge_cfg.trait_name)
+            } else {
+                bridge_cfg.trait_name.clone()
+            };
+            let interface_filename = format!("{interface_class_name}.php");
             generated_files.push(GeneratedFile {
                 path: PathBuf::from(&php_stubs_dir).join(&interface_filename),
                 content: interface_content,
