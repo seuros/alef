@@ -19,6 +19,19 @@
 //! same commit -- which is what makes the invalidation deliberate and dated rather than
 //! silent. They are not a second implementation of the hash: a re-derivation would move in
 //! lockstep with the code it is meant to pin. ~keep
+//!
+//! # Regenerating these vectors
+//!
+//! The per-file `alef:hash:` recipe changed (`compute_file_hash` no longer folds `inputs_hash`
+//! in) and `CODEGEN_FORMAT_VERSION` was bumped 2 -> 3 in the same commit, exactly as this file's
+//! contract requires. The vectors below were regenerated on 2026-08-27 by printing the real
+//! `compute_inputs_hash`/`compute_file_hash` output for the fixtures above and copying it back.
+//!
+//! Never hand-derive these. Nobody can compute a blake3 digest by hand, and a fabricated vector
+//! that happens to match a wrong implementation is exactly the "check that examined nothing"
+//! failure this repo keeps hitting -- worse than a failing test, because it locks the bug in.
+//! To regenerate after an intentional recipe change: print both values from a throwaway test,
+//! copy them in, delete the throwaway. ~keep
 
 use super::{compute_file_hash, compute_inputs_hash};
 use crate::core::template_versions::precommit::CODEGEN_FORMAT_VERSION;
@@ -29,10 +42,10 @@ const FIXTURE_FILE_BODY: &str = "fn fixture() {}\n";
 
 /// The revision the vectors below were computed under. Asserted separately so a bump without
 /// recomputed vectors, and recomputed vectors without a bump, both fail loudly. ~keep
-const PINNED_CODEGEN_FORMAT_VERSION: &str = "2";
+const PINNED_CODEGEN_FORMAT_VERSION: &str = "3";
 
-const GOLDEN_INPUTS_HASH: &str = "2aa40c183b09b9c8cb986ff8120d0a3a665b5ed82962149f2abf8856866df57c";
-const GOLDEN_FILE_HASH: &str = "59ce25fe68a99c6e95ef5ee2fc47f31be1303ba8a755531c4b905afa591bde8a";
+const GOLDEN_INPUTS_HASH: &str = "3b80c2438f94b045843fcd148c2128953c96dfcd6dbca82748d6633a3160d50f";
+const GOLDEN_FILE_HASH: &str = "335f0c0982c5e42c05344f61b9f107bf072b2bdc778fd920c94b25cc02c57126";
 
 #[test]
 fn inputs_hash_recipe_matches_its_recorded_revision() {
@@ -53,7 +66,7 @@ fn inputs_hash_recipe_matches_its_recorded_revision() {
 #[test]
 fn file_hash_recipe_matches_its_recorded_revision() {
     assert_eq!(
-        compute_file_hash(GOLDEN_INPUTS_HASH, FIXTURE_FILE_BODY),
+        compute_file_hash(FIXTURE_FILE_BODY),
         GOLDEN_FILE_HASH,
         "the per-file stamp recipe changed without a CODEGEN_FORMAT_VERSION bump; every stamp \
          already written is now unverifiable and no regeneration explains why"

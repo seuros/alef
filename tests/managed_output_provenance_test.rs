@@ -22,8 +22,7 @@ fn inline_marked_output_without_generated_header_is_managed_and_rehashed() {
     let updated = finalize_hashes(&managed_paths, "sources", config).expect("finalize inline-managed output");
 
     let output = std::fs::read_to_string(&path).expect("read finalized output");
-    let inputs_hash = hash::compute_inputs_hash("sources", config);
-    let expected_hash = hash::compute_file_hash(&inputs_hash, &hash::strip_hash_line(&output));
+    let expected_hash = hash::compute_file_hash(&hash::strip_hash_line(&output));
     let expected_output = hash::inject_hash_line(
         &format!("{INLINE_MARKER}public final class Current {{}}\n"),
         &expected_hash,
@@ -71,11 +70,7 @@ fn all_upgrade_preserves_inline_managed_output_and_unmanaged_scaffold_from_old_m
     let removed = sweep_manifest_orphans(&previous_paths, &keep, &[selected], &[]).expect("all cleanup selection");
 
     let inline = std::fs::read_to_string(&inline_path).expect("inline output survives");
-    let inputs_hash = hash::compute_inputs_hash("sources", b"config");
-    let expected_hash = hash::compute_file_hash(
-        &inputs_hash,
-        &format!("{INLINE_MARKER}public final class Current {{}}\n"),
-    );
+    let expected_hash = hash::compute_file_hash(&format!("{INLINE_MARKER}public final class Current {{}}\n"));
     let expected_inline = hash::inject_hash_line(
         &format!("{INLINE_MARKER}public final class Current {{}}\n"),
         &expected_hash,

@@ -114,8 +114,7 @@ fn create_once_seed_marked_on_disk_is_not_restamped_when_only_generation_inputs_
         let before = std::fs::read_to_string(&path).expect("read seeded file");
 
         let paths = stampable_output_paths(&files, root.path());
-        let updated =
-            finalize_hashes(&paths, case.sources_hash_after, case.alef_toml_after).expect("finalize hashes");
+        let updated = finalize_hashes(&paths, case.sources_hash_after, case.alef_toml_after).expect("finalize hashes");
 
         assert_eq!(
             updated, 0,

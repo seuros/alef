@@ -140,8 +140,7 @@ fn batch_recording_matches_per_path_recording_entry_for_entry() {
     ];
 
     record_scaffold_owned_path(batched.path(), &batched.path().join("pre/existing.json")).expect("seed");
-    record_scaffold_owned_path(one_at_a_time.path(), &one_at_a_time.path().join("pre/existing.json"))
-        .expect("seed");
+    record_scaffold_owned_path(one_at_a_time.path(), &one_at_a_time.path().join("pre/existing.json")).expect("seed");
 
     let joined: Vec<PathBuf> = relatives.iter().map(|rel| batched.path().join(rel)).collect();
     let refs: Vec<&Path> = joined.iter().map(PathBuf::as_path).collect();

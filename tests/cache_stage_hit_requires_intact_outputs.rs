@@ -28,10 +28,10 @@ const INPUTS_HASH: &str = "inputs-hash-for-this-fixture";
 const BODY: &str = "def test_record_value():\n    assert True\n";
 
 /// Write a file stamped exactly the way generation stamps one: alef header, then the
-/// `alef:hash:` line carrying `compute_file_hash(inputs_hash, content)`.
-fn write_stamped(path: &Path, inputs_hash: &str) {
+/// `alef:hash:` line carrying `compute_file_hash(content)`.
+fn write_stamped(path: &Path) {
     let content = format!("{}{BODY}", header(CommentStyle::Hash));
-    let stamped = inject_hash_line(&content, &compute_file_hash(inputs_hash, &content));
+    let stamped = inject_hash_line(&content, &compute_file_hash(&content));
     fs::write(path, stamped).expect("write stamped generated file");
 }
 
@@ -52,7 +52,7 @@ fn a_stamped_stage_output_edited_after_generation_turns_the_cache_hit_into_a_mis
 
     let stamped = root.join("test_smoke.py");
     let unstamped = root.join("conftest.py");
-    write_stamped(&stamped, INPUTS_HASH);
+    write_stamped(&stamped);
     fs::write(&unstamped, "# hand-grown pytest fixtures\n").expect("write unstamped output");
 
     let key = record_manifest(&[stamped.clone(), unstamped.clone()]);
@@ -86,10 +86,14 @@ fn a_stamped_stage_output_edited_after_generation_turns_the_cache_hit_into_a_mis
          treated as tampering"
     );
 
-    // A different inputs hash is a different stamp recipe: every stamped output now disagrees.
+    // A different inputs hash must NOT invalidate the stamps. The per-file `alef:hash:` is
+    // computed over the file's own content alone; folding a whole-tree fingerprint into it is
+    // exactly the churn this recipe was split to stop (one edited source restamped 3,436
+    // generated files). Stale-tree detection lives in the recorded generation fingerprint
+    // instead, not in every file's stamp. ~keep
     assert!(
-        !cache::is_stage_cached(CRATE_NAME, STAGE, &key, "some-other-inputs-hash"),
-        "stamps are only meaningful under the inputs hash they were written with"
+        cache::is_stage_cached(CRATE_NAME, STAGE, &key, "some-other-inputs-hash"),
+        "a per-file stamp is content-only and must not move when unrelated generation inputs do"
     );
 
     fs::remove_file(&stamped).expect("delete a manifested output");

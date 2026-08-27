@@ -27,11 +27,11 @@ src/backends/swift/gen_bindings/dto.rs 1207
 src/backends/wasm/gen_bindings/mod.rs 1130
 src/backends/wasm/trait_bridge.rs 1187
 src/backends/zig/gen_bindings/functions.rs 1494
-src/cli/cache.rs 2303
+src/cli/cache.rs 1189
 src/cli/commands/validate_versions.rs 1022
 src/cli/pipeline/generate/header_freshness.rs 1622
 src/cli/pipeline/generate/scaffold.rs 1067
-src/cli/pipeline/generate/tests.rs 2453
+src/cli/pipeline/generate/tests.rs 2450
 src/cli/pipeline/version_tests/sync_versions.rs 1276
 src/codegen/config_gen/tests/defaults.rs 1224
 src/codegen/conversions/tests.rs 1142

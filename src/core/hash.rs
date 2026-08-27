@@ -6,11 +6,9 @@
 //!
 //! # Hash semantics
 //!
-//! The embedded `alef:hash:<hex>` value is **not** [`compute_inputs_hash`]'s
-//! output. It is [`compute_file_hash`]'s output, which folds that inputs
-//! fingerprint together with the file's own emitted content — every call site
-//! that injects a hash line passes it `compute_file_hash`'s result, never
-//! `compute_inputs_hash`'s directly:
+//! Two *different* hashes exist, answering two different questions, and — unlike the
+//! pre-split design documented below (see "Migration from v0.21.0" further down) —
+//! neither is folded into the other:
 //!
 //! ```text
 //! inputs_hash = blake3(
@@ -21,20 +19,49 @@
 //! )
 //!
 //! alef:hash:<hex> = blake3(
-//!   "sources\0" || inputs_hash || "\0content\0" || file_content_without_hash_line
+//!   "alef:content\0" || file_content_without_hash_line
 //! )
 //! ```
 //!
 //! Where `sources_hash` is [`compute_sources_hash`] over the sorted Rust source
 //! files alef parses to build the IR, and `canonical_toml` is the normalized
 //! form of `alef.toml` (comments stripped, keys sorted, whitespace and line
-//! endings normalized). Because the file's own bytes are folded in, the
-//! embedded hash answers a strictly stronger question than "were these inputs
-//! used" — it answers **"was this exact file content produced by these
-//! inputs?"** A hand-edit to an emitted file (a reverted dependency bump, a
-//! manually patched line) changes `file_content_without_hash_line` without
-//! touching `inputs_hash`, so it changes the embedded value and `alef verify`
-//! reports it stale, exactly like an inputs change would.
+//! endings normalized).
+//!
+//! **`alef:hash:<hex>` — [`compute_file_hash`] — is a pure function of the file's
+//! own content.** It answers "has this file been hand-edited since alef last wrote
+//! it?" and nothing else. A hand-edit to an emitted file (a reverted dependency
+//! bump, a manually patched line) changes `file_content_without_hash_line`, so it
+//! changes the embedded value and `alef verify` reports it stale.
+//!
+//! **`inputs_hash` — [`compute_inputs_hash`] — answers a different question, "are
+//! this crate's generation inputs (sources + `alef.toml`) still what they were the
+//! last time it was generated?", and is recorded exactly ONCE per crate, centrally,
+//! by `cli::cache::record_inputs_hash` (the committed
+//! `cli::cache::generation_record::GENERATION_RECORD` file) — never embedded in any
+//! generated file.** `alef generate`/`alef all` write it after a successful run;
+//! `alef verify` recomputes the current value and compares it to the recorded one.
+//!
+//! This split replaced a single-value design (every `alef:hash:` folded
+//! `inputs_hash` directly into the per-file hash: `blake3("sources\0" ||
+//! inputs_hash || "\0content\0" || content)`) that made the *embedded* hash change
+//! whenever *any* source file or `alef.toml` key changed, project-wide, even for a
+//! file whose own emitted bytes were unaffected. Measured across real consumer
+//! repos, that meant single-key `alef.toml` edits committing thousands of files
+//! whose diff was a one-line hash-only churn with no other change — 98.8% of all
+//! generated-file diffs in one audit. `inputs_hash` still exists and is still
+//! computed exactly the same way; it is simply no longer mixed into per-file
+//! content hashing, so an unrelated input change no longer touches a file whose
+//! own bytes did not change.
+//!
+//! One consequence of the split: recomputing `compute_file_hash` from current
+//! on-disk bytes alone can no longer, by itself, prove a file is fresh with
+//! respect to the *current* inputs — only that its bytes match what was last
+//! written under *some* generation. That coarser question ("do this crate's
+//! current inputs match what was last generated") is what the central record
+//! answers instead, once per crate rather than once per file — see
+//! `cli::cache::generation_record`'s module doc and `bin_cli::core_commands::verify`
+//! for how the two checks combine.
 //!
 //! Post-generation formatter drift (rustfmt, ruff, rumdl-fmt, oxfmt, etc.) is
 //! *not* a false positive, but not because content is excluded — it is
@@ -44,22 +71,22 @@
 //! `finalize_hashes` then hashes the final, formatted bytes). So the embedded
 //! hash reflects the post-format content from the start, and a later run of
 //! the same formatter over already-formatted content is a no-op, not drift.
-//! Routine alef crate releases do not change the hash because the alef crate
-//! version (`ALEF_REV`) is not an input to `inputs_hash`. Separately, bumping the
+//! Routine alef crate releases do not change `inputs_hash` because the alef crate
+//! version (`ALEF_REV`) is not an input to it. Separately, bumping the
 //! `[workspace] alef_version` pin inside `alef.toml` — the standard consumer upgrade step —
-//! also does not change the hash: that one key is stripped from `canonical_toml` before
+//! also does not change it: that one key is stripped from `canonical_toml` before
 //! hashing, because nothing in codegen branches on it (see `strip_alef_version_pin`).
 //! Every other key in `alef.toml` is still a real input, so a genuine config change still
-//! rehashes.
+//! moves `inputs_hash` and is caught by the central-record comparison — without touching
+//! any individual file's `alef:hash:` stamp.
 //!
-//! `alef verify` (`bin_cli::helpers::verify_walk` / `verify_walk_multi`)
-//! re-derives `inputs_hash` from the current `alef.toml` and Rust sources,
-//! reads each on-disk file, strips its `alef:hash:` line, recomputes
-//! [`compute_file_hash`] over `inputs_hash` plus the *actual on-disk bytes*,
-//! and compares that to the embedded line. It is read-only — no
-//! regeneration, no writes — but it is not a bare line comparison: the
-//! on-disk content is rehashed on every run, which is exactly what lets it
-//! catch content drift without regenerating.
+//! `alef verify` (`bin_cli::helpers::verify_walk` / `stale_among`) reads each
+//! on-disk alef-owned file, strips its `alef:hash:` line, recomputes
+//! [`compute_file_hash`] over the *actual on-disk bytes* alone, and compares
+//! that to the embedded line — a pure content check, no `alef.toml` or source
+//! read required per file. Separately, and only once per crate, it recomputes
+//! `inputs_hash` and compares it to the crate's recorded value. Both are
+//! read-only — no regeneration, no writes.
 //!
 //! What this mechanism cannot see is scoped precisely by two other things, not
 //! by the hash formula: a file whose extension isn't in
@@ -79,6 +106,26 @@
 //! regenerated with v0.21.0+ will carry a new hash value; `alef verify` from
 //! v0.21.0+ rejects old-format hashes. Run `alef generate` once after
 //! upgrading to stamp all files with the new format.
+//!
+//! # Migration from v0.21.0 — v0.71.x (the inputs-hash split)
+//!
+//! Every one of those releases embedded `inputs_hash` directly into `alef:hash:`, as
+//! described above. Any file last stamped by one of them carries a hash value this
+//! version's [`compute_file_hash`] cannot reproduce, by construction — the two
+//! recipes hash different byte streams over the same content, so they collide only
+//! by chance. `alef verify` therefore reports **every** previously-stamped file as
+//! stale on the first run after upgrading to this version, exactly once, the same
+//! way the v0.21.0 migration above did for its own recipe change. This is
+//! `CODEGEN_FORMAT_VERSION`'s bump policy operating as designed (see its doc): a
+//! structural change to the stamp recipe is exactly what that constant exists to
+//! flag, and this module's `stamp_recipe_tests` golden vectors enforce that the bump
+//! happens in the same commit as the recipe change. Run `alef generate`/`alef all` once
+//! after upgrading — this both re-stamps every file with the new content-only
+//! recipe (most files re-stamp with unchanged bytes, since the fix is precisely
+//! that content didn't need to change) and writes the first
+//! `cli::cache::generation_record` entry for each crate, after which `alef verify`
+//! is clean again and future unrelated input changes no longer cause any per-file
+//! churn.
 
 const HASH_PREFIX: &str = "alef:hash:";
 const DEFAULT_REGENERATE_COMMAND: &str = "alef generate";
@@ -598,17 +645,17 @@ fn normalize_source_path(path: &std::path::Path) -> String {
 
 /// Compute the per-file verify hash that alef embeds in each generated file.
 ///
-/// `sources_hash` may be the output of [`compute_sources_hash`] or the canonical
-/// generation-input fingerprint from [`compute_inputs_hash`]. `content` is the file
-/// content; any pre-existing `alef:hash:` line is stripped before hashing so
-/// the function is idempotent.
+/// A pure function of `content` alone — any pre-existing `alef:hash:` line is
+/// stripped before hashing so the function is idempotent. Deliberately does **not**
+/// take `inputs_hash` or `sources_hash`: see this module's doc for why mixing
+/// generation-inputs identity into every file's own stamp caused whole-tree
+/// provenance churn, and where the inputs-freshness question now lives instead
+/// (`cli::cache::generation_record`).
 #[doc(hidden)]
-pub fn compute_file_hash(sources_hash: &str, content: &str) -> String {
+pub fn compute_file_hash(content: &str) -> String {
     let stripped = strip_hash_line(content);
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"sources\0");
-    hasher.update(sources_hash.as_bytes());
-    hasher.update(b"\0content\0");
+    hasher.update(b"alef:content\0");
     hasher.update(stripped.as_bytes());
     hasher.finalize().to_hex().to_string()
 }

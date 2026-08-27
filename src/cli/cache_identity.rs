@@ -435,24 +435,27 @@ mod tests {
     /// the cache keys had leaked into `compute_inputs_hash`, every generated file in every
     /// consumer would restamp on every alef release — the exact cost the stripped
     /// `alef_version` pin exists to avoid. These are frozen expected values, so they fail on
-    /// any drift rather than re-deriving whatever the code currently does. ~keep
+    /// any drift rather than re-deriving whatever the code currently does.
+    /// Regenerated 2026-08-27 for the CODEGEN_FORMAT_VERSION 2 -> 3 bump, which
+    /// `compute_inputs_hash` folds in -- that is the ONE legitimate reason these move.
+    /// Any other drift is the bug this test exists to catch. ~keep
     #[test]
     fn embedded_inputs_hash_is_unaffected_by_cache_key_identity() {
         let cases: [(&str, &[u8], &str); 3] = [
             (
                 "sources-abc",
                 b"[workspace]\nlanguages = [\"node\"]\n",
-                "b87e401397681a7347a51d94496237d2ea3cb721f42e5b136a98e86f2c1f8ecb",
+                "5bec01d0c5156f7339c8e1dd14b9245fbf791933156ec252cab9bce3ae8e0e39",
             ),
             (
                 "sources-abc",
                 b"",
-                "e2404a2956e25be55cd89779670638ce19288a7ae787a693cc97e984fb1d4de9",
+                "6236d147c8bf5653a1aef09d70abdd3ecb1f0cb2e27056b0f03d277c3310bc00",
             ),
             (
                 "",
                 b"[workspace]\n",
-                "911e97c6dce240140b3c74c57ed23a41535202f33c586a6f6101d3b7f8b4623d",
+                "8ada6034d43c7dbb07d46e8194b70cc5cc9ad4c3db53342d1bc80d76d7487f2f",
             ),
         ];
         for (sources_hash, toml_bytes, expected) in cases {

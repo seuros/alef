@@ -239,20 +239,22 @@ pub(crate) fn format_languages(languages: &[crate::core::config::Language]) -> S
     languages.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", ")
 }
 
-/// A file whose embedded `alef:hash:` did not match any expected inputs hash.
+/// A file whose embedded `alef:hash:` did not match its own on-disk content hash.
 ///
-/// Returned by [`verify_walk_multi`] and [`verify_walk`] for every stale file
-/// found during a verify walk. The `computed` field holds all candidate hashes
-/// from the current workspace (one per crate); `embedded` is what was found in
-/// the file's header. Pass `--verbose` / `-v` to `alef verify` to print these.
+/// Returned by [`verify_walk`] for every stale file found during a verify walk. The
+/// `computed` field is the content-only hash [`stale_among`] recomputed from the file's
+/// current on-disk bytes; `embedded` is what was found in the file's header. Since
+/// [`crate::core::hash::compute_file_hash`] takes no generation-inputs parameter (see its
+/// doc), there is exactly one candidate value per file, not one per crate -- pass
+/// `--verbose` / `-v` to `alef verify` to print these.
 pub(crate) struct StaleMismatch {
     /// Absolute path of the stale generated file.
     pub(crate) path: String,
     /// The `alef:hash:` value embedded in the file's header.
     pub(crate) embedded: String,
-    /// All candidate inputs hashes computed from the current workspace.
-    /// The file is stale because none of these equals `embedded`.
-    pub(crate) computed: Vec<String>,
+    /// The content-only hash recomputed from the file's current on-disk bytes. The file is
+    /// stale because this differs from `embedded`.
+    pub(crate) computed: String,
 }
 
 /// Re-exported so `helpers`' own callers and tests keep one spelling for the ownership walk
@@ -713,35 +715,31 @@ fn stage_failure_for(
     (files, failures)
 }
 
-/// The stale subset of an ownership walk's output, against every candidate inputs hash.
+/// The stale subset of an ownership walk's output: every scanned file whose embedded
+/// `alef:hash:` does not equal a fresh content-only hash of its own on-disk bytes.
 ///
 /// Takes the walk's result rather than a directory so a caller that needs both the staleness
 /// verdict AND the walk's own coverage tally (`alef verify`, via
 /// [`super::verify_scan::scan`]) can get them from ONE walk. Two walks would be two
-/// answers to "what is on disk", free to disagree about the very set the report describes. ~keep
-pub(crate) fn stale_among(
-    scanned: &[(std::path::PathBuf, Option<String>, String)],
-    inputs_hashes: &[String],
-) -> Vec<StaleMismatch> {
-    if inputs_hashes.is_empty() {
-        return Vec::new();
-    }
+/// answers to "what is on disk", free to disagree about the very set the report describes.
+///
+/// This is a pure content check -- see [`crate::core::hash::compute_file_hash`]'s doc for
+/// why it takes no generation-inputs argument. It cannot by itself tell "this file's inputs
+/// changed since it was generated"; that coarser, crate-scoped question is answered
+/// separately by comparing the current `inputs_hash` against
+/// `crate::cli::cache::generation_record`'s committed record (see `core::hash`'s module doc
+/// and `bin_cli::core_commands::verify`). ~keep
+pub(crate) fn stale_among(scanned: &[(std::path::PathBuf, Option<String>, String)]) -> Vec<StaleMismatch> {
     let mut stale: Vec<StaleMismatch> = scanned
         .iter()
-        .filter(|(_, disk_hash, content)| {
-            disk_hash.as_ref().is_none_or(|disk_hash| {
-                !inputs_hashes
-                    .iter()
-                    .any(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, content) == *disk_hash)
+        .filter_map(|(path, disk_hash, content)| {
+            let computed = crate::core::hash::compute_file_hash(content);
+            let embedded = disk_hash.clone();
+            (embedded.as_deref() != Some(computed.as_str())).then(|| StaleMismatch {
+                path: path.display().to_string(),
+                embedded: embedded.unwrap_or_else(|| "<missing>".to_owned()),
+                computed,
             })
-        })
-        .map(|(path, disk_hash, content)| StaleMismatch {
-            path: path.display().to_string(),
-            embedded: disk_hash.clone().unwrap_or_else(|| "<missing>".to_owned()),
-            computed: inputs_hashes
-                .iter()
-                .map(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, content))
-                .collect(),
         })
         .collect();
 
@@ -751,7 +749,7 @@ pub(crate) fn stale_among(
 
 /// Walk the consumer's repo from `base_dir`, find every alef-headered file, and
 /// return the list of stale ones — where the embedded `alef:hash:<hex>` does not
-/// equal the content-derived hash seeded by `inputs_hash`.
+/// equal a fresh content-only hash of the file's own current bytes.
 ///
 /// Skips obvious build/cache directories (`target/`, `node_modules/`, `_build/`,
 /// `.alef/`, `parsers/`, `dist/`, `vendor/`, `.git/`), and every directory git considers
@@ -768,8 +766,8 @@ pub(crate) fn stale_among(
 /// local restatement of it, so this stays the shared oracle for them even though the command no
 /// longer routes through it. ~keep
 #[cfg(test)]
-pub(crate) fn verify_walk(base_dir: &std::path::Path, inputs_hash: &str) -> anyhow::Result<Vec<StaleMismatch>> {
-    Ok(stale_among(&collect_alef_hashes(base_dir), &[inputs_hash.to_owned()]))
+pub(crate) fn verify_walk(base_dir: &std::path::Path) -> anyhow::Result<Vec<StaleMismatch>> {
+    Ok(stale_among(&collect_alef_hashes(base_dir)))
 }
 
 #[cfg(test)]
