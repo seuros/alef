@@ -188,15 +188,15 @@ fn render_python_wildcard_assertion(
                 };
                 let pred = format!("any({needle} in str({elem_accessor}) for _e in {iterable})");
                 if negate {
-                    let _ = writeln!(out, "    assert not {pred}  # noqa: S101");
+                    let _ = writeln!(out, "    assert not {pred}");
                 } else {
-                    let _ = writeln!(out, "    assert {pred}  # noqa: S101");
+                    let _ = writeln!(out, "    assert {pred}");
                 }
             }
         }
         "not_empty" => {
             let pred = format!("any(str({elem_accessor}) != \"\" for _e in {iterable})");
-            let _ = writeln!(out, "    assert {pred}  # noqa: S101");
+            let _ = writeln!(out, "    assert {pred}");
         }
         other => {
             let _ = writeln!(
@@ -256,10 +256,10 @@ fn render_synthetic_field(
 fn emit_bool_assertion(out: &mut String, pred: &str, assertion_type: &str, field: &str) {
     match assertion_type {
         "is_true" => {
-            let _ = writeln!(out, "    assert {pred}  # noqa: S101");
+            let _ = writeln!(out, "    assert {pred}");
         }
         "is_false" => {
-            let _ = writeln!(out, "    assert not ({pred})  # noqa: S101");
+            let _ = writeln!(out, "    assert not ({pred})");
         }
         other => {
             panic!("Python e2e generator: unsupported assertion type '{other}' on synthetic field '{field}'");
@@ -273,21 +273,21 @@ fn render_embeddings_assertion(out: &mut String, assertion: &Assertion, result_v
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({result_var}) == {n}  # noqa: S101");
+                let _ = writeln!(out, "    assert len({result_var}) == {n}");
             }
         }
         "count_min" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({result_var}) >= {n}  # noqa: S101");
+                let _ = writeln!(out, "    assert len({result_var}) >= {n}");
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "    assert len({result_var}) > 0  # noqa: S101");
+            let _ = writeln!(out, "    assert len({result_var}) > 0");
         }
         "is_empty" => {
-            let _ = writeln!(out, "    assert len({result_var}) == 0  # noqa: S101");
+            let _ = writeln!(out, "    assert len({result_var}) == 0");
         }
         other => {
             panic!("Python e2e generator: unsupported assertion type '{other}' on synthetic field 'embeddings'");
@@ -301,13 +301,13 @@ fn render_embedding_dimensions(out: &mut String, assertion: &Assertion, result_v
         "equals" => {
             if let Some(val) = &assertion.value {
                 let py_val = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {expr} == {py_val}  # noqa: S101");
+                let _ = writeln!(out, "    assert {expr} == {py_val}");
             }
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 let py_val = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {expr} > {py_val}  # noqa: S101");
+                let _ = writeln!(out, "    assert {expr} > {py_val}");
             }
         }
         other => {
@@ -577,38 +577,38 @@ fn render_method_result(out: &mut String, assertion: &Assertion, result_var: &st
                 if let Some(val) = &assertion.value {
                     if val.is_boolean() {
                         if val.as_bool() == Some(true) {
-                            let _ = writeln!(out, "    assert {call_expr} is True  # noqa: S101");
+                            let _ = writeln!(out, "    assert {call_expr} is True");
                         } else {
-                            let _ = writeln!(out, "    assert {call_expr} is False  # noqa: S101");
+                            let _ = writeln!(out, "    assert {call_expr} is False");
                         }
                     } else {
                         let expected = value_to_python_string(val);
-                        let _ = writeln!(out, "    assert {call_expr} == {expected}  # noqa: S101");
+                        let _ = writeln!(out, "    assert {call_expr} == {expected}");
                     }
                 }
             }
             "is_true" => {
-                let _ = writeln!(out, "    assert {call_expr}  # noqa: S101");
+                let _ = writeln!(out, "    assert {call_expr}");
             }
             "is_false" => {
-                let _ = writeln!(out, "    assert not {call_expr}  # noqa: S101");
+                let _ = writeln!(out, "    assert not {call_expr}");
             }
             "greater_than_or_equal" => {
                 if let Some(val) = &assertion.value {
                     let n = val.as_u64().unwrap_or(0);
-                    let _ = writeln!(out, "    assert {call_expr} >= {n}  # noqa: S101");
+                    let _ = writeln!(out, "    assert {call_expr} >= {n}");
                 }
             }
             "count_min" => {
                 if let Some(val) = &assertion.value {
                     let n = val.as_u64().unwrap_or(0);
-                    let _ = writeln!(out, "    assert len({call_expr}) >= {n}  # noqa: S101");
+                    let _ = writeln!(out, "    assert len({call_expr}) >= {n}");
                 }
             }
             "contains" => {
                 if let Some(val) = &assertion.value {
                     let expected = value_to_python_string(val);
-                    let _ = writeln!(out, "    assert {expected} in {call_expr}  # noqa: S101");
+                    let _ = writeln!(out, "    assert {expected} in {call_expr}");
                 }
             }
             "is_error" => {
@@ -765,7 +765,7 @@ mod tests {
             &resolver_with_optional_field("data"),
             &make_assertion("is_true", Some("data"), None),
         );
-        assert_eq!(out, "    assert result.data is not None  # noqa: S101\n");
+        assert_eq!(out, "    assert result.data is not None\n");
     }
 
     #[test]
@@ -774,7 +774,7 @@ mod tests {
             &resolver_with_optional_field("data"),
             &make_assertion("is_false", Some("data"), None),
         );
-        assert_eq!(out, "    assert result.data is None  # noqa: S101\n");
+        assert_eq!(out, "    assert result.data is None\n");
     }
 
     /// A follow-on member access through the optional field: Python's dynamic typing means
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn is_true_on_non_optional_field_is_unchanged() {
         let out = render_field_assertion(&empty_resolver(), &make_assertion("is_true", Some("active"), None));
-        assert_eq!(out, "    assert result.active is True  # noqa: S101\n");
+        assert_eq!(out, "    assert result.active is True\n");
     }
 
     #[cfg(test)]
@@ -818,7 +818,7 @@ mod tests {
         // Bare `assert result` fails on a legitimate 0, 0.0 or False.
         assert_eq!(
             out.trim(),
-            "assert result is not None and (not hasattr(result, \"__len__\") or len(result) > 0)  # noqa: S101"
+            "assert result is not None and (not hasattr(result, \"__len__\") or len(result) > 0)"
         );
     }
 
@@ -852,7 +852,7 @@ mod tests {
         // The actual side must be the bare expression: any normalizing call (trim/strip/
         // case-folding) wrapped around it would silently accept a mismatched value.
         assert_eq!(
-            emitted, "    assert result == \"hello\\n\"  # noqa: S101\n",
+            emitted, "    assert result == \"hello\\n\"\n",
             "emitted assertion drifted: {emitted}"
         );
         // And a value differing only by the trailing newline must still produce a
@@ -966,10 +966,7 @@ mod tests {
         let mut out = String::new();
         let handled = render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content", &empty_resolver());
         assert!(handled);
-        assert_eq!(
-            out.trim(),
-            "assert all(c.content for c in (result.chunks or []))  # noqa: S101"
-        );
+        assert_eq!(out.trim(), "assert all(c.content for c in (result.chunks or []))");
     }
 
     #[test]
@@ -986,7 +983,7 @@ mod tests {
         let mut out = String::new();
         let handled = render_synthetic_field(&mut out, &assertion, "result", "embeddings", &empty_resolver());
         assert!(handled);
-        assert_eq!(out.trim(), "assert len(result) > 0  # noqa: S101");
+        assert_eq!(out.trim(), "assert len(result) > 0");
     }
 
     #[test]
@@ -1025,9 +1022,6 @@ mod tests {
             &empty_resolver(),
         );
         assert!(handled);
-        assert_eq!(
-            out.trim(),
-            "assert (len(result[0]) if result else 0) > 10  # noqa: S101"
-        );
+        assert_eq!(out.trim(), "assert (len(result[0]) if result else 0) > 10");
     }
 }

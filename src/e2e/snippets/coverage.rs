@@ -510,16 +510,17 @@ mod curated_snippet_tests {
         )
         .expect_err("a curated glob that crosses into alef's own generated subtree must be refused");
 
+        // The glob-crossing behaviour under test is already pinned above by the `PathBuf`
+        // equality checks (component-based, so portable on any OS); this message embeds a
+        // `Path::display()` of that same value, which renders with `\` on Windows. Normalize
+        // before the substring check rather than comparing the raw, host-rendered message. ~keep
+        let message = error.to_string().replace('\\', "/");
         assert!(
-            error
-                .to_string()
-                .contains("docs-site/src/snippets/generated/rust/getting-started/basic_usage.md"),
+            message.contains("docs-site/src/snippets/generated/rust/getting-started/basic_usage.md"),
             "{error}"
         );
         assert!(
-            error
-                .to_string()
-                .contains("a curated declaration must never claim a path alef writes"),
+            message.contains("a curated declaration must never claim a path alef writes"),
             "{error}"
         );
     }

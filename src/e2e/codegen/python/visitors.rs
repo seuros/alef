@@ -64,11 +64,17 @@ pub(super) fn emit_python_visitor_method(out: &mut String, method_name: &str, ac
         }
     };
 
+    // A002 (argument shadows a builtin) only applies to `visit_heading`'s `id` parameter —
+    // every other callback's parameter list is builtin-clean, so blanket-suppressing A002
+    // on every visitor method left it an unused, RUF100-dirty directive on all the others. ~keep
+    let needs_a002 = params.split(", ").any(|p| p == "id");
+
     let rendered = crate::e2e::template_env::render(
         "python/visitor_method.jinja",
         minijinja::context! {
             method_name => method_name,
             params => params,
+            needs_a002 => needs_a002,
             action_type => action_type,
             action_value => action_value,
             action_template => action_template,

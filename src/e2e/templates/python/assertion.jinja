@@ -24,99 +24,98 @@
 {% if assertion_type == "equals" %}
 {% if is_string_val %}
 {% if is_enum %}
-    assert _alef_e2e_text({{ field_access }}).lower() {{ op }} {{ expected_val }}.lower()  # noqa: S101
+    assert _alef_e2e_text({{ field_access }}).lower() {{ op }} {{ expected_val }}.lower()
 {% else %}
-    assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} {{ op }} {{ expected_val }}
 {% endif %}
 {% else %}
-    assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} {{ op }} {{ expected_val }}
 {% endif %}
 {% elif assertion_type == "contains" %}
 {% if field_is_optional %}
-    assert {{ field_access }} is not None  # noqa: S101
+    assert {{ field_access }} is not None
 {% endif %}
-    assert {{ cmp_expr }}  # noqa: S101
+    assert {{ cmp_expr }}
 {% elif assertion_type == "contains_all" %}
 {% for val in values_list %}
 {% if field_is_optional %}
-    assert {{ field_access }} is not None  # noqa: S101
+    assert {{ field_access }} is not None
 {% endif %}
-    assert {{ val }}  # noqa: S101
+    assert {{ val }}
 {% endfor %}
 {% elif assertion_type == "not_contains" %}
 {% if field_is_optional %}
-    assert {{ field_access }} is None or {{ negated_cmp_expr }}  # noqa: S101
+    assert {{ field_access }} is None or {{ negated_cmp_expr }}
 {% else %}
-    assert {{ negated_cmp_expr }}  # noqa: S101
+    assert {{ negated_cmp_expr }}
 {% endif %}
 {% elif assertion_type == "not_empty" %}
 {# Bare truthiness would reject a legitimate 0/0.0/False. Only sized values carry an emptiness notion; #}
 {# everything else just has to be present. #}
-    assert {{ field_access }} is not None and (not hasattr({{ field_access }}, "__len__") or len({{ field_access }}) > 0)  # noqa: S101
+    assert {{ field_access }} is not None and (not hasattr({{ field_access }}, "__len__") or len({{ field_access }}) > 0)
 {% elif assertion_type == "is_empty" %}
-    assert not {{ field_access }}  # noqa: S101
+    assert not {{ field_access }}
 {% elif assertion_type == "contains_any" %}
 {% if field_is_optional %}
-    assert {{ field_access }} is not None  # noqa: S101
+    assert {{ field_access }} is not None
 {% endif %}
-    assert {{ cmp_expr_any }}  # noqa: S101
+    assert {{ cmp_expr_any }}
 {% elif assertion_type == "greater_than" %}
-    assert {{ field_access }} > {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} > {{ expected_val }}
 {% elif assertion_type == "less_than" %}
-    assert {{ field_access }} < {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} < {{ expected_val }}
 {% elif assertion_type == "greater_than_or_equal" or assertion_type == "min" %}
-    assert {{ field_access }} >= {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} >= {{ expected_val }}
 {% elif assertion_type == "less_than_or_equal" or assertion_type == "max" %}
-    assert {{ field_access }} <= {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} <= {{ expected_val }}
 {% elif assertion_type == "starts_with" %}
-    assert {{ field_access }}.startswith({{ expected_val }})  # noqa: S101
+    assert {{ field_access }}.startswith({{ expected_val }})
 {% elif assertion_type == "ends_with" %}
-    assert {{ field_access }}.endswith({{ expected_val }})  # noqa: S101
+    assert {{ field_access }}.endswith({{ expected_val }})
 {% elif assertion_type == "min_length" %}
-    assert len({{ field_access }}) >= {{ n }}  # noqa: S101
+    assert len({{ field_access }}) >= {{ n }}
 {% elif assertion_type == "max_length" %}
-    assert len({{ field_access }}) <= {{ n }}  # noqa: S101
+    assert len({{ field_access }}) <= {{ n }}
 {% elif assertion_type == "count_min" %}
-    assert len({{ field_access }}) >= {{ n }}  # noqa: S101
+    assert len({{ field_access }}) >= {{ n }}
 {% elif assertion_type == "count_equals" %}
-    assert len({{ field_access }}) == {{ n }}  # noqa: S101
+    assert len({{ field_access }}) == {{ n }}
 {% elif assertion_type == "is_true" %}
 {% if field_is_optional %}
 {# `is_true` on an Optional field means "present" -- `is True` fails for any non-bool #}
 {# value (a struct, a string, a list), which is the wrong check for `Option<T>` where T #}
 {# is not bool. `is not None` is the interpretation that holds for any T. #}
-    assert {{ field_access }} is not None  # noqa: S101
+    assert {{ field_access }} is not None
 {% else %}
-    assert {{ field_access }} is True  # noqa: S101
+    assert {{ field_access }} is True
 {% endif %}
 {% elif assertion_type == "is_false" %}
 {% if field_is_optional %}
-    assert {{ field_access }} is None  # noqa: S101
+    assert {{ field_access }} is None
 {% else %}
-    assert not {{ field_access }}  # noqa: S101
+    assert not {{ field_access }}
 {% endif %}
 {% elif assertion_type == "method_result" %}
 {% if check == "equals" %}
 {% if is_boolean_val %}
-    assert {{ call_expr }} is {{ bool_val_str }}  # noqa: S101
+    assert {{ call_expr }} is {{ bool_val_str }}
 {% else %}
-    assert {{ call_expr }} == {{ check_val }}  # noqa: S101
+    assert {{ call_expr }} == {{ check_val }}
 {% endif %}
 {% elif check == "is_true" %}
-    assert {{ call_expr }}  # noqa: S101
+    assert {{ call_expr }}
 {% elif check == "is_false" %}
-    assert not {{ call_expr }}  # noqa: S101
+    assert not {{ call_expr }}
 {% elif check == "greater_than_or_equal" %}
-    assert {{ call_expr }} >= {{ check_n }}  # noqa: S101
+    assert {{ call_expr }} >= {{ check_n }}
 {% elif check == "count_min" %}
-    assert len({{ call_expr }}) >= {{ check_n }}  # noqa: S101
+    assert len({{ call_expr }}) >= {{ check_n }}
 {% elif check == "contains" %}
-    assert {{ check_val }} in {{ call_expr }}  # noqa: S101
+    assert {{ check_val }} in {{ call_expr }}
 {% elif check == "is_error" %}
     with pytest.raises(Exception):  # noqa: B017
         {{ call_expr }}
 {% endif %}
 {% elif assertion_type == "matches_regex" %}
-    import re  # noqa: PLC0415
-    assert re.search({{ expected_val }}, {{ field_access }}) is not None  # noqa: S101
+    assert re.search({{ expected_val }}, {{ field_access }}) is not None
 {% endif %}

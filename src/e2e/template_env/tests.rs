@@ -23,7 +23,7 @@ mod not_empty_tests {
         assert_eq!(
             rendered.trim(),
             "assert result.content is not None and (not hasattr(result.content, \"__len__\") \
-             or len(result.content) > 0)  # noqa: S101"
+             or len(result.content) > 0)"
         );
     }
 

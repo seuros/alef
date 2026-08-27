@@ -226,14 +226,16 @@ pub(super) fn render_test_function(
             let _ = writeln!(client_setup, "    if api_key:");
             let _ = writeln!(
                 client_setup,
-                "        print(\"{fixture_id}: using real API ({api_key_var} is set)\", flush=True)  # noqa: T201"
+                "        sys.stdout.write(\"{fixture_id}: using real API ({api_key_var} is set)\\n\")"
             );
+            let _ = writeln!(client_setup, "        sys.stdout.flush()");
             let _ = writeln!(client_setup, "        client = {factory}(api_key=api_key)");
             let _ = writeln!(client_setup, "    else:");
             let _ = writeln!(
                 client_setup,
-                "        print(\"{fixture_id}: using mock server ({api_key_var} not set)\", flush=True)  # noqa: T201"
+                "        sys.stdout.write(\"{fixture_id}: using mock server ({api_key_var} not set)\\n\")"
             );
+            let _ = writeln!(client_setup, "        sys.stdout.flush()");
             let _ = writeln!(
                 client_setup,
                 "        client = {factory}(api_key=\"test-key\", base_url={mock_base_url_expr})"
@@ -254,7 +256,7 @@ pub(super) fn render_test_function(
             );
         } else if let Some(api_key_var) = api_key_opt {
             let _ = writeln!(client_setup, "    api_key = os.environ.get(\"{api_key_var}\")");
-            let _ = writeln!(client_setup, "    if not api_key:  # noqa: SIM102");
+            let _ = writeln!(client_setup, "    if not api_key:");
             let _ = writeln!(client_setup, "        pytest.skip(\"{api_key_var} not set\")");
             let _ = writeln!(client_setup, "    client = {factory}(api_key=api_key)");
         } else {

@@ -8,6 +8,12 @@
    - thirdparty_from: list of from-import strings
    - helper_functions: string containing helper function definitions (e.g., _alef_e2e_text, _alef_e2e_item_texts)
    - fixtures_body: string containing all rendered test functions and fixtures
+
+   A blank line separates stdlib_imports from thirdparty_bare/thirdparty_from (ruff's isort
+   treats "standard-library" and "third-party" as distinct sections and reflows an unseparated
+   pair on every `lint --fix`), but thirdparty_bare and thirdparty_from get no separator
+   between them — isort keeps straight and from-imports in one merged third-party section
+   absent a `known-first-party` config naming the consumer's own package. ~keep
 #}
 {{ header }}
 """{{ docstring }}"""
@@ -18,11 +24,17 @@
 {% endfor %}
 {% endif %}
 {% if thirdparty_bare %}
+{% if stdlib_imports %}
+
+{% endif %}
 {% for imp in thirdparty_bare %}
 {{ imp }}
 {% endfor %}
 {% endif %}
 {% if thirdparty_from %}
+{% if stdlib_imports and not thirdparty_bare %}
+
+{% endif %}
 {% for imp in thirdparty_from %}
 {{ imp }}
 {% endfor %}

@@ -59,7 +59,7 @@ pub(super) fn emit_error_assertion(
             // The disjunction lets a single codegen path satisfy both.
             let _ = writeln!(
                 out,
-                "    assert \"{escaped}\" in str(exc_info.value) or \"{escaped}\" in type(exc_info.value).__name__  # noqa: S101"
+                "    assert \"{escaped}\" in str(exc_info.value) or \"{escaped}\" in type(exc_info.value).__name__"
             );
         }
     } else {

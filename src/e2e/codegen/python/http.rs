@@ -361,7 +361,10 @@ mod tests {
             out.contains("_headers = {}\n    _req = urllib.request.Request"),
             "got: {out}"
         );
-        assert!(out.contains("method=\"GET\")\n    class _NoRedirect"), "got: {out}");
+        assert!(
+            out.contains("method=\"GET\")  # noqa: S310\n    class _NoRedirect"),
+            "got: {out}"
+        );
         assert!(!out.contains("E704"), "got: {out}");
     }
 
@@ -371,8 +374,14 @@ mod tests {
         let mut out = String::new();
         render_http_test_function(&mut out, &fixture);
 
-        assert!(out.contains("_headers = {}\n    import json"), "got: {out}");
-        assert!(out.contains("method=\"GET\")\n    class _NoRedirect"), "got: {out}");
+        assert!(
+            out.contains("_headers = {}\n    _headers.setdefault(\"Content-Type\", \"application/json\")"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("method=\"GET\")  # noqa: S310\n    class _NoRedirect"),
+            "got: {out}"
+        );
         assert!(!out.contains("E704"), "got: {out}");
     }
 }

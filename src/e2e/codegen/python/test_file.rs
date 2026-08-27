@@ -1,5 +1,13 @@
 //! Python test file generation — import resolution and orchestration.
 
+// `python/mod.rs` is over the file-size cap and in the baseline, so it may not grow --
+// declared here via `#[path]` at the sibling files that exist only to support this one. ~keep
+#[path = "import_lines.rs"]
+mod import_lines;
+#[cfg(test)]
+#[path = "lint_clean_python_tests.rs"]
+mod lint_clean_python_tests;
+
 use std::collections::BTreeSet;
 use std::fmt::Write as FmtWrite;
 
@@ -10,6 +18,7 @@ use crate::e2e::codegen::resolve_field;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
+use self::import_lines::{compute_pytest_and_sys_import_needs, finalize_stdlib_and_bare_imports};
 use super::helpers::{
     self, BytesKind, classify_bytes_value, python_method_helper_import, resolve_client_factory, resolve_enum_fields,
     resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types, resolve_handle_nested_types,
@@ -120,10 +129,9 @@ pub(super) fn render_test_file(
                 || crate::e2e::codegen::streaming_assertions::resolve_is_streaming(f, cc.streaming_enabled())
         }) || e2e_config.call.r#async
     });
-    let has_env_api_key = fixtures
-        .iter()
-        .any(|f| f.env.as_ref().and_then(|e| e.api_key_var.as_ref()).is_some());
-    let needs_pytest = has_error_test || is_async || has_env_api_key;
+    let client_factory = resolve_client_factory(e2e_config);
+    let (needs_pytest, needs_sys_import) =
+        compute_pytest_and_sys_import_needs(fixtures, client_factory.as_deref(), has_error_test, is_async);
 
     let has_mock_url_placeholder = fixtures.iter().any(|f| {
         let cc =
@@ -144,8 +152,8 @@ pub(super) fn render_test_file(
                     .any(|arg| arg.arg_type == "json_object" && !resolve_field(&f.input, &arg.field).is_null())
             });
 
-    let client_factory = resolve_client_factory(e2e_config);
     let needs_os_import = client_factory.is_some()
+        || has_http_tests
         || has_mock_url_placeholder
         || e2e_config
             .call
@@ -204,8 +212,6 @@ pub(super) fn render_test_file(
                 .is_some_and(|s| matches!(classify_bytes_value(s), BytesKind::Base64))
         })
     });
-
-    let _ = has_http_tests;
 
     let needs_options_type = (effective_options_via == "kwargs" || effective_options_via == "from_json")
         && effective_options_type.is_some()
@@ -325,22 +331,6 @@ pub(super) fn render_test_file(
     let mut thirdparty_bare: Vec<String> = Vec::new();
     let mut thirdparty_from: Vec<String> = Vec::new();
 
-    if needs_base64_import {
-        stdlib_imports.push("import base64".to_string());
-    }
-    if needs_json_import {
-        stdlib_imports.push("import json".to_string());
-    }
-    if needs_os_import {
-        stdlib_imports.push("import os".to_string());
-    }
-    if needs_path_import {
-        stdlib_imports.push("from pathlib import Path".to_string());
-    }
-    if needs_pytest {
-        thirdparty_bare.push("import pytest  # noqa: F401".to_string());
-    }
-
     // Import candidates are derived for every non-HTTP fixture, skipped or not. A skipped fixture
     // still has its full call body emitted (only a `@pytest.mark.skip` decorator is added), and the
     // docs-snippet emitter lifts this same import block out of the rendered file for a snippet that
@@ -371,8 +361,6 @@ pub(super) fn render_test_file(
         );
     }
 
-    stdlib_imports.sort();
-    thirdparty_bare.sort();
     thirdparty_from.sort();
 
     // Render all fixtures
@@ -401,6 +389,19 @@ pub(super) fn render_test_file(
         }
         let _ = writeln!(fixtures_body);
     }
+
+    finalize_stdlib_and_bare_imports(
+        &fixtures_body,
+        has_http_tests,
+        needs_base64_import,
+        needs_json_import,
+        needs_os_import,
+        needs_path_import,
+        needs_sys_import,
+        needs_pytest,
+        &mut stdlib_imports,
+        &mut thirdparty_bare,
+    );
 
     // Each helper is emitted iff the unit that ships in this file references it. The two
     // are gated separately because they have independent callers: the array
@@ -443,7 +444,7 @@ pub(super) fn render_test_file(
 
 /// True when `name` occurs in `source` as a whole Python identifier rather than as a
 /// substring of a longer one (`Widget` must not match inside `WidgetRequest`).
-fn references_identifier(source: &str, name: &str) -> bool {
+pub(super) fn references_identifier(source: &str, name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -962,10 +963,10 @@ mod tests {
     /// generator expression), and must not false-negative on it.
     #[test]
     fn references_identifier_finds_the_item_texts_helper_call_site() {
-        let emitted_assertion = "        assert any(\"Function\" in text for item in result.structure for text in _alef_e2e_item_texts(item))  # noqa: S101\n";
+        let emitted_assertion = "        assert any(\"Function\" in text for item in result.structure for text in _alef_e2e_item_texts(item))\n";
         assert!(references_identifier(emitted_assertion, "_alef_e2e_item_texts"));
 
-        let emitted_without_helper = "        assert result.content == \"hello\"  # noqa: S101\n";
+        let emitted_without_helper = "        assert result.content == \"hello\"\n";
         assert!(!references_identifier(emitted_without_helper, "_alef_e2e_item_texts"));
     }
 

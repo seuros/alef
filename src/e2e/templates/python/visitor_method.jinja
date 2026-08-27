@@ -7,7 +7,7 @@
    - action_value: escaped string value (for custom)
    - action_template: escaped template string (for custom_template)
 #}
-        def {{ method_name }}({{ params }}):  # noqa: A002, ANN001, ANN202, ARG002
+        def {{ method_name }}({{ params }}):  # noqa: {% if needs_a002 %}A002, {% endif %}ANN001, ANN202, ARG002
 {% if action_type == "skip" %}
             return "skip"
 {% elif action_type == "continue" %}

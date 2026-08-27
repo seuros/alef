@@ -9,6 +9,6 @@
 import importlib
 
 
-def test_imports_published_package():
+def test_imports_published_package() -> None:
     module = importlib.import_module("{{ pip_name }}")
     assert module is not None

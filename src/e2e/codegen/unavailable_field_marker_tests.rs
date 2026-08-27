@@ -217,7 +217,7 @@ fn a_skip_on_another_field_does_not_opt_this_one_out() {
 
 #[test]
 fn a_body_with_no_marker_records_nothing() {
-    assert!(verdicts_for("    assert result.count == 1  # noqa: S101\n", "python", &[]).is_empty());
+    assert!(verdicts_for("    assert result.count == 1\n", "python", &[]).is_empty());
 }
 
 /// Regression control: a synthetic field's "unsupported assertion type" comment

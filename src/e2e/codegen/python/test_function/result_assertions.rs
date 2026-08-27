@@ -45,7 +45,7 @@ fn apply_vacuous_assertion_fallback(
     if returns_void {
         return;
     }
-    let _ = writeln!(temp_assertions, "    assert {result_var} is not None  # noqa: S101");
+    let _ = writeln!(temp_assertions, "    assert {result_var} is not None");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -205,14 +205,14 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({expr}) >= {n}  # noqa: S101");
+                let _ = writeln!(out, "    assert len({expr}) >= {n}");
             }
         }
         "count_equals" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({expr}) == {n}  # noqa: S101");
+                let _ = writeln!(out, "    assert len({expr}) == {n}");
             }
         }
         "equals" => {
@@ -220,9 +220,9 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
                 let expected = value_to_python_string(val);
                 let op = if val.is_boolean() || val.is_null() { "is" } else { "==" };
                 if val.is_string() {
-                    let _ = writeln!(out, "    assert {expr}.strip() {op} {expected}.strip()  # noqa: S101");
+                    let _ = writeln!(out, "    assert {expr}.strip() {op} {expected}.strip()");
                 } else {
-                    let _ = writeln!(out, "    assert {expr} {op} {expected}  # noqa: S101");
+                    let _ = writeln!(out, "    assert {expr} {op} {expected}");
                 }
             }
         }
@@ -231,11 +231,11 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
             // carry an emptiness notion; everything else just has to be present.
             let _ = writeln!(
                 out,
-                "    assert {expr} is not None and (not hasattr({expr}, \"__len__\") or len({expr}) > 0)  # noqa: S101"
+                "    assert {expr} is not None and (not hasattr({expr}, \"__len__\") or len({expr}) > 0)"
             );
         }
         "is_empty" => {
-            let _ = writeln!(out, "    assert not {expr}  # noqa: S101");
+            let _ = writeln!(out, "    assert not {expr}");
         }
         "is_true" => {
             // Normalize "true"/"false" literals to Python's True/False.
@@ -246,7 +246,7 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
             } else {
                 expr.clone()
             };
-            let _ = writeln!(out, "    assert {py_expr}  # noqa: S101");
+            let _ = writeln!(out, "    assert {py_expr}");
         }
         "is_false" => {
             let py_expr = if expr == "true" {
@@ -256,24 +256,24 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
             } else {
                 expr.clone()
             };
-            let _ = writeln!(out, "    assert not {py_expr}  # noqa: S101");
+            let _ = writeln!(out, "    assert not {py_expr}");
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {expr} > {expected}  # noqa: S101");
+                let _ = writeln!(out, "    assert {expr} > {expected}");
             }
         }
         "greater_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {expr} >= {expected}  # noqa: S101");
+                let _ = writeln!(out, "    assert {expr} >= {expected}");
             }
         }
         "contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
-                let _ = writeln!(out, "    assert {expected} in {expr}  # noqa: S101");
+                let _ = writeln!(out, "    assert {expected} in {expr}");
             }
         }
         other => {
@@ -346,7 +346,7 @@ mod tests {
         // Bare `assert chunks` fails on a legitimate 0, 0.0 or False.
         assert_eq!(
             out.trim(),
-            "assert chunks is not None and (not hasattr(chunks, \"__len__\") or len(chunks) > 0)  # noqa: S101"
+            "assert chunks is not None and (not hasattr(chunks, \"__len__\") or len(chunks) > 0)"
         );
     }
 
@@ -454,7 +454,7 @@ mod tests {
     fn vacuous_fallback_emits_a_real_assertion_when_body_is_empty() {
         let mut body = String::new();
         apply_vacuous_assertion_fallback(&mut body, true, "result", false);
-        assert_eq!(body, "    assert result is not None  # noqa: S101\n");
+        assert_eq!(body, "    assert result is not None\n");
     }
 
     #[test]
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn vacuous_fallback_leaves_a_real_assertion_untouched() {
-        let mut body = "    assert result.count == 1  # noqa: S101\n".to_string();
+        let mut body = "    assert result.count == 1\n".to_string();
         let original = body.clone();
         apply_vacuous_assertion_fallback(&mut body, true, "result", false);
         assert_eq!(
@@ -594,7 +594,7 @@ mod tests {
         let mut out = String::new();
         let assertion = assertion("greater_than", Some("chunks"), Some(serde_json::Value::from(2)));
         emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
-        assert_eq!(out.trim(), "assert chunks > 2  # noqa: S101");
+        assert_eq!(out.trim(), "assert chunks > 2");
     }
 
     /// Regression test for alef task #81, hole 3: the streaming branch of
