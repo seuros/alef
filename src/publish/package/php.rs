@@ -22,7 +22,7 @@ use crate::publish::platform::{Os, RustTarget};
 use anyhow::{Result, bail};
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Thread-safety mode for the PHP extension binary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
