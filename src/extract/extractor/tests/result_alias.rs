@@ -460,3 +460,86 @@ fn test_alias_generic_over_an_undefaulted_error_parameter_records_no_hint() {
         load.error_type
     );
 }
+
+/// Task #514 measurement: a crate declaring TWO error enums, with a function whose return type
+/// spells out the second one explicitly (`Result<T, SecondError>`), must resolve `error_type` to
+/// that exact enum -- never to whichever enum happens to be declared first. This is the
+/// extraction-side half of the zig backend's `resolve_zig_error_type` name-mismatch fix
+/// (5a2964785): that fix only matters if extraction hands it the right name to match against;
+/// if extraction itself ever produced `FirstError` here, no backend-side fix could recover the
+/// right answer, only a safe unknown one. ~keep
+#[test]
+fn test_error_type_matches_the_declared_enum_named_in_an_explicit_two_error_crate() {
+    let source = r#"
+        pub enum FirstError {
+            Boom,
+        }
+
+        pub enum SecondError {
+            Bang,
+        }
+
+        pub struct Widget;
+
+        pub fn build(input: &str) -> std::result::Result<Widget, SecondError> {
+            unimplemented!()
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let build = surface.functions.iter().find(|f| f.name == "build").unwrap();
+    assert_eq!(
+        build.error_type.as_deref(),
+        Some("SecondError"),
+        "an explicit two-parameter Result naming the second declared enum must resolve to it \
+         exactly, not the first-declared enum, got: {:?}",
+        build.error_type
+    );
+}
+
+/// Same measurement, but through a `Result<T>` alias whose hint is recorded in a *different*
+/// module than the function that returns it, in a crate that declares two unrelated error enums.
+/// `RESULT_ERROR_HINTS` is keyed by declaring module, which is the likeliest place a real defect
+/// would hide once more than one error alias is in play. ~keep
+#[test]
+fn test_error_type_resolves_correctly_through_a_cross_module_alias_with_two_error_enums() {
+    let source = r#"
+        pub mod primary_error {
+            pub enum FirstError {
+                Boom,
+            }
+
+            pub type Result<T> = std::result::Result<T, FirstError>;
+        }
+
+        pub mod secondary {
+            pub mod error {
+                pub enum SecondError {
+                    Bang,
+                }
+
+                pub type Result<T> = std::result::Result<T, SecondError>;
+            }
+
+            pub mod api {
+                use super::error::Result;
+
+                pub struct Widget;
+
+                pub fn build(input: &str) -> Result<Widget> {
+                    unimplemented!()
+                }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let build = surface.functions.iter().find(|f| f.name == "build").unwrap();
+    assert_eq!(
+        build.error_type.as_deref(),
+        Some("SecondError"),
+        "a Result<T> alias declared in a sibling module, in a crate with two error enums, must \
+         resolve to its own module's error type, got: {:?}",
+        build.error_type
+    );
+}
