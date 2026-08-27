@@ -735,7 +735,7 @@ impl Backend for WasmBackend {
             if let Some(plan) = untagged_ts_plan.plans.remove(&enum_def.name) {
                 builder.add_item(&plan.extern_type_declaration);
             } else if !enums::is_untagged_data_enum(enum_def) {
-                builder.add_item(&gen_enum(enum_def, &prefix));
+                builder.add_item(&gen_enum(enum_def, &prefix, &core_import, None)); // see `gen_enum`'s doc ~keep
             }
         }
 

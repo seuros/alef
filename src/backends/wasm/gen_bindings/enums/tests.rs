@@ -42,7 +42,7 @@ fn make_enum(name: &str, variants: &[&str]) -> EnumDef {
 #[test]
 fn gen_enum_produces_wasm_bindgen_attribute() {
     let e = make_enum("Color", &["Red", "Green", "Blue"]);
-    let result = gen_enum(&e, "Wasm");
+    let result = gen_enum(&e, "Wasm", "", None);
     assert!(result.contains("#[wasm_bindgen]"));
     assert!(result.contains("pub enum WasmColor"));
     assert!(!result.contains("js_name = \"Color\""));
@@ -113,7 +113,7 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
         version: Default::default(),
     };
 
-    let output = gen_enum(&e, "Wasm");
+    let output = gen_enum(&e, "Wasm", "", None);
     assert!(
         output.contains("pub struct WasmFormatMetadata"),
         "a payload-carrying default-tagged enum must become a discriminator struct, \
@@ -148,7 +148,7 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
 #[test]
 fn gen_enum_empty_variants_no_panic() {
     let e = make_enum("Empty", &[]);
-    let result = gen_enum(&e, "");
+    let result = gen_enum(&e, "", "", None);
     assert!(result.contains("pub enum Empty"));
     assert!(!result.contains("to_api_str"));
 }
@@ -157,7 +157,7 @@ fn gen_enum_empty_variants_no_panic() {
 fn gen_enum_to_api_str_snake_case() {
     let mut e = make_enum("FinishReason", &["Stop", "ToolCalls", "Length", "ContentFilter"]);
     e.serde_rename_all = Some("snake_case".to_string());
-    let result = gen_enum(&e, "Wasm");
+    let result = gen_enum(&e, "Wasm", "", None);
     assert!(result.contains("pub fn to_api_str(self) -> &'static str"));
     assert!(result.contains("Self::Stop => \"stop\""));
     assert!(result.contains("Self::ToolCalls => \"tool_calls\""));
@@ -170,7 +170,7 @@ fn gen_enum_to_api_str_explicit_rename_overrides_rename_all() {
     let mut e = make_enum("Role", &["User", "Assistant"]);
     e.serde_rename_all = Some("snake_case".to_string());
     e.variants[0].serde_rename = Some("human".to_string());
-    let result = gen_enum(&e, "Wasm");
+    let result = gen_enum(&e, "Wasm", "", None);
     assert!(result.contains("Self::User => \"human\""));
     assert!(result.contains("Self::Assistant => \"assistant\""));
 }
@@ -178,9 +178,90 @@ fn gen_enum_to_api_str_explicit_rename_overrides_rename_all() {
 #[test]
 fn gen_enum_to_api_str_no_rename_all_uses_variant_name() {
     let e = make_enum("Status", &["Active", "Inactive"]);
-    let result = gen_enum(&e, "");
+    let result = gen_enum(&e, "", "", None);
     assert!(result.contains("Self::Active => \"Active\""));
     assert!(result.contains("Self::Inactive => \"Inactive\""));
+}
+
+/// alef #536's shape: a HOST-owned cfg-gated variant's wrapper declaration must carry the
+/// identical `#[cfg(...)]` its conversion arm already carries (`codegen::conversions`'
+/// `enum_cfg_gate_tests.rs` covers the arm side), and `to_api_str`'s match over the wrapper's own
+/// `Self` must gate that SAME variant's arm identically -- otherwise `to_api_str` itself becomes
+/// non-exhaustive the moment the feature is off, independent of the `From` impls entirely. This
+/// is exactly the reported defect: `WasmRenderMode::Extended` existed unconditionally in the wrapper
+/// while its conversion arm was gated, so the two disagreed about whether the variant existed.
+/// Load-bearing gating: a fixture with no `cfg` at all (or the feature always compiled in) cannot
+/// reproduce alef #536, since the wrapper's declaration and its match arms would trivially stay
+/// in lockstep by coincidence, not by construction. ~keep
+#[test]
+fn gen_enum_attaches_host_cfg_guard_to_wrapper_declaration_and_matches() {
+    let enum_def = EnumDef {
+        name: "RenderMode".to_string(),
+        rust_path: "core_crate::RenderMode".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Fast".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extended".to_string(),
+                cfg: Some(r#"feature = "extended-mode""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let output = gen_enum(&enum_def, "Wasm", "core_crate", None);
+
+    assert!(
+        output.contains("#[cfg(feature = \"extended-mode\")]\n    Extended = 1,"),
+        "the wrapper's own declaration must gate the host-owned variant identically to its \
+         conversion arm, got:\n{output}"
+    );
+    assert!(
+        output.contains("#[cfg(feature = \"extended-mode\")]\n            Self::Extended =>"),
+        "to_api_str's match arm over the wrapper's own type must carry the identical guard so the \
+         match stays exhaustive whichever way the feature resolves, got:\n{output}"
+    );
+}
+
+/// `gen_enum`'s foreign-variant proof path, exercised directly (see that function's doc comment
+/// for why WASM's own production call site still passes `None`): with the gating feature proven
+/// absent from `configured_features`, the wrapper must not declare the variant at all -- a
+/// shipped library that can never produce it must not advertise it. Load-bearing gating: a
+/// fixture with every feature enabled cannot reproduce this, since the variant would then be
+/// legitimately reachable. ~keep
+#[test]
+fn gen_enum_drops_foreign_variant_proven_unreachable_by_configured_features() {
+    let enum_def = EnumDef {
+        name: "RoutingStrategy".to_string(),
+        rust_path: "dep_crate::RoutingStrategy".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Primary".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extra".to_string(),
+                cfg: Some(r#"feature = "extra-tier""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let configured: std::collections::HashSet<&str> = ["other-feature"].into_iter().collect();
+
+    let output = gen_enum(&enum_def, "Wasm", "core_crate", Some(&configured));
+
+    assert!(
+        !output.contains("Extra"),
+        "a provably unreachable variant must not appear at all, got:\n{output}"
+    );
+    assert!(
+        output.contains("Primary = 0,"),
+        "the still-reachable variant must remain, got:\n{output}"
+    );
 }
 
 /// Build a tagged enum where every non-empty variant is a newtype/tuple variant

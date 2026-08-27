@@ -43,7 +43,7 @@ fn make_simple_enum(name: &str, variants: &[&str]) -> EnumDef {
 #[test]
 fn gen_enum_empty_variants_compiles() {
     let e = make_simple_enum("Status", &[]);
-    let result = gen_enum(&e, "", false);
+    let result = gen_enum(&e, "", false, "", None);
     assert!(result.contains("enum Status") || result.is_empty() || result.contains("Status"));
 }
 
@@ -51,7 +51,7 @@ fn gen_enum_empty_variants_compiles() {
 #[test]
 fn gen_enum_includes_variant_names() {
     let e = make_simple_enum("Color", &["Red", "Green", "Blue"]);
-    let result = gen_enum(&e, "", false);
+    let result = gen_enum(&e, "", false, "", None);
     assert!(result.contains("Red") || result.contains("red") || result.contains("RED"));
 }
 
@@ -131,7 +131,7 @@ fn gen_tagged_enum_unit_variant_uses_kind_discriminant() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&e, "Js", true);
+    let result = gen_enum(&e, "Js", true, "", None);
 
     assert!(
         result.contains("js_name = \"annotation_type\""),
@@ -200,7 +200,7 @@ fn gen_tagged_enum_tuple_variant_uses_camel_case_value() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&e, "Js", true);
+    let result = gen_enum(&e, "Js", true, "", None);
 
     assert!(
         result.contains("js_name = \"fontSize\"") && result.contains("pub font_size: Option<String>"),
@@ -269,7 +269,7 @@ fn gen_tagged_enum_struct_variant_emits_field_names() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&e, "Js", true);
+    let result = gen_enum(&e, "Js", true, "", None);
 
     assert!(
         result.contains("reason"),
@@ -335,7 +335,7 @@ fn gen_enum_escapes_jsdoc_block_close_in_variant_docs() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&e, "", false);
+    let result = gen_enum(&e, "", false, "", None);
     eprintln!("Generated code:\n{}\n", result);
 
     assert!(
@@ -377,7 +377,7 @@ fn adjacent_tagged_enum_uses_shared_content_field() {
         ..Default::default()
     };
 
-    let output = gen_enum(&enum_def, "Js", true);
+    let output = gen_enum(&enum_def, "Js", true, "", None);
     assert!(output.contains("pub type_tag: String"));
     assert!(output.contains("pub output: Option<String>"));
     assert!(!output.contains("pub custom: Option<String>"));
@@ -419,7 +419,7 @@ fn adjacent_tagged_enum_omits_spread_only_when_all_fields_are_set() {
         ..Default::default()
     };
 
-    let output = gen_enum(&enum_def, "Js", true);
+    let output = gen_enum(&enum_def, "Js", true, "", None);
 
     let skip_fn = output
         .split("pub fn visit_result_skip() -> JsVisitResult")
@@ -508,7 +508,7 @@ fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip()
         version: Default::default(),
     };
 
-    let output = gen_enum(&e, "Js", true);
+    let output = gen_enum(&e, "Js", true, "", None);
     assert!(
         output.contains("pub struct JsFormatMetadata"),
         "a payload-carrying default-tagged enum must become a tagged object struct, \
@@ -616,5 +616,122 @@ fn string_enum_js_values_matches_napi_runtime_wire_value_for_digit_boundary_vari
         vec!["bm_25".to_string()],
         "napi-rs's convert_case-based macro emits \"bm_25\" for variant Bm25 under snake_case; \
          alef must report the same value or the generated ts_type literal accepts a string Rust rejects"
+    );
+}
+
+/// alef #536's shape reproduced at the wrapper-declaration level: a HOST-owned cfg-gated variant
+/// (`rust_path` rooted in the same crate as `core_import`) must carry the identical `#[cfg(...)]`
+/// on the wrapper's OWN declaration that `codegen::conversions::gen_enum_from_*_cfg` already
+/// attaches to its conversion arm (see `enum_cfg_gate_tests.rs`), or the two disagree about
+/// whether the variant exists the moment the feature is off from the wrapper's own point of view.
+/// Load-bearing gating: with the feature always compiled in (no `cfg` at all, or a fixture that
+/// never gates any variant), the wrapper declaration and the arm would trivially agree regardless
+/// of this fix, so this could not catch the defect. ~keep
+#[test]
+fn gen_enum_attaches_host_cfg_guard_to_wrapper_declaration() {
+    let enum_def = EnumDef {
+        name: "RenderMode".to_string(),
+        rust_path: "core_crate::RenderMode".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Fast".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extended".to_string(),
+                cfg: Some(r#"feature = "extended-mode""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let output = gen_enum(&enum_def, "Js", true, "core_crate", None);
+
+    assert!(
+        output.contains("#[cfg(feature = \"extended-mode\")]\n    Extended,"),
+        "the host-owned cfg-gated variant's declaration must carry the identical #[cfg(...)] its \
+         conversion arm carries, got:\n{output}"
+    );
+}
+
+/// alef #534's shape reproduced at the wrapper-declaration level: a FOREIGN-crate cfg-gated
+/// variant whose gating feature this binding's OWN configured feature set proves is off must not
+/// appear in the generated public JS enum at all -- a shipped library that can never produce the
+/// variant must not advertise it. Load-bearing gating: `Extra`'s feature is deliberately absent
+/// from `configured_features` below, mirroring a consumer dependency declared with
+/// `default-features = false` and the gating feature never turned back on; a fixture with every
+/// feature enabled cannot reproduce this, since the variant would then be legitimately reachable. ~keep
+#[test]
+fn gen_enum_drops_foreign_variant_proven_unreachable_by_configured_features() {
+    let enum_def = EnumDef {
+        name: "RoutingStrategy".to_string(),
+        rust_path: "dep_crate::RoutingStrategy".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Primary".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Secondary".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extra".to_string(),
+                cfg: Some(r#"feature = "extra-tier""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let configured: std::collections::HashSet<&str> = ["other-feature"].into_iter().collect();
+
+    let output = gen_enum(&enum_def, "Js", true, "core_crate", Some(&configured));
+
+    assert!(
+        !output.contains("Extra"),
+        "a provably unreachable variant must not appear at all, got:\n{output}"
+    );
+    assert!(
+        output.contains("Primary,"),
+        "still-reachable variants must remain, got:\n{output}"
+    );
+    assert!(
+        output.contains("Secondary,"),
+        "still-reachable variants must remain, got:\n{output}"
+    );
+}
+
+/// Positive control for the test above: when the configured feature set does NOT rule the gate
+/// out (here, the feature is explicitly requested, mirroring a consumer who enabled it), the
+/// variant remains declared -- alef cannot safely omit a foreign-crate variant it cannot prove
+/// absent, since Cargo feature unification could still turn the dependency's feature on some way
+/// alef's static configuration read cannot observe. Same fixture as the test above except for the
+/// configured feature list. ~keep
+#[test]
+fn gen_enum_keeps_foreign_variant_not_ruled_out_by_configured_features() {
+    let enum_def = EnumDef {
+        name: "RoutingStrategy".to_string(),
+        rust_path: "dep_crate::RoutingStrategy".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Primary".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Extra".to_string(),
+                cfg: Some(r#"feature = "extra-tier""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let configured: std::collections::HashSet<&str> = ["extra-tier"].into_iter().collect();
+
+    let output = gen_enum(&enum_def, "Js", true, "core_crate", Some(&configured));
+
+    assert!(
+        output.contains("Extra,"),
+        "a variant the configured features do not rule out must stay declared, got:\n{output}"
     );
 }

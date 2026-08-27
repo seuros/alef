@@ -175,7 +175,13 @@ fn napi_convert_case(case: &str) -> Option<convert_case::Case<'static>> {
     }
 }
 
-pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> String {
+pub(super) fn gen_enum(
+    enum_def: &EnumDef,
+    prefix: &str,
+    has_serde: bool,
+    core_import: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> String {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     // Internal tagging always produces an object on the wire (`{"kind":"A"}` for a unit variant),
     // so it must route to the object emitter even when no variant carries fields. A default
@@ -222,7 +228,23 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> Str
     lines.push(derives);
     lines.push(format!("pub enum {prefix}{} {{", enum_def.name));
 
-    for variant in &enum_def.variants {
+    // The SAME authority the conversion arms consult (`codegen::conversions::enum_variant_declaration`)
+    // decides which variants this wrapper declares and under what `#[cfg(...)]` guard -- keeping
+    // this declaration and the `From` impls' match arms from ever disagreeing about which variants
+    // exist. See that function's doc comment for the two alef defects that disagreement caused. ~keep
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let declared_variants: Vec<(&EnumVariant, Option<String>)> = enum_def
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            match crate::codegen::conversions::enum_variant_declaration(variant, is_host_enum, configured_features) {
+                crate::codegen::conversions::VariantDeclaration::Keep { cfg } => Some((variant, cfg)),
+                crate::codegen::conversions::VariantDeclaration::Drop => None,
+            }
+        })
+        .collect();
+
+    for (variant, cfg) in &declared_variants {
         let mut variant_doc = String::new();
         let sanitized_variant_doc = crate::codegen::doc_emission::sanitize_rust_idioms(
             &variant.doc,
@@ -233,6 +255,9 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> Str
         if !variant_doc.is_empty() {
             lines.push(variant_doc.trim_end_matches('\n').to_string());
         }
+        if let Some(cfg) = cfg {
+            lines.push(format!("    #[cfg({cfg})]"));
+        }
         if let Some(rename) = variant.serde_rename.as_deref() {
             lines.push(format!("    #[napi(value = \"{rename}\")]"));
         }
@@ -241,8 +266,11 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> Str
 
     lines.push("}".to_string());
 
-    if let Some(first) = enum_def.variants.first() {
+    if let Some((first, first_cfg)) = declared_variants.first() {
         lines.push(String::new());
+        if let Some(cfg) = first_cfg {
+            lines.push(format!("#[cfg({cfg})]"));
+        }
         lines.push("#[allow(clippy::derivable_impls)]".to_string());
         lines.push(format!("impl Default for {prefix}{} {{", enum_def.name));
         lines.push(format!("    fn default() -> Self {{ Self::{} }}", first.name));

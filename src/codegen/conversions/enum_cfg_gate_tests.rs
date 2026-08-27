@@ -1,4 +1,7 @@
-use super::{gen_enum_from_binding_to_core, gen_enum_from_core_to_binding};
+use super::{
+    ConversionConfig, gen_enum_from_binding_to_core, gen_enum_from_binding_to_core_cfg, gen_enum_from_core_to_binding,
+    gen_enum_from_core_to_binding_cfg,
+};
 use crate::core::ir::{EnumDef, EnumVariant};
 
 fn simple_enum() -> EnumDef {
@@ -129,5 +132,73 @@ fn ungated_enum_emits_no_cfg_in_either_direction() {
     assert!(
         !binding_to_core.contains("#[cfg("),
         "ungated enum must not emit #[cfg(...)] in From<BindingEnum> impl, got:\n{binding_to_core}"
+    );
+}
+
+/// The fix this task adds: when the binding's own configured feature set PROVES a foreign-crate
+/// cfg-gated variant's feature is off, the conversion needs no catch-all at all -- the variant
+/// can never exist for this binding, so the remaining explicit arms are already exhaustive
+/// against the real (feature-reduced) type this binding actually links. Load-bearing gating: if
+/// `Gpu` were reachable under every feature enabled (the naive "turn everything on" fixture), this
+/// case could never reproduce alef #534 -- the pre-fix blanket `has_cfg_variants` check and the
+/// post-fix proof-aware check would agree by accident, passing against the still-broken code. ~keep
+#[test]
+fn foreign_cfg_variant_proven_disabled_needs_no_catch_all() {
+    let mut enum_def = simple_enum();
+    enum_def.rust_path = "dep_crate::Backend".to_string();
+    enum_def.variants[1].cfg = Some(r#"feature = "gpu-accel""#.to_string());
+
+    let configured = vec!["other-feature".to_string()];
+    let config = ConversionConfig {
+        configured_features: Some(configured.as_slice()),
+        ..Default::default()
+    };
+
+    let core_to_binding = gen_enum_from_core_to_binding_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        !core_to_binding.contains("_ => Default::default()"),
+        "a foreign variant proven unreachable by the binding's own configured features must not \
+         trigger a catch-all (unreachable pattern under -D warnings), got:\n{core_to_binding}"
+    );
+    assert!(
+        !core_to_binding.contains("Backend::Gpu"),
+        "the proven-unreachable variant must not be referenced at all, got:\n{core_to_binding}"
+    );
+    assert!(
+        core_to_binding.contains("Backend::Cpu => Self::Cpu"),
+        "the still-reachable variant must still convert, got:\n{core_to_binding}"
+    );
+
+    let binding_to_core = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        !binding_to_core.contains("_ => Default::default()"),
+        "same proof, opposite direction, got:\n{binding_to_core}"
+    );
+}
+
+/// Positive control for the test above: when the configured feature set does NOT rule the gate
+/// out (here, the feature is explicitly requested), the conversion falls back to the existing
+/// conservative behavior. Cargo feature unification could still turn a dependency's own feature
+/// on some way alef's static configuration read cannot observe, so the catch-all must stay. Same
+/// fixture as `foreign_cfg_variant_proven_disabled_needs_no_catch_all` except for the configured
+/// feature list, proving the new logic only removes the catch-all when it can actually prove the
+/// gate off, never merely because a foreign variant is present. ~keep
+#[test]
+fn foreign_cfg_variant_not_ruled_out_keeps_conservative_catch_all() {
+    let mut enum_def = simple_enum();
+    enum_def.rust_path = "dep_crate::Backend".to_string();
+    enum_def.variants[1].cfg = Some(r#"feature = "gpu-accel""#.to_string());
+
+    let configured = vec!["gpu-accel".to_string()];
+    let config = ConversionConfig {
+        configured_features: Some(configured.as_slice()),
+        ..Default::default()
+    };
+
+    let core_to_binding = gen_enum_from_core_to_binding_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        core_to_binding.contains("_ => Default::default()"),
+        "a variant the configured features do not rule out must keep the conservative catch-all, \
+         got:\n{core_to_binding}"
     );
 }

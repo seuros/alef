@@ -111,6 +111,13 @@ impl Backend for NapiBackend {
         let mapper =
             NapiMapper::with_traits_and_capsules(prefix.clone(), trait_type_names, capsule_type_names_for_mapper);
         let core_import = config.core_import_name();
+        // This binding's own configured feature set (already expanded through the core crate's
+        // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+        // provably unreachable for this binding -- see `codegen::conversions::enum_variant_declaration`.
+        let enabled_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Node));
+        let configured_features_set: std::collections::HashSet<&str> =
+            enabled_features.iter().map(String::as_str).collect();
 
         let output_dir = resolve_output_dir(config.output_paths.get("node"), &config.name, "crates/{name}-node/src/");
         let has_serde = crate::core::config::detect_serde_available(&output_dir);
@@ -371,7 +378,13 @@ impl Backend for NapiBackend {
             .collect();
 
         for enum_def in &api.enums {
-            builder.add_item(&enums::gen_enum(enum_def, &prefix, has_serde));
+            builder.add_item(&enums::gen_enum(
+                enum_def,
+                &prefix,
+                has_serde,
+                &core_import,
+                Some(&configured_features_set),
+            ));
         }
 
         let exclude_functions: ahash::AHashSet<String> = config
@@ -509,6 +522,7 @@ impl Backend for NapiBackend {
             opaque_types: Some(&opaque_types),
             json_as_value: true,
             never_skip_cfg_field_names: &never_skip_cfg_field_names,
+            configured_features: Some(enabled_features.as_slice()),
             ..Default::default()
         };
         for typ in api

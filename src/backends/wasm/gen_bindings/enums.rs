@@ -707,7 +707,24 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
 }
 
 /// Generate a wasm-bindgen enum definition.
-pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
+///
+/// `configured_features`: the WASM backend's own call site (`WasmBackend::generate_bindings`)
+/// always passes `None` here today -- it proves a HOST-owned cfg-gated variant's declaration and
+/// conversion arm compile in or out together (see `enum_variant_declaration`) without needing
+/// this at all, and `None` keeps a FOREIGN-owned cfg-gated variant declared unconditionally,
+/// exactly matching the conservative catch-all `codegen::conversions::gen_enum_from_*_cfg` still
+/// emits for it (wasm's own `ConversionConfig` never sets `configured_features` either). Passing
+/// `Some` here without ALSO wiring the matching `wasm_conv_config.configured_features` would drop
+/// a proven-disabled foreign variant from this declaration while its conversion still emits a
+/// catch-all for it -- now genuinely unreachable, reintroducing alef #534's own defect shape one
+/// level down. Tests below exercise `Some` directly to prove the function is still correct if a
+/// future change wires it up on both sides together. ~keep
+pub(super) fn gen_enum(
+    enum_def: &EnumDef,
+    prefix: &str,
+    core_import: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> String {
     if is_tagged_data_enum(enum_def) {
         return gen_tagged_enum_as_struct(enum_def, prefix);
     }
@@ -724,26 +741,48 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
         format!("pub enum {} {{", js_name),
     ]);
 
-    for (idx, variant) in enum_def.variants.iter().enumerate() {
+    // The SAME authority the conversion arms consult (`codegen::conversions::enum_variant_declaration`)
+    // decides which variants this wrapper declares and under what `#[cfg(...)]` guard -- keeping
+    // this declaration, the `to_api_str`/`from_api_str` matches below, and the `From` impls'
+    // match arms from ever disagreeing about which variants exist. See that function's doc
+    // comment for the two alef defects that disagreement caused. ~keep
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let declared_variants: Vec<(&EnumVariant, Option<String>)> = enum_def
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            match crate::codegen::conversions::enum_variant_declaration(variant, is_host_enum, configured_features) {
+                crate::codegen::conversions::VariantDeclaration::Keep { cfg } => Some((variant, cfg)),
+                crate::codegen::conversions::VariantDeclaration::Drop => None,
+            }
+        })
+        .collect();
+
+    for (idx, (variant, cfg)) in declared_variants.iter().enumerate() {
+        if let Some(cfg) = cfg {
+            lines.push(format!("    #[cfg({cfg})]"));
+        }
         lines.push(format!("    {} = {},", variant.name, idx));
     }
 
     lines.push("}".to_string());
 
-    let default_variant = enum_def
-        .variants
+    let default_variant = declared_variants
         .iter()
-        .find(|v| v.is_default)
-        .or_else(|| enum_def.variants.first());
-    if let Some(dv) = default_variant {
+        .find(|(v, _)| v.is_default)
+        .or_else(|| declared_variants.first());
+    if let Some((dv, dv_cfg)) = default_variant {
         lines.push(String::new());
+        if let Some(cfg) = dv_cfg {
+            lines.push(format!("#[cfg({cfg})]"));
+        }
         lines.push("#[allow(clippy::derivable_impls)]".to_string());
         lines.push(format!("impl Default for {} {{", js_name));
         lines.push(format!("    fn default() -> Self {{ Self::{} }}", dv.name));
         lines.push("}".to_string());
     }
 
-    if !enum_def.variants.is_empty() {
+    if !declared_variants.is_empty() {
         lines.push(String::new());
         lines.push(format!("impl {} {{", js_name));
         lines.push(
@@ -751,12 +790,15 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
         );
         lines.push("    pub fn to_api_str(self) -> &'static str {".to_string());
         lines.push("        match self {".to_string());
-        for variant in &enum_def.variants {
+        for (variant, cfg) in &declared_variants {
             let wire = wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
                 enum_def.serde_rename_all.as_deref(),
             );
+            if let Some(cfg) = cfg {
+                lines.push(format!("            #[cfg({cfg})]"));
+            }
             lines.push(format!("            Self::{} => \"{}\",", variant.name, wire));
         }
         lines.push("        }".to_string());
@@ -769,12 +811,15 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
         );
         lines.push("    pub fn from_api_str(s: &str) -> Option<Self> {".to_string());
         lines.push("        match s {".to_string());
-        for variant in &enum_def.variants {
+        for (variant, cfg) in &declared_variants {
             let wire = wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
                 enum_def.serde_rename_all.as_deref(),
             );
+            if let Some(cfg) = cfg {
+                lines.push(format!("            #[cfg({cfg})]"));
+            }
             lines.push(format!("            \"{}\" => Some(Self::{}),", wire, variant.name));
         }
         lines.push("            _ => None,".to_string());

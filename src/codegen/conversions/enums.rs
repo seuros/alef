@@ -1,8 +1,104 @@
+use std::collections::HashSet;
+
 use crate::codegen::cfg::is_host_owned_rust_path;
-use crate::core::ir::EnumDef;
+use crate::core::ir::{EnumDef, EnumVariant};
 
 use super::ConversionConfig;
 use super::helpers::{binding_to_core_match_arm_ext_cfg, core_enum_path_remapped, core_to_binding_match_arm_ext_cfg};
+
+/// Whether a generated wrapper type (the `#[napi(string_enum)] pub enum Js...`,
+/// `#[wasm_bindgen] pub enum Wasm...`, etc. a `gen_enum`-style backend emitter declares) should
+/// include `variant`, and under what `#[cfg(...)]` guard, if any.
+///
+/// This is the SAME authority [`enum_conversion_needs_catch_all`]'s callers in this module
+/// consult for the conversion arm belonging to the same variant, so a wrapper type's declared
+/// shape and its conversion's match arms can never disagree about which variants exist. Two
+/// distinct alef defects trace back to that disagreement: a disabled foreign variant still gets
+/// declared unconditionally while its conversion adds a now-unreachable catch-all (alef #534),
+/// and a host-owned variant's conversion arm carries a `#[cfg(...)]` guard the wrapper's OWN
+/// declaration never mirrors, so the wrapper type is missing exactly the variant the arm exists
+/// to handle whenever that feature is off from the wrapper's own point of view -- and, since the
+/// wrapper's declaration is unconditional (no gate at all) while the arm's gate DOES vary with
+/// the feature, the two also drift the moment the feature comes back on (alef #536). Attaching
+/// the identical guard to both the wrapper's own declaration and its conversion arm removes the
+/// second disagreement entirely: variant, arm, and now the wrapper's own copy of the variant all
+/// compile in or out together. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantDeclaration {
+    /// Emit `variant` in the wrapper's declaration, optionally behind `cfg`.
+    Keep { cfg: Option<String> },
+    /// Omit `variant` entirely: this binding's own configured feature set proves the gate can
+    /// never be satisfied, so the variant can never exist for this binding either.
+    Drop,
+}
+
+#[must_use]
+pub fn enum_variant_declaration(
+    variant: &EnumVariant,
+    is_host_enum: bool,
+    configured_features: Option<&HashSet<&str>>,
+) -> VariantDeclaration {
+    let Some(cfg) = variant.cfg.as_deref() else {
+        return VariantDeclaration::Keep { cfg: None };
+    };
+    if is_host_enum {
+        // The wrapper crate already declares this feature -- `codegen::cfg::collect_cfg_features`
+        // walks host-owned items -- so attaching the identical guard here keeps the wrapper's own
+        // declaration, its conversion arm, and the source variant compiling in or out together,
+        // deferring exhaustiveness to the compiler instead of alef's own (necessarily incomplete)
+        // static feature analysis. ~keep
+        return VariantDeclaration::Keep {
+            cfg: Some(cfg.to_string()),
+        };
+    }
+    match configured_features {
+        Some(features) if foreign_variant_proven_unreachable(cfg, features) => VariantDeclaration::Drop,
+        // Unknown, or not proven absent: keep unconditionally. The wrapper crate cannot declare a
+        // foreign crate's own feature as its own (`unexpected cfg condition value`), so a "maybe
+        // reachable" foreign variant can only be represented unconditionally, never conditionally
+        // compiled -- Cargo feature unification could still turn the dependency's feature on some
+        // way alef's static configuration read cannot observe.
+        _ => VariantDeclaration::Keep { cfg: None },
+    }
+}
+
+/// Whether `cfg` (a foreign-owned variant's gate) is proven unsatisfied by this binding's own
+/// configured feature set. Reuses [`crate::core::ir::cfg_feature_satisfied`], the canonical cfg
+/// evaluator every other cfg-gating decision in alef defers to, rather than re-parsing the cfg
+/// string here. ~keep
+fn foreign_variant_proven_unreachable(cfg: &str, configured_features: &HashSet<&str>) -> bool {
+    !crate::core::ir::cfg_feature_satisfied(Some(cfg), configured_features)
+}
+
+/// Whether at least one of `enum_def`'s FOREIGN cfg-gated variants remains a real gap that a
+/// conversion catch-all must cover: not proven unreachable by `configured_features` (`None` means
+/// "unknown", the existing conservative default). Host-owned cfg-gated variants never count --
+/// see [`enum_conversion_needs_catch_all`]'s own doc comment for why the compiler already
+/// guarantees exhaustiveness for those without a catch-all.
+fn has_unresolved_foreign_cfg_variants(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&HashSet<&str>>,
+) -> bool {
+    if is_host_enum {
+        return false;
+    }
+    enum_def.variants.iter().any(|v| match v.cfg.as_deref() {
+        None => false,
+        Some(cfg) => match configured_features {
+            Some(features) => !foreign_variant_proven_unreachable(cfg, features),
+            None => true,
+        },
+    })
+}
+
+/// Build the `HashSet<&str>` view [`enum_variant_declaration`]/[`has_unresolved_foreign_cfg_variants`]
+/// need from `config.configured_features`, once per generator call.
+fn configured_features_set<'a>(config: &ConversionConfig<'a>) -> Option<HashSet<&'a str>> {
+    config
+        .configured_features
+        .map(|features| features.iter().map(String::as_str).collect())
+}
 
 /// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's own
 /// cfg gate; the generated binding crate never declares a Cargo feature for it (see
@@ -100,8 +196,10 @@ pub fn gen_enum_from_binding_to_core_cfg(enum_def: &EnumDef, core_import: &str, 
         })
         .collect();
 
-    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    let needs_catch_all = enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, false);
+    let configured_features = configured_features_set(config);
+    let has_unresolved_cfg_variants =
+        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, configured_features.as_ref());
+    let needs_catch_all = enum_conversion_needs_catch_all(has_unresolved_cfg_variants, is_host_enum, false);
 
     crate::codegen::template_env::render(
         "conversions/enum_from_binding_to_core",
@@ -142,9 +240,14 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
         })
         .collect();
 
-    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    let needs_catch_all =
-        enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty());
+    let configured_features = configured_features_set(config);
+    let has_unresolved_cfg_variants =
+        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, configured_features.as_ref());
+    let needs_catch_all = enum_conversion_needs_catch_all(
+        has_unresolved_cfg_variants,
+        is_host_enum,
+        !enum_def.excluded_variants.is_empty(),
+    );
 
     crate::codegen::template_env::render(
         "conversions/enum_from_core_to_binding",
