@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AcknowledgeableWarningCategory": {
+      "description": "The closed set of warning categories a consumer may acknowledge anywhere in `alef.toml`.\n\nAdding a variant here is a deliberate, reviewable decision to make a whole new category\nacknowledgeable project-wide; it is not the place to loosen an individual producer's\nmatching rules. Each producer that consults [`crate::core::warning_ack::AcknowledgementLedger`]\nadditionally restricts which of these variants it accepts at its own config location (see\n`AcknowledgementLedger::new`'s `scope` argument), so a category can exist here yet still be\nrejected everywhere it is not the correct match key for. ~keep",
+      "oneOf": [
+        {
+          "const": "virtual_field_path",
+          "description": "A virtual field path synthesized across a tagged-union/method crossing that a target\nlanguage's IR cannot represent directly. Owned by `src/e2e/codegen/presentation.rs`; this\nvariant exists so that module's warning can be acknowledged once it starts consulting the\nledger, but nothing in this crate wires it in yet.",
+          "type": "string"
+        },
+        {
+          "const": "doc_snippet_reserved_domain",
+          "description": "A documentation snippet publishing IANA's reserved `example.com` domain (RFC 2606 §3)\nbecause the fixture's target language has no configured\n`[crates.e2e.snippets].sample_base_url`. See `crate::e2e::snippets::render_body`.",
+          "type": "string"
+        }
+      ]
+    },
     "AdapterConfig": {
       "additionalProperties": false,
       "description": "Configuration for a single adapter.",
@@ -6773,6 +6788,14 @@
     "SnippetConfig": {
       "additionalProperties": false,
       "properties": {
+        "acknowledged_warnings": {
+          "default": [],
+          "description": "Narrow, per-fixture/target acknowledgements for the reserved-placeholder-domain warning\n(task #540). Each entry silences exactly one fixture id publishing the placeholder for\nexactly one target language -- never every fixture, never every language. An entry that\nstops matching (because the fixture no longer publishes the placeholder for that target)\nfails the run rather than lingering as a no-op; see\n`crate::core::warning_ack::AcknowledgementLedger`. Configuring `sample_base_url` above\nremains the actual fix; this exists for fixtures whose sample input is genuinely\nreserved/non-routable documentation content on purpose.",
+          "items": {
+            "$ref": "#/$defs/WarningAcknowledgement"
+          },
+          "type": "array"
+        },
         "capabilities": {
           "$ref": "#/$defs/SnippetCapabilities",
           "default": {
@@ -7585,6 +7608,37 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "WarningAcknowledgement": {
+      "additionalProperties": false,
+      "description": "One consumer-authored acknowledgement: silence exactly one warning identity for exactly one\nsource target.\n\nNever a glob and never class-wide by construction -- `identity` and `target` are matched by\nexact string equality (see `crate::core::warning_ack::AcknowledgementLedger::check`), and\nthere is no field here that could broaden a match to \"every target\" or \"every identity in\nthis category\". An entry that stops matching because the underlying warning was fixed (or\nnever fires for that identity/target again) fails the run rather than aging into silent,\npermanent suppression -- see `AcknowledgementLedger::finish`.",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/AcknowledgeableWarningCategory"
+        },
+        "identity": {
+          "description": "The exact warning identity this entry silences, e.g. a fixture id for\n`doc_snippet_reserved_domain` or a field path for `virtual_field_path`. Never a glob or\nprefix -- matched by exact string equality only.",
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "description": "Free-text audit note for the consumer's own record; alef never reads it to decide\nanything, only echoes it back when reporting a match.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "The exact source target this entry is scoped to, e.g. a target language such as\n`\"python\"`. An acknowledgement never applies to a target it does not name verbatim.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "identity",
+        "target"
+      ],
       "type": "object"
     },
     "WasmConfig": {

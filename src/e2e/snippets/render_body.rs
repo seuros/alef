@@ -118,36 +118,52 @@ fn rendered(body: String, sample_base_url: DocsSampleBaseUrl<'_>) -> RenderedSni
     }
 }
 
-/// The number of fixture ids a placeholder-URL warning names before it stops enumerating; a
-/// consumer with hundreds of URL fixtures should get a usable message, not a log dump.
+/// The number of fixture/language occurrences a placeholder-URL warning names before it stops
+/// enumerating; a consumer with hundreds of URL fixtures should get a usable message, not a log
+/// dump.
 const PLACEHOLDER_SAMPLE_URL_FIXTURES_NAMED: usize = 10;
 
 /// Say, once per run, that snippets were published carrying an address nobody serves.
 ///
-/// The alternative -- emitting the placeholder and saying nothing -- is what let a reader
-/// copy a quick start that could never work: the address is syntactically perfect and fails
-/// only when run. Not an error, because a project may legitimately have no public sample
-/// host, and failing here would break every consumer that already ships these snippets.
-pub(super) fn report_placeholder_sample_urls(fixtures: &[String], sample_base_url: DocsSampleBaseUrl<'_>) {
-    if fixtures.is_empty() {
+/// `occurrences` carries only fixture/language pairs that were NOT acknowledged via
+/// `[crates.e2e.snippets].acknowledged_warnings` -- a suppressed occurrence must not be named
+/// here (it is already visible in the acknowledged-warnings report instead; see
+/// `report_acknowledged_warnings`). Not an error by itself, because a project may legitimately
+/// have no public sample host, and failing here would break every consumer that already ships
+/// these snippets. Each named occurrence carries the exact `alef.toml` entry that would
+/// acknowledge it (task #540's provenance requirement), so a consumer can act without guessing
+/// the config shape.
+pub(super) fn report_placeholder_sample_urls(occurrences: &[(String, String)], sample_base_url: DocsSampleBaseUrl<'_>) {
+    if occurrences.is_empty() {
         return;
     }
-    let named = fixtures
+    let named = occurrences
         .iter()
         .take(PLACEHOLDER_SAMPLE_URL_FIXTURES_NAMED)
-        .cloned()
+        .map(|(fixture_id, language)| {
+            format!(
+                "{fixture_id} ({language}, acknowledge with {})",
+                WarningAcknowledgement::config_entry_for(
+                    AcknowledgeableWarningCategory::DocSnippetReservedDomain,
+                    fixture_id,
+                    language,
+                )
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    let remaining = fixtures.len().saturating_sub(PLACEHOLDER_SAMPLE_URL_FIXTURES_NAMED);
+    let remaining = occurrences.len().saturating_sub(PLACEHOLDER_SAMPLE_URL_FIXTURES_NAMED);
     tracing::warn!(
         target: "alef::e2e::snippets",
-        fixtures = fixtures.len(),
+        fixtures = occurrences.len(),
         base_url = sample_base_url.base(),
         config_key = crate::core::config::e2e::SAMPLE_BASE_URL_CONFIG_KEY,
-        "{} documentation snippet fixture(s) publish the reserved placeholder address `{}`, \
-         which serves nothing: a reader who copies them gets a request that cannot succeed. \
-         Set `{}` to a host that really serves your sample inputs. Affected fixtures: {named}{}",
-        fixtures.len(),
+        "{} documentation snippet fixture/language occurrence(s) publish the reserved placeholder \
+         address `{}`, which serves nothing: a reader who copies them gets a request that cannot \
+         succeed. Set `{}` to a host that really serves your sample inputs, or acknowledge a \
+         specific fixture/language pair below -- a stale acknowledgement (one that matches \
+         nothing) fails the run. Affected: {named}{}",
+        occurrences.len(),
         sample_base_url.base(),
         crate::core::config::e2e::SAMPLE_BASE_URL_CONFIG_KEY,
         if remaining > 0 {
@@ -155,5 +171,24 @@ pub(super) fn report_placeholder_sample_urls(fixtures: &[String], sample_base_ur
         } else {
             String::new()
         }
+    );
+}
+
+/// Say, once per run, how many warning occurrences a configured acknowledgement suppressed.
+///
+/// Task #540's third requirement: the suppressed set must be visible, not invisible. Silent on
+/// a run with nothing acknowledged, matching `report_placeholder_sample_urls`'s silence on a run
+/// with nothing to report.
+pub(super) fn report_acknowledged_warnings(report: &crate::core::warning_ack::AcknowledgementReport) {
+    if report.matched_count == 0 {
+        return;
+    }
+    tracing::info!(
+        target: "alef::e2e::snippets",
+        matched = report.matched_count,
+        "{} documentation snippet warning occurrence(s) acknowledged via \
+         [crates.e2e.snippets].acknowledged_warnings: {}",
+        report.matched_count,
+        report.matched_entries.join(", ")
     );
 }

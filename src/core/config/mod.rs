@@ -31,6 +31,7 @@ pub mod trait_bridge;
 pub mod update_defaults;
 pub mod validation;
 pub mod verify;
+pub mod warning_ack;
 pub mod workspace;
 
 pub use cargo_lints::CargoLintsConfig;

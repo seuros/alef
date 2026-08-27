@@ -1,7 +1,9 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SnippetConfig};
+use crate::core::config::warning_ack::{AcknowledgeableWarningCategory, WarningAcknowledgement};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
+use crate::core::warning_ack::{AckOutcome, AcknowledgementLedger};
 use crate::e2e::codegen::{E2eCodegen, all_generators};
 use crate::e2e::fixture::{Fixture, FixtureDocs, SideEffectClass};
 use anyhow::{Context, Result, bail};
@@ -187,6 +189,12 @@ pub struct SnippetGenerationReport {
     /// would break every consumer that has lived with the placeholder. It is reported so the
     /// run states what it published rather than implying the snippets are runnable.
     pub placeholder_sample_url_fixtures: Vec<String>,
+    /// Total number of `doc_snippet_reserved_domain` warning occurrences a configured
+    /// `[[crates.e2e.snippets.acknowledged_warnings]]` entry matched and suppressed this run.
+    /// Zero when no acknowledgements are configured or none matched -- see
+    /// `crate::core::warning_ack::AcknowledgementLedger`. Task #540 requires this stay visible
+    /// rather than the suppressed set going unreported. ~keep
+    pub acknowledged_warning_count: usize,
     /// Project-root-relative paths that `[crates.e2e.snippets].curated_snippets` claims as
     /// hand-authored on purpose, resolved by [`coverage::resolve_curated_snippet_paths`].
     ///
@@ -312,10 +320,19 @@ fn generate_snippet_report_with_extensions(
     // in that batch's `BTreeMap`, so reading it any later would read this run's intentions and
     // silently degrade `ownership::is_ledger_owned_snippet_path` to bare path identity. ~keep
     ownership::snapshot_pre_run_ledger(Path::new(&snippets.output));
+    // Only `doc_snippet_reserved_domain` is meaningful at this config location; a
+    // `virtual_field_path` entry configured under `[crates.e2e.snippets]` is rejected here
+    // rather than reported as merely stale below -- see `WarningAckError::OutOfScope`. ~keep
+    let mut ack_ledger = AcknowledgementLedger::new(
+        &[AcknowledgeableWarningCategory::DocSnippetReservedDomain],
+        snippets.acknowledged_warnings.clone(),
+    )
+    .map_err(|error| anyhow::anyhow!("invalid `[crates.e2e.snippets].acknowledged_warnings`: {error}"))?;
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
     let mut guard_rejections = Vec::<SnippetGuardRejection>::new();
     let mut placeholder_sample_url_fixtures = BTreeSet::<String>::new();
+    let mut placeholder_sample_url_occurrences = Vec::<(String, String)>::new();
     let mut coverage = SnippetCoverageLedger {
         format_version: COVERAGE_MANIFEST_VERSION,
         ..SnippetCoverageLedger::default()
@@ -442,7 +459,17 @@ fn generate_snippet_report_with_extensions(
                 used_placeholder_sample_url,
             } = rendered;
             if used_placeholder_sample_url {
-                placeholder_sample_url_fixtures.insert(fixture.id.clone());
+                // Keyed by BOTH the fixture id (warning identity) and this target language
+                // (source target) -- an acknowledgement for one target must never silence the
+                // same fixture publishing the placeholder for a different one. ~keep
+                let category = AcknowledgeableWarningCategory::DocSnippetReservedDomain;
+                match ack_ledger.check(category, &fixture.id, language) {
+                    AckOutcome::Acknowledged { .. } => {}
+                    AckOutcome::NotAcknowledged { .. } => {
+                        placeholder_sample_url_fixtures.insert(fixture.id.clone());
+                        placeholder_sample_url_occurrences.push((fixture.id.clone(), language.to_string()));
+                    }
+                }
             }
             let content = render_snippet_markdown(&body, fixture, docs, language, lang);
             let requirements = snippet_requirements(fixture, language, &body);
@@ -487,7 +514,16 @@ fn generate_snippet_report_with_extensions(
     coverage = coverage::normalize(coverage);
     coverage::validate(&coverage)?;
     let placeholder_sample_url_fixtures: Vec<String> = placeholder_sample_url_fixtures.into_iter().collect();
-    render_body::report_placeholder_sample_urls(&placeholder_sample_url_fixtures, sample_base_url);
+    render_body::report_placeholder_sample_urls(&placeholder_sample_url_occurrences, sample_base_url);
+    // Requirement 2: a configured acknowledgement that matched nothing this run -- because the
+    // warning was fixed, never fired for that identity/target, or was mistyped -- fails the run
+    // here, before the caller writes any snippet to disk. This is deliberately not deferred the
+    // way `deferred_error` defers generator failures in `e2e::mod.rs`: a stale acknowledgement
+    // is a configuration defect the consumer must see and fix, not a transient render failure. ~keep
+    let acknowledgement_report = ack_ledger
+        .finish()
+        .map_err(|error| anyhow::anyhow!("`[crates.e2e.snippets].acknowledged_warnings`: {error}"))?;
+    render_body::report_acknowledged_warnings(&acknowledgement_report);
     // The project root is the process working directory here: `snippets.output` is itself an
     // unresolved project-root-relative configuration string, and every generated path above is
     // built by joining it. Curated globs share that base by construction. ~keep
@@ -510,6 +546,7 @@ fn generate_snippet_report_with_extensions(
         coverage,
         guard_rejections,
         placeholder_sample_url_fixtures,
+        acknowledged_warning_count: acknowledgement_report.matched_count,
         curated_paths,
     })
 }

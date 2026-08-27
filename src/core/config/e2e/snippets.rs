@@ -1,4 +1,5 @@
 use super::sample_url::{DocsSampleBaseUrl, InvalidSampleBaseUrl};
+use crate::core::config::warning_ack::WarningAcknowledgement;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,6 +50,16 @@ pub struct SnippetConfig {
     /// must never match a path alef itself generates.
     #[serde(default)]
     pub curated_snippets: Vec<String>,
+    /// Narrow, per-fixture/target acknowledgements for the reserved-placeholder-domain warning
+    /// (task #540). Each entry silences exactly one fixture id publishing the placeholder for
+    /// exactly one target language -- never every fixture, never every language. An entry that
+    /// stops matching (because the fixture no longer publishes the placeholder for that target)
+    /// fails the run rather than lingering as a no-op; see
+    /// `crate::core::warning_ack::AcknowledgementLedger`. Configuring `sample_base_url` above
+    /// remains the actual fix; this exists for fixtures whose sample input is genuinely
+    /// reserved/non-routable documentation content on purpose.
+    #[serde(default)]
+    pub acknowledged_warnings: Vec<WarningAcknowledgement>,
 }
 
 impl SnippetConfig {

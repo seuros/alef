@@ -15,6 +15,7 @@ pub mod template_versions;
 pub mod toolchain;
 pub mod validation;
 pub mod version;
+pub mod warning_ack;
 
 pub use backend::{Backend, Capabilities, GeneratedFile};
 pub use config::resolve_output_dir;

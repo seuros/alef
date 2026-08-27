@@ -251,6 +251,101 @@ fn an_unusable_sample_base_url_fails_generation_naming_the_config_key() {
     );
 }
 
+/// Build a snippet config identical to [`python_snippet_report`]'s unconfigured case but with
+/// `acknowledged_warnings` set, so a test can drive the real acknowledgement wiring in
+/// `generate_snippet_report_with_extensions` rather than the engine in isolation.
+fn python_snippet_report_with_acknowledgements(
+    acknowledged_warnings: Vec<WarningAcknowledgement>,
+) -> Result<SnippetGenerationReport> {
+    let (e2e, crate_config) = url_e2e_config();
+    let snippet_config = SnippetConfig {
+        output: "docs/snippets".into(),
+        acknowledged_warnings,
+        ..SnippetConfig::default()
+    };
+    let context = SnippetRenderContext {
+        e2e: &e2e,
+        crate_config: &crate_config,
+        type_defs: &[],
+        enums: &[],
+        functions: &[],
+        errors: &[],
+    };
+    generate_snippet_report_with_extensions(&[url_fixture()], &["python".into()], &snippet_config, &context, &[])
+}
+
+fn reserved_domain_ack(identity: &str, target: &str) -> WarningAcknowledgement {
+    WarningAcknowledgement {
+        category: AcknowledgeableWarningCategory::DocSnippetReservedDomain,
+        identity: identity.to_string(),
+        target: target.to_string(),
+        reason: None,
+    }
+}
+
+/// Task #540's decisive test, driven through the real production path rather than the engine
+/// in isolation: an acknowledgement configured in `alef.toml` for a warning that never fires
+/// this run must fail the run, not pass silently. This run renders only `"python"` (see
+/// `python_snippet_report_with_acknowledgements`), so an entry naming target `"go"` can never
+/// be matched here -- it is unconditionally stale, whether the identity is right or not. ~keep
+#[test]
+fn a_stale_acknowledgement_fails_the_run_instead_of_passing_silently() {
+    let error = python_snippet_report_with_acknowledgements(vec![reserved_domain_ack("extract_uri", "go")])
+        .expect_err("an acknowledgement that matches nothing this run must fail generation");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("extract_uri") && message.contains("go"),
+        "the failure must name the stale entry: {message}"
+    );
+    assert!(
+        message.to_lowercase().contains("matched nothing") || message.to_lowercase().contains("stale"),
+        "the failure must say the acknowledgement is stale, not fail for an unrelated reason: {message}"
+    );
+}
+
+/// The companion to the stale test above: an acknowledgement that DOES match must suppress the
+/// warning and the run must succeed, with the matched count reported and accurate.
+#[test]
+fn a_matching_acknowledgement_suppresses_the_warning_and_reports_a_nonzero_matched_count() {
+    let report = python_snippet_report_with_acknowledgements(vec![reserved_domain_ack("extract_uri", "python")])
+        .expect("a matching acknowledgement must let the run succeed");
+
+    assert!(
+        report.placeholder_sample_url_fixtures.is_empty(),
+        "an acknowledged occurrence must not be reported as an unresolved placeholder use"
+    );
+    assert_eq!(
+        report.acknowledged_warning_count, 1,
+        "exactly one warning occurrence was acknowledged"
+    );
+}
+
+/// Requirement 4, driven through the real config path: a category that has no business being
+/// acknowledged at this location is rejected even though `virtual_field_path` is a legitimate
+/// variant elsewhere on [`AcknowledgeableWarningCategory`]. Proves the rejection is wired into
+/// production `alef.toml` config, not only asserted against the engine directly.
+#[test]
+fn a_category_this_location_does_not_service_is_rejected_even_when_legitimate_elsewhere() {
+    let error = python_snippet_report_with_acknowledgements(vec![WarningAcknowledgement {
+        category: AcknowledgeableWarningCategory::VirtualFieldPath,
+        identity: "result.0::Ok::path".to_string(),
+        target: "python".to_string(),
+        reason: None,
+    }])
+    .expect_err("a category this ledger scope does not accept must be rejected");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("virtual_field_path"),
+        "the failure must name the offending category: {message}"
+    );
+    assert!(
+        message.contains("doc_snippet_reserved_domain"),
+        "the failure must name what IS accepted here: {message}"
+    );
+}
+
 /// The tension this feature exists inside: the docs address must never reach the executable
 /// suite. The e2e test body for the same fixture is rendered from the untouched fixture and
 /// still binds the mock server, with the configured sample host nowhere in it.
