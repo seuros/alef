@@ -131,6 +131,53 @@ fn options_visitor_uses_symbols_emitted_by_ffi_backend() {
 }
 
 #[test]
+fn function_param_vtable_type_uses_shouty_snake_prefix_not_plain_uppercase() {
+    // `SampleCore` is load-bearing: it has no separator of its own, so shouty-snake-casing it
+    // (what cbindgen's `[export] prefix` actually applies — see `c_consumer::export_type_prefix`)
+    // yields `SAMPLE_CORE`, while plain-uppercasing it yields `SAMPLECORE`. A prefix like
+    // `sample_core` already contains its own underscore, so both formulas would agree and this
+    // test would pass even against the pre-fix `prefix.to_uppercase()` formula. ~keep
+    let trait_def = make_trait_def("Renderer", vec![make_method("render", vec![], TypeRef::Unit, None)]);
+    let bridge_cfg = make_bridge_cfg("Renderer", None);
+
+    let mut out = String::new();
+    emit_trait_bridge(
+        "SampleCore",
+        "SampleError",
+        &bridge_cfg,
+        &trait_def,
+        &HashSet::new(),
+        &mut out,
+    );
+
+    let correct_prefix = crate::codegen::c_consumer::export_type_prefix("SampleCore");
+    let buggy_prefix = "SampleCore".to_uppercase();
+    assert_ne!(
+        correct_prefix, buggy_prefix,
+        "fixture prefix must make shouty-snake-case and plain-uppercase disagree"
+    );
+    assert_eq!(correct_prefix, "SAMPLE_CORE");
+
+    // `c_prefixed_type_name` deliberately emits `{ExportPrefix}{PrefixPascal}{suffix}`: cbindgen
+    // prepends its `[export] prefix` to a Rust type name that is itself already prefix-cased, so
+    // the prefix legitimately appears twice (`HTM` + `Htm` + `VisitorCallbacks`). Only the first
+    // segment is the one this test is about; dropping the second asserts a name the generator has
+    // never emitted for any prefix. ~keep
+    let correct_vtable_type = format!("c.struct_{correct_prefix}SampleCoreRendererVTable");
+    let buggy_vtable_type = format!("c.struct_{buggy_prefix}SampleCoreRendererVTable");
+
+    assert!(
+        out.contains(&correct_vtable_type),
+        "register_fn_body must @bitCast to the cbindgen-prefixed vtable type ({correct_vtable_type}). Got:\n{out}"
+    );
+    // Negative control: exactly the string the pre-fix `prefix.to_uppercase()` formula produced.
+    assert!(
+        !out.contains(&buggy_vtable_type),
+        "must not reference the plain-uppercased vtable type ({buggy_vtable_type}). Got:\n{out}"
+    );
+}
+
+#[test]
 fn visitor_handle_alias_is_u64_backed_not_a_pointer() {
     // `VisitorHandle` wraps the FFI's `AlefHandle`, which is a `u64` handle-registry key,
     // not a raw pointer — the alias type must match that ABI.

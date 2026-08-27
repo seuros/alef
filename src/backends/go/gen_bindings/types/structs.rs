@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use minijinja::context;
 
 use crate::backends::go::type_map::{go_field_type, go_optional_field_type, go_type};
+use crate::codegen::c_consumer;
 use crate::codegen::naming::{go_type_name, to_go_name, wire_field_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
@@ -13,7 +14,7 @@ use super::helpers::{emit_type_doc, is_tuple_field, needs_omitempty_pointer};
 pub(in crate::backends::go::gen_bindings) fn gen_opaque_type(typ: &TypeDef, ffi_prefix: &str) -> String {
     let type_snake = crate::backends::go::c_symbols::type_component(&typ.name);
     let go_name = go_type_name(&typ.name);
-    let c_type = format!("{}{}", ffi_prefix.to_uppercase(), typ.name);
+    let c_type = format!("{}{}", c_consumer::export_type_prefix(ffi_prefix), typ.name);
 
     crate::backends::go::template_env::render(
         "opaque_type.jinja",

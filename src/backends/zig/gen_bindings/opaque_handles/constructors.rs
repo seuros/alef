@@ -1,3 +1,4 @@
+use crate::codegen::c_consumer;
 use crate::core::config::workspace::ClientConstructorConfig;
 use crate::core::ir::TypeDef;
 use heck::AsSnakeCase;
@@ -16,7 +17,7 @@ pub(crate) fn emit_opaque_constructor(
     out: &mut String,
 ) {
     let type_snake = AsSnakeCase(&ty.name).to_string();
-    let upper_prefix = prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(prefix);
     let has_string_param = ctor.params.iter().any(|p| ffi_ty_needs_dupez(&p.ty));
 
     out.push_str(&render(

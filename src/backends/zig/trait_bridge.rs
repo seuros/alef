@@ -19,6 +19,7 @@
 //! methods are stubs — Zig code is produced through the standalone
 //! [`emit_trait_bridge`] free function, not the shared driver.
 
+use crate::codegen::c_consumer;
 use crate::codegen::generators::trait_bridge::{TraitBridgeGenerator, TraitBridgeSpec};
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
 use crate::core::ir::{MethodDef, TypeDef, TypeRef};
@@ -60,16 +61,22 @@ fn vtable_param_type(ty: &TypeRef) -> &'static str {
     }
 }
 
-/// Compose a cbindgen-prefixed C type name: `{PREFIX_UPPER}{PrefixPascal}{suffix}`.
+/// Compose a cbindgen-prefixed C type name: `{ExportTypePrefix}{PrefixPascal}{suffix}`.
 ///
-/// cbindgen's `prefix` setting (the crate's uppercase FFI prefix, e.g. `"HTM"` for a
-/// `"htm"` crate) is prepended verbatim to every Rust type name it emits — including
-/// names that are themselves already prefix-cased, so a Rust `HtmVisitorCallbacks`
-/// becomes the C `HTMHtmVisitorCallbacks`. Every call site that derives one of these
-/// C type names must use this shared rule or two sites can silently disagree.
+/// cbindgen's `[export] prefix` setting (the crate's shouty-snake-cased FFI prefix, e.g.
+/// `"HTM"` for a `"htm"` crate — see `c_consumer::export_type_prefix`) is prepended verbatim
+/// to every Rust type name it emits — including names that are themselves already
+/// prefix-cased, so a Rust `HtmVisitorCallbacks` becomes the C `HTMHtmVisitorCallbacks`. A
+/// plain `.to_uppercase()` disagrees with that whenever `prefix` has an internal word
+/// boundary (`SampleCore` -> `SAMPLE_CORE`, not `SAMPLECORE`). Every call site that derives
+/// one of these C type names must use this shared rule or two sites can silently disagree.
 /// ~keep
 fn c_prefixed_type_name(prefix: &str, suffix: &str) -> String {
-    format!("{}{}{suffix}", prefix.to_uppercase(), prefix.to_upper_camel_case())
+    format!(
+        "{}{}{suffix}",
+        c_consumer::export_type_prefix(prefix),
+        prefix.to_upper_camel_case()
+    )
 }
 
 /// Check if a method returns a type that requires out_result wrapping at the FFI boundary.

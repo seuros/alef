@@ -36,13 +36,13 @@ use serde_json;
 
 /// Derive the cbindgen-generated C type name for a Rust FFI type.
 ///
-/// cbindgen prepends the uppercased `ffi_prefix` to the Rust struct name verbatim.
-/// Example: prefix="abc", Rust name="AbcRendererVTable" → "ABCAbcRendererVTable".
+/// cbindgen prepends its shouty-snake-cased `[export] prefix` to the Rust struct name
+/// verbatim, not a plain uppercase (see `c_consumer::export_type_prefix`). Example:
+/// prefix="abc", Rust name="AbcRendererVTable" → "ABCAbcRendererVTable".
 ///
-/// Note: the Rust struct name already includes the pascal-case prefix segment
-/// (e.g. `Htm`), so only the uppercase prefix is prepended here.
+/// Note: the Rust struct name already includes the pascal-case prefix segment (e.g. `Htm`).
 pub(crate) fn ffi_c_type_name(ffi_prefix: &str, rust_basename: &str) -> String {
-    let prefix_upper = ffi_prefix.to_uppercase();
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(ffi_prefix);
     format!("{prefix_upper}{rust_basename}")
 }
 

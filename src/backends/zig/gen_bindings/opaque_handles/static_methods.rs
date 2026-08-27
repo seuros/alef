@@ -1,4 +1,5 @@
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
+use crate::codegen::c_consumer;
 use crate::core::ir::{MethodDef, TypeDef, TypeRef};
 use heck::AsSnakeCase;
 use std::collections::HashSet;
@@ -27,7 +28,7 @@ pub(super) fn emit_opaque_static_method(
 
     let method_snake = AsSnakeCase(&method.name).to_string();
     let type_snake = AsSnakeCase(&ty.name).to_string();
-    let upper_prefix = prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(prefix);
 
     let params_str = method
         .params

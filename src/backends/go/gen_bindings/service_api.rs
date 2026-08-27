@@ -14,6 +14,7 @@
 //! All names and signatures are derived from the `ApiSurface` IR — alef is generic.
 
 use crate::backends::go::c_symbols;
+use crate::codegen::c_consumer;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, HandlerContractDef, RegistrationDef, ServiceDef, TypeRef, WrapperConstructorArg};
@@ -314,7 +315,7 @@ fn gen_service_struct(
     api_surface: &ApiSurface,
 ) {
     let service_name = &service.name;
-    let upper_prefix = ffi_prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
 
     let doc_block = if service.doc.is_empty() {
         String::new()
@@ -430,7 +431,7 @@ fn gen_registration_method(
 
     out.push_str("\tctxID := registerHandler(handler)\n");
 
-    let upper_prefix = ffi_prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     out.push_str(&crate::backends::go::template_env::render(
         "service_registration_call_header.jinja",
         minijinja::context! {
@@ -513,7 +514,7 @@ fn gen_registration_variant(
 
     out.push_str("\tctxID := registerHandler(handler)\n");
 
-    let upper_prefix = ffi_prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     out.push_str(&crate::backends::go::template_env::render(
         "service_variant_call_header.jinja",
         minijinja::context! {
@@ -602,7 +603,7 @@ fn gen_configurator_method(
         },
     ));
 
-    let upper_prefix = ffi_prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
 
     let mut cfg_args = Vec::new();
     let mut preprocessing = String::new();
@@ -661,7 +662,7 @@ fn gen_entrypoint_method(
         params.join(", ")
     };
 
-    let upper_prefix = ffi_prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(ffi_prefix);
     let opaque_return = match &ep.return_type {
         TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n) => Some(n.clone()),
         _ => None,

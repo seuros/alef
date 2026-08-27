@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::codegen::c_consumer;
 use crate::codegen::naming::{field_uses_duration_map_wire, go_type_name};
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{FieldDef, PrimitiveType, TypeRef};
@@ -152,8 +153,13 @@ pub fn go_optional_field_type(field: &FieldDef) -> Cow<'static, str> {
 /// `TypeRef::Named` value to this handle unconditionally — never to an opaque pointer — so
 /// every Go local, parameter, or comparison for a value that started as `TypeRef::Named`
 /// must use this C type name and compare against `0`, not `nil`.
+///
+/// The prefix must go through [`c_consumer::export_type_prefix`], not a local `.to_uppercase()`:
+/// that is the same shouty-snake-case cbindgen actually applies to its `[export] prefix`, and a
+/// plain uppercase disagrees whenever the prefix has an internal word boundary (`SampleCore` ->
+/// `SAMPLE_CORE` vs `SAMPLECORE`). ~keep
 pub fn alef_handle_c_type(ffi_prefix: &str) -> String {
-    format!("{}AlefHandle", ffi_prefix.to_uppercase())
+    format!("{}AlefHandle", c_consumer::export_type_prefix(ffi_prefix))
 }
 
 /// Maps a TypeRef to its Go type representation.
@@ -259,6 +265,22 @@ mod tests {
     #[test]
     fn test_bytes() {
         assert_eq!(GoMapper.map_type(&TypeRef::Bytes), "[]byte");
+    }
+
+    #[test]
+    fn alef_handle_c_type_uses_shouty_snake_prefix_not_plain_uppercase() {
+        // `SampleCore` is load-bearing: it has no separator of its own, so shouty-snake-casing
+        // it (`SAMPLE_CORE`) and plain-uppercasing it (`SAMPLECORE`) genuinely disagree. A
+        // prefix like `sample_core` already contains its own underscore, so both formulas
+        // would produce the same string and this test would pass even against the pre-fix
+        // `.to_uppercase()` formula. ~keep
+        let expected = format!("{}AlefHandle", c_consumer::export_type_prefix("SampleCore"));
+        assert_eq!(expected, "SAMPLE_COREAlefHandle");
+
+        assert_eq!(alef_handle_c_type("SampleCore"), expected);
+        // Negative control: this is exactly what the pre-fix `ffi_prefix.to_uppercase()`
+        // formula produced.
+        assert_ne!(alef_handle_c_type("SampleCore"), "SAMPLECOREAlefHandle");
     }
 
     #[test]

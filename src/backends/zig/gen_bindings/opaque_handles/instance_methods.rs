@@ -3,6 +3,7 @@ use crate::backends::zig::gen_bindings::functions::{
     assert_error_set_covers_body, return_conversion_needs_out_of_memory, return_uses_bytes_out_params, zig_return_type,
 };
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
+use crate::codegen::c_consumer;
 use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 use heck::AsSnakeCase;
 use std::collections::{HashMap, HashSet};
@@ -113,7 +114,7 @@ pub(super) fn emit_opaque_method(
 /// `c.{prefix}_{snake_type}_free(self._handle)`. The C destructor is generated
 /// by the FFI crate for every opaque handle type.
 pub(super) fn emit_opaque_free(ty: &TypeDef, prefix: &str, type_snake: &str, out: &mut String) {
-    let upper_prefix = prefix.to_uppercase();
+    let upper_prefix = c_consumer::export_type_prefix(prefix);
     out.push_str(&render(
         "opaque_free_method.jinja",
         minijinja::context! {

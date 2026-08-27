@@ -3,6 +3,7 @@ use super::result_presence::result_presence_gate;
 use super::types::{cgo_type_for_primitive, emit_type_doc, go_return_expr, primitive_max_sentinel};
 use crate::backends::go::c_symbols;
 use crate::backends::go::type_map::{go_optional_type, go_return_type, go_type, go_zero_value};
+use crate::codegen::c_consumer;
 use crate::codegen::naming::{go_param_name, go_type_name, to_go_name};
 use crate::core::ir::{MethodDef, ParamDef, TypeDef, TypeRef};
 
@@ -591,7 +592,7 @@ pub(super) fn gen_param_to_c(
         }
         TypeRef::Named(name) => {
             if opaque_names.contains(name.as_str()) {
-                let c_type = format!("{}{}", ffi_prefix.to_uppercase(), name);
+                let c_type = format!("{}{}", c_consumer::export_type_prefix(ffi_prefix), name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_opaque_cast.jinja",
                     minijinja::context! {
@@ -699,7 +700,7 @@ pub(super) fn gen_param_to_c(
                 out.push('\n');
             }
             TypeRef::Named(name) if opaque_names.contains(name.as_str()) => {
-                let c_type = format!("{}{}", ffi_prefix.to_uppercase(), name);
+                let c_type = format!("{}{}", c_consumer::export_type_prefix(ffi_prefix), name);
                 out.push_str(&crate::backends::go::template_env::render(
                     "param_optional_opaque.jinja",
                     minijinja::context! {
