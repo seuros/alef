@@ -2,12 +2,20 @@
 //!
 //! Extracted out of `test_case.rs`, which sits at the file-size ratchet's frozen ceiling
 //! (`tests/file_size_baseline.txt`) and may not grow. Behavior is otherwise unchanged from the
-//! block this replaces, plus `with_anchored_optional_paths`: without it, an `Option<Vec<T>>`
-//! segment field reached through an array-projected path (e.g. `entries[0].sections`) never
-//! matches `with_ir_fields`'s bare-name-only optional set once the path crosses more than one
-//! segment, so the per-segment accessor renderer emits an un-unwrapped index/`.length` access.
-//! `with_anchored_optional_paths` materializes the IR-anchored answer for this fixture's own
-//! assertion paths into the same lookup set, mirroring `presentation.rs`'s existing use of it.
+//! block this replaces, plus `with_ir_result_fields`/`with_anchored_optional_paths`: without
+//! `with_ir_result_fields`, `FieldResolver`'s `ir_result_field_map` keeps its default `root_type:
+//! None`, which makes `with_anchored_optional_paths` an unconditional no-op (it early-returns on
+//! an unresolved root) regardless of what paths it is given — the same gap kotlin's identical
+//! module documents and wires around. With both wired in, an `Option<Vec<T>>` segment field
+//! reached through an array-projected path (e.g. `entries[0].sections`) — which never matches
+//! `with_ir_fields`'s bare-name-only optional set once the path crosses more than one segment —
+//! resolves correctly, and `with_anchored_optional_paths` materializes that IR-anchored answer
+//! for this fixture's own assertion paths into the same lookup set, mirroring `presentation.rs`'s
+//! existing use of it. ~keep Before this fix, `dart_length_expr`'s `FieldResolver::is_optional`
+//! check silently fell back to the config-only `fields_optional` set for any consumer whose
+//! `alef.toml` never listed the field by hand, so a leaf `Option<Vec<T>>` field known only
+//! through the IR emitted a bare `.length` against a nullable `List<T>?` (dart analyzer:
+//! "potentially null").
 
 use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::config::{CallConfig, E2eConfig};
@@ -57,7 +65,12 @@ pub(super) fn build_call_field_resolver(
     // indexes into it — e.g. a recursive `Option<Vec<DataNode>> Children`) has no
     // `fields_array` config signal at all, so `FieldResolver::is_collection_root` always
     // returned false regardless of what `assertions.rs` checks it for. ~keep
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
     .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()))
 }
+
+#[cfg(test)]
+#[path = "call_field_resolver/tests.rs"]
+mod tests;

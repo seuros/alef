@@ -47,6 +47,25 @@ impl FieldResolver {
         self.swift_first_class_map.is_vec_field_name(leaf)
     }
 
+    /// True when the leaf segment of `field` is a JSON-bridged Swift leaf on any IR type — the
+    /// binding generator collapsed it to a single `RustString` holding the whole field
+    /// JSON-encoded, per `SwiftFirstClassMap::json_bridged_field_names`.
+    ///
+    /// ~keep A POSITIVE fact, not the complement of [`Self::leaf_is_vec_via_swift_map`]: that
+    /// complement also contains every genuine scalar and every field the map has no data for at
+    /// all (an empty/never-scanned `SwiftFirstClassMap`), and neither of those is a JSON bridge.
+    /// `swift_count_target` used to treat "not a recorded vec field name" as "must be a bridged
+    /// scalar, wrap `.toString()`", which is exactly the confusion `json_bridged_field_names`'s
+    /// own doc comment warns against — a field the IR proves is a genuine `Vec<T>` but the Swift
+    /// map simply never recorded (an empty map, or a field reached only through an opaque owner
+    /// type the map never scanned) got the same `.toString()` treatment as an actually-bridged
+    /// scalar, silently counting the CHARACTERS of a debug string instead of the Vec's elements.
+    pub fn leaf_is_json_bridged_via_swift_map(&self, field: &str) -> bool {
+        let leaf = field.split('.').next_back().unwrap_or(field);
+        let leaf = leaf.split('[').next().unwrap_or(leaf);
+        self.swift_first_class_map.is_json_bridged_field_name(leaf)
+    }
+
     /// The prefix of `field` that names a JSON-bridged Swift leaf which the path then steps
     /// *past*, if any.
     ///
@@ -644,7 +663,8 @@ impl FieldResolver {
         })
     }
 
-    /// Check if a field path is an array/Vec type, per the `fields_array` config.
+    /// Check if a field path is an array/Vec type, per the `fields_array` config — falling back
+    /// to the IR-anchored answer ([`is_collection_path`]) when the config is silent.
     ///
     /// Accepts the raw fixture spelling as well as an already-resolved path: the second lookup
     /// asks [`Self::result_relative_path`] where the value actually sits — alias applied, virtual
@@ -662,12 +682,35 @@ impl FieldResolver {
     /// Recursion is bounded: `result_relative_path` consults `is_valid_for_result` with a single
     /// dot-free segment, whose `namespace_stripped_path` returns `None` immediately, so the
     /// re-entry through `is_known_via_sibling_field_config` terminates one level down.
+    ///
+    /// ~keep `is_optional` already falls back to the IR (`ir_result_fields::is_optional_path`)
+    /// when `fields_optional` is silent; this method never did, so a field whose `Vec`-ness is
+    /// known ONLY through the IR (no per-element path anywhere in the fixture suite ever
+    /// populated `fields_array`) read as scalar. An `Option<Vec<T>>` field in exactly that state
+    /// — `is_optional` true, `is_array` wrongly false — is what every caller that branches on
+    /// `is_optional(..) && is_array(..)` (the `Option<Vec<T>>` unwrap-before-`.len()` arm in
+    /// `assertion_helpers.rs`, Go's slice-vs-pointer deref choice in `go/assertions.rs`) takes as
+    /// "optional scalar", emitting a bare `.len()`/`*field` against the still-wrapped `Option`.
+    /// `is_collection_path` is the exact oracle `is_collection_root` already asks for the
+    /// sibling "is this field a collection AT ALL" question; several backends (dart, kotlin,
+    /// csharp, swift, and one call site in this crate's own `rust/assertions.rs`) already OR
+    /// `is_array(..) || is_collection_root(..)` at the call site to route around this gap —
+    /// duplicating the fallback per call site instead of fixing the shared oracle, so any call
+    /// site that never learned the workaround (every helper in `rust/assertion_helpers.rs`, all
+    /// of `go/assertions.rs` and `go/test_function.rs`) still misclassifies. Asking here once
+    /// removes the need for that workaround everywhere.
     pub fn is_array(&self, field: &str) -> bool {
         if self.array_fields.contains(field) {
             return true;
         }
         let relative = self.result_relative_path(field);
-        relative != field && self.array_fields.contains(relative.as_ref())
+        if relative != field && self.array_fields.contains(relative.as_ref()) {
+            return true;
+        }
+        if is_collection_path(&self.ir_collection_map, self.resolve(field)) {
+            return true;
+        }
+        is_collection_path(&self.ir_collection_map, relative.as_ref())
     }
 
     /// Check whether `field` (a raw or already-resolved fixture path) is

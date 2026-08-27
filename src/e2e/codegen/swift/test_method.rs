@@ -113,7 +113,16 @@ pub(super) fn render_test_method(
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(effective_enum_fields)
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
+    // ~keep Without this, `ir_result_field_map.root_type` stays `None`, which makes
+    // `with_anchored_optional_paths` below an unconditional no-op (it early-returns on an
+    // unresolved root) regardless of what paths it is given — the same gap kotlin's identical
+    // wiring documents and csharp/java/typescript already avoid. An `Option<Vec<T>>` segment
+    // field reached through an array-projected path (e.g. `entries[0].sections`) never matches
+    // `with_ir_fields`'s bare-name-only optional set once the path crosses more than one
+    // segment, so without an anchored root the per-segment accessor renderer emitted an
+    // un-unwrapped `RustString`/collection access.
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
     // `with_ir_fields` only proves a bare field name optional, with no path context; anchors
     // this fixture's assertion paths via the IR's real per-type walk instead, matching
@@ -984,3 +993,7 @@ mod inert_example_refusal_tests {
         assert!(take_inert_examples().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "test_method/ir_result_fields_wiring_tests.rs"]
+mod ir_result_fields_wiring_tests;

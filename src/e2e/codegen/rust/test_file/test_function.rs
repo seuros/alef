@@ -721,3 +721,7 @@ fn finalize_test_body(out: &mut String, fixture: &Fixture, e2e_config: &E2eConfi
 #[cfg(test)]
 #[path = "test_function/optional_segment_len_tests.rs"]
 mod optional_segment_len_tests;
+
+#[cfg(test)]
+#[path = "test_function/ir_only_array_classification_tests.rs"]
+mod ir_only_array_classification_tests;

@@ -30,7 +30,7 @@ impl E2eCodegen for PhpCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -252,6 +252,7 @@ impl E2eCodegen for PhpCodegen {
                 &test_class,
                 type_defs,
                 enums,
+                functions,
                 &php_enum_lowering,
                 enum_fields,
                 result_is_simple,

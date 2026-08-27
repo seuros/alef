@@ -457,9 +457,24 @@ pub(super) fn swift_array_count_expr(
 /// that already support `.count` directly.
 ///
 /// The discriminator is the field's resolved leaf type, looked up against the
-/// `SwiftFirstClassMap`'s vec field set when available. If the field is
-/// unknown (None), fall back to checking whether the field would be wrapped
-/// with `.toString()` — indicating a scalar String field unsuitable for counting.
+/// `SwiftFirstClassMap`'s vec field set when available, falling back to the
+/// IR-derived `is_array`/`is_collection_root` oracle when the map has no
+/// per-field data at all, and deferring to a positive JSON-bridge fact over
+/// either when one is recorded. If nothing answers, fall back to wrapping with
+/// `.toString()` — the correct treatment for a genuine scalar String field.
+///
+/// ~keep `leaf_is_vec_via_swift_map`'s own doc already warns it is a bare-leaf,
+/// best-effort answer; treating its `false` as "therefore JSON-bridged" — rather
+/// than "the map has no opinion" — is what made a field the IR proves is a real
+/// `Vec<T>` (but that `SwiftFirstClassMap` never recorded, e.g. reached only
+/// through an opaque owner type the map never scanned) fall to `.toString()`
+/// and silently count the CHARACTERS of a debug string instead of the Vec's
+/// elements. `leaf_is_json_bridged_via_swift_map` is consulted FIRST and wins
+/// outright when it fires, because a field the swift-bridge scan positively
+/// recorded as JSON-bridged really is a scalar `RustString` at the Swift
+/// surface regardless of what the Rust-level IR says its logical shape is —
+/// see that method's own doc for why the map cannot answer this from the
+/// complement of `vec_field_names` alone.
 pub(super) fn swift_count_target(
     field_expr: &str,
     field_resolver: &FieldResolver,
@@ -469,10 +484,17 @@ pub(super) fn swift_count_target(
     if !is_method_call {
         return Some(field_expr.to_string());
     }
-    if let Some(f) = field
-        && field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(f))
-    {
-        return Some(field_expr.to_string());
+    if let Some(f) = field {
+        let resolved = field_resolver.resolve(f);
+        if field_resolver.leaf_is_json_bridged_via_swift_map(resolved) {
+            return Some(format!("{field_expr}.toString()"));
+        }
+        if field_resolver.leaf_is_vec_via_swift_map(resolved)
+            || field_resolver.is_array(resolved)
+            || field_resolver.is_collection_root(resolved)
+        {
+            return Some(field_expr.to_string());
+        }
     }
     // A non-Vec method-call accessor is a scalar String (RustString) leaf. Converting
     // it to a Swift `String` via `.toString()` yields a value that DOES expose a

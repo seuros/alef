@@ -80,3 +80,7 @@ mod tagged_union_method_call_extension_tests;
 #[cfg(test)]
 #[path = "field_access/python_optional_index_tests.rs"]
 mod python_optional_index_tests;
+
+#[cfg(test)]
+#[path = "field_access/is_array_ir_fallback_tests.rs"]
+mod is_array_ir_fallback_tests;
