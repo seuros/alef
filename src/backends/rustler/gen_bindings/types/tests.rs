@@ -481,7 +481,7 @@ fn test_flat_data_enum_from_core_uses_full_rust_path() {
         version: Default::default(),
     };
 
-    let from_core = gen_rustler_flat_data_enum_from_core(&enum_def, "sample_crate");
+    let from_core = gen_rustler_flat_data_enum_from_core(&enum_def, "sample_crate", None);
     assert!(
         from_core.contains("sample_crate::extraction::docx::drawing::DrawingType"),
         "flat data enum From<core> must use full rust_path; got:\n{from_core}"

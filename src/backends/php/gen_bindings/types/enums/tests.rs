@@ -379,7 +379,7 @@ mod flat_data_enum_from_impls_tests {
     #[test]
     fn flat_enum_with_default_variant_emits_default_fallback() {
         let enum_def = make_enum("Message", Some("role"), true, false);
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate", None);
 
         // When the enum has a #[default] variant, should emit `_ => CorePath::default()`
         assert!(
@@ -391,7 +391,7 @@ mod flat_data_enum_from_impls_tests {
     #[test]
     fn flat_enum_without_default_and_with_excluded_emits_unreachable() {
         let enum_def = make_enum("Message", Some("role"), false, true);
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate", None);
 
         // When the enum has NO #[default] variant but HAS excluded variants,
         assert!(
@@ -408,7 +408,7 @@ mod flat_data_enum_from_impls_tests {
     #[test]
     fn flat_enum_without_default_and_no_excluded_emits_unreachable() {
         let enum_def = make_enum("SimpleEnum", Some("type"), false, false);
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "crate", None);
 
         assert!(
             generated.contains("_ => unreachable!(\"unrecognised tag for flat enum, not constructible from PHP\")"),
@@ -469,7 +469,7 @@ mod flat_data_enum_from_impls_tests {
         let mut enum_def = make_enum("Message", Some("kind"), false, false);
         enum_def.rust_path = "core_lib::Message".to_string();
         enum_def.variants[1].cfg = Some(r#"feature = "thumbnails""#.to_string());
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib", None);
 
         assert!(
             generated.contains("core_lib::Message::Variant2 =>"),
@@ -501,7 +501,7 @@ mod flat_data_enum_from_impls_tests {
         let mut enum_def = make_enum("Message", Some("kind"), false, false);
         enum_def.rust_path = "dep_crate::Message".to_string();
         enum_def.variants[1].cfg = Some(r#"feature = "testkit""#.to_string());
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib", None);
 
         assert!(
             !generated.contains("#[cfg(feature = \"testkit\")]"),
@@ -522,7 +522,7 @@ mod flat_data_enum_from_impls_tests {
     #[test]
     fn ungated_enum_emits_no_cfg_in_either_direction() {
         let enum_def = make_enum("Message", Some("kind"), false, false);
-        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib", None);
         assert!(
             !generated.contains("#[cfg("),
             "ungated enum must not emit #[cfg(...)], got:\n{generated}"

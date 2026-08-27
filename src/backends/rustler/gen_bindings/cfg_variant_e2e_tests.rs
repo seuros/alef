@@ -1,0 +1,190 @@
+//! End-to-end regression coverage for alef #544: a FOREIGN (dependency-owned) cfg-gated enum
+//! variant run through the REAL `RustlerBackend::generate_bindings` path, not a direct
+//! `conversions::gen_enum_from_*_cfg` / `types::gen_rustler_flat_data_enum_from_core` call.
+//! Mirrors `backends::wasm::gen_bindings::cfg_variant_e2e_tests`, the pattern task #538
+//! established for wasm.
+//!
+//! Rustler has TWO independent enum-conversion generators, and both carried this defect:
+//! - the shared `codegen::conversions::gen_enum_from_core_to_binding_cfg` path (tagged/fieldless
+//!   enums), reached via `rustler_conv_config` in `native.rs`, which never set
+//!   `configured_features`;
+//! - the bespoke `types::gen_rustler_flat_data_enum_from_core` (flat-struct data enums), which
+//!   never took `configured_features` as an argument at all and computed its own
+//!   `has_cfg_variants` locally -- the "second authority" this task's brief called out.
+//!
+//! Both get a negative/positive-control pair below.
+
+use super::RustlerBackend;
+use crate::core::backend::Backend;
+use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeRef};
+
+fn rustler_config_with_feature(configured_feature: Option<&str>) -> ResolvedCrateConfig {
+    let features_line = configured_feature
+        .map(|f| format!("features = [\"{f}\"]\n"))
+        .unwrap_or_default();
+    let toml_src = format!(
+        "[workspace]\nlanguages = [\"elixir\"]\n[[crates]]\nname = \"test-lib\"\nsources = [\"src/lib.rs\"]\n\
+         [crates.elixir]\napp_name = \"test_lib\"\n{features_line}"
+    );
+    let cfg: NewAlefConfig = toml::from_str(&toml_src).unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+fn lib_rs_content(files: &[crate::core::backend::GeneratedFile]) -> &str {
+    &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("generate_bindings must emit lib.rs")
+        .content
+}
+
+fn core_to_binding_conversion<'a>(lib_rs: &'a str, marker: &str) -> &'a str {
+    let start = lib_rs
+        .find(marker)
+        .unwrap_or_else(|| panic!("generated crate must contain conversion impl starting with:\n{marker}"));
+    let end = lib_rs[start..]
+        .find("\n}")
+        .map(|i| start + i + 2)
+        .expect("conversion impl must close");
+    &lib_rs[start..end]
+}
+
+/// A different first path segment than the crate's own `core_import` ("test_lib") is what
+/// `is_host_owned_rust_path` reads to classify this enum -- and every one of its cfg-gated
+/// variants -- as FOREIGN. Fieldless variants only, so `is_flat_data_enum` is false and this
+/// enum goes through the SHARED `codegen::conversions::gen_enum_from_core_to_binding_cfg` path
+/// (`rustler_conv_config` in `native.rs`), not the bespoke flat-data-enum generator. ~keep
+fn foreign_cfg_tagged_enum_api() -> ApiSurface {
+    ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        enums: vec![EnumDef {
+            name: "RoutingStrategy".to_string(),
+            rust_path: "dep_crate::RoutingStrategy".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Primary".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Extra".to_string(),
+                    cfg: Some(r#"feature = "extra-tier""#.to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Same foreign-ownership shape as `foreign_cfg_tagged_enum_api`, but the non-cfg variant
+/// carries a single TUPLE field, so every data-carrying variant is tuple-shaped and
+/// `is_flat_data_enum` is true -- this enum routes through the bespoke
+/// `types::gen_rustler_flat_data_enum_from_core` generator instead of the shared
+/// `ConversionConfig`-driven path. ~keep
+fn foreign_cfg_flat_data_enum_api() -> ApiSurface {
+    ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        enums: vec![EnumDef {
+            name: "PayloadKind".to_string(),
+            rust_path: "dep_crate::PayloadKind".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Primary".to_string(),
+                    fields: vec![FieldDef {
+                        name: "_0".to_string(),
+                        ty: TypeRef::String,
+                        ..Default::default()
+                    }],
+                    is_tuple: true,
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Extra".to_string(),
+                    cfg: Some(r#"feature = "extra-tier""#.to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// alef #544: `rustler_conv_config` (the `ConversionConfig` construction site feeding the shared
+/// `gen_enum_from_core_to_binding_cfg`) never set `configured_features`, so
+/// `codegen::conversions::enums::has_unresolved_foreign_cfg_variants` always saw `None` and had
+/// to assume a foreign cfg-gated variant might still exist -- emitting a trailing
+/// `_ => Default::default()` catch-all that is unreachable (a `cargo clippy -D warnings` failure)
+/// once the binding's own feature set actually proves the foreign variant can never appear.
+#[test]
+fn generate_bindings_omits_unreachable_catch_all_for_tagged_enum_foreign_variant_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_tagged_enum_api();
+    let config = rustler_config_with_feature(None);
+    let files = RustlerBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = core_to_binding_conversion(lib_rs, "impl From<dep_crate::RoutingStrategy> for RoutingStrategy {");
+
+    assert!(
+        !conversion.contains("_ => Default::default(),"),
+        "a foreign cfg-gated variant proven unreachable by this binding's own configured feature \
+         set must not leave behind an unreachable catch-all (a cargo clippy -D warnings failure), \
+         got:\n{conversion}"
+    );
+}
+
+/// Positive control for the test above.
+#[test]
+fn generate_bindings_keeps_catch_all_for_tagged_enum_foreign_variant_not_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_tagged_enum_api();
+    let config = rustler_config_with_feature(Some("extra-tier"));
+    let files = RustlerBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = core_to_binding_conversion(lib_rs, "impl From<dep_crate::RoutingStrategy> for RoutingStrategy {");
+
+    assert!(
+        conversion.contains("_ => Default::default(),"),
+        "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
+         match stays exhaustive, got:\n{conversion}"
+    );
+}
+
+/// alef #544, the flat-data-enum half (the "second authority" this task's brief called out):
+/// `types::gen_rustler_flat_data_enum_from_core` never took `configured_features` at all and
+/// computed its own `has_cfg_variants` from "does any variant carry a cfg," host-owned or
+/// foreign, ignoring the binding's own feature set entirely -- the same unreachable catch-all
+/// defect, reached through the bespoke generator instead of the shared one.
+#[test]
+fn generate_bindings_omits_unreachable_catch_all_for_flat_data_enum_foreign_variant_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_flat_data_enum_api();
+    let config = rustler_config_with_feature(None);
+    let files = RustlerBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = core_to_binding_conversion(lib_rs, "impl From<dep_crate::PayloadKind> for PayloadKind {");
+
+    assert!(
+        !conversion.contains("_ => Self::default(),"),
+        "a foreign cfg-gated variant proven unreachable by this binding's own configured feature \
+         set must not leave behind an unreachable catch-all (a cargo clippy -D warnings failure), \
+         got:\n{conversion}"
+    );
+}
+
+/// Positive control for the test above.
+#[test]
+fn generate_bindings_keeps_catch_all_for_flat_data_enum_foreign_variant_not_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_flat_data_enum_api();
+    let config = rustler_config_with_feature(Some("extra-tier"));
+    let files = RustlerBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = core_to_binding_conversion(lib_rs, "impl From<dep_crate::PayloadKind> for PayloadKind {");
+
+    assert!(
+        conversion.contains("_ => Self::default(),"),
+        "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
+         match stays exhaustive, got:\n{conversion}"
+    );
+}

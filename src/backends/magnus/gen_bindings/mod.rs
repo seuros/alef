@@ -111,6 +111,12 @@ impl Backend for MagnusBackend {
 
         let mapper = MagnusMapper;
         let core_import = config.core_import_name();
+        // This binding's own configured feature set (already expanded through the core crate's
+        // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+        // provably unreachable for this binding -- see
+        // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
+        let enabled_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Ruby));
 
         let exclude_functions: std::collections::HashSet<&str> = config
             .ruby
@@ -528,6 +534,7 @@ impl Backend for MagnusBackend {
             // enum-only `magnus_conv_config`. ~keep
             map_flatten_to_string: true,
             exclude_types: &absent_named_types,
+            configured_features: Some(enabled_features.as_slice()),
             ..Default::default()
         };
         for e in &api.enums {
@@ -849,6 +856,9 @@ impl Backend for MagnusBackend {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cfg_variant_e2e_tests;
 
 #[cfg(test)]
 #[path = "default_timeout_pairing_tests.rs"]

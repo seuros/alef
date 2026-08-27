@@ -15,9 +15,9 @@ pub use core_to_binding::{
     field_conversion_from_core, field_conversion_from_core_cfg, gen_from_core_to_binding, gen_from_core_to_binding_cfg,
 };
 pub use enums::{
-    VariantDeclaration, enum_conversion_needs_catch_all, enum_variant_declaration,
-    enum_variant_declaration_without_cfg_attribute, gen_enum_from_binding_to_core, gen_enum_from_binding_to_core_cfg,
-    gen_enum_from_core_to_binding, gen_enum_from_core_to_binding_cfg,
+    VariantDeclaration, enum_conversion_needs_catch_all, enum_conversion_needs_catch_all_for_features,
+    enum_variant_declaration, enum_variant_declaration_without_cfg_attribute, gen_enum_from_binding_to_core,
+    gen_enum_from_binding_to_core_cfg, gen_enum_from_core_to_binding, gen_enum_from_core_to_binding_cfg,
 };
 pub use helpers::{
     apply_crate_remaps, build_type_path_map, can_generate_conversion, can_generate_enum_conversion,

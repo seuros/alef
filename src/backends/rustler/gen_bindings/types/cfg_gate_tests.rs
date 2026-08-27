@@ -40,7 +40,7 @@ fn host_owned_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
         ],
     );
 
-    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib");
+    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib", None);
     assert!(
         from_core.contains("mylib::VisitorResult::Thumbnail"),
         "the host-owned variant's arm must still be emitted, got:\n{from_core}"
@@ -86,7 +86,7 @@ fn foreign_owned_cfg_variant_arm_is_dropped_not_gated_in_both_directions() {
         ],
     );
 
-    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib");
+    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib", None);
     assert!(
         !from_core.contains("#[cfg(feature = \"testkit\")]"),
         "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{from_core}"
@@ -119,7 +119,7 @@ fn ungated_enum_emits_no_cfg_in_either_direction() {
         vec![unit_variant("Continue", None), unit_variant("Skip", None)],
     );
 
-    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib");
+    let from_core = gen_rustler_flat_data_enum_from_core(&en, "mylib", None);
     assert!(
         !from_core.contains("#[cfg("),
         "ungated enum must not emit #[cfg(...)], got:\n{from_core}"

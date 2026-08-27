@@ -219,6 +219,31 @@ pub fn enum_conversion_needs_catch_all(
     has_excluded_variants || (has_cfg_variants && !is_host_enum)
 }
 
+/// [`enum_conversion_needs_catch_all`], but resolved against this binding's own configured
+/// feature set instead of the raw "does any variant carry a cfg" question -- the same refinement
+/// [`has_unresolved_foreign_cfg_variants`] already gives every `ConversionConfig`-driven enum
+/// conversion (via [`gen_enum_from_core_to_binding_cfg`]).
+///
+/// For backends whose enum representation cannot route through `ConversionConfig` at all --
+/// Rustler's and PHP's flat-data-enum generators build a bespoke struct-with-discriminator shape
+/// instead of an enum-to-enum `From` impl, so they call `enum_conversion_needs_catch_all` with a
+/// hand-rolled `has_cfg_variants` that ignores configured features entirely -- this is the direct
+/// entry point into the identical resolver, so those generators land on the same verdict as every
+/// other backend instead of re-deriving their own rule (alef #544). ~keep
+#[must_use]
+pub fn enum_conversion_needs_catch_all_for_features(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    has_excluded_variants: bool,
+    configured_features: Option<&[String]>,
+) -> bool {
+    let features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let has_unresolved_cfg_variants =
+        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, features_set.as_ref());
+    enum_conversion_needs_catch_all(has_unresolved_cfg_variants, is_host_enum, has_excluded_variants)
+}
+
 /// Generate `impl From<BindingEnum> for core::Enum` (binding -> core).
 pub fn gen_enum_from_binding_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     gen_enum_from_binding_to_core_cfg(enum_def, core_import, &ConversionConfig::default())

@@ -149,6 +149,12 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         .collect();
     let core_import = config.core_import_name();
     let lang_rename_all = config.serde_rename_all_for_language(Language::Php);
+    // This binding's own configured feature set (already expanded through the core crate's
+    // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+    // provably unreachable for this binding -- see
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
+    let enabled_features =
+        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Php));
 
     let php_config = config.php.as_ref();
     let exclude_functions = php_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
@@ -678,7 +684,11 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         .map(|typ| typ.name.clone())
         .collect();
     for enum_def in api.enums.iter().filter(|e| is_tagged_data_enum(e)) {
-        builder.add_item(&gen_flat_data_enum_from_impls(enum_def, &core_import));
+        builder.add_item(&gen_flat_data_enum_from_impls(
+            enum_def,
+            &core_import,
+            Some(enabled_features.as_slice()),
+        ));
         for variant in &enum_def.variants {
             for field in &variant.fields {
                 if let TypeRef::Named(type_name) = &field.ty

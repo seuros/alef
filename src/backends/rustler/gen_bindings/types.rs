@@ -1,6 +1,6 @@
 use crate::backends::rustler::template_env;
 use crate::codegen::cfg::is_host_owned_rust_path;
-use crate::codegen::conversions::enum_conversion_needs_catch_all;
+use crate::codegen::conversions::enum_conversion_needs_catch_all_for_features;
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
@@ -306,7 +306,11 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
 ///     }
 /// }
 /// ```
-pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_import: &str) -> String {
+pub(super) fn gen_rustler_flat_data_enum_from_core(
+    enum_def: &EnumDef,
+    core_import: &str,
+    configured_features: Option<&[String]>,
+) -> String {
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let discriminator =
@@ -394,10 +398,18 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     // catch-all exists for) with `#[allow(unreachable_patterns)]`. A host-owned variant's arm
     // carries the identical `#[cfg(...)]` as the variant itself (see `rustler_flat_variant_kept`
     // above), so the two always compile in or out together and the match stays exhaustive either
-    // way -- see `codegen::conversions::enum_conversion_needs_catch_all`, the same decision every
-    // other Rust-emitting backend's enum conversion now defers to. ~keep
-    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
-    if enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty()) {
+    // way. A FOREIGN cfg-gated variant's arm is unconditionally dropped instead (same function),
+    // so whether a catch-all is still needed for it depends on whether this binding's own
+    // configured feature set proves the variant unreachable -- delegated to
+    // `codegen::conversions::enum_conversion_needs_catch_all_for_features`, the same resolver
+    // every `ConversionConfig`-driven enum conversion already uses, so this bespoke flat-data
+    // generator can't drift from that verdict (alef #544). ~keep
+    if enum_conversion_needs_catch_all_for_features(
+        enum_def,
+        is_host_enum,
+        !enum_def.excluded_variants.is_empty(),
+        configured_features,
+    ) {
         out.push_str("            _ => Self::default(),\n");
     }
 

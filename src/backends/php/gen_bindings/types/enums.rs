@@ -1,6 +1,6 @@
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::ImplBuilder;
-use crate::codegen::conversions::enum_conversion_needs_catch_all;
+use crate::codegen::conversions::enum_conversion_needs_catch_all_for_features;
 use crate::codegen::naming::wire_variant_value;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
@@ -336,7 +336,11 @@ fn variant_tag_value(variant: &EnumVariant, enum_def: &EnumDef) -> String {
 
 /// Generate `From<core::DataEnum> for PhpDataEnum` and `From<PhpDataEnum> for core::DataEnum`
 /// for a tagged data enum lowered to a flat PHP class.
-pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &str) -> String {
+pub(crate) fn gen_flat_data_enum_from_impls(
+    enum_def: &EnumDef,
+    core_import: &str,
+    configured_features: Option<&[String]>,
+) -> String {
     use crate::core::ir::{PrimitiveType, TypeRef};
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
@@ -350,7 +354,6 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
     // `codegen::conversions::enums::gen_enum_from_core_to_binding_cfg`. A host-owned cfg keeps
     // its arm and its `#[cfg(...)]`. ~keep
     let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
-    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
 
     let all_flat_fields: std::collections::BTreeSet<String> = {
         let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -477,13 +480,22 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
     // When the IR has excluded variants (e.g. cfg-gated variants with #[alef(skip)] or
     // #[doc(hidden)]), the Rust compiler sees those variants at compile time but the generated
     // match has no arm for them, so a catch-all is required. A foreign-crate cfg-gated variant
-    // (dropped above, unconditionally) leaves the same kind of gap. A host-owned cfg-gated
-    // variant does NOT: its arm carries the identical `#[cfg(...)]` as the variant itself, so
-    // they compile in or out together and the match stays exhaustive either way -- see
-    // `codegen::conversions::enum_conversion_needs_catch_all`, which this defers to so the two
-    // reimplementations (this one and NAPI's `gen_tagged_enum_core_to_binding`) can't drift back
-    // out of sync with each other or with the shared `gen_enum_from_core_to_binding_cfg`. ~keep
-    if enum_conversion_needs_catch_all(has_cfg_variants, is_host_enum, !enum_def.excluded_variants.is_empty()) {
+    // (dropped above, unconditionally) leaves the same kind of gap UNLESS this binding's own
+    // configured feature set proves the variant unreachable, in which case the gap closes and no
+    // catch-all is needed. A host-owned cfg-gated variant never needs one: its arm carries the
+    // identical `#[cfg(...)]` as the variant itself, so they compile in or out together and the
+    // match stays exhaustive either way -- see
+    // `codegen::conversions::enum_conversion_needs_catch_all_for_features`, the same
+    // configured-feature-aware resolver every `ConversionConfig`-driven enum conversion already
+    // uses, which this defers to so the reimplementations here and in NAPI's
+    // `gen_tagged_enum_core_to_binding` can't drift back out of sync with each other or with the
+    // shared `gen_enum_from_core_to_binding_cfg` (alef #544). ~keep
+    if enum_conversion_needs_catch_all_for_features(
+        enum_def,
+        is_host_enum,
+        !enum_def.excluded_variants.is_empty(),
+        configured_features,
+    ) {
         out.push_str("            _ => Default::default(),\n");
     }
     out.push_str(&crate::backends::php::template_env::render(

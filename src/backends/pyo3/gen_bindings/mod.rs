@@ -3,6 +3,8 @@
 pub mod capsule;
 mod capsule_methods;
 mod cfg_fields;
+#[cfg(test)]
+mod cfg_variant_e2e_tests;
 mod config;
 mod config_opaque;
 pub(in crate::backends::pyo3) mod constructors;
@@ -82,6 +84,12 @@ impl Backend for Pyo3Backend {
         }
         let mapper = Pyo3Mapper { trait_type_names };
         let core_import = config.core_import_name();
+        // This binding's own configured feature set (already expanded through the core crate's
+        // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+        // provably unreachable for this binding -- see
+        // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
+        let enabled_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Python));
 
         let output_dir = resolve_output_dir(config.output_paths.get("python"), &config.name, "crates/{name}-py/src/");
         let has_serde = crate_has_serde(config);
@@ -710,6 +718,7 @@ impl Backend for Pyo3Backend {
             },
             opaque_types: Some(&conversion_opaque_set),
             never_skip_cfg_field_names: &never_skip_cfg_field_names,
+            configured_features: Some(enabled_features.as_slice()),
             ..Default::default()
         };
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
@@ -731,20 +740,33 @@ impl Backend for Pyo3Backend {
                 ));
             }
         }
+        // Fieldless enums only: a data-carrying enum (`enum_has_data_variants`) never reaches a
+        // `From<core::Enum> for BindingEnum>` match at all in PyO3 -- it is represented as a
+        // per-variant `#[pyclass]` union instead, so there is no catch-all arm for
+        // `configured_features` to prune here. `_cfg` variants (not the plain
+        // `gen_enum_from_binding_to_core`/`gen_enum_from_core_to_binding`, which default
+        // `configured_features` to `None`) are required so a foreign cfg-gated fieldless variant
+        // this binding's own feature set proves unreachable does not leave behind an unreachable
+        // `_ => Default::default()` catch-all under `-D warnings` (alef #544). Reusing
+        // `pyo3_conversion_cfg` is safe here: every field it sets besides `configured_features`
+        // (`option_duration_on_defaults`, `binding_field_renames`, `opaque_types`,
+        // `never_skip_cfg_field_names`) is unread by the enum conversion path. ~keep
         for e in &api.enums {
             if generators::enum_has_data_variants(e) {
                 continue;
             }
             if input_types.contains(&e.name) && crate::codegen::conversions::can_generate_enum_conversion(e) {
-                builder.add_item(&crate::codegen::conversions::gen_enum_from_binding_to_core(
+                builder.add_item(&crate::codegen::conversions::gen_enum_from_binding_to_core_cfg(
                     e,
                     &core_import,
+                    &pyo3_conversion_cfg,
                 ));
             }
             if crate::codegen::conversions::can_generate_enum_conversion_from_core(e) {
-                builder.add_item(&crate::codegen::conversions::gen_enum_from_core_to_binding(
+                builder.add_item(&crate::codegen::conversions::gen_enum_from_core_to_binding_cfg(
                     e,
                     &core_import,
+                    &pyo3_conversion_cfg,
                 ));
             }
         }

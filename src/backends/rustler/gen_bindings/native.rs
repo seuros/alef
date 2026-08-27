@@ -31,6 +31,12 @@ fn prepend_cfg(cfg: Option<&str>, item: String) -> String {
 pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let mapper = RustlerMapper;
     let core_import = config.core_import_name();
+    // This binding's own configured feature set (already expanded through the core crate's
+    // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
+    // provably unreachable for this binding -- see
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
+    let enabled_features =
+        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Elixir));
 
     let elixir_config = config.elixir.as_ref();
     let exclude_functions: AHashSet<String> = elixir_config
@@ -496,7 +502,11 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
 
         if is_flat_data {
             if crate::codegen::conversions::can_generate_enum_conversion_from_core(e) {
-                builder.add_item(&gen_rustler_flat_data_enum_from_core(e, &core_import));
+                builder.add_item(&gen_rustler_flat_data_enum_from_core(
+                    e,
+                    &core_import,
+                    Some(enabled_features.as_slice()),
+                ));
             }
             if input_types.contains(&e.name) && crate::codegen::conversions::can_generate_enum_conversion(e) {
                 builder.add_item(&gen_rustler_flat_data_enum_to_core(e, &core_import));
@@ -504,6 +514,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         } else {
             let rustler_conv_config = crate::codegen::conversions::ConversionConfig {
                 binding_enums_have_data: has_data,
+                configured_features: Some(enabled_features.as_slice()),
                 ..Default::default()
             };
             if input_types.contains(&e.name) && crate::codegen::conversions::can_generate_enum_conversion(e) {
