@@ -96,6 +96,7 @@ pub(crate) fn resolve(
     e2e_config: &E2eConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Vec<PresentationOperation> {
     if fixture.docs.is_none() {
@@ -108,8 +109,8 @@ pub(crate) fn resolve(
         &fixture.tags,
         &fixture.input,
     );
-    let resolver = build_resolver(e2e_config, call, language, type_defs, functions);
-    resolve_with(fixture, e2e_config, language, &resolver, type_defs, functions)
+    let resolver = build_resolver(e2e_config, call, language, type_defs, enums, functions);
+    resolve_with(fixture, e2e_config, language, &resolver, type_defs, enums, functions)
 }
 
 /// The bare, IR-backed resolver [`resolve`] answers with. Shared with [`apply_derived_shows`] so
@@ -120,6 +121,7 @@ fn build_resolver(
     call: &crate::core::config::e2e::CallConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> FieldResolver {
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
@@ -135,6 +137,7 @@ fn build_resolver(
         call,
         language,
         type_defs,
+        enums,
         functions,
     )
 }
@@ -154,6 +157,7 @@ fn anchor_to_declared_result_type(
     call: &crate::core::config::e2e::CallConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> FieldResolver {
     let root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
@@ -164,10 +168,21 @@ fn anchor_to_declared_result_type(
     let result_fields = FieldResolver::ir_result_field_facts(type_defs, language);
     let resolver = resolver.with_ir_result_fields(result_fields, root_type.clone());
     // Only `ir_result_field_map` was ever anchored here; every per-language assertion resolver
-    // ALSO anchors `ir_collection_map` (and `ir_enum_map`) at construction, but this shared
-    // snippet/docs resolver never did. `validate_authored_operations` needs the collection map to
-    // resolve an `Iterate` operation's loop-item type (`FieldResolver::collection_element_type`),
-    // so it has to be anchored here too, not re-derived at the one call site that needs it. ~keep
+    // ALSO anchors `ir_collection_map` and `ir_enum_map` at construction, but this shared
+    // snippet/docs resolver never did — `ir_enum_map` stayed the all-default `IrEnumMap`, so
+    // `FieldResolver::result_field_oracle_knows`'s `tagged_union_method_call_declares` step (which
+    // reads `enum_type_at_path(&self.ir_enum_map, ..)`) could never resolve the union type at a
+    // `fields_method_calls`-covered crossing, even though that same oracle already knows how to
+    // answer once the map is anchored — every per-language assertion resolver anchors it via this
+    // exact call, `FieldResolver::ir_enum_fields(type_defs, enums)`. Without it here, a docs
+    // snippet dropped every field reached through a tagged-union crossing, and `validate_authored_operations`
+    // (via `authored_shows_on_result` -> `ir_permits_result_path` -> `result_field_oracle_knows`)
+    // refused the very paths the consumer's own `fields_method_calls` declared and the executable
+    // e2e generators already rendered correctly. ~keep
+    let resolver = resolver.with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), root_type.clone());
+    // `validate_authored_operations` needs the collection map to resolve an `Iterate` operation's
+    // loop-item type (`FieldResolver::collection_element_type`), so it has to be anchored here
+    // too, not re-derived at the one call site that needs it. ~keep
     resolver.with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), root_type)
 }
 
@@ -181,6 +196,7 @@ fn resolver_anchored_at_element(
     path: &str,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
 ) -> FieldResolver {
     let Some(element_type) = resolver.collection_element_type(path) else {
         return resolver.clone();
@@ -189,6 +205,10 @@ fn resolver_anchored_at_element(
     let resolver = resolver
         .clone()
         .with_ir_result_fields(result_fields, Some(element_type.clone()));
+    let resolver = resolver.with_ir_enum_map(
+        FieldResolver::ir_enum_fields(type_defs, enums),
+        Some(element_type.clone()),
+    );
     resolver.with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), Some(element_type))
 }
 
@@ -213,6 +233,7 @@ pub(crate) fn apply_derived_shows(
     e2e_config: &E2eConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) {
     if fixture.docs.is_none() || fixture.has_docs_presentation() {
@@ -225,7 +246,7 @@ pub(crate) fn apply_derived_shows(
         &fixture.tags,
         &fixture.input,
     );
-    let resolver = build_resolver(e2e_config, call, language, type_defs, functions);
+    let resolver = build_resolver(e2e_config, call, language, type_defs, enums, functions);
     let paths: Vec<String> = default_operations_from_assertions(fixture, call, language, &resolver)
         .into_iter()
         .filter_map(|operation| match operation {
@@ -262,6 +283,7 @@ pub(crate) fn resolve_with(
     language: &str,
     resolver: &FieldResolver,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Vec<PresentationOperation> {
     let Some(docs) = fixture.docs.as_ref() else {
@@ -277,7 +299,7 @@ pub(crate) fn resolve_with(
     // The two callers that supply their own resolver (php's getter map, swift's first-class map)
     // build it from config alone, so the anchoring has to be applied here rather than at each
     // construction site -- one place decides what a snippet knows about its result type. ~keep
-    let resolver = &anchor_to_declared_result_type(resolver.clone(), call, language, type_defs, functions);
+    let resolver = &anchor_to_declared_result_type(resolver.clone(), call, language, type_defs, enums, functions);
     let result_var = call.effective_result_var();
     let result_root = root_variable(language, result_var);
     let operations = docs
@@ -366,7 +388,7 @@ pub(crate) fn resolve_with(
                 // does declare `content` at `results[].content`, so the still-result-anchored resolver
                 // dutifully reproduced that whole path underneath the already-peeled loop variable, in
                 // every backend that shares this one presentation layer. ~keep
-                let item_resolver = resolver_anchored_at_element(resolver, path, language, type_defs);
+                let item_resolver = resolver_anchored_at_element(resolver, path, language, type_defs, enums);
                 PresentationOperation {
                     kind: "iterate",
                     expression,
@@ -843,3 +865,7 @@ mod iterate_field_display_safety_tests;
 #[cfg(test)]
 #[path = "presentation/iterate_element_anchor_tests.rs"]
 mod iterate_element_anchor_tests;
+
+#[cfg(test)]
+#[path = "presentation/tagged_union_crossing_tests.rs"]
+mod tagged_union_crossing_tests;

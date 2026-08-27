@@ -288,8 +288,8 @@ fn render_docs_snippet(
     // binds a named `result` and whether a `Result` return is unwrapped — sees the derived
     // operations too, not just hand-authored ones. Without it the emitter bound `let _ =`
     // while this snippet printed `result.<field>`. ~keep
-    super::presentation::apply_derived_shows(&mut call_fixture, e2e_config, "rust", type_defs, functions);
-    let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs, functions);
+    super::presentation::apply_derived_shows(&mut call_fixture, e2e_config, "rust", type_defs, enums, functions);
+    let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs, enums, functions);
     let call = e2e_config.resolve_call_for_fixture(
         call_fixture.call.as_deref(),
         &call_fixture.id,

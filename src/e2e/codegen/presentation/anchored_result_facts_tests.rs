@@ -105,6 +105,7 @@ fn an_optional_field_on_the_calls_return_type_is_optional_despite_a_required_twi
         &config(),
         "node",
         &type_defs,
+        &[],
         &convert_returning("ConversionResult"),
     );
 
@@ -144,6 +145,7 @@ fn a_required_field_of_a_default_deriving_result_type_is_optional_in_the_node_bi
         &config(),
         "node",
         &type_defs,
+        &[],
         &convert_returning("ScrapeOutcome"),
     );
 
@@ -181,6 +183,7 @@ fn a_required_field_of_a_default_deriving_result_type_stays_required_in_the_wasm
         &config(),
         "wasm",
         &type_defs,
+        &[],
         &convert_returning("ScrapeOutcome"),
     );
 
@@ -220,6 +223,7 @@ fn a_field_declared_only_on_an_unrelated_type_derives_no_accessor() {
         &config(),
         "python",
         &type_defs,
+        &[],
         &convert_returning("ConversionResult"),
     );
 
@@ -255,6 +259,7 @@ fn a_field_the_result_type_declares_still_derives_its_accessor() {
         &config(),
         "python",
         &type_defs,
+        &[],
         &convert_returning("ConversionResult"),
     );
 
@@ -302,6 +307,7 @@ fn an_unresolvable_result_type_keeps_the_unanchored_answers() {
         "node",
         &type_defs,
         &[],
+        &[],
     );
     assert_eq!(
         guarded
@@ -317,6 +323,7 @@ fn an_unresolvable_result_type_keeps_the_unanchored_answers() {
         &config(),
         "python",
         &type_defs,
+        &[],
         &[],
     );
     assert_eq!(
@@ -358,6 +365,7 @@ fn the_availability_oracles_disagree_on_purpose_for_a_name_the_result_type_lacks
         &e2e_config.call,
         "python",
         &type_defs,
+        &[],
         &convert_returning("ConversionResult"),
     );
 
@@ -418,6 +426,7 @@ fn a_result_field_named_like_a_streaming_pseudo_field_still_derives_its_accessor
         &config(),
         "python",
         &type_defs,
+        &[],
         &convert_returning("SegmentReport"),
     );
     assert_eq!(
@@ -443,6 +452,7 @@ fn a_result_field_named_like_a_streaming_pseudo_field_still_derives_its_accessor
         &config(),
         "python",
         &type_defs,
+        &[],
         &convert_returning("SegmentReport"),
     );
     assert_eq!(

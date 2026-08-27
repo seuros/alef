@@ -135,8 +135,8 @@ fn show_display_flag_selects_the_human_readable_rust_formatter() {
             is_async => false, presentation => operations },
         )
     };
-    let displayed = render(resolve(&display_fixture, &config, "rust", &[], &[]));
-    let debugged = render(resolve(&debug_fixture, &config, "rust", &[], &[]));
+    let displayed = render(resolve(&display_fixture, &config, "rust", &[], &[], &[]));
+    let debugged = render(resolve(&debug_fixture, &config, "rust", &[], &[], &[]));
 
     assert!(displayed.contains("println!(\"{}\", result.text);"), "{displayed}");
     assert!(debugged.contains("println!(\"{:?}\", result.text);"), "{debugged}");
@@ -146,8 +146,8 @@ fn show_display_flag_selects_the_human_readable_rust_formatter() {
 fn presentation_templates_emit_idiomatic_python_rust_and_typescript() {
     let fixture = fixture();
     let config = config();
-    let python = resolve(&fixture, &config, "python", &[], &[]);
-    let rust = resolve(&fixture, &config, "rust", &[], &[]);
+    let python = resolve(&fixture, &config, "python", &[], &[], &[]);
+    let rust = resolve(&fixture, &config, "rust", &[], &[], &[]);
     let mut typescript_fixture = fixture.clone();
     typescript_fixture
         .docs
@@ -161,7 +161,7 @@ fn presentation_templates_emit_idiomatic_python_rust_and_typescript() {
         display: true,
         optional: true,
     }];
-    let typescript = resolve(&typescript_fixture, &config, "node", &[], &[]);
+    let typescript = resolve(&typescript_fixture, &config, "node", &[], &[], &[]);
 
     let python_output = crate::e2e::template_env::render(
         "python/snippet_body.py.jinja",
@@ -244,7 +244,7 @@ fn resolve_iterate_treats_path_optional_when_fixture_flag_is_stale() {
     let mut stale_config = config();
     stale_config.fields_optional = ["results[0].elements".to_string()].into_iter().collect();
 
-    let operations = resolve(&stale_fixture, &stale_config, "node", &[], &[]);
+    let operations = resolve(&stale_fixture, &stale_config, "node", &[], &[], &[]);
     let iterate = operations.first().expect("one iterate operation");
     assert!(
         iterate.optional,
@@ -300,8 +300,8 @@ fn resolve_show_unwraps_ir_only_optional_field_in_non_leaf_position() {
         ..TypeDef::default()
     };
 
-    let without_ir = resolve(&show_fixture, &config, "rust", &[], &[]);
-    let with_ir = resolve(&show_fixture, &config, "rust", &[process_result], &[]);
+    let without_ir = resolve(&show_fixture, &config, "rust", &[], &[], &[]);
+    let with_ir = resolve(&show_fixture, &config, "rust", &[process_result], &[], &[]);
 
     assert_eq!(
         without_ir[0].expression, "result.data.kind",
@@ -372,6 +372,7 @@ fn resolve_downgrades_display_true_against_an_ir_struct_field_but_keeps_it_for_a
         &config,
         "rust",
         &[process_result, data],
+        &[],
         std::slice::from_ref(&process_fn),
     );
     let by_path = |path: &str| operations.iter().find(|op| op.expression.ends_with(path)).unwrap();
@@ -427,12 +428,12 @@ fn resolve_derives_show_operations_from_assertion_fields_when_docs_names_none() 
         ..E2eConfig::default()
     };
 
-    let python = resolve(&fixture, &config, "python", &[], &[]);
+    let python = resolve(&fixture, &config, "python", &[], &[], &[]);
     assert_eq!(python.len(), 1, "the duplicate 'content' field must not be shown twice");
     assert_eq!(python[0].kind, "show");
     assert_eq!(python[0].expression, "result.content");
 
-    let rust = resolve(&fixture, &config, "rust", &[], &[]);
+    let rust = resolve(&fixture, &config, "rust", &[], &[], &[]);
     assert_eq!(rust[0].expression, "result.content");
 }
 
@@ -450,7 +451,7 @@ fn resolve_ignores_assertions_with_no_field_when_deriving_show_operations() {
     .expect("fixture must parse");
     let config = config();
 
-    assert!(resolve(&fixture, &config, "python", &[], &[]).is_empty());
+    assert!(resolve(&fixture, &config, "python", &[], &[], &[]).is_empty());
 }
 
 /// A void call has no result to access; even a fixture whose assertions happen to name a
@@ -468,5 +469,5 @@ fn resolve_derives_no_show_operations_for_a_void_returning_call() {
     let mut config = config();
     config.call.returns_void = true;
 
-    assert!(resolve(&fixture, &config, "python", &[], &[]).is_empty());
+    assert!(resolve(&fixture, &config, "python", &[], &[], &[]).is_empty());
 }

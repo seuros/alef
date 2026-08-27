@@ -91,6 +91,7 @@ fn shown_expressions(language: &str, shows: &[&str]) -> Vec<String> {
         &config(),
         language,
         &type_defs(),
+        &[],
         &process_returning("ProcessResult"),
     )
     .into_iter()
@@ -148,6 +149,7 @@ fn wasm_does_not_guard_a_required_nested_field() {
         &config(),
         "wasm",
         &type_defs,
+        &[],
         &process_returning("ProcessResult"),
     )
     .into_iter()

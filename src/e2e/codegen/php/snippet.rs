@@ -175,6 +175,7 @@ pub(super) fn render_snippet_body_with_ir(
         lang,
         &field_resolver,
         type_defs,
+        enums,
         functions,
     );
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());

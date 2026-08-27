@@ -157,6 +157,7 @@ pub(super) fn render_with_ir(
             "swift",
             &field_resolver,
             type_defs,
+            enums,
             functions,
         )
     };

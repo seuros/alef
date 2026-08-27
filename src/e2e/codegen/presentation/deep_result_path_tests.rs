@@ -98,6 +98,7 @@ fn shown_expressions(field_path: &str) -> Vec<String> {
         &config(),
         "python",
         &type_defs(),
+        &[],
         &convert_returning("ConversionResult"),
     )
     .into_iter()
@@ -145,6 +146,7 @@ fn the_availability_oracles_disagree_on_purpose_for_a_nested_name_the_result_typ
         &e2e_config.call,
         "python",
         &type_defs(),
+        &[],
         &convert_returning("ConversionResult"),
     );
 
@@ -180,6 +182,7 @@ fn only_a_consumer_declared_path_names_the_config_key_that_declares_it() {
         &e2e_config.call,
         "python",
         &type_defs(),
+        &[],
         &convert_returning("ConversionResult"),
     );
 

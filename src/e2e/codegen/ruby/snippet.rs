@@ -10,9 +10,9 @@ pub(super) fn render_snippet_body(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
-    _enums: &[EnumDef],
+    enums: &[EnumDef],
 ) -> Result<String> {
-    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, _enums, &[])
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, &[])
 }
 
 /// [`render_snippet_body`], with the free-function registry it cannot see.
@@ -26,7 +26,7 @@ pub(super) fn render_snippet_body_with_ir(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
-    _enums: &[EnumDef],
+    enums: &[EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
     if fixture.is_http_test() {
@@ -97,7 +97,8 @@ pub(super) fn render_snippet_body_with_ir(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, functions);
+    let presentation =
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, enums, functions);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     let body = crate::e2e::template_env::render(
         "ruby/snippet_body.jinja",

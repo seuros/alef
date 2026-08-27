@@ -239,7 +239,8 @@ pub(crate) fn render_snippet_body_with_ir(
         class_name
     };
 
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, functions);
+    let presentation =
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, enums, functions);
     let result_var = call.effective_result_var();
     Ok(crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",

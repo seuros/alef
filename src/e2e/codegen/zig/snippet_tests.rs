@@ -25,6 +25,7 @@ fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("snippet renders");
 
@@ -88,6 +89,7 @@ fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("snippet renders");
 
@@ -126,6 +128,7 @@ fn client_factory_snippet_without_docs_client_keeps_the_base_url_slot_null() {
         "sample",
         "sample",
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
     )
@@ -197,6 +200,7 @@ fn snippet_keeps_import_and_call_without_test_harness() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("snippet renders");
     assert!(rendered.contains("const sample = @import(\"sample\")"));
@@ -228,6 +232,7 @@ fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
         "sample",
         "sample",
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
     )
@@ -280,6 +285,7 @@ fn json_struct_result_keeps_the_payload_print_instead_of_field_accessors() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("snippet renders");
 
@@ -313,6 +319,7 @@ fn json_result_snippet_consumes_and_frees_the_result() {
         "sample",
         "sample",
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
     )
@@ -376,6 +383,7 @@ fn expected_error_snippet_prints_caught_error_name() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("snippet renders");
     assert!(rendered.contains("else |err|"));
@@ -405,6 +413,7 @@ fn visitor_snippet_reuses_native_callback_setup() {
         &ResolvedCrateConfig::default(),
         &[],
         &[],
+        &[],
     )
     .expect("visitor snippet renders");
     assert!(rendered.contains("pub fn main() !void"));
@@ -431,6 +440,7 @@ fn streaming_snippet_reuses_error_union_call_preparation() {
         "sample",
         "sample",
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
     )
@@ -555,6 +565,7 @@ fn snippet_target_never_references_std_testing_for_a_docs_bytes_input() {
         "sample",
         "sample",
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
     )

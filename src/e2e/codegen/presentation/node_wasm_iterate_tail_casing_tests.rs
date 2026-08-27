@@ -103,6 +103,7 @@ fn iterate_expression(language: &str) -> String {
         &config(),
         language,
         &type_defs(),
+        &[],
         &search_returning("Envelope"),
     )
     .into_iter()
@@ -170,10 +171,17 @@ fn wasm_leaves_an_already_camel_tail_segment_unchanged() {
             ..TypeDef::default()
         },
     ];
-    let expression = resolve(&fixture, &config(), "wasm", &type_defs, &search_returning("Envelope"))
-        .into_iter()
-        .find(|operation| operation.kind == "iterate")
-        .expect("fixture declares one iterate operation")
-        .expression;
+    let expression = resolve(
+        &fixture,
+        &config(),
+        "wasm",
+        &type_defs,
+        &[],
+        &search_returning("Envelope"),
+    )
+    .into_iter()
+    .find(|operation| operation.kind == "iterate")
+    .expect("fixture declares one iterate operation")
+    .expression;
     assert_eq!(expression, "first?.tags");
 }

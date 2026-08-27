@@ -114,7 +114,8 @@ pub(super) fn render_snippet_body_with_ir(
         .unwrap_or(&class_name)
         .to_string();
     let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java", type_defs, functions);
+    let presentation =
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java", type_defs, enums, functions);
     let expects_error = fixture
         .assertions
         .iter()

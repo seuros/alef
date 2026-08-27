@@ -32,7 +32,7 @@ pub(super) fn render_snippet_body(
     // `assertions` already name (see `presentation::default_operations_from_assertions`),
     // and that fallback has nothing to read once this function empties the list. ~keep
     let presentation =
-        crate::e2e::codegen::presentation::resolve(&call_fixture, e2e_config, "python", type_defs, functions);
+        crate::e2e::codegen::presentation::resolve(&call_fixture, e2e_config, "python", type_defs, enums, functions);
     call_fixture.assertions.clear();
     call_fixture.mock_response = None;
     // With `mock_response` cleared, `test_function`'s `client_factory` path falls through

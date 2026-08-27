@@ -533,8 +533,17 @@ fn describe_type_ref(ty: &crate::core::ir::TypeRef) -> String {
 pub fn validate_field_classifications(
     e2e_config: &E2eConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
+    // The same authority `FieldResolver::result_field_oracle_knows`'s
+    // `tagged_union_method_call_declares` step anchors via `with_ir_enum_map` before rendering a
+    // `fields_method_calls`-covered accessor for the executable e2e generators. Consulted here so
+    // this check and those generators read one fact about which leaf names are real tagged-union
+    // crossing fields, instead of this check re-deriving that answer from `type_defs` alone -- see
+    // `is_declared_union_crossing`. ~keep
+    let enum_map = crate::e2e::field_access::FieldResolver::ir_enum_fields(type_defs, enums);
+    let method_calls = declared_method_call_crossings(e2e_config);
     let mut tables: Vec<(&std::collections::HashSet<String>, FieldClassification, String)> = vec![
         (
             &e2e_config.fields_optional,
@@ -559,9 +568,70 @@ pub fn validate_field_classifications(
         tables.push((&call.fields_array, FieldClassification::Array, key));
     }
     for (entries, classification, config_key) in tables {
-        check_classification_table(entries, classification, &config_key, type_defs, &mut errors);
+        check_classification_table(
+            entries,
+            classification,
+            &config_key,
+            type_defs,
+            &enum_map,
+            &method_calls,
+            &mut errors,
+        );
     }
     errors
+}
+
+/// Every `fields_method_calls` entry declared anywhere in `e2e_config` (`[e2e]`, `[e2e.call]`,
+/// and every `[e2e.calls.*]`), pooled into one flat set.
+///
+/// ~keep [`check_classification_table`] is a leaf-name check with no per-call scoping of its
+/// own -- it already pools `fields_optional`/`fields_array` the same way across every call --
+/// so a crossing declared under one call's override still vouches for the same leaf validated
+/// against a different table's entry. Under-scoping this the OTHER way (requiring an exact
+/// per-call match) would reintroduce the false "unverified" warning for a consumer whose
+/// `fields_method_calls` lives on `[e2e.call]` while the `fields_optional` entry it covers is
+/// declared globally on `[e2e]`, or vice versa.
+fn declared_method_call_crossings(e2e_config: &E2eConfig) -> std::collections::HashSet<&str> {
+    let mut method_calls: std::collections::HashSet<&str> =
+        e2e_config.fields_method_calls.iter().map(String::as_str).collect();
+    method_calls.extend(e2e_config.call.fields_method_calls.iter().map(String::as_str));
+    for call in e2e_config.calls.values() {
+        method_calls.extend(call.fields_method_calls.iter().map(String::as_str));
+    }
+    method_calls
+}
+
+/// Whether `entry` is a declared, IR-confirmed tagged-union crossing: the consumer's own
+/// `fields_method_calls` names `entry` verbatim, AND `leaf` is a real crossing field name --
+/// the single field an `EnumVariant` carries, per
+/// [`crate::e2e::field_access::FieldResolver::ir_enum_fields`]'s `variant_payload_types` (built
+/// by `ir_enum::build_variant_payload_types`).
+///
+/// ~keep Both halves are required. The config declaration alone is not enough: trusting it
+/// unconditionally would let a misspelled `fields_method_calls` entry that names an ordinary,
+/// non-union field silence a genuine "unverified" warning for it -- the exact over-correction
+/// `check_classification_table`'s own doc comment warns never happens today ("never
+/// over-report"). Requiring the IR to independently confirm the leaf is a real crossing field
+/// keeps this additive: it can only clear an entry the IR itself backs, never any entry a
+/// config typo merely claims.
+///
+/// A crossing field's own [`crate::core::ir::FieldDef::optional`] is never `true` -- a Rust
+/// tuple-variant field is not itself `Option<T>` -- even though every accessor into it returns
+/// `Option<..>` (the enum might not be that variant). `FieldClassification::agrees_with`'s
+/// literal `field.optional` check is the wrong question for a crossing field, which is why this
+/// clears the entry before that check runs rather than teaching it a second notion of
+/// optionality.
+fn is_declared_union_crossing(
+    entry: &str,
+    leaf: &str,
+    enum_map: &crate::e2e::field_access::IrEnumMap,
+    method_calls: &std::collections::HashSet<&str>,
+) -> bool {
+    method_calls.contains(entry)
+        && enum_map
+            .variant_payload_types
+            .values()
+            .any(|variants| variants.values().any(|(field_name, _)| field_name == leaf))
 }
 
 fn check_classification_table(
@@ -569,6 +639,8 @@ fn check_classification_table(
     classification: FieldClassification,
     config_key: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enum_map: &crate::e2e::field_access::IrEnumMap,
+    method_calls: &std::collections::HashSet<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
     let table = classification.table();
@@ -578,6 +650,9 @@ fn check_classification_table(
     for entry in sorted {
         let (leaf, subscripted) = classification_target(entry);
         if leaf.is_empty() {
+            continue;
+        }
+        if is_declared_union_crossing(entry, leaf, enum_map, method_calls) {
             continue;
         }
         match ir_field_shape(leaf, type_defs) {
@@ -1195,246 +1270,5 @@ mod tests {
 }
 
 #[cfg(test)]
-mod field_classification_tests {
-    use super::{Severity, validate_field_classifications};
-    use crate::core::config::e2e::{CallConfig, E2eConfig};
-    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
-    use std::collections::HashSet;
-
-    fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
-        FieldDef {
-            name: name.to_string(),
-            ty,
-            optional,
-            ..FieldDef::default()
-        }
-    }
-
-    /// One IR type carrying the shapes the assertions below rule on: a plain `Vec<String>`, a
-    /// genuine `Option<String>`, and a plain `String`.
-    fn article_ir() -> Vec<TypeDef> {
-        vec![TypeDef {
-            name: "ArticleMetadata".to_string(),
-            fields: vec![
-                field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
-                field("subtitle", TypeRef::String, true),
-                field("title", TypeRef::String, false),
-                field(
-                    "open_graph",
-                    TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
-                    false,
-                ),
-            ],
-            ..TypeDef::default()
-        }]
-    }
-
-    fn config_with(optional: &[&str], array: &[&str]) -> E2eConfig {
-        E2eConfig {
-            fields_optional: optional.iter().map(|f| (*f).to_string()).collect(),
-            fields_array: array.iter().map(|f| (*f).to_string()).collect(),
-            ..E2eConfig::default()
-        }
-    }
-
-    fn errors_only(diagnostics: &[super::ValidationError]) -> Vec<&super::ValidationError> {
-        diagnostics
-            .iter()
-            .filter(|diag| diag.severity == Severity::Error)
-            .collect()
-    }
-
-    /// The defect this check exists for: `metadata.article.tags` declared optional against a
-    /// plain `Vec<String>` used to surface only as "type annotations needed" pointed at
-    /// generated code, with nothing naming the config line.
-    #[test]
-    fn optional_entry_naming_a_non_optional_ir_field_is_an_error_that_names_key_and_type() {
-        let diagnostics = validate_field_classifications(&config_with(&["metadata.article.tags"], &[]), &article_ir());
-
-        let errors = errors_only(&diagnostics);
-        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
-        let message = &errors[0].message;
-        assert!(message.contains("[e2e].fields_optional"), "names the table: {message}");
-        assert!(
-            message.contains("`metadata.article.tags`"),
-            "names the entry: {message}"
-        );
-        assert!(message.contains("Vec<String>"), "names the real IR type: {message}");
-        assert_eq!(errors[0].file, "alef.toml");
-    }
-
-    /// The check must not fire on a correct declaration — the field really is `Option<String>`.
-    #[test]
-    fn optional_entry_naming_a_genuinely_optional_ir_field_produces_no_error() {
-        let diagnostics = validate_field_classifications(&config_with(&["metadata.subtitle"], &[]), &article_ir());
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "a correct fields_optional entry must not be rejected: {diagnostics:?}"
-        );
-    }
-
-    /// A subscripted entry classifies the ELEMENT the subscript reaches, not the container. Every
-    /// key lookup on a `HashMap<String, String>` used to be rejected as contradicting the IR
-    /// because the subscript was stripped and the map itself was ruled on as a bare field — which
-    /// is how a correct `metadata.document.open_graph[title]` failed the whole run.
-    #[test]
-    fn optional_entry_subscripting_a_map_field_produces_no_error() {
-        let diagnostics = validate_field_classifications(
-            &config_with(&["metadata.document.open_graph[title]"], &[]),
-            &article_ir(),
-        );
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "a map key lookup is legitimately optional: {diagnostics:?}"
-        );
-    }
-
-    /// Indexing a list element as optional is the same shape and must also pass.
-    #[test]
-    fn optional_entry_subscripting_a_vec_field_produces_no_error() {
-        let diagnostics = validate_field_classifications(&config_with(&["tags[0]"], &[]), &article_ir());
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "a list index is legitimately optional: {diagnostics:?}"
-        );
-    }
-
-    /// Subscript-awareness must not become a blanket amnesty: a subscript against a scalar is
-    /// still a wrong path, and the diagnostic has to say the subscript is the problem.
-    #[test]
-    fn optional_entry_subscripting_a_scalar_field_is_still_an_error() {
-        let diagnostics = validate_field_classifications(&config_with(&["title[0]"], &[]), &article_ir());
-
-        let errors = errors_only(&diagnostics);
-        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
-        assert!(
-            errors[0].message.contains("subscripts it"),
-            "got: {}",
-            errors[0].message
-        );
-        assert!(errors[0].message.contains("String"), "got: {}", errors[0].message);
-    }
-
-    /// `fields_array` on a subscripted entry claims the element is itself indexable, so a
-    /// `HashMap<String, String>` value — a plain `String` — must still be rejected.
-    #[test]
-    fn array_entry_subscripting_a_map_of_scalars_is_an_error() {
-        let diagnostics = validate_field_classifications(&config_with(&[], &["open_graph[title]"]), &article_ir());
-
-        let errors = errors_only(&diagnostics);
-        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
-        assert!(errors[0].message.contains("fields_array"), "got: {}", errors[0].message);
-    }
-
-    /// `fields_array` gets the same treatment: declaring a plain `String` indexable emits `[0]`
-    /// against a scalar.
-    #[test]
-    fn array_entry_naming_a_non_collection_ir_field_is_an_error() {
-        let diagnostics = validate_field_classifications(&config_with(&[], &["title"]), &article_ir());
-
-        let errors = errors_only(&diagnostics);
-        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
-        assert!(errors[0].message.contains("fields_array"), "got: {}", errors[0].message);
-        assert!(errors[0].message.contains("String"), "got: {}", errors[0].message);
-    }
-
-    #[test]
-    fn array_entry_naming_a_vec_ir_field_produces_no_error() {
-        let diagnostics = validate_field_classifications(&config_with(&[], &["tags"]), &article_ir());
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "a correct fields_array entry must not be rejected: {diagnostics:?}"
-        );
-    }
-
-    /// The `IrAbsent` arm. Every IR-less caller (unit tests, snippet entry points that generate
-    /// from empty IR slices) must keep working — nothing was consulted, so nothing is claimed.
-    #[test]
-    fn an_absent_ir_produces_no_diagnostic_at_all() {
-        let diagnostics = validate_field_classifications(&config_with(&["tags"], &["title"]), &[]);
-
-        assert!(
-            diagnostics.is_empty(),
-            "an absent IR licenses no claim in either direction: {diagnostics:?}"
-        );
-    }
-
-    /// The `Unresolvable` arm. A name the IR has never heard of is unverified, not wrong —
-    /// virtual namespace prefixes and synthetic/streaming paths legitimately look like this — so
-    /// it warns and generation still proceeds.
-    #[test]
-    fn an_ir_unknown_leaf_warns_rather_than_failing_generation() {
-        let diagnostics =
-            validate_field_classifications(&config_with(&["interaction.chunk_count"], &[]), &article_ir());
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "an unverifiable entry must not fail generation: {diagnostics:?}"
-        );
-        assert_eq!(diagnostics.len(), 1, "expected one warning, got: {diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, Severity::Warning);
-        assert!(
-            diagnostics[0].message.contains("unverified") && diagnostics[0].message.contains("`chunk_count`"),
-            "the warning must name the leaf it could not resolve: {}",
-            diagnostics[0].message
-        );
-    }
-
-    /// Index and wildcard suffixes are part of the entry spelling, not part of the field name.
-    #[test]
-    fn indexed_and_wildcard_entry_spellings_resolve_to_the_same_leaf_field() {
-        let indexed = validate_field_classifications(&config_with(&["article[0].tags"], &[]), &article_ir());
-        let wildcard = validate_field_classifications(&config_with(&["article[].tags"], &[]), &article_ir());
-
-        assert_eq!(errors_only(&indexed).len(), 1, "got: {indexed:?}");
-        assert_eq!(errors_only(&wildcard).len(), 1, "got: {wildcard:?}");
-    }
-
-    /// Per-call override tables are checked too, and the diagnostic names the call's own table
-    /// rather than the global one — the operator has to be pointed at the line they must edit.
-    #[test]
-    fn per_call_override_tables_are_checked_and_named_in_the_diagnostic() {
-        let mut config = E2eConfig::default();
-        config.calls.insert(
-            "summarize".to_string(),
-            CallConfig {
-                fields_optional: HashSet::from(["tags".to_string()]),
-                ..CallConfig::default()
-            },
-        );
-
-        let diagnostics = validate_field_classifications(&config, &article_ir());
-
-        let errors = errors_only(&diagnostics);
-        assert_eq!(errors.len(), 1, "got: {diagnostics:?}");
-        assert!(
-            errors[0].message.contains("[e2e.calls.summarize].fields_optional"),
-            "got: {}",
-            errors[0].message
-        );
-    }
-
-    /// The documented under-report trade: a field name that agrees with the entry on ANY IR type
-    /// clears it, because a bare leaf name cannot be pinned to one result type from here. This
-    /// pins the trade so a later "tighten it up" change has to confront it deliberately.
-    #[test]
-    fn a_same_named_field_that_agrees_on_another_type_clears_the_entry() {
-        let mut ir = article_ir();
-        ir.push(TypeDef {
-            name: "DraftMetadata".to_string(),
-            fields: vec![field("tags", TypeRef::Vec(Box::new(TypeRef::String)), true)],
-            ..TypeDef::default()
-        });
-
-        let diagnostics = validate_field_classifications(&config_with(&["tags"], &[]), &ir);
-
-        assert!(
-            errors_only(&diagnostics).is_empty(),
-            "agrees-on-any-type must win, or a shared field name produces a false failure: {diagnostics:?}"
-        );
-    }
-}
+#[path = "field_classification_tests.rs"]
+mod field_classification_tests;

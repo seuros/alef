@@ -84,7 +84,14 @@ fn docs_fixture(operations: serde_json::Value) -> Fixture {
 }
 
 fn resolved_rust(operations: serde_json::Value) -> Vec<PresentationOperation> {
-    resolve(&docs_fixture(operations), &config(), "rust", &type_defs(), &functions())
+    resolve(
+        &docs_fixture(operations),
+        &config(),
+        "rust",
+        &type_defs(),
+        &[],
+        &functions(),
+    )
 }
 
 /// The fix: a `Vec<Vec<String>>` per-item field is refused by the allowlist, and a `String`
@@ -125,6 +132,7 @@ fn field_displays_is_untouched_for_non_rust_languages() {
         &config(),
         "python",
         &type_defs(),
+        &[],
         &functions(),
     );
     assert_eq!(operations[0].field_displays, vec![true, true]);

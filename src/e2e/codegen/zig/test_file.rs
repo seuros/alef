@@ -716,6 +716,7 @@ fn render_test_fn(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
@@ -723,6 +724,7 @@ pub(super) fn render_snippet_body(
     ffi_prefix: &str,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<String> {
     let call = e2e_config.resolve_call_for_fixture(
@@ -803,7 +805,7 @@ pub(super) fn render_snippet_body(
     // fixtures keep the whole-payload print below. ~keep
     let binds_typed_result = !expects_error && !call.returns_void && !body.contains("const _result_json =");
     let presentation = if binds_typed_result {
-        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig", type_defs, functions)
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig", type_defs, enums, functions)
     } else {
         Vec::new()
     };

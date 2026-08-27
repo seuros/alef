@@ -263,7 +263,7 @@ fn generate_e2e_with_extensions(
     // operator sees "type annotations needed" in a file they never wrote, with nothing naming the
     // config line that caused it. Refusing here costs one regeneration; letting it through costs
     // a debugging session in the wrong tree. ~keep
-    let classification_diagnostics = validate::validate_field_classifications(e2e_config, type_defs);
+    let classification_diagnostics = validate::validate_field_classifications(e2e_config, type_defs, enums);
     for diag in unreported(&classification_diagnostics, log) {
         match diag.severity {
             Severity::Error => error!("{}: {}", diag.file, diag.message),

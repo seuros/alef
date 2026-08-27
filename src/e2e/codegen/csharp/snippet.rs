@@ -168,7 +168,8 @@ pub(super) fn render_snippet_body_with_ir(
     let needs_collections = setup_lines
         .iter()
         .any(|line| line.contains("List<") || line.contains("Dictionary<"));
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "csharp", type_defs, functions);
+    let presentation =
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "csharp", type_defs, enums, functions);
     Ok(crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
         minijinja::context! {

@@ -90,6 +90,7 @@ fn resolved(fixture: &Fixture, language: &str) -> Vec<PresentationOperation> {
         &config(),
         language,
         &type_defs(),
+        &[],
         &convert_returning("Envelope"),
     )
 }

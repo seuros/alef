@@ -79,7 +79,7 @@ fn an_error_path_assertion_field_derives_no_accessor() {
         {"type": "equals", "field": "error.status_code", "value": 401}
     ]));
 
-    let operations = resolve(&fixture, &call_config(), "java", &type_defs_declaring_error(), &[]);
+    let operations = resolve(&fixture, &call_config(), "java", &type_defs_declaring_error(), &[], &[]);
 
     assert_eq!(
         operations,
@@ -94,7 +94,7 @@ fn a_field_the_availability_oracle_rejects_derives_no_accessor() {
     let mut config = call_config();
     config.result_fields = ["content".to_string()].into_iter().collect();
 
-    let operations = resolve(&fixture, &config, "csharp", &[], &[]);
+    let operations = resolve(&fixture, &config, "csharp", &[], &[], &[]);
 
     assert_eq!(
         operations,
@@ -118,7 +118,7 @@ fn a_pseudo_field_on_a_byte_buffer_result_derives_no_accessor() {
         },
     );
 
-    let operations = resolve(&fixture, &config, "csharp", &[], &[]);
+    let operations = resolve(&fixture, &config, "csharp", &[], &[], &[]);
 
     assert_eq!(
         operations,
@@ -145,7 +145,7 @@ fn a_pseudo_field_still_resolves_for_a_backend_whose_result_is_a_struct() {
         },
     );
 
-    let operations = resolve(&fixture, &config, "python", &[], &[]);
+    let operations = resolve(&fixture, &config, "python", &[], &[], &[]);
 
     assert_eq!(operations.len(), 1);
     assert_eq!(operations[0].expression, "result.audio");
@@ -160,7 +160,14 @@ fn a_field_that_resolves_on_the_return_type_still_derives_an_accessor() {
         {"type": "not_empty", "field": "content"}
     ]));
 
-    let operations = resolve(&fixture, &call_config(), "python", &type_defs_declaring_error(), &[]);
+    let operations = resolve(
+        &fixture,
+        &call_config(),
+        "python",
+        &type_defs_declaring_error(),
+        &[],
+        &[],
+    );
 
     assert_eq!(
         operations.len(),
@@ -182,7 +189,7 @@ fn a_streaming_virtual_field_derives_no_accessor() {
         {"type": "greater_than_or_equal", "field": "stream.event_count_min", "value": 1}
     ]));
 
-    let operations = resolve(&fixture, &call_config(), "dart", &[], &[]);
+    let operations = resolve(&fixture, &call_config(), "dart", &[], &[], &[]);
 
     assert_eq!(
         operations,
@@ -216,7 +223,7 @@ fn an_assertion_grouping_prefix_derives_no_accessor() {
         ..TypeDef::default()
     }];
 
-    let operations = resolve(&fixture, &call_config(), "csharp", &type_defs, &[]);
+    let operations = resolve(&fixture, &call_config(), "csharp", &type_defs, &[], &[]);
 
     assert_eq!(
         operations,
@@ -235,7 +242,7 @@ fn a_hand_authored_shows_entry_is_never_filtered() {
     let mut config = call_config();
     config.result_fields = ["content".to_string()].into_iter().collect();
 
-    let operations = resolve(&fixture, &config, "python", &[], &[]);
+    let operations = resolve(&fixture, &config, "python", &[], &[], &[]);
 
     assert_eq!(operations.len(), 1);
     assert_eq!(operations[0].expression, "result.cost_tracked");

@@ -155,7 +155,7 @@ impl E2eCodegen for RCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
@@ -204,7 +204,7 @@ impl E2eCodegen for RCodegen {
         let presentation = if call.returns_void || expects_error {
             Vec::new()
         } else {
-            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r", type_defs, functions)
+            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r", type_defs, enums, functions)
         };
         let body = if call.returns_void || expects_error || !presentation.is_empty() {
             body

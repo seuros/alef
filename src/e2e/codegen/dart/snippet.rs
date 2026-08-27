@@ -100,7 +100,8 @@ pub(super) fn render_snippet_body_with_ir(
     // Spot-checking `Uint8List` here missed `Float64List`/`Int64List` — the stub named the
     // class and the snippet never imported its library. ~keep
     let needs_typed_data = crate::backends::dart::type_map::needs_dart_typed_data(&stub_classes);
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart", type_defs, functions);
+    let presentation =
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart", type_defs, enums, functions);
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {

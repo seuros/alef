@@ -544,7 +544,7 @@ impl E2eCodegen for ZigE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
@@ -554,7 +554,16 @@ impl E2eCodegen for ZigE2eCodegen {
             .as_ref()
             .and_then(|value| value.prefix.clone())
             .unwrap_or_default();
-        test_file::render_snippet_body(fixture, e2e_config, &module, &ffi_prefix, config, type_defs, functions)
+        test_file::render_snippet_body(
+            fixture,
+            e2e_config,
+            &module,
+            &ffi_prefix,
+            config,
+            type_defs,
+            enums,
+            functions,
+        )
     }
 
     fn language_name(&self) -> &'static str {
