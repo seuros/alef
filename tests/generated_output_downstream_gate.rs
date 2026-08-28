@@ -224,7 +224,6 @@ fn clippy_lane_languages() -> Vec<&'static str> {
 
 #[path = "generated_output_downstream_gate/fixture.rs"]
 mod fixture;
-// `FIXTURE_SOURCE`/`FIXTURE_ALEF_TOML` moved to `foreign_cfg_gate::write_fixture_workspace`.
 use fixture::FIXTURE_CARGO_TOML;
 
 // ---------------------------------------------------------------------------
