@@ -392,6 +392,41 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
                 }
 
+                // Fold in every path a post-build step writes unguarded -- mirrors
+                // `core_commands/generate.rs`'s identical fold-in for `alef generate` (see
+                // `PostBuildStep::owned_paths`'s doc for why this can't be left to the generator's
+                // own `GeneratedFile` output). Before this, `alef all` never called `owned_paths`
+                // at all, so `MaterializeSwiftBridge`'s real, unguarded trio
+                // (`RustBridgeC.h`'s populated form, `SwiftBridgeCore.swift`, `{binding_crate}.swift`)
+                // was never claimed in `binding_ownership`/`current_gen_paths` here -- unlike
+                // `alef generate`, which has claimed it since the alef #B fix. The very next
+                // `alef all` run's orphan sweep then read this crate's swift root as having
+                // recorded nothing worth comparing against on the previous run (`previous_paths`
+                // empty under `packages/swift`) even though this run's `keep` plainly claims files
+                // under it -- exactly the "orphan-reclaim bookkeeping gap" diagnostic describes
+                // (alef-task #557). ~keep
+                for &language in &languages {
+                    let Some(backend) = crate::cli::registry::try_get_backend(language) else {
+                        continue;
+                    };
+                    let Some(build_config) = backend.build_config_with_config(resolved_cfg) else {
+                        continue;
+                    };
+                    let owned: Vec<_> = build_config
+                        .post_build
+                        .iter()
+                        .flat_map(|step| step.owned_paths(&base_dir))
+                        .collect();
+                    if owned.is_empty() {
+                        continue;
+                    }
+                    binding_ownership
+                        .entry(language)
+                        .or_default()
+                        .extend(owned.iter().cloned());
+                    current_gen_paths.extend(owned);
+                }
+
                 tracing::info!("Generating type stubs...");
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
 

@@ -784,14 +784,8 @@ pub fn run_post_build(
                 )
                 .with_context(|| format!("failed to re-materialize swift-bridge files for '{binding_crate_name}'"))?;
                 if let Some(files) = materialized {
-                    for f in files {
-                        if let Some(parent) = f.path.parent() {
-                            std::fs::create_dir_all(parent)
-                                .with_context(|| format!("failed to create directory {}", parent.display()))?;
-                        }
-                        std::fs::write(&f.path, &f.content)
-                            .with_context(|| format!("failed to write {}", f.path.display()))?;
-                    }
+                    crate::backends::swift::gen_bindings::bridge_artifacts::write_materialized_files(files)
+                        .with_context(|| format!("failed to write swift-bridge files for '{binding_crate_name}'"))?;
                 }
                 info!("Re-materialized swift-bridge files for '{binding_crate_name}' from fresh build output");
             }

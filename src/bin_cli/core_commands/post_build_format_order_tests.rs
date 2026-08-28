@@ -46,6 +46,40 @@ sources = ["src/lib.rs"]
 version_from = "Cargo.toml"
 "#;
 
+/// Same fixture as [`write_fixture_workspace`], but with `[workspace.scaffold]` metadata --
+/// `alef all` (unlike `alef generate`) also runs README generation, which needs it; the plain
+/// `alef generate`-only fixture above deliberately omits it to keep that harness's tree small
+/// (mirrors [`ALL_FIXTURE_ALEF_TOML`] below, which the existing `alef all` scaffold-phase tests
+/// already rely on for the same reason). ~keep
+const ALL_SWIFT_FIXTURE_ALEF_TOML: &str = r#"
+[workspace]
+languages = ["swift"]
+
+[workspace.scaffold]
+repository = "https://example.invalid/sample/sample-lib"
+license = "MIT"
+authors = ["Sample Author <sample@example.invalid>"]
+description = "Sample fixture library"
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+version_from = "Cargo.toml"
+"#;
+
+fn write_all_swift_fixture_workspace(root: &Path) {
+    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE).expect("write fixture source");
+    std::fs::write(root.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+    std::fs::write(root.join("alef.toml"), ALL_SWIFT_FIXTURE_ALEF_TOML).expect("write fixture alef.toml");
+    std::fs::write(root.join("Cargo.lock"), "").expect("write fixture Cargo.lock");
+    // See `write_fixture_workspace`'s matching comment above it: pre-creates
+    // `packages/swift/Sources` so `emit_swift_bridge_files`'s `package_root` resolution finds the
+    // real tree on its first candidate instead of the buggy repo-root fallback for a project with
+    // no `Sources/` directory yet.
+    std::fs::create_dir_all(root.join("packages/swift/Sources")).expect("create packages/swift/Sources");
+}
+
 /// The fixed binding crate name `MaterializeSwiftBridge` derives from the fixture's crate name
 /// (`format!("{}-swift", config.name)`), pinned here as a constant instead of recomputed inline
 /// so the fake `target/` layout below and the assertions after `alef generate` runs can never
@@ -607,4 +641,58 @@ fn generate_reformats_a_scaffold_file_left_stamped_and_uncanonical_by_an_earlier
         crate::core::hash::strip_hash_line(&canonical),
         "the healed file's body must match what a from-scratch run produces, not merely be poly-clean"
     );
+}
+
+/// Regression for alef-task #557's "orphan-reclaim bookkeeping gap" diagnostic
+/// (`cli::pipeline::generate::orphans::sweep_manifest_orphans`): `alef all` must claim every path
+/// `PostBuildStep::owned_paths` reports as written, exactly like `alef generate` already does
+/// (`core_commands/generate.rs`'s own fold-in, added for the alef #B incident this fixture's
+/// helpers above were written against). Before this fix, `all_commands.rs`'s `handle` never called
+/// `owned_paths` at all, so `MaterializeSwiftBridge`'s real (non-placeholder) swift-bridge trio --
+/// `RustBridgeC.h`'s populated form, `SwiftBridgeCore.swift`, `{binding_crate}.swift` -- was
+/// written to disk by every `alef all` run but never recorded in the persisted
+/// `all-bindings-swift-ownership` stage manifest `sweep_manifest_orphans` reads back as its
+/// "previous run" baseline on the NEXT run. That produces exactly the diagnosed symptom: a root
+/// this run recorded kept files under, with the previous-run manifest recording none under it --
+/// permanently, since nothing ever closed the loop. ~keep
+#[test]
+fn all_records_the_materialized_swift_bridge_trio_in_the_binding_ownership_manifest() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_all_swift_fixture_workspace(&root);
+    seed_fake_swift_bridge_build_output(&root);
+
+    run_all(&root);
+
+    let sources_rust_bridge = root.join("packages/swift/Sources/RustBridge");
+    let core_swift = sources_rust_bridge.join("SwiftBridgeCore.swift");
+    let crate_swift = sources_rust_bridge.join(format!("{BINDING_CRATE_NAME}.swift"));
+    let header = header_path(&root);
+    for materialized in [&header, &core_swift, &crate_swift] {
+        assert!(
+            materialized.is_file(),
+            "sanity: MaterializeSwiftBridge must have written {} from the fake swift-bridge build \
+             output, or the manifest assertion below is vacuous",
+            materialized.display()
+        );
+    }
+
+    let manifest_path = root.join(".alef/test-lib/hashes/all-bindings-swift-ownership.manifest");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
+        panic!(
+            "the all-bindings-swift-ownership manifest must exist after `alef all`: {} ({e})",
+            manifest_path.display()
+        )
+    });
+    let manifest_paths: std::collections::HashSet<&str> = manifest.lines().collect();
+
+    for materialized in [&header, &core_swift, &crate_swift] {
+        let absolute = materialized.display().to_string();
+        assert!(
+            manifest_paths.contains(absolute.as_str()),
+            "post-build-owned path {absolute} must be recorded in the binding ownership manifest \
+             so the NEXT `alef all` run's orphan sweep has a non-empty previous-run baseline for \
+             this root -- manifest contents:\n{manifest}"
+        );
+    }
 }

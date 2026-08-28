@@ -255,6 +255,36 @@ pub(crate) fn emit_swift_bridge_files(
     Ok(Some(files))
 }
 
+/// Write `files` (the trio [`emit_swift_bridge_files`] produces) to disk, normalizing each
+/// file's content the same way the standard `write_files`/`write_files_report` pipeline does
+/// before hashing.
+///
+/// `emit_swift_bridge_files`' real (non-placeholder) output is read straight off swift-bridge's
+/// own build output (`out_dir.join("SwiftBridgeCore.h")` and friends -- an external tool's
+/// generated files, not alef's own template output) and is written here by
+/// `PostBuildStep::MaterializeSwiftBridge`, the one write path in the whole `alef build` command
+/// that goes straight to `std::fs::write` instead of through that pipeline. Any trailing
+/// whitespace or missing final newline swift-bridge's own codegen happens to emit (e.g. a
+/// `#include <stdbool.h>` line with a trailing space) therefore reached the committed
+/// `RustBridgeC.h`/`*.swift` files uncorrected until this normalized every line the same way the
+/// in-process placeholder path already does. ~keep
+pub(crate) fn write_materialized_files(files: Vec<GeneratedFile>) -> anyhow::Result<()> {
+    for f in files {
+        if let Some(parent) = f.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("failed to create directory {}: {e}", parent.display()))?;
+        }
+        let normalized = crate::cli::pipeline::normalize_content(&f.path, &f.content);
+        std::fs::write(&f.path, &normalized)
+            .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", f.path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "bridge_artifacts/materialize_write_tests.rs"]
+mod materialize_write_tests;
+
 pub(super) fn emit_inbound_protocols(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
