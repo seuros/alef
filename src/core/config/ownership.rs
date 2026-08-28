@@ -15,7 +15,8 @@
 //! so for every path those stages emit, `can_skip` never runs, the ownership guard is reached,
 //! and a hand-maintained seed that carries no provenance marker is refused. The refusal is
 //! recorded in `WriteReport::refused_paths` and reported by
-//! `cli::pipeline::generate::write::report_refused_writes` as "N file(s) were NOT written",
+//! `cli::pipeline::generate::write::report_refused_writes` as "N file(s) were NOT written, M of
+//! them holding content that DIFFERS from what alef would now generate",
 //! naming `alef adopt <path>` as the remedy -- which `alef adopt` then refuses for the same
 //! files, because `cli::commands::adopt::is_create_once_seed` classifies them as seeds and
 //! adoption would consent to a later overwriting regen replacing them. The consumer is left in

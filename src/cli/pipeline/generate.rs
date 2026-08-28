@@ -37,7 +37,7 @@ pub(crate) use user_owned::declared_user_owned;
 pub use write::{WriteReport, report_refused_writes, report_user_owned_skips};
 pub(crate) use write::{
     apply_shebang_chmod, atomic_write, ensure_generated_header, is_markable_path, is_owned_by_ownership_record,
-    marker_comment_style, provenance_header_for_path, stamp_for_adoption,
+    marker_comment_style, matches_alef_output, provenance_header_for_path, stamp_for_adoption,
 };
 pub use write::{
     finalize_hashes, finalize_hashes_after_tree_format, finalize_hashes_sweeping, managed_generated_files,

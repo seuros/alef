@@ -343,6 +343,27 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     // came to read a green `alef verify` as a whole-tree freshness gate when it is a claim
     // about marker-carrying files only. See `verify_coverage`'s module doc. ~keep
     let unmarked_seeds = crate::bin_cli::helpers::frozen::unmarked_create_once_seeds(&frozen_generated_files);
+    let drifted_seeds = crate::bin_cli::helpers::frozen::drifted_frozen_seeds(&frozen_generated_files);
+    // Printed unconditionally, ABOVE the verdict, and deliberately outside the exit-code gate
+    // below.
+    //
+    // Not fatal, and the cost of that choice is stated rather than hidden: a consumer whose
+    // frozen file is benign today would start failing CI on the upgrade that added this check,
+    // for a condition that predates the release and that no rerun of `alef generate` clears --
+    // which is precisely the trap `has_adoptable_frozen_files` was narrowed to escape when
+    // create-once seeds made verify unable to reach exit 0 at all. Buying strictness by
+    // re-breaking every consumer's gate is how a check gets routed around, and a routed-around
+    // check reports nothing.
+    //
+    // What replaces the exit code is that this can no longer be quiet. It prints on every run
+    // including a clean one, it names each file rather than counting it, and its count is
+    // restated in the coverage block, so it is visible to a reader of a PASSING run -- unlike
+    // the write-time refusal tally, which only ever appeared in a generate/build log nobody
+    // reads after the fact. A consumer who wants it fatal has a precise, local gate: declare
+    // the path `user_owned` (which removes it) or grep this heading in CI. ~keep
+    for line in crate::bin_cli::helpers::frozen::drifted_seed_report_lines(&frozen_generated_files) {
+        crate::bin_cli::output::line(line);
+    }
     // Measured from the SAME managed surface the rest of this report is measured from, and with
     // the same matcher the write guards use, so the number cannot describe a different file set
     // than the one alef actually exempted. ~keep
@@ -368,6 +389,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         &marked_paths,
         scan_coverage,
         unmarked_seeds.len(),
+        drifted_seeds.len(),
         ephemeral_excluded_count,
         declared_user_owned_count,
     )

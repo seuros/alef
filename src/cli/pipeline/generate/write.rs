@@ -7,146 +7,14 @@ use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, warn};
 
-#[derive(Debug, Default)]
-pub struct WriteReport {
-    pub expected_paths: std::collections::HashSet<std::path::PathBuf>,
-    pub changed_paths: std::collections::HashSet<std::path::PathBuf>,
-    /// Paths the ownership guard declined to write.
-    ///
-    /// Recorded rather than only logged, because a refusal is otherwise invisible to every
-    /// downstream signal: the guard `continue`s before the path reaches `expected_paths`, so
-    /// orphan sweeps, freshness checks and the changed count all behave as though alef never
-    /// intended to write the file. A permanently frozen file is then indistinguishable from
-    /// one alef simply does not manage.
-    ///
-    /// Unlike an ordinary skip the condition never clears on its own, and the remedy —
-    /// `alef adopt` — is a human action. A human cannot act on a number nobody reports, so
-    /// this has to be visible rather than inferred from what did not change.
-    ///
-    /// A `BTreeSet` rather than a `Vec`: the same path can be refused by more than one guard
-    /// site in a run, and the report is read by a person, so it must not repeat itself or
-    /// reorder between runs. ~keep
-    pub refused_paths: std::collections::BTreeSet<std::path::PathBuf>,
-    /// Paths this run left alone because `[workspace.ownership] user_owned`
-    /// ([`crate::core::config::OwnershipConfig`]) declares them owned by the consuming
-    /// repository rather than by alef.
-    ///
-    /// A separate set from [`Self::refused_paths`] because it is a separate FACT, not a
-    /// softer wording of the same one. A refusal is alef reporting that it wanted to write a
-    /// file and could not prove it may -- an unresolved condition with a human remedy. A
-    /// declared skip is alef reporting that it was told not to, by a committed line of config
-    /// someone can read. Folding the two would leave the operator with a failure tally that
-    /// only goes down by deleting the declaration, which is exactly the stable bad state the
-    /// declaration exists to end.
-    ///
-    /// Reported rather than silent for the same reason `refused_paths` is: a run that wrote
-    /// nothing because 17 paths were declared must say so. See [`report_user_owned_skips`]. ~keep
-    pub user_owned_paths: std::collections::BTreeSet<std::path::PathBuf>,
-}
+mod report;
 
-impl WriteReport {
-    pub fn changed_count(&self) -> usize {
-        self.changed_paths.len()
-    }
-
-    pub fn expected_count(&self) -> usize {
-        self.expected_paths.len()
-    }
-
-    pub fn refused_count(&self) -> usize {
-        self.refused_paths.len()
-    }
-
-    /// How many paths this report left alone on the strength of `[workspace.ownership]
-    /// user_owned`.
-    pub fn user_owned_count(&self) -> usize {
-        self.user_owned_paths.len()
-    }
-
-    /// Fold another phase's refusals into this report.
-    ///
-    /// A run writes through several independent phases — bindings, service API, type stubs,
-    /// public API, scaffolding — each returning its own report. The refusal summary is a
-    /// run-level fact addressed to an operator, so reporting per phase understates it: the
-    /// reader works the list they were shown and is left with the refusals from every other
-    /// phase, unlisted and with no remaining signal that they exist. Only `refused_paths`
-    /// merges; the changed and expected sets stay per-phase because their counts are reported
-    /// per phase and summing them would double-count a path two phases both intended.
-    ///
-    /// Folds BOTH not-written sets -- refusals and declared user-owned skips -- through this
-    /// one call rather than adding a second method beside it, so the ~13 `absorb_unwritten`
-    /// call sites cannot end up folding one set and dropping the other. That is not
-    /// hypothetical here: `alef all` already shipped a bug where a count-only wrapper
-    /// discarded `refused_paths` for a whole class of writes, and the run reported success
-    /// while the guard had silently refused thousands. ~keep
-    pub fn absorb_unwritten(&mut self, other: &WriteReport) {
-        self.refused_paths.extend(other.refused_paths.iter().cloned());
-        self.user_owned_paths.extend(other.user_owned_paths.iter().cloned());
-    }
-}
-
-/// Surface every write the ownership guard declined, naming the remedy.
-///
-/// The guard is self-perpetuating by construction: it refuses because the file carries no
-/// marker, and the marker can only arrive by writing the file. No later run breaks that
-/// cycle, so a per-file `warn!` mid-run understates the situation — the condition is
-/// permanent rather than transient, and only an operator can clear it. One consolidated
-/// block naming the fix is the difference between a log line and an actionable report. ~keep
-pub fn report_refused_writes(report: &WriteReport) {
-    if report.refused_paths.is_empty() {
-        return;
-    }
-    let mut paths: Vec<&std::path::PathBuf> = report.refused_paths.iter().collect();
-    paths.sort();
-    warn!(
-        "{} file(s) were NOT written: each already exists, carries no alef provenance marker, and \
-         alef has no durable record of owning it. This will not resolve on its own — the marker can \
-         only be written by writing the file, which is exactly what the guard declines. Review the \
-         diff for each and adopt the ones alef should own with `alef adopt <path>`. At migration \
-         scale, `alef adopt <glob>` previews the whole set and `alef adopt <glob> --converged-only \
-         --write` clears every file that already matches generated output, leaving the drifted \
-         ones for you to read one at a time. If these are \
-         formats that cannot carry a marker (package.json, *.jar) and this is a fresh clone or a CI \
-         checkout, check whether .alef-ownership.toml was committed — that file is where their \
-         ownership is recorded. Do NOT hand-add the marker line: a refusal can be protecting a \
-         deliberate hand-edit, and stamping it blind re-enables exactly the clobbering the guard \
-         exists to prevent.",
-        paths.len()
-    );
-    for path in paths {
-        warn!("  not written: {}", path.display());
-    }
-}
-
-/// State the count of writes skipped because `[workspace.ownership] user_owned` declares the
-/// path owned by the consuming repository.
-///
-/// INFO, not WARN, and worded as a disposition rather than a problem: nothing here needs
-/// fixing, and there is no remedy to name -- the remedy already happened, in a committed line
-/// of `alef.toml` a reviewer approved. Reporting it as a warning beside
-/// [`report_refused_writes`] would recreate the condition this option exists to end, where a
-/// deliberate, correct state is announced as a failure on every single run.
-///
-/// Not silent either. A run that skipped 17 paths has narrowed its own scope, and the same
-/// standard `crate::core::config::VerifyConfig`'s module doc sets for `alef verify` applies:
-/// the number is stated unconditionally, so the declaration stays visible to whoever reads the
-/// log rather than only to whoever reads the config. Paths go to DEBUG because the count is
-/// the operator-facing fact and a large declaration would otherwise bury the rest of the run. ~keep
-pub fn report_user_owned_skips(report: &WriteReport) {
-    if report.user_owned_paths.is_empty() {
-        return;
-    }
-    tracing::info!(
-        "{} file(s) were not written because `[workspace.ownership] user_owned` in alef.toml \
-         declares them owned by this repository rather than by alef. alef does not overwrite \
-         them, does not stamp them with a provenance marker, and does not verify their \
-         contents. Remove the matching pattern to hand a path back to alef.",
-        report.user_owned_paths.len()
-    );
-    for path in &report.user_owned_paths {
-        debug!("  declared user-owned, not written: {}", path.display());
-    }
-}
+// Re-exported at this path, not moved out from under callers: `super::write::WriteReport` and
+// the two report functions are named from scaffold.rs, user_owned.rs, the parent `generate`
+// module and a dozen tests, and a mechanical path rename across all of them would bury the
+// behaviour change this split exists to carry. ~keep
+pub(crate) use report::matches_alef_output;
+pub use report::{WriteReport, report_refused_writes, report_user_owned_skips};
 
 /// Every path in `files` that [`finalize_hashes`] must re-stamp this run.
 ///
@@ -692,11 +560,21 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     let changed_paths = std::sync::Mutex::new(std::collections::HashSet::new());
     let refused_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
     let user_owned_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
-    let refuse = |path: &Path| {
+    let refused_drifted_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    // `existing` is the disk bytes the caller has already read, or `None` when the file could
+    // not be read as text at all. Classified here rather than by a later pass because this is
+    // the only place both sides are in hand -- see `WriteReport::refused_drifted_paths`. ~keep
+    let refuse = |path: &Path, existing: Option<&str>, generated: &str| {
         refused_paths
             .lock()
             .expect("refused-path mutex poisoned")
             .insert(path.to_path_buf());
+        if !existing.is_some_and(|existing| matches_alef_output(path, existing, generated)) {
+            refused_drifted_paths
+                .lock()
+                .expect("refused-drifted-path mutex poisoned")
+                .insert(path.to_path_buf());
+        }
     };
     prepared
         .par_iter()
@@ -726,7 +604,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              leaving it untouched",
                             full_path.display()
                         );
-                        refuse(full_path);
+                        refuse(full_path, None, normalized);
                         return Ok(());
                     };
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
@@ -778,7 +656,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                                 full_path.display()
                             ),
                         }
-                        refuse(full_path);
+                        refuse(full_path, Some(existing.as_str()), normalized);
                         return Ok(());
                     }
                 }
@@ -808,7 +686,9 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              alef ownership -- leaving it untouched",
                             full_path.display()
                         );
-                        refuse(full_path);
+                        // A binary reaches this branch only after an exact byte comparison
+                        // already failed above, so no text classification applies. ~keep
+                        refuse(full_path, None, "");
                         return Ok(());
                     }
                 }
@@ -833,6 +713,9 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
         expected_paths: prepared.into_keys().collect(),
         changed_paths: changed_paths.into_inner().expect("changed-path mutex poisoned"),
         refused_paths: refused_paths.into_inner().expect("refused-path mutex poisoned"),
+        refused_drifted_paths: refused_drifted_paths
+            .into_inner()
+            .expect("refused-drifted-path mutex poisoned"),
         user_owned_paths: user_owned_paths.into_inner().expect("user-owned-path mutex poisoned"),
     })
 }
@@ -982,6 +865,8 @@ pub use tree_stamp::finalize_hashes_after_tree_format;
 
 #[cfg(test)]
 mod marker_syntax_tests;
+#[cfg(test)]
+mod refusal_drift_tests;
 #[cfg(test)]
 mod stamp_scope_tests;
 #[cfg(test)]

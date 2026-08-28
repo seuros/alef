@@ -55,6 +55,17 @@ pub(crate) struct VerifyCoverage {
     /// Stating the number as coverage keeps it visible on a clean run, which the old heading
     /// (printed only when some other check had already failed) did not. ~keep
     pub(crate) create_once_unmarked: usize,
+    /// The subset of [`Self::create_once_unmarked`] that alef re-renders on every run, would
+    /// write different bytes for, and is refused on -- see
+    /// [`super::helpers::frozen::drifted_frozen_seeds`].
+    ///
+    /// Split out because the line above it makes a positive claim -- "the missing marker is the
+    /// documented user-owned steady state, not drift" -- that this run does not check and that
+    /// is FALSE for exactly these paths. A coverage report exists to stop a green result being
+    /// read as more than it is; asserting "not drift" about files nobody compared is the same
+    /// over-claim one level down, and it is the one that let three consumer repositories ship a
+    /// version-pinned installer frozen at a stale release. ~keep
+    pub(crate) create_once_drifted: usize,
     /// The subset of [`Self::managed_absent`] that `[crates.verify].ignore_ephemeral`
     /// (`crate::core::config::VerifyConfig`) matched and dropped from the "missing generated
     /// files" / "missing generated files that are also gitignored" headings -- output the
@@ -91,6 +102,7 @@ impl VerifyCoverage {
         marked_paths: &std::collections::HashSet<std::path::PathBuf>,
         scan: super::verify_scan::ScanCoverage,
         create_once_unmarked: usize,
+        create_once_drifted: usize,
         ephemeral_excluded: usize,
         declared_user_owned: usize,
     ) -> Self {
@@ -100,6 +112,7 @@ impl VerifyCoverage {
             files_opened: scan.opened,
             files_unexamined: scan.unexamined,
             create_once_unmarked,
+            create_once_drifted,
             ephemeral_excluded,
             declared_user_owned,
             ..Self::default()
@@ -143,13 +156,24 @@ impl VerifyCoverage {
             ),
         ];
         if self.create_once_unmarked > 0 {
+            // Two numbers, not one, and the split is the point. The steady-state claim below is
+            // only true of the seeds alef never re-attempts; stating it over the whole set
+            // asserted "not drift" about files this run had not compared. ~keep
+            let settled = self.create_once_unmarked - self.create_once_drifted;
             lines.push(format!(
-                "      of which {} are create-once seeds with no marker: alef writes each of these \
-                 paths only when absent and never revisits it, so the missing marker is the \
-                 documented user-owned steady state, not drift -- nothing needs adopting and no \
-                 rerun changes this line (-vv lists them)",
-                self.create_once_unmarked
+                "      of which {settled} are create-once seeds with no marker that alef does not \
+                 re-attempt: it writes each of these paths only when absent and never revisits it, \
+                 so the missing marker is the documented user-owned steady state, not drift -- \
+                 nothing needs adopting and no rerun changes this line (-vv lists them)"
             ));
+            if self.create_once_drifted > 0 {
+                lines.push(format!(
+                    "      and {} more that alef DOES re-render every run, whose on-disk content \
+                     differs from what it would write and whose write the ownership guard refuses \
+                     -- these are stale, not settled, and are named under their own heading above",
+                    self.create_once_drifted
+                ));
+            }
         }
         lines.push(format!(
             "    {} absent (reported under the missing-file headings)",

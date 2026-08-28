@@ -236,7 +236,7 @@ pub fn write_scaffold_files_report(
                 // Counted like any other refusal: a binary target cannot carry a marker, so
                 // it is permanently part of the residue and must not be silently omitted
                 // from the number that reports it. ~keep
-                report.refused_paths.insert(full_path.clone());
+                report.refuse_drifted(&full_path);
                 continue;
             }
             report.expected_paths.insert(full_path.clone());
@@ -355,7 +355,7 @@ pub fn write_scaffold_files_report(
                             full_path.display()
                         ),
                     }
-                    report.refused_paths.insert(full_path.clone());
+                    report.refuse_text(&full_path, existing_text.as_deref(), &normalized);
                     continue;
                 }
             }

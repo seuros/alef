@@ -9,6 +9,13 @@
 #[cfg(test)]
 mod tests;
 
+// The write guards' own convergence predicate, reached through the pipeline rather than
+// restated here. This report and the guards must answer "did the refused write have different
+// content to deliver" identically, or the report describes a refusal that did not happen --
+// the two-derivations-of-one-fact shape behind this repository's last several ownership
+// defects. It lives beside the guards, in `cli::pipeline::generate::write::report`. ~keep
+use crate::cli::pipeline::matches_alef_output;
+
 /// A generated file alef would own and mark, that already exists on disk but
 /// carries no provenance marker at all.
 ///
@@ -62,6 +69,37 @@ pub(crate) struct FrozenFile {
     /// The field survives because the count still has to be stated -- as coverage, in
     /// `bin_cli::verify_coverage`. ~keep
     pub(crate) create_once: bool,
+    /// Whether the bytes on disk differ from the bytes alef would write to this path, once
+    /// the provenance header alef itself would prepend is discounted
+    /// ([`matches_alef_output`]).
+    ///
+    /// THE DEFECT this closes: every report about a frozen file described the file's
+    /// OWNERSHIP ("carries no marker") and nothing about its CONTENT, so a frozen file that
+    /// is byte-for-byte what alef would generate and a frozen file whose withheld content
+    /// has since gone stale read identically -- as a count of files not written. Measured:
+    /// a generated PHP test-app installer bakes the release version into its own bytes, the
+    /// guard refused the rewrite on every run, and three separate consumer repositories
+    /// shipped an installer pinned to a stale release for weeks. From outside, a refusal on
+    /// version-derived content is indistinguishable from a file that is simply up to date --
+    /// unless the report says which one it is. alef has both sides in hand at the moment it
+    /// decides (the disk bytes it just read, and the rendered `GeneratedFile` it was about
+    /// to write), so the comparison costs one string compare and no extra I/O. ~keep
+    pub(crate) drifted: bool,
+    /// Whether alef re-attempts this write on every run, rather than emitting the path only
+    /// when it is absent.
+    ///
+    /// This is the antecedent of [`FrozenFile`]'s own definition -- "alef would write this
+    /// path and the guard refuses it forever" -- and it is not uniform across the tree.
+    /// `write_scaffold_files_report`'s `can_skip` short-circuits a `generated_header: false`
+    /// path that already exists BEFORE any ownership or content check, so under an
+    /// `overwrite = false` writer (`packages/**`) nothing is attempted and nothing is
+    /// withheld: a seed a human has grown past alef's placeholder is the documented steady
+    /// state, and reporting its drift would be noise on the exact list whose value is that
+    /// every line on it is real. The e2e and test-app stages write with `overwrite = true`
+    /// (`bin_cli::all_commands::e2e_stage`), so `can_skip` never fires there and the guard
+    /// refuses a real, differing write on every single run. Only that second case is a
+    /// defect a consumer cannot see. ~keep
+    pub(crate) rewritten_every_run: bool,
 }
 
 /// [`FrozenFile`] entries for every alef-owned file in `files` that already
@@ -107,10 +145,18 @@ pub(crate) struct FrozenFile {
 /// `remedy`/`near_miss` below — the same predicate answers correctly for both candidate
 /// sets without branching: every entry from `managed_generated_files` carries a marker
 /// (`carries_alef_marker() == true`), which `is_create_once_seed` always answers `false`
-/// for, so only entries recovered from `unmarkable_unclaimed_files` can ever be seeds. ~keep
+/// for, so only entries recovered from the two unmarked candidate sets below can ever be
+/// seeds. ~keep
+///
+/// `rewritten_roots` are the absolute output roots whose writer runs with `overwrite = true`
+/// -- see [`FrozenFile::rewritten_every_run`] for why that distinction decides whether a
+/// missing marker is a withheld write or a documented steady state, and
+/// [`super::rewritten_output_roots`] for where the roots come from. Passing an empty slice
+/// keeps the pre-existing candidate sets exactly as they were.
 pub(super) fn frozen_managed_paths(
     files: &[crate::core::backend::GeneratedFile],
     base_dir: &std::path::Path,
+    rewritten_roots: &[std::path::PathBuf],
 ) -> Vec<FrozenFile> {
     // `[workspace.ownership] user_owned` is consulted here, not just in the writers, because
     // "frozen" means "alef would write this path and the guard refuses it forever" -- and for a
@@ -130,6 +176,7 @@ pub(super) fn frozen_managed_paths(
     crate::cli::pipeline::managed_generated_files(files)
         .into_iter()
         .chain(unmarkable_unclaimed_files(files, base_dir))
+        .chain(unmarked_files_under_rewritten_roots(files, base_dir, rewritten_roots))
         .filter_map(|file| {
             let full_path = base_dir.join(&file.path);
             if declared.matches(base_dir, &full_path) {
@@ -144,6 +191,20 @@ pub(super) fn frozen_managed_paths(
                 return None;
             }
             let create_once = crate::cli::commands::adopt::is_create_once_seed(&file);
+            // The bytes the writer would actually place, obtained from the writer's own
+            // `normalize_content` + `ensure_generated_header` pair via `adopt::managed_outputs`
+            // rather than re-derived here -- a comparison against content that is merely close
+            // to what alef would write reports drift that no regeneration would ever resolve.
+            //
+            // COST, stated because it is a real one: `normalize_content` shells out to rustfmt
+            // for a `.rs` path, so this spawns one process per frozen Rust file. Bounded by the
+            // frozen candidate set, which is empty on a healthy tree and is dominated in the
+            // measured bad cases by `.md` and `.toml` (no subprocess). Approximating the
+            // comparison to dodge that would answer a different question than the guard asked,
+            // and the whole point here is that the two agree. ~keep
+            let drifted = crate::cli::commands::adopt::managed_outputs(std::slice::from_ref(&file), base_dir)
+                .first()
+                .is_none_or(|output| !matches_alef_output(&full_path, &existing, &output.content));
             let remedy = super::marker_line(&file.content).map(str::to_owned).or_else(|| {
                 let header = crate::cli::pipeline::provenance_header_for_path(&file.path)?;
                 super::marker_line(&header).map(str::to_owned)
@@ -154,9 +215,59 @@ pub(super) fn frozen_managed_paths(
                 remedy,
                 near_miss,
                 create_once,
+                drifted,
+                rewritten_every_run: is_under_any_root(&full_path, rewritten_roots),
             })
         })
         .collect()
+}
+
+/// Every file in `files` that both existing candidate sets miss: no marker of any kind
+/// (`carries_alef_marker()` is false, nothing in `content`), a MARKABLE extension, and a path
+/// under one of `rewritten_roots`.
+///
+/// [`unmarkable_unclaimed_files`] is scoped to the unmarkable subset for a reason its own doc
+/// gives -- an ownership record may only ever clear a path the write guard would accept on a
+/// record, and a markable path with no marker is refused regardless of any record. That
+/// reasoning bounds where the RECORD may be consulted; it does not bound which files can be
+/// frozen, and this set falls on the correct side of it either way, because
+/// [`frozen_managed_paths`]'s own record fallback is already gated on `!is_markable`.
+///
+/// THE HOLE this closes: a `generated_header: false` file on a markable extension carries no
+/// marker in memory and is therefore in neither existing set, so `alef verify` could not see
+/// it at all -- not as a finding, not as a create-once seed, not in any count. The measured
+/// instance is a generated PHP test-app installer (`.sh`, `generated_header: false`) whose
+/// baked-in release version had drifted in three consumer repositories while `alef verify`
+/// stayed green. The e2e writer passes `overwrite = true`, so alef was attempting and being
+/// refused that exact write on every run, and the only place it was ever mentioned was the
+/// write-time refusal tally.
+///
+/// Scoped to `rewritten_roots` rather than applied tree-wide: under an `overwrite = false`
+/// writer the identical file shape (`packages/dart/test/*_test.dart`, `build.zig`) is skipped
+/// by `can_skip` before any check runs, so nothing is withheld and there is nothing to report.
+/// See [`FrozenFile::rewritten_every_run`]. ~keep
+fn unmarked_files_under_rewritten_roots(
+    files: &[crate::core::backend::GeneratedFile],
+    base_dir: &std::path::Path,
+    rewritten_roots: &[std::path::PathBuf],
+) -> Vec<crate::core::backend::GeneratedFile> {
+    if rewritten_roots.is_empty() {
+        return Vec::new();
+    }
+    files
+        .iter()
+        .filter(|file| {
+            let full_path = base_dir.join(&file.path);
+            !file.carries_alef_marker()
+                && crate::cli::pipeline::marker_comment_style(&full_path).is_some()
+                && is_under_any_root(&full_path, rewritten_roots)
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_under_any_root(path: &std::path::Path, roots: &[std::path::PathBuf]) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
 }
 
 /// Every file in `files` that [`crate::cli::pipeline::managed_generated_files`] excludes
@@ -212,6 +323,54 @@ pub(crate) fn unmarked_create_once_seeds(frozen: &[FrozenFile]) -> Vec<&str> {
         .collect()
 }
 
+/// Every create-once seed that alef re-attempts on every run AND whose on-disk content
+/// differs from what it would write -- the withheld-and-stale set.
+///
+/// The one subset of the frozen report where a count alone is a false statement. For every
+/// other seed the coverage line's wording is true as written: nothing is attempted, so the
+/// missing marker is a steady state and the file's contents are simply unproven. For these,
+/// alef renders different bytes, tries to write them, is refused, and says only that N files
+/// were not written -- which is exactly what let a version-bearing installer sit stale in three
+/// consumer repositories for weeks. Naming the file is the whole fix: the reader cannot infer
+/// it from any number, because a refusal on up-to-date content and a refusal on stale content
+/// produce the same number. ~keep
+pub(crate) fn drifted_frozen_seeds(frozen: &[FrozenFile]) -> Vec<&str> {
+    frozen
+        .iter()
+        .filter(|file| file.create_once && file.drifted && file.rewritten_every_run)
+        .map(|file| file.path.as_str())
+        .collect()
+}
+
+/// The report for [`drifted_frozen_seeds`], or no lines at all when there are none.
+///
+/// Separate from [`report_lines`] because the remedy is different, not because the wording is:
+/// these paths are refused by `alef adopt --write` as create-once seeds, so pointing at the
+/// same remedy would repeat the measured failure where a human followed the printed advice and
+/// hit a wall every time. The two remedies that do work are named instead. ~keep
+pub(crate) fn drifted_seed_report_lines(frozen: &[FrozenFile]) -> Vec<String> {
+    let drifted = drifted_frozen_seeds(frozen);
+    if drifted.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "Frozen files whose withheld content has DRIFTED ({} path(s) -- alef re-renders each of \
+         these on every run, would write different bytes, and the ownership guard refuses because \
+         the file carries no provenance marker. Unlike the other unmarked seeds this is not a \
+         steady state: what is on disk is not what this configuration produces, and no rerun \
+         changes that. Content derived from the release version is the case that bites, because a \
+         stale copy stays plausible. Review the diff with `alef adopt <path>` (preview only), then \
+         either delete the file so the next run writes it cleanly, or -- if you meant to keep your \
+         copy -- declare it in `[workspace.ownership] user_owned` so alef stops attempting the \
+         write and stops counting it here):",
+        drifted.len()
+    )];
+    for path in drifted {
+        lines.push(format!("  {path}"));
+    }
+    lines
+}
+
 /// `alef verify`'s frozen-file report -- the ADOPTABLE entries only, one line each plus its
 /// remedy.
 ///
@@ -253,6 +412,20 @@ pub(crate) fn report_lines(frozen: &[FrozenFile]) -> Vec<String> {
     ];
     for file in adoptable {
         lines.push(format!("  {}", file.path));
+        // Stated per file, above the remedy, because it decides how the remedy must be read.
+        // Adopting a converged file changes no byte of it; adopting a drifted one consents to
+        // the next `alef generate` replacing content that is genuinely different -- and a
+        // reader who cannot tell the two apart has to open every file to find out which of
+        // them was the one silently holding stale output. ~keep
+        lines.push(if file.drifted {
+            "    content DIFFERS from what alef would generate: the refused write had different \
+             bytes to deliver, so this file is stale for as long as it stays frozen"
+                .to_owned()
+        } else {
+            "    content already matches what alef would generate: adoption records ownership \
+             and changes no byte of the file"
+                .to_owned()
+        });
         if let Some(near_miss) = &file.near_miss {
             lines.push(format!(
                 "    close but not recognized: {near_miss:?} (alef accepts \"generated by alef\" \

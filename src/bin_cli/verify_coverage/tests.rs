@@ -22,7 +22,7 @@ fn managed_paths_split_into_verified_present_and_absent() {
     let managed = paths(directory.path(), &["stamped.toml", "unmarked.json", "never_written.rs"]);
     let marked = paths(directory.path(), &["stamped.toml"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0, 0);
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0, 0, 0);
     assert_eq!(coverage.managed_total, 3);
     assert_eq!(coverage.managed_content_verified, 1);
     assert_eq!(coverage.managed_present_only, 1);
@@ -43,7 +43,7 @@ fn marked_files_outside_the_surface_are_counted_separately() {
     let managed = paths(directory.path(), &["a.rs"]);
     let marked = paths(directory.path(), &["a.rs", "legacy_visitor.py"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0, 0);
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0, 0, 0);
     assert_eq!(coverage.marked_outside_surface, 1);
     assert_eq!(coverage.managed_total, 1);
 }
@@ -64,6 +64,7 @@ fn report_states_that_presence_only_paths_are_not_content_checked() {
         files_opened: 40,
         files_unexamined: 900,
         create_once_unmarked: 0,
+        create_once_drifted: 0,
         ephemeral_excluded: 0,
         declared_user_owned: 0,
     };
@@ -136,4 +137,48 @@ fn report_states_create_once_seeds_as_coverage_not_as_drift() {
 fn report_omits_the_seed_line_when_there_are_no_seeds() {
     let report = VerifyCoverage::default().report_lines().join("\n");
     assert!(!report.contains("create-once seeds with no marker"), "{report}");
+}
+
+/// The coverage block asserted "the missing marker is the documented user-owned steady state,
+/// not drift" over EVERY unmarked seed, having compared none of them. For the seeds alef
+/// re-renders on every run that claim is simply false, and it was false for the exact files a
+/// consumer found frozen at a stale release. A coverage report exists to stop a green result
+/// being read as more than it is; it may not itself over-claim. ~keep
+#[test]
+fn report_does_not_call_a_re_attempted_drifted_seed_a_settled_steady_state() {
+    let coverage = VerifyCoverage {
+        managed_total: 100,
+        managed_present_only: 72,
+        create_once_unmarked: 72,
+        create_once_drifted: 3,
+        ..VerifyCoverage::default()
+    };
+    let report = coverage.report_lines().join("\n");
+
+    assert!(
+        report.contains("69 are create-once seeds"),
+        "the steady-state claim may only cover the seeds alef does not re-attempt: {report}"
+    );
+    assert!(
+        report.contains("and 3 more that alef DOES re-render every run"),
+        "the drifted seeds must be counted separately rather than folded into the settled ones: {report}"
+    );
+    assert!(
+        report.contains("stale, not settled"),
+        "and must not be described as the documented steady state: {report}"
+    );
+}
+
+/// The control: with nothing drifted, the second line must not appear at all, so its presence
+/// stays evidence rather than boilerplate. ~keep
+#[test]
+fn report_omits_the_drifted_seed_line_when_no_seed_drifted() {
+    let coverage = VerifyCoverage {
+        managed_total: 100,
+        managed_present_only: 72,
+        create_once_unmarked: 72,
+        ..VerifyCoverage::default()
+    };
+    let report = coverage.report_lines().join("\n");
+    assert!(!report.contains("DOES re-render"), "{report}");
 }

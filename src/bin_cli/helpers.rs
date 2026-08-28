@@ -446,7 +446,7 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     let mut result = MissingAndFrozenFiles {
         missing,
         missing_gitignored,
-        frozen: frozen_managed_paths(&surface, base_dir),
+        frozen: frozen_managed_paths(&surface, base_dir, &rewritten_output_roots(config, base_dir)),
         managed_paths,
         stage_failures: stage_failures
             .into_iter()
@@ -462,6 +462,26 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     result.stage_failures.sort();
     result.stage_failures.dedup();
     Ok(result)
+}
+
+/// The absolute output roots this configuration writes with `overwrite = true`.
+///
+/// Both e2e stages call `pipeline::write_scaffold_files_report(.., true)`
+/// (`bin_cli::all_commands::e2e_stage`), which is what makes their output the one part of the
+/// tree where `can_skip` never fires and a pre-existing unmarked file is a write refused on
+/// every run rather than a create-once seed nobody is attempting to touch. Every other writer
+/// this report covers is `overwrite = false`. Derived from the resolved config rather than from
+/// the default directory names, so a consumer that renames either root is still described
+/// correctly. See [`frozen::FrozenFile::rewritten_every_run`]. ~keep
+fn rewritten_output_roots(
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    config
+        .e2e
+        .iter()
+        .flat_map(|e2e| [base_dir.join(&e2e.output), base_dir.join(&e2e.registry.output)])
+        .collect()
 }
 
 /// Insert `files` into `surface`, letting a later stage win the path.
