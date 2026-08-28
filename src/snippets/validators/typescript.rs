@@ -1,10 +1,13 @@
+#[path = "node_project_root.rs"]
+mod node_project_root;
+
 use crate::snippets::error::Result;
-use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{
     BatchValidation, SnippetValidation, SnippetValidator, all_error_lines_match, run_command,
 };
+use node_project_root::resolve_isolated_scratch;
 use std::io::Write;
 
 pub struct TypeScriptValidator;
@@ -37,10 +40,22 @@ const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "tsc failed without a snippet-spec
 /// (verified: a second, richer `declare module "node:fs/promises"` in the same program does not
 /// conflict with this one). Written unconditionally on every check, session or not -- an unused
 /// ambient module declaration is a no-op, so detecting whether a given snippet's code actually
-/// needs it would only add a second, fragile way for this to miss a case. ~keep
+/// needs it would only add a second, fragile way for this to miss a case.
+///
+/// The same gap exists for the bare `Buffer` global: `ts_bytes_value_expression`'s base64 branch
+/// (`src/e2e/codegen/typescript/test_file/bytes.rs`) emits `Buffer.from(value, "base64")` into
+/// every TypeScript target uniformly, the same way the file-path branch emits the dynamic
+/// `node:fs/promises` import above. Without `@types/node` resolvable, `tsc` reports
+/// `TS2591: Cannot find name 'Buffer'. Do you need to install type definitions for node?` --
+/// `Buffer` is on TypeScript's own curated list of Node globals that earn this specific hint
+/// (`require`, `process`, `__dirname`, ... alongside it), the sibling case to the degraded dynamic
+/// import above rather than a different bug. Declared here for the same reason: alef is what
+/// emits the construct, so alef makes it typecheck, with only the one static method these
+/// templates actually call. ~keep
 const NODE_AMBIENT_DECLARATION_FILE_NAME: &str = "alef_node_fs_promises_ambient.d.ts";
-const NODE_AMBIENT_DECLARATION_CONTENT: &str =
-    "declare module \"node:fs/promises\" {\n  function readFile(path: string): Promise<Uint8Array>;\n}\n";
+const NODE_AMBIENT_DECLARATION_CONTENT: &str = "declare module \"node:fs/promises\" {\n  function readFile(path: \
+                                                 string): Promise<Uint8Array>;\n}\n\ndeclare const Buffer: {\n  \
+                                                 from(data: string, encoding: string): Uint8Array;\n};\n";
 
 impl TypeScriptValidator {
     fn validate_batch_with_context(
@@ -82,14 +97,26 @@ impl TypeScriptValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<BatchValidation> {
-        let temporary_directory = session.is_none().then(ScratchDir::isolated).transpose()?;
+        // Anchored on the first checked snippet's own real file: an unclaimed batch groups
+        // whatever snippets share no configured session, which in practice share one doc tree and
+        // therefore one real project root -- see `node_project_root` for why only a real,
+        // on-disk path can resolve to one at all. ~keep
+        let anchor = checked.first().map(|&index| snippets[index].path.as_path());
+        let temporary_directory = match session {
+            Some(_) => None,
+            None => Some(resolve_isolated_scratch(anchor, timeout_secs)?),
+        };
         let directory = match (session, temporary_directory.as_ref()) {
             (Some(value), _) => value.workspace_directory()?,
-            (None, Some(value)) => value.path().to_path_buf(),
+            (None, Some((value, _))) => value.path().to_path_buf(),
             (None, None) => unreachable!(),
         };
         if session.is_none() {
-            std::fs::write(directory.join("tsconfig.json"), Self::isolated_tsconfig())?;
+            let types_node_resolved = temporary_directory.as_ref().is_some_and(|(_, resolved)| *resolved);
+            std::fs::write(
+                directory.join("tsconfig.json"),
+                Self::isolated_tsconfig(types_node_resolved),
+            )?;
         }
         std::fs::write(
             directory.join(NODE_AMBIENT_DECLARATION_FILE_NAME),
@@ -180,14 +207,21 @@ impl TypeScriptValidator {
         if Self::is_trivially_valid(&snippet.code) {
             return Ok((SnippetStatus::Pass, None));
         }
-        let temporary_directory = session.is_none().then(ScratchDir::isolated).transpose()?;
+        let temporary_directory = match session {
+            Some(_) => None,
+            None => Some(resolve_isolated_scratch(Some(snippet.path.as_path()), timeout_secs)?),
+        };
         let directory = match (session, temporary_directory.as_ref()) {
             (Some(value), _) => value.workspace_directory()?,
-            (None, Some(value)) => value.path().to_path_buf(),
+            (None, Some((value, _))) => value.path().to_path_buf(),
             (None, None) => unreachable!(),
         };
         if session.is_none() {
-            std::fs::write(directory.join("tsconfig.json"), Self::isolated_tsconfig())?;
+            let types_node_resolved = temporary_directory.as_ref().is_some_and(|(_, resolved)| *resolved);
+            std::fs::write(
+                directory.join("tsconfig.json"),
+                Self::isolated_tsconfig(types_node_resolved),
+            )?;
         }
         std::fs::write(
             directory.join(NODE_AMBIENT_DECLARATION_FILE_NAME),
@@ -209,8 +243,19 @@ impl TypeScriptValidator {
         })
     }
 
-    fn isolated_tsconfig() -> &'static str {
-        r#"{"compilerOptions":{"strict":true,"noEmit":true,"target":"ES2022","module":"ES2022","moduleResolution":"bundler","skipLibCheck":true},"include":["*.ts"]}"#
+    /// `include_types_node` must be `true` only when `node_project_root::resolve_isolated_scratch`
+    /// has already confirmed a real ancestor `@types/node` install -- naming `"node"` in `types`
+    /// when nothing resolves fails with `TS2688: Cannot find type definition file for 'node'`
+    /// (confirmed by hand-probing `tsc`), the exact failure this mechanism exists to prevent. The
+    /// unset-`"types"` branch deliberately does *not* rely on automatic type-acquisition to fill
+    /// the gap when `false`: see `node_project_root`'s module docs for why that default is not
+    /// something alef can depend on being implemented the same way across `tsc` generations. ~keep
+    fn isolated_tsconfig(include_types_node: bool) -> &'static str {
+        if include_types_node {
+            r#"{"compilerOptions":{"strict":true,"noEmit":true,"target":"ES2022","module":"ES2022","moduleResolution":"bundler","skipLibCheck":true,"types":["node"]},"include":["*.ts"]}"#
+        } else {
+            r#"{"compilerOptions":{"strict":true,"noEmit":true,"target":"ES2022","module":"ES2022","moduleResolution":"bundler","skipLibCheck":true},"include":["*.ts"]}"#
+        }
     }
 
     fn write_overlay_config(directory: &std::path::Path, manifest: &std::path::Path) -> Result<std::path::PathBuf> {
@@ -503,6 +548,44 @@ mod tests {
         assert!(
             files.iter().any(|entry| entry == NODE_AMBIENT_DECLARATION_FILE_NAME),
             "package overlay must list the node ambient declaration: {files:?}"
+        );
+    }
+
+    /// Text-pinning proof for the piece that never needs a real `tsc` run: the ambient
+    /// declaration's *content*, not just the fact that it is listed in `files`
+    /// (`package_overlay_includes_the_node_ambient_declaration` /
+    /// `project_overlay_includes_the_node_ambient_declaration` already cover that half). This only
+    /// proves the declaration text alef writes to disk includes a `Buffer` global -- it does not
+    /// prove `tsc` accepts it; see `buffer_from_base64_typechecks_without_a_types_node_dependency`
+    /// in `node_ambient_declaration_tsc_tests.rs` for the real-compiler proof. ~keep
+    #[test]
+    fn node_ambient_declaration_content_declares_the_buffer_global() {
+        assert!(
+            NODE_AMBIENT_DECLARATION_CONTENT.contains("declare const Buffer"),
+            "the ambient declaration must cover the bare `Buffer` global `ts_bytes_value_expression`'s base64 \
+             branch emits, the same way it already covers `node:fs/promises`: {NODE_AMBIENT_DECLARATION_CONTENT:?}"
+        );
+    }
+
+    /// Text-pinning proof for the conditional half of `isolated_tsconfig`: it must name `"node"`
+    /// in `types` only when the caller has already confirmed a real ancestor `@types/node`
+    /// install. Naming it unconditionally reproduces `TS2688: Cannot find type definition file for
+    /// 'node'` for every session-less check that never resolves one (confirmed by hand-probing
+    /// `tsc` against exactly that tsconfig shape with nothing on its `typeRoots` search path); see
+    /// `an_uncovered_node_builtin_typechecks_when_the_real_project_has_types_node_installed` and
+    /// `an_uncovered_node_builtin_fails_loudly_with_no_resolvable_project` in
+    /// `node_project_root_tsc_tests.rs` for the real-compiler proof of both branches. ~keep
+    #[test]
+    fn isolated_tsconfig_names_node_types_only_when_told_to() {
+        assert!(
+            !TypeScriptValidator::isolated_tsconfig(false).contains("\"types\""),
+            "the default isolated tsconfig must not name any `types` entry: {}",
+            TypeScriptValidator::isolated_tsconfig(false)
+        );
+        assert!(
+            TypeScriptValidator::isolated_tsconfig(true).contains("\"types\":[\"node\"]"),
+            "the resolved-ancestor isolated tsconfig must explicitly name `\"node\"` in `types`: {}",
+            TypeScriptValidator::isolated_tsconfig(true)
         );
     }
 
@@ -863,3 +946,7 @@ mod wasm_optional_chain_tsc_tests;
 #[cfg(test)]
 #[path = "node_ambient_declaration_tsc_tests.rs"]
 mod node_ambient_declaration_tsc_tests;
+
+#[cfg(test)]
+#[path = "node_project_root_tsc_tests.rs"]
+mod node_project_root_tsc_tests;

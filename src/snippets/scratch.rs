@@ -115,6 +115,28 @@ impl ScratchDir {
         Ok(Self { inner })
     }
 
+    /// Allocates scratch nested inside `root` -- a real, on-disk project root a caller has already
+    /// resolved by other means, not a configured session -- rather than the OS temporary
+    /// directory [`isolated`](Self::isolated) uses. Reuses the exact `.alef/snippets/tmp`
+    /// convention and cleanup machinery session-backed scratch already relies on
+    /// ([`SNIPPET_SCRATCH_ROOT`], [`purge_stale_scratch_root`]) instead of inventing a second
+    /// in-tree scratch location, and sweeps that root before allocating: unlike a session's own
+    /// root, nothing else ever calls [`purge_stale_scratch_root`] for this path (there is no
+    /// `SessionSpec` to run `prepare_sessions_isolated`'s phase-two sweep), so a crashed run's
+    /// leftovers here would otherwise sit in the consumer's tree forever. See
+    /// `node_project_root::resolve_isolated_scratch` (`src/snippets/validators/
+    /// node_project_root.rs`) for the first and, as of this writing, only caller. ~keep
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scratch root cannot be swept, created, or a unique directory
+    /// cannot be allocated inside it.
+    pub fn rooted(root: &Path, timeout_secs: u64) -> Result<Self> {
+        let scratch_root = root.join(SNIPPET_SCRATCH_ROOT);
+        purge_stale_scratch_root(&scratch_root, timeout_secs)?;
+        Self::in_root(&scratch_root)
+    }
+
     fn in_root(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)
             .map_err(|error| Error::Other(format!("creating snippet scratch root {}: {error}", root.display())))?;
@@ -322,6 +344,47 @@ mod tests {
             .filter(|name| name != ".alef")
             .collect();
         assert!(loose.is_empty(), "nothing may be written loose in the tree: {loose:?}");
+    }
+
+    /// `rooted` must nest under the same `.alef/snippets/tmp` convention `for_session` uses --
+    /// this is what lets `tsc`'s own ancestor `node_modules/@types` scan reach a real project's
+    /// installed types once the scratch directory it writes `tsconfig.json` into sits inside that
+    /// project's own tree, rather than the OS temp directory `isolated` uses. ~keep
+    #[test]
+    fn rooted_nests_scratch_under_the_same_cache_root_a_session_would() {
+        let root = tempfile::tempdir().expect("project root");
+
+        let scratch = ScratchDir::rooted(root.path(), 5).expect("rooted scratch directory");
+
+        assert_eq!(
+            scratch.path().parent(),
+            Some(root.path().join(SNIPPET_SCRATCH_ROOT).as_path()),
+            "rooted scratch must nest under the cache root, not sit directly in `root`"
+        );
+    }
+
+    /// A crashed run's leftover under a `rooted` root has no `SessionSpec` and therefore no
+    /// `prepare_sessions_isolated` sweep to ever remove it -- `rooted` must sweep for itself, the
+    /// same way session preparation sweeps its own root before activating. This test cannot age an
+    /// entry past the sweep's grace window without a real (or backdated) mtime, so it proves the
+    /// wiring the safe direction: the sweep genuinely runs against `root`'s own scratch cache
+    /// (no error, no wrong-root panic) and still respects that grace window, the same way
+    /// `the_sweep_spares_scratch_a_concurrent_run_may_still_be_using` proves it for a session's own
+    /// root. Real removal of an aged-out entry is already covered there and in
+    /// `the_sweep_removes_every_abandoned_shape_including_populated_directories`. ~keep
+    #[test]
+    fn rooted_sweeps_its_root_without_deleting_a_freshly_touched_concurrent_entry() {
+        let root = tempfile::tempdir().expect("project root");
+        let scratch_root = root.path().join(SNIPPET_SCRATCH_ROOT);
+        let concurrent = scratch_root.join(".alef-snippet-concurrent");
+        std::fs::create_dir_all(&concurrent).expect("concurrent scratch");
+
+        let _scratch = ScratchDir::rooted(root.path(), 0).expect("rooted scratch directory");
+
+        assert!(
+            concurrent.exists(),
+            "a freshly touched entry from a concurrent run must survive rooted's sweep"
+        );
     }
 
     #[test]

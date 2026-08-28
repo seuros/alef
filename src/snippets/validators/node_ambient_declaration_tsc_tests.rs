@@ -12,6 +12,12 @@
 //! anywhere on the toolchain's resolution path -- these run with `session: None`, the isolated
 //! scratch path that (unlike a consumer's own `node_modules`) can never see a real `@types/node`
 //! by accident.
+//!
+//! The `buffer_from_base64_*` tests below cover the sibling gap: `ts_bytes_value_expression`'s
+//! base64 branch (`src/e2e/codegen/typescript/test_file/bytes.rs`) emits the bare global
+//! `Buffer.from(value, "base64")`, which `tsc` rejects the same way for the same reason --
+//! `TS2591: Cannot find name 'Buffer'. Do you need to install type definitions for node?` --
+//! `Buffer` being one of the handful of Node globals TypeScript special-cases that hint for.
 
 use super::TypeScriptValidator;
 use crate::snippets::types::{Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel};
@@ -106,6 +112,47 @@ void main();
     );
     let results = TypeScriptValidator::validate_batch_with_context(
         &[&uses_node_import],
+        ValidationLevel::TypeCheck,
+        TOOLCHAIN_TEST_TIMEOUT_SECS,
+        None,
+    )
+    .expect("batch validation runs");
+
+    assert_eq!(results, vec![(SnippetStatus::Pass, None)], "{results:?}");
+}
+
+/// The exact construct `ts_bytes_value_expression`'s base64 branch emits
+/// (`src/e2e/codegen/typescript/test_file/bytes.rs`): a bare `Buffer.from(value, "base64")` call,
+/// assigned into a `Uint8Array`-typed local the way a generated docs snippet assigns it into a
+/// builder field.
+#[test]
+fn buffer_from_base64_typechecks_without_a_types_node_dependency() {
+    if which::which("tsc").is_err() {
+        return;
+    }
+    let (status, diagnostics) = check(
+        "const bytes: Uint8Array = Buffer.from(\"aGVsbG8=\", \"base64\");
+console.log(bytes.length);
+",
+    );
+    assert_eq!(status, SnippetStatus::Pass, "diagnostics: {diagnostics:?}");
+}
+
+/// The same construct through the batch path real docs-snippet checks actually use -- proves the
+/// `Buffer` ambient declaration reaches the batch's own `tsconfig.json` `files` list, not just
+/// the single-snippet overlay, mirroring `node_fs_promises_typechecks_in_a_batch_without_a_types_node_dependency`.
+#[test]
+fn buffer_from_base64_typechecks_in_a_batch_without_a_types_node_dependency() {
+    if which::which("tsc").is_err() {
+        return;
+    }
+    let uses_buffer = snippet(
+        "const bytes: Uint8Array = Buffer.from(\"aGVsbG8=\", \"base64\");
+console.log(bytes.length);
+",
+    );
+    let results = TypeScriptValidator::validate_batch_with_context(
+        &[&uses_buffer],
         ValidationLevel::TypeCheck,
         TOOLCHAIN_TEST_TIMEOUT_SECS,
         None,
