@@ -46,6 +46,9 @@ pub struct RunnerConfig {
     pub allowed_side_effects: Vec<SideEffectClass>,
     pub cache_dir: Option<std::path::PathBuf>,
     pub changed_only: bool,
+    /// How many *non-live* toolchain cache generations survive a run — see
+    /// [`crate::snippets::session::DEFAULT_TOOLCHAIN_CACHE_GENERATIONS`].
+    pub toolchain_cache_generations: usize,
     pub sessions: HashMap<String, SessionSpec>,
 }
 
@@ -61,6 +64,7 @@ impl Default for RunnerConfig {
             allowed_side_effects: Vec::new(),
             cache_dir: Some(std::path::PathBuf::from(".alef/snippets")),
             changed_only: false,
+            toolchain_cache_generations: crate::snippets::session::DEFAULT_TOOLCHAIN_CACHE_GENERATIONS,
             sessions: HashMap::new(),
         }
     }
@@ -111,6 +115,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
     let preparation = prepare_sessions_isolated_with_activation_filter(
         &sessions_to_prepare,
         config.resolved_before_timeout_secs(),
+        config.toolchain_cache_generations,
         &needs_before_hook,
     );
     let sessions = preparation.sessions;

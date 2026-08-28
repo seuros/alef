@@ -32,7 +32,7 @@ fn without_a_session_both_caches_are_scoped_to_the_snippet_directory() {
 
 /// Pins the fix's whole point: with a session, `apply_cache_dirs` must leave
 /// `ZIG_GLOBAL_CACHE_DIR` unset -- not set-then-shadowed by call order, genuinely unset -- so only
-/// `ValidationSession::apply_environment`'s fingerprint-scoped, session-shared directory ever
+/// `ValidationSession::apply_environment`'s toolchain-key-scoped, session-shared directory ever
 /// reaches the process. Before this fix, deleting or reordering the `session.apply(&mut command)`
 /// call after `apply_cache_dirs` (both real call sites do this today, but nothing enforced it)
 /// would have silently regressed every zig snippet in a session back to a fresh, unshared,
@@ -70,7 +70,7 @@ fn with_a_session_apply_cache_dirs_leaves_the_global_cache_unset() {
     );
 
     // The other half of the invariant: once `session.apply` runs (as every real caller does
-    // immediately afterward), the global cache resolves to the session's own fingerprint-scoped
+    // immediately afterward), the global cache resolves to the session's own toolchain-key-scoped
     // directory -- not the scratch directory `apply_cache_dirs` was given.
     session.apply(&mut command);
     let after_session_apply: std::collections::BTreeMap<String, PathBuf> = command
@@ -81,8 +81,12 @@ fn with_a_session_apply_cache_dirs_leaves_the_global_cache_unset() {
         .get("ZIG_GLOBAL_CACHE_DIR")
         .expect("session.apply must set ZIG_GLOBAL_CACHE_DIR");
     assert!(
-        shared_global_cache.starts_with(root.path().join(".alef/snippets/cache").join(&session.fingerprint)),
-        "the global cache must be the session's fingerprint-scoped, session-shared directory, not a \
+        shared_global_cache.starts_with(
+            root.path()
+                .join(".alef/snippets/cache")
+                .join(session.toolchain_cache_key())
+        ),
+        "the global cache must be the session's toolchain-key-scoped, session-shared directory, not a \
          scratch directory: {}",
         shared_global_cache.display()
     );

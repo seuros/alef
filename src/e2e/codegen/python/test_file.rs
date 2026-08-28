@@ -25,6 +25,7 @@ use super::helpers::{
     resolve_module, resolve_options_type, resolve_options_via,
 };
 use super::http::render_http_test_function;
+use super::test_function::handle_values::collect_used_nested_types;
 use super::test_function::{render_test_function, resolve_field_enum_type};
 
 /// Render a complete Python test file for a single fixture category.
@@ -352,6 +353,7 @@ pub(super) fn render_test_file(
             needs_options_type,
             enum_fields,
             handle_nested_types,
+            handle_dict_types,
             &used_enum_types,
             &used_config_types,
             type_defs,
@@ -509,6 +511,7 @@ fn build_thirdparty_imports(
     needs_options_type: bool,
     enum_fields: &std::collections::HashMap<String, String>,
     handle_nested_types: &std::collections::HashMap<String, String>,
+    handle_dict_types: &std::collections::HashSet<String>,
     used_enum_types: &BTreeSet<String>,
     used_config_types: &BTreeSet<String>,
     type_defs: &[crate::core::ir::TypeDef],
@@ -641,24 +644,16 @@ fn build_thirdparty_imports(
     }
 
     if !handle_nested_types.is_empty() {
-        let mut used_nested_types: BTreeSet<String> = BTreeSet::new();
+        let mut used_types: BTreeSet<String> = BTreeSet::new();
         for fixture in fixtures.iter() {
-            for arg in &e2e_config.call.args {
-                if arg.arg_type == "handle" {
-                    let config_value = resolve_field(&fixture.input, &arg.field);
-                    if let Some(obj) = config_value.as_object() {
-                        for key in obj.keys() {
-                            if let Some(type_name) = handle_nested_types.get(key)
-                                && obj[key].is_object()
-                            {
-                                used_nested_types.insert(type_name.clone());
-                            }
-                        }
-                    }
+            for arg in e2e_config.call.args.iter().filter(|arg| arg.arg_type == "handle") {
+                let config_value = resolve_field(&fixture.input, &arg.field);
+                for (key, value) in config_value.as_object().into_iter().flatten() {
+                    collect_used_nested_types(key, value, handle_nested_types, handle_dict_types, &mut used_types);
                 }
             }
         }
-        for type_name in used_nested_types {
+        for type_name in used_types {
             if !import_names.contains(&type_name) {
                 import_names.push(type_name);
             }
@@ -853,6 +848,7 @@ mod tests {
             true,
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
             &BTreeSet::new(),
             &used_config_types,
             &[],

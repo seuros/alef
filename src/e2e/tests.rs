@@ -650,3 +650,6 @@ fn a_later_invocations_identical_diagnostic_is_reported_again() {
         )),
     });
 }
+
+#[path = "lang_scope_tests.rs"]
+mod lang_scope;

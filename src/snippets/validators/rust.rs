@@ -660,11 +660,39 @@ mod tests {
         );
     }
 
-    /// Two sessions must never share compiled artifacts: they can link different path
-    /// dependencies, different features and different dependency versions into a package with the
-    /// same name. ~keep
+    /// Two sessions must never share compiled artifacts when their CONFIGURATION differs: they can
+    /// link different path dependencies, different features and different dependency versions into
+    /// a package with the same name. The separation is keyed on configuration, not on a
+    /// working-tree digest -- see the content-only companion below for why. ~keep
     #[test]
-    fn two_sessions_do_not_share_a_cargo_target_directory() {
+    fn two_differently_configured_sessions_do_not_share_a_cargo_target_directory() {
+        let project = tempfile::tempdir().expect("project directory");
+        let first = ValidationSession {
+            language: Language::Rust,
+            working_directory: project.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "fingerprint-one".into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let mut second = first.clone();
+        second.rust_features = vec!["extra".to_string()];
+
+        assert_ne!(
+            first.cargo_target_directory(),
+            second.cargo_target_directory(),
+            "a differing feature set can link different artifacts into a package of the same name"
+        );
+    }
+
+    /// A source edit must re-run validation without discarding the compiler cache. Cargo tracks its
+    /// own artifacts' staleness against its own inputs; handing it an empty directory on every
+    /// content change bought no correctness and cost a full cold rebuild per edit -- measured at
+    /// 4.1 GiB stranded per run in a consumer repo, with nothing ever sweeping them. ~keep
+    #[test]
+    fn a_content_only_change_keeps_the_cargo_target_directory() {
         let project = tempfile::tempdir().expect("project directory");
         let first = ValidationSession {
             language: Language::Rust,
@@ -679,7 +707,11 @@ mod tests {
         let mut second = first.clone();
         second.fingerprint = "fingerprint-two".into();
 
-        assert_ne!(first.cargo_target_directory(), second.cargo_target_directory());
+        assert_eq!(
+            first.cargo_target_directory(),
+            second.cargo_target_directory(),
+            "a working-tree edit must rekey the verdict cache, not strand the compiler cache"
+        );
     }
 
     #[test]

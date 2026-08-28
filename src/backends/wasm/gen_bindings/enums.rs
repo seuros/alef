@@ -21,7 +21,7 @@ use super::functions::emit_rustdoc;
 /// payload was silently dropped (`Custom = 1` with no field). Route it through the same
 /// discriminator-struct emitter as an explicitly tagged enum, defaulting the discriminant field
 /// name to "type" like `gen_tagged_enum_as_struct` already does. ~keep
-pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
+pub(crate) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     has_data_variants && (enum_def.serde_tag.is_some() || !enum_def.serde_untagged)
 }
@@ -35,7 +35,7 @@ pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
 /// never called for these: `mod.rs` redirects every field of this type straight to `JsValue`
 /// (via `type_overrides`) and bridges it through `serde_wasm_bindgen` at the field site, the same
 /// mechanism already used for `is_tagged_data_enum` fields. ~keep
-pub(super) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
+pub(crate) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
     enum_def.serde_untagged && enum_def.variants.iter().any(|v| !v.fields.is_empty())
 }
 
@@ -720,7 +720,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
 /// confirmation trail. This backend must therefore decide, at generation time, whether a
 /// cfg-gated variant exists AT ALL for this binding and emit it fully present or fully absent --
 /// never a `#[cfg(...)]` attribute on the variant itself. ~keep
-pub(super) fn gen_enum(
+pub(crate) fn gen_enum(
     enum_def: &EnumDef,
     prefix: &str,
     core_import: &str,

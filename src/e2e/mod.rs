@@ -449,10 +449,22 @@ fn generate_e2e_with_extensions(
     // successfully -- CODE, not documentation -- must not be discarded because the
     // snippet stage behind them tripped. `Option::get_or_insert` leaves an earlier
     // generator failure in place rather than overwriting it with this one. ~keep
+    //
+    // The report is computed over `configured_languages` -- the UNFILTERED set -- and not over
+    // `resolved_languages`, because everything it feeds except the per-language `.md` files
+    // themselves is a whole-tree record: the coverage ledger is the only place alef writes down
+    // which path it personally generated for which cell, and `prune_orphaned_snippets` reads that
+    // record back to decide what to unlink. Computing it from a `--lang`-narrowed set would
+    // rewrite the whole-tree record as though one language were the whole tree, dropping every
+    // other language's ownership entry -- so their files could never be pruned again and
+    // `ownership::is_ledger_owned_snippet_path` would stop recognising them as alef's. Feeding the
+    // full set instead keeps every shared artifact byte-identical between a filtered and an
+    // unfiltered run; the `--lang` scope is applied to the per-language files alone, by
+    // `language_filter::retain_selected_languages` below. ~keep
     if let Some(snippet_config) = &e2e_config.snippets {
         match snippets::generate_snippet_report(
             &fixtures,
-            snippet_config.languages_or(&resolved_languages),
+            snippet_config.languages_or(&configured_languages),
             e2e_config,
             snippet_config,
             config,
@@ -486,7 +498,11 @@ fn generate_e2e_with_extensions(
                     content: format!("{coverage_content}\n"),
                     generated_header: false,
                 });
-                all_files.extend(report.snippets.into_iter().map(|snippet| snippet.file));
+                all_files.extend(
+                    snippets::language_filter::retain_selected_languages(report.snippets, languages)
+                        .into_iter()
+                        .map(|snippet| snippet.file),
+                );
             }
             Err(error) => {
                 warn!("snippet generation failed, deferring failure: {error:#}");
@@ -668,9 +684,15 @@ fn ensure_snippet_coverage_complete(coverage: &snippets::SnippetCoverageLedger) 
 /// See [`snippets::coverage::orphaned_paths`] for the ownership predicate —
 /// only a path recorded in the *previous* run's own coverage manifest is
 /// ever a deletion candidate, and only for a language this run actually
-/// evaluated. That keeps a `--lang`-filtered or cached run from
-/// mass-deleting another language's still-valid output, and keeps a
-/// hand-authored file untouched.
+/// evaluated. That keeps a run holding a partial ledger — a cached one, or
+/// any caller that evaluated a subset — from mass-deleting another
+/// language's still-valid output, and keeps a hand-authored file untouched.
+///
+/// A `--lang`-filtered run is deliberately NOT one of those: it evaluates
+/// every configured language and prunes across all of them, exactly as an
+/// unfiltered run does. Its `--lang` scope applies to the per-language files
+/// it rewrites (`snippets::language_filter`), not to the whole-tree ledger
+/// this prune and `alef verify`'s `validate_current` both read. ~keep
 ///
 /// Best-effort: a missing or unreadable previous manifest (first run, or one
 /// predating this ledger format) means "nothing to prune yet", not an

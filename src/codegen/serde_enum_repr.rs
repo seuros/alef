@@ -78,6 +78,117 @@ pub fn serde_enum_repr(enum_def: &EnumDef) -> SerdeEnumRepr {
     }
 }
 
+/// The inverse of [`crate::codegen::naming::wire_variant_value`]: given a value read off the
+/// JSON/wire surface (an e2e fixture's enum-typed input, a recorded response body), return the
+/// Rust variant name that produces it — which is also the public member identifier every binding
+/// declares for that variant.
+///
+/// A caller that instead re-cases the wire value (`wire.to_upper_camel_case()`) is using a wire
+/// name as a host-language identifier casing rule, which the `centralized-naming` rule forbids.
+/// The two agree only for variants whose wire spelling happens to round-trip, and diverge
+/// silently for `#[serde(rename = "...")]` (`"md"` -> `Md`, declared `Markdown`), for
+/// `rename_all = "lowercase"` over a multi-word variant (`PlainText` -> `"plaintext"` ->
+/// `Plaintext`), and for any acronym-cased variant (`HTML` -> `"html"` -> `Html`).
+///
+/// Both spellings are accepted, mirroring the field-side precedent in the TypeScript e2e
+/// generator's `refuse_undeclared_json_keys`: a fixture may legitimately name an enum value by
+/// its Rust identifier or by its wire value, and rejecting the former would fail a correctly
+/// authored fixture. `None` means no declared variant carries that wire value at all, which a
+/// caller must not paper over by inventing an identifier. ~keep
+#[must_use]
+pub fn variant_name_for_wire<'a>(enum_def: &'a EnumDef, wire: &str) -> Option<&'a str> {
+    let rename_all = enum_def.serde_rename_all.as_deref();
+    enum_def
+        .variants
+        .iter()
+        .find(|variant| {
+            variant.name == wire
+                || crate::codegen::naming::wire_variant_value(
+                    &variant.name,
+                    variant.serde_rename.as_deref(),
+                    rename_all,
+                ) == wire
+        })
+        .map(|variant| variant.name.as_str())
+}
+
+#[cfg(test)]
+mod variant_name_for_wire_tests {
+    use super::*;
+    use crate::core::ir::EnumVariant;
+
+    fn output_format(rename_all: Option<&str>, variants: &[(&str, Option<&str>)]) -> EnumDef {
+        EnumDef {
+            name: "OutputFormat".to_string(),
+            serde_rename_all: rename_all.map(str::to_string),
+            variants: variants
+                .iter()
+                .map(|(name, rename)| EnumVariant {
+                    name: (*name).to_string(),
+                    serde_rename: rename.map(str::to_string),
+                    ..EnumVariant::default()
+                })
+                .collect(),
+            ..EnumDef::default()
+        }
+    }
+
+    #[test]
+    fn should_resolve_every_rename_strategy_back_to_the_declared_variant() {
+        // (case, rename_all, variants, wire value, expected variant)
+        let cases: [(&str, Option<&str>, &[(&str, Option<&str>)], &str, Option<&str>); 7] = [
+            (
+                "single word, no rename",
+                None,
+                &[("Markdown", None)],
+                "Markdown",
+                Some("Markdown"),
+            ),
+            (
+                "single word under lowercase",
+                Some("lowercase"),
+                &[("Markdown", None)],
+                "markdown",
+                Some("Markdown"),
+            ),
+            (
+                "multi word under snake_case",
+                Some("snake_case"),
+                &[("PlainText", None)],
+                "plain_text",
+                Some("PlainText"),
+            ),
+            (
+                "multi word under lowercase collapses, so re-casing cannot recover it",
+                Some("lowercase"),
+                &[("PlainText", None)],
+                "plaintext",
+                Some("PlainText"),
+            ),
+            (
+                "explicit rename wins over rename_all",
+                Some("snake_case"),
+                &[("Markdown", Some("md"))],
+                "md",
+                Some("Markdown"),
+            ),
+            (
+                "acronym variant under lowercase",
+                Some("lowercase"),
+                &[("HTML", None)],
+                "html",
+                Some("HTML"),
+            ),
+            ("value no variant declares", None, &[("Markdown", None)], "pdf", None),
+        ];
+
+        for (case, rename_all, variants, wire, expected) in cases {
+            let enum_def = output_format(rename_all, variants);
+            assert_eq!(variant_name_for_wire(&enum_def, wire), expected, "{case}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

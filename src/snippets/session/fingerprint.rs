@@ -3,7 +3,7 @@
 //!
 //! Split out of `session` under the repo's file-size cap.
 
-use super::SessionSpec;
+use super::{SessionSpec, ValidationSession};
 use crate::snippets::error::{Error, Result};
 use rayon::prelude::*;
 use std::path::Path;
@@ -56,6 +56,57 @@ pub(super) fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
         hasher.update(digest.as_bytes());
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Domain separator that keeps a toolchain cache key from ever colliding with a session
+/// fingerprint. Both are blake3 hex over overlapping inputs and both name a directory under
+/// `.alef/snippets/`, so without this a session with no `before` hook and an empty working tree
+/// could in principle produce one string meaning two different things. ~keep
+const TOOLCHAIN_KEY_DOMAIN: &[u8] = b"alef.snippets.toolchain-cache.v1";
+
+/// The key naming a session's persistent toolchain cache directories -- the cargo target
+/// directory, the Go build cache, the Zig global cache.
+///
+/// Deliberately the *configuration* half of the session fingerprint and nothing else: no working
+/// tree digest. A toolchain cache is a compiler's own artifact store, and cargo, `go build` and
+/// zig each track the staleness of their contents against their own inputs. Keying it on the
+/// content fingerprint instead meant that editing any file the fingerprint hashes -- which for a
+/// session configured with `cwd = "."` is every file in the repository -- handed the toolchain a
+/// brand-new empty directory and forced a cold rebuild of the whole dependency tree, while the
+/// directory it replaced stayed on disk. One consumer reached five such directories totalling
+/// 19.9 GiB, each a full cold `cargo check` of several minutes, over five runs whose only
+/// intervening change was ordinary source edits elsewhere in the repository. Invalidating a
+/// *verdict* is what the fingerprint is for; invalidating a *compiler cache* is what the compiler
+/// is for.
+///
+/// What the cache does still have to separate is two differently *configured* sessions, so that
+/// they can never compile into each other's artifacts: different working directory, manifest,
+/// environment, include paths, cargo features or snippet dependencies all key apart, exactly as
+/// before. `before` is excluded because a hook is a build step run *against* the working
+/// directory, not a property of the artifacts produced from it -- two sessions over one package
+/// that differ only in their hook (a consumer's `kotlin` and `kotlin_android` targets, say) share
+/// one compiler cache on purpose. ~keep
+pub(super) fn session_toolchain_key(session: &ValidationSession) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(TOOLCHAIN_KEY_DOMAIN);
+    hash_specification(&mut hasher, &toolchain_identity(session));
+    hasher.finalize().to_hex().to_string()
+}
+
+/// A session's configuration restated as a [`SessionSpec`] so [`hash_specification`] stays the one
+/// definition of what distinguishes two sessions, rather than a second hand-copied field list that
+/// can drift out of step with it when a field is added. ~keep
+fn toolchain_identity(session: &ValidationSession) -> SessionSpec {
+    SessionSpec {
+        language: session.language,
+        working_directory: session.working_directory.clone(),
+        manifest: session.manifest.clone(),
+        before: Vec::new(),
+        env: session.env.clone(),
+        include_paths: session.include_paths.clone(),
+        rust_features: session.rust_features.clone(),
+        rust_dependencies: session.rust_dependencies.clone(),
+    }
 }
 
 /// The configuration half of the fingerprint: everything that distinguishes two sessions pointed
@@ -169,6 +220,64 @@ mod tests {
         let changed = session_fingerprint(&spec).expect("changed fingerprint");
 
         assert_ne!(first, changed);
+    }
+
+    fn resolved_session(spec: &SessionSpec) -> ValidationSession {
+        ValidationSession {
+            language: spec.language,
+            working_directory: spec.working_directory.clone(),
+            manifest: spec.manifest.clone(),
+            fingerprint: session_fingerprint(spec).expect("fingerprint"),
+            env: spec.env.clone(),
+            include_paths: spec.include_paths.clone(),
+            rust_features: spec.rust_features.clone(),
+            rust_dependencies: spec.rust_dependencies.clone(),
+        }
+    }
+
+    /// The two caches a session keys must invalidate on opposite signals, and this pins both
+    /// directions at once so a change that collapses them cannot pass.
+    ///
+    /// A snippet's *verdict* depends on the working tree, so the fingerprint -- which keys
+    /// `ValidationCache` -- must change when a source file does. A *compiler cache* does not: cargo
+    /// tracks its own artifacts' staleness, so handing it a fresh empty directory whenever any
+    /// hashed file changes only forces a cold rebuild and strands the previous 4 GiB directory on
+    /// disk. Before this fix both were keyed on the fingerprint, so a consumer whose Rust session
+    /// is configured `cwd = "."` -- meaning every file in the repository is inside the fingerprint's
+    /// scope -- got a brand-new toolchain cache directory, and a full several-minute recompile, from
+    /// any edit anywhere in the tree.
+    ///
+    /// The third assertion is the control that keeps the fix honest: making the toolchain key
+    /// constant would satisfy the second assertion too, and would let two differently configured
+    /// sessions compile into each other's artifacts. ~keep
+    #[test]
+    fn a_source_edit_rekeys_the_verdict_cache_but_not_the_compiler_cache() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        std::fs::create_dir_all(directory.path().join("src")).expect("source tree");
+        std::fs::write(directory.path().join("src/lib.rs"), "pub fn chunk() {}").expect("source file");
+        let spec = fingerprint_spec(directory.path());
+        let before = resolved_session(&spec);
+
+        std::fs::write(directory.path().join("src/lib.rs"), "pub fn chunk(limit: usize) {}").expect("edited source");
+        let after = resolved_session(&spec);
+
+        assert_ne!(
+            before.fingerprint, after.fingerprint,
+            "a source edit must still rekey the verdict cache, or a stale Pass would be replayed"
+        );
+        assert_eq!(
+            before.cargo_target_directory(),
+            after.cargo_target_directory(),
+            "a source edit must not strand the compiler cache and force a cold rebuild"
+        );
+
+        let mut reconfigured = spec.clone();
+        reconfigured.rust_features = vec!["api".to_string()];
+        assert_ne!(
+            resolved_session(&reconfigured).cargo_target_directory(),
+            after.cargo_target_directory(),
+            "two differently configured sessions must never compile into each other's artifacts"
+        );
     }
 
     /// A build tool's own scratch output is deterministically derived from files the fingerprint

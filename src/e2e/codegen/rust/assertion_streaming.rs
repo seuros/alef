@@ -7,6 +7,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::streaming_assertions::StreamingFieldResolver;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
@@ -34,21 +35,27 @@ pub(super) fn try_render_streaming_virtual_field_assertion(
         return false;
     }
 
-    if let Some(expr) =
-        crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
-            f,
-            "rust",
-            "chunks",
-            Some(dep_name),
-            streaming_item_type,
-        )
-    {
+    if let Some(expr) = StreamingFieldResolver::accessor_with_streaming_context(
+        f,
+        "rust",
+        "chunks",
+        Some(dep_name),
+        streaming_item_type,
+    ) {
+        // `field_resolver.is_optional` answers for the *declared* IR field, but the expression
+        // actually emitted is whatever the streaming resolver built — and most of its accessors
+        // flatten the declared `Option` away (`.iter().flatten()`, `.unwrap_or_default()`) while
+        // pinning a concrete type. Ask the accessor owner which shape it produced instead of
+        // assuming the declared wrapper survived: appending `.as_ref()` to a `Vec`- or
+        // `String`-typed chain is an unannotatable `AsRef<T>` call (E0282), not a no-op. ~keep
+        let option_wrapper_survives = field_resolver.is_optional(f)
+            && StreamingFieldResolver::accessor_is_collected_var_passthrough(f, "rust", "chunks");
         match assertion.assertion_type.as_str() {
             "count_min" => {
                 if let Some(val) = &assertion.value
                     && let Some(n) = val.as_u64()
                 {
-                    let expr_for_len = if field_resolver.is_optional(f) {
+                    let expr_for_len = if option_wrapper_survives {
                         format!("{expr}.as_ref().map_or(0, |v| v.len())")
                     } else {
                         format!("{expr}.len()")
@@ -68,7 +75,7 @@ pub(super) fn try_render_streaming_virtual_field_assertion(
                 if let Some(val) = &assertion.value
                     && let Some(n) = val.as_u64()
                 {
-                    let expr_for_len = if field_resolver.is_optional(f) {
+                    let expr_for_len = if option_wrapper_survives {
                         format!("{expr}.as_ref().map_or(0, |v| v.len())")
                     } else {
                         format!("{expr}.len()")
@@ -99,7 +106,7 @@ pub(super) fn try_render_streaming_virtual_field_assertion(
                 }
             }
             "not_empty" => {
-                let check_expr = if field_resolver.is_optional(f) {
+                let check_expr = if option_wrapper_survives {
                     format!("{expr}.as_ref().is_some_and(|v| !v.is_empty())")
                 } else {
                     format!("!{expr}.is_empty()")
@@ -107,7 +114,7 @@ pub(super) fn try_render_streaming_virtual_field_assertion(
                 let _ = writeln!(out, "    assert!({check_expr}, \"expected non-empty\");");
             }
             "is_empty" => {
-                let check_expr = if field_resolver.is_optional(f) {
+                let check_expr = if option_wrapper_survives {
                     format!("{expr}.as_ref().is_none_or(|v| v.is_empty())")
                 } else {
                     format!("{expr}.is_empty()")

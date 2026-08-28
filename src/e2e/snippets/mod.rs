@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub mod coverage;
 mod exclusions;
+pub mod language_filter;
 pub(crate) mod ledger_paths;
 pub mod migration;
 pub(crate) mod mock_harness_guard;

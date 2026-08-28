@@ -19,6 +19,21 @@ impl StreamingFieldResolver {
         Self::accessor_with_module_qualifier(field, lang, chunks_var, None)
     }
 
+    /// Whether the accessor for `field` is a verbatim passthrough of `chunks_var` — the resolver
+    /// handed back the collected-list local itself instead of building an expression over it.
+    ///
+    /// This is the only shape whose static type is decided by the *caller* (which binds the
+    /// local), so it is also the only shape to which the asserted field's declared `Option`
+    /// wrapper still applies. Every other accessor pins its own type on the way out
+    /// (`.collect::<Vec<_>>()`, `.collect::<String>()`, `.len()`, `.unwrap_or_default()`,
+    /// `.is_some()`), and an `Option` normalization appended to one of those is not merely
+    /// redundant: `Vec<T>` and `String` each implement `AsRef` for several targets, so a bare
+    /// `.as_ref()` on them resolves to `AsRef<T>` with nothing to pin `T` and the generated test
+    /// fails to compile with E0282. ~keep
+    pub fn accessor_is_collected_var_passthrough(field: &str, lang: &str, chunks_var: &str) -> bool {
+        Self::accessor(field, lang, chunks_var).is_some_and(|expr| expr == chunks_var)
+    }
+
     /// Same as [`Self::accessor`] but accepts a per-project module qualifier
     /// for the `stream.has_*_event` branches that emit a streaming union type
     /// path.

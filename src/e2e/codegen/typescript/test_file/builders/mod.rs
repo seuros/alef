@@ -1,4 +1,7 @@
+mod enum_members;
+
 use super::*;
+use enum_members::{declared_enum_member_for_prefixed, is_tagged_data_enum, wasm_enum_bridged_as_raw_value};
 
 use crate::e2e::codegen::fixture_refusal::RefusalSite;
 
@@ -42,37 +45,6 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression(
         0,
         referenced_enums,
     )
-}
-
-/// True when `type_name` (possibly with a `Wasm` binding-prefix) names an
-/// IR enum that uses serde's internally-tagged representation
-/// (`#[serde(tag = "...")]`) and has at least one variant carrying data.
-///
-/// WASM bindings expose such enums via field setters of type
-/// `JsValue`/`Option<JsValue>`, which `serde_wasm_bindgen::from_value` then
-/// deserializes from a plain JS object. Wrapping the value with the
-/// per-variant `default()` factory + setters produces an opaque
-/// wasm-bindgen wrapper class whose own-property table is empty — serde
-/// then fails to read the discriminator. The e2e builder must emit a plain
-/// JS object literal for these instead.
-fn is_tagged_data_enum(type_name: &str, enums: &[EnumDef], wasm_type_prefix: &str) -> bool {
-    let stripped = type_name.strip_prefix(wasm_type_prefix).unwrap_or(type_name);
-    enums
-        .iter()
-        .any(|e| e.name == stripped && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
-}
-
-/// True when `enum_name` (already unprefixed IR name) is a `#[serde(untagged)]`
-/// enum with at least one variant carrying data — mirrors the `is_untagged_data_enum`
-/// gate the napi `.d.ts` dispatcher uses (see `dispatch .d.ts enums on their serde
-/// representation`). On the wire such an enum serializes as the bare payload of
-/// whichever variant matched, not a named member — a string-typed instance is the
-/// raw JS value itself. Treating it as `EnumType.Variant` turned an empty string
-/// into `WasmEmbeddingInput.` (missing member, a syntax error). ~keep
-fn is_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
-    enums
-        .iter()
-        .any(|e| e.name == enum_name && e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()))
 }
 
 /// For a node-lang tagged-data enum whose matched variant wraps a single Named-type payload
@@ -445,7 +417,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
                         referenced_enums.insert(enum_type.clone());
-                        format!("{enum_type}.{}", s.to_upper_camel_case())
+                        let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, s);
+                        format!("{enum_type}.{member}")
                     } else {
                         json_to_js(&preprocessed)
                     }
@@ -595,15 +568,15 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             }
         } else if let Some(crate::core::ir::TypeRef::Named(enum_type)) = field_type
             && enums.iter().any(|definition| definition.name == *enum_type)
-            && !is_untagged_data_enum(enum_type, enums)
+            && !wasm_enum_bridged_as_raw_value(enum_type, enums, wasm_type_prefix)
             && let serde_json::Value::String(variant) = val
         {
+            let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, variant);
             let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
-            stmts.push(format!(
-                "{var}.{camel_key} = {enum_type}.{};",
-                variant.to_upper_camel_case()
-            ));
-        } else if let Some(enum_type) = resolve_enum_type(enum_fields, Some(ir_owner_name), key, &camel_key) {
+            stmts.push(format!("{var}.{camel_key} = {enum_type}.{member};"));
+        } else if let Some(enum_type) = resolve_enum_type(enum_fields, Some(ir_owner_name), key, &camel_key)
+            && !wasm_enum_bridged_as_raw_value(enum_type, enums, wasm_type_prefix)
+        {
             // This is an enum field — generate EnumType.EnumValue.
             // Look up by both snake_case (fixture key) and camelCase (alef.toml override key
             // convention) so the alef.toml `enum_fields = { codeBlockStyle = "..." }` style
@@ -616,7 +589,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             // `ExtractInputKind.Uri` references an undefined name.
             let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
             if let serde_json::Value::String(s) = val {
-                stmts.push(format!("{var}.{camel_key} = {enum_type}.{};", s.to_upper_camel_case()));
+                let member = declared_enum_member_for_prefixed(&enum_type, enums, wasm_type_prefix, s);
+                stmts.push(format!("{var}.{camel_key} = {enum_type}.{member};"));
             } else {
                 stmts.push(format!("{var}.{camel_key} = {};", json_to_js(val)));
             }
@@ -685,14 +659,16 @@ fn node_value_expression(
         && let Some(variant) = value.as_str()
     {
         referenced_enums.insert(type_name.clone());
-        return format!("{type_name}.{}", variant.to_upper_camel_case());
+        let member = declared_enum_member_for_prefixed(type_name, enums, "", variant);
+        return format!("{type_name}.{member}");
     }
     let camel_field = snake_to_camel(field);
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
         referenced_enums.insert(enum_type.clone());
-        return format!("{enum_type}.{}", variant.to_upper_camel_case());
+        let member = declared_enum_member_for_prefixed(enum_type, enums, "", variant);
+        return format!("{enum_type}.{member}");
     }
     match value {
         serde_json::Value::Object(object) => {

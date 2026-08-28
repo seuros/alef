@@ -15,6 +15,8 @@ mod args;
 mod assertion_containment_tests;
 mod assertion_helpers;
 mod assertion_streaming;
+#[cfg(test)]
+mod assertion_streaming_option_tests;
 mod assertion_synthetic;
 #[cfg(test)]
 mod assertion_wildcard_element_tests;

@@ -2,6 +2,7 @@
 
 mod args;
 mod error_assertions;
+pub(super) mod handle_values;
 mod result_assertions;
 mod typed_values;
 

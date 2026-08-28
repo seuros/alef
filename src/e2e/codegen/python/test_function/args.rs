@@ -8,6 +8,7 @@ use crate::e2e::codegen::resolve_field;
 use crate::e2e::fixture::Fixture;
 
 use super::super::json::json_to_python_literal;
+use super::handle_values::build_handle_kwarg_value;
 use super::typed_values::{emit_bytes_arg, emit_json_object_arg};
 
 /// Build arg binding lines and kwarg expressions for a fixture call.
@@ -282,38 +283,6 @@ fn emit_handle_arg(
         arg_bindings.push(format!("    {var_name} = {constructor_name}({literal})"));
     }
     kwarg_exprs.push(var_name.to_string());
-}
-
-pub(crate) fn build_handle_kwarg_value(
-    k: &str,
-    v: &serde_json::Value,
-    handle_nested_types: &HashMap<String, String>,
-    handle_dict_types: &HashSet<String>,
-) -> String {
-    if let Some(type_name) = handle_nested_types.get(k)
-        && let Some(nested_obj) = v.as_object()
-    {
-        if nested_obj.is_empty() {
-            return format!("{type_name}()");
-        }
-        if handle_dict_types.contains(k) {
-            return json_to_python_literal(v);
-        }
-        let nested_kwargs: Vec<String> = nested_obj
-            .iter()
-            .map(|(nk, nv)| {
-                let nested_snake_key = nk.to_snake_case();
-                format!("{nested_snake_key}={}", json_to_python_literal(nv))
-            })
-            .collect();
-        return format!("{type_name}({})", nested_kwargs.join(", "));
-    }
-    if k == "request_timeout"
-        && let Some(ms) = v.as_u64()
-    {
-        return format!("{}", ms / 1000);
-    }
-    json_to_python_literal(v)
 }
 
 #[cfg(test)]

@@ -318,6 +318,7 @@ fn run_check(
         allowed_side_effects,
         cache_dir: use_cache.then(|| root.join(config.cache_dir())),
         changed_only: use_cache,
+        toolchain_cache_generations: crate::snippets::session::DEFAULT_TOOLCHAIN_CACHE_GENERATIONS,
         sessions: match configured_sessions(config, root, &crate_config.features) {
             Ok(sessions) => sessions,
             Err(error) => {

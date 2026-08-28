@@ -6,7 +6,7 @@
 //! - `exclude_types`: Skip generation of specific types
 //! - `type_overrides`: Remap types (e.g., Path → String)
 
-mod gen_bindings;
+pub(crate) mod gen_bindings;
 mod template_env;
 pub mod trait_bridge;
 mod type_map;

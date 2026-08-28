@@ -34,7 +34,10 @@ const SCRATCH_PREFIX: &str = ".alef-snippet-";
 /// [`purge_stale_scratch_root`] treats it as abandoned rather than as a concurrently running
 /// validation's live scratch. Two alef processes can legitimately share one working directory, and
 /// without this window the sweep would delete the other one's work in progress. ~keep
-const ABANDONED_GRACE_SECS: u64 = 60;
+///
+/// Shared with `session::toolchain_cache`, which reclaims fallen-out-of-use compiler caches under
+/// the identical hazard: one margin, one rationale, rather than two numbers that can drift. ~keep
+pub(super) const ABANDONED_GRACE_SECS: u64 = 60;
 
 /// A killed child can still be exiting — and still holding or recreating entries — when its
 /// scratch guard drops, so a single `remove_dir_all` can lose the race and return `ENOTEMPTY`.

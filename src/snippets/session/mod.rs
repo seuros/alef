@@ -5,10 +5,14 @@ mod hook_reuse_tests;
 #[cfg(test)]
 mod preparation_error_tests;
 mod purge;
+mod toolchain_cache;
 
 use before_hooks::{HookOutcomes, run_before_once};
-use fingerprint::session_fingerprint;
+use fingerprint::{session_fingerprint, session_toolchain_key};
 use purge::{cleanup_legacy_scratch_directories, purge_abandoned_scratch, purge_stale_session_scratch};
+use toolchain_cache::{ToolchainCaches, purge_stale_toolchain_caches};
+
+pub use toolchain_cache::DEFAULT_TOOLCHAIN_CACHE_GENERATIONS;
 
 use crate::snippets::error::{Error, Result};
 use crate::snippets::types::Language;
@@ -155,29 +159,29 @@ impl ValidationSession {
         }
     }
 
-    /// The persistent, fingerprint-keyed directory `cargo` compiles the snippet check project
-    /// into.
+    /// The persistent directory `cargo` compiles the snippet check project into.
     ///
     /// Every rust snippet batch writes its check project into a fresh scratch directory, so
     /// without a target directory that outlives it, `cargo check` recompiled the session's path
     /// dependency and its entire transitive tree on every single run — minutes of work whose
-    /// inputs had not changed. Keyed by fingerprint like the other toolchain caches, so two
-    /// sessions can never compile into each other's artifacts. ~keep
+    /// inputs had not changed. Keyed by [`Self::toolchain_cache_key`] like the other toolchain
+    /// caches, so two sessions can never compile into each other's artifacts. ~keep
     #[must_use]
     pub fn cargo_target_directory(&self) -> PathBuf {
         self.cache_directories().cargo_target
     }
 
+    /// The key naming this session's persistent toolchain cache directories — its session
+    /// *configuration*, deliberately not its working-tree [`Self::fingerprint`]. See
+    /// `fingerprint::session_toolchain_key` for why a compiler cache must outlive a source edit
+    /// that a verdict cache must not. ~keep
+    #[must_use]
+    pub fn toolchain_cache_key(&self) -> String {
+        session_toolchain_key(self)
+    }
+
     fn cache_directories(&self) -> ToolchainCaches {
-        let root = self
-            .working_directory
-            .join(".alef/snippets/cache")
-            .join(&self.fingerprint);
-        ToolchainCaches {
-            go_build: root.join("go-build"),
-            zig_global: root.join("zig-global"),
-            cargo_target: root.join("cargo-target"),
-        }
+        toolchain_cache::cache_directories(self)
     }
 }
 
@@ -185,20 +189,6 @@ impl ValidationSession {
 /// these is resolved against the session's `working_directory` when it is relative, because a
 /// toolchain resolves it against its own process working directory otherwise. ~keep
 const TOOLCHAIN_CACHE_VARIABLES: &[&str] = &["GOCACHE", "ZIG_GLOBAL_CACHE_DIR", "CARGO_TARGET_DIR"];
-
-/// The persistent, per-session directories a toolchain keeps its compiled artifacts in. All are
-/// keyed by the session fingerprint and survive across runs — that reuse is the entire point. ~keep
-struct ToolchainCaches {
-    go_build: PathBuf,
-    zig_global: PathBuf,
-    cargo_target: PathBuf,
-}
-
-impl ToolchainCaches {
-    fn directories(&self) -> [&Path; 3] {
-        [&self.go_build, &self.zig_global, &self.cargo_target]
-    }
-}
 
 /// A spec that resolved successfully, paired with the target name and spec it came from, awaiting
 /// the purge and then activation.
@@ -211,17 +201,23 @@ type ResolvedSession<'a> = (&'a String, &'a SessionSpec, ValidationSession);
 /// caller that wants the unconditional behaviour. ~keep
 #[cfg(test)]
 pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
-    prepare_sessions_isolated_with_activation_filter(specs, timeout_secs, &|_, _| true)
+    prepare_sessions_isolated_with_activation_filter(
+        specs,
+        timeout_secs,
+        DEFAULT_TOOLCHAIN_CACHE_GENERATIONS,
+        &|_, _| true,
+    )
 }
 
 /// Prepares every configured session in three phases, because the middle one is not per-session.
 ///
 /// Phase one resolves each spec far enough to know its fingerprint, without running any `before`
-/// hook. Phase two then purges the in-tree session scratch root of every working directory, using
-/// the *complete* set of live fingerprints for that directory — which is why it cannot be folded
-/// back into a per-session step: two targets can legitimately share one `working_directory`, and a
-/// per-session purge would delete its sibling's live scratch. Phase three runs the `before` hooks
-/// against the already-purged tree, but only for a session `needs_activation` still says needs it.
+/// hook. Phase two then purges the in-tree session scratch root — and, under `generations`, the
+/// toolchain cache root — of every working directory, using the *complete* set of live keys for
+/// that directory, which is why it cannot be folded back into a per-session step: two targets can
+/// legitimately share one `working_directory`, and a per-session purge would delete its sibling's
+/// live scratch. Phase three runs the `before` hooks against the already-purged tree, but only for
+/// a session `needs_activation` still says needs it.
 ///
 /// `needs_activation(target, session)` runs after phase one, once a session's fingerprint is known,
 /// so a caller can compare that fingerprint against a result cache before committing to the
@@ -236,6 +232,7 @@ pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, ti
 pub(crate) fn prepare_sessions_isolated_with_activation_filter(
     specs: &HashMap<String, SessionSpec>,
     timeout_secs: u64,
+    generations: usize,
     needs_activation: &(dyn Fn(&str, &ValidationSession) -> bool + Sync),
 ) -> SessionPreparation {
     let mut sessions = HashMap::new();
@@ -248,6 +245,7 @@ pub(crate) fn prepare_sessions_isolated_with_activation_filter(
         }
     }
     purge_stale_session_scratch(&resolved);
+    purge_stale_toolchain_caches(&resolved, timeout_secs, generations);
     let mut outcomes = activate_sessions(&resolved, timeout_secs, needs_activation);
     outcomes.sort_by_key(|(index, _)| *index);
     for ((target, spec, session), (_, outcome)) in resolved.into_iter().zip(outcomes) {
@@ -433,6 +431,7 @@ fn activate_session(
             ))
         })?;
     }
+    caches.mark_used();
     Ok(())
 }
 
