@@ -210,12 +210,31 @@ The full extension walkthrough covers trait references and per-language emission
 | `alef build` | Build language bindings using native tools. |
 | `alef verify` | Check generated files and optional compile/lint state for CI. |
 | `alef diff` | Show what generation would change without writing files. |
+| `alef schema` | Write or `--check` a vendored copy of the `alef.toml` JSON Schema. |
 | `alef e2e` | Initialize, scaffold, validate, list, or generate local e2e suites. |
 | `alef test-apps` | Generate and run standalone registry-mode test applications. |
 | `alef publish` | Prepare, build, package, and validate release artifacts. |
 | `alef all` | Run the full generation workflow in one command. |
 
 Run `alef --help` or `alef <command> --help` for the full option set.
+
+### Vendoring the `alef.toml` JSON Schema
+
+`schemas/alef.schema.json` is Alef's own config schema — the JSON Schema for `alef.toml` — which
+you may vendor so an editor can validate `alef.toml` offline. It is **not** a generated binding:
+nothing in `alef generate`, `alef build`, or `alef all` writes or refreshes it, and no build step
+reads it. Alef never creates the file on its own; run `alef schema` explicitly if you want a copy:
+
+```bash
+alef schema --output schemas/alef.schema.json   # write or refresh
+alef schema --check                             # byte-exact staleness check
+```
+
+If a copy exists at the default path, `alef verify` reports it. A copy that describes a different
+`alef.toml` surface than the running Alef fails verification, because an editor validating against
+it is answering for a different release. A copy whose only difference is the embedded version stamp
+is reported as informational and does not fail — the described config surface is unchanged, so
+editor validation is still correct.
 
 ## Development
 

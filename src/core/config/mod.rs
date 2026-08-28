@@ -69,8 +69,8 @@ pub use raw_crate::RawCrateConfig;
 pub use resolve_helpers::{OutputLayout, detect_serde_available, resolve_output_dir, resolve_output_layout};
 pub use resolved::ResolvedCrateConfig;
 pub use schema::{
-    DEFAULT_SCHEMA_PATH, alef_config_schema, check_alef_config_schema, render_alef_config_schema,
-    write_alef_config_schema,
+    DEFAULT_SCHEMA_PATH, SchemaDrift, alef_config_schema, check_alef_config_schema, classify_alef_config_schema,
+    render_alef_config_schema, write_alef_config_schema,
 };
 pub use service::{EntrypointSpec, HandlerContractConfig, RegistrationSpec, ServiceConfig};
 pub use tools::{DEFAULT_RUST_DEV_TOOLS, LangContext, ToolsConfig, require_tool, require_tools};

@@ -351,6 +351,12 @@ pub(crate) enum Commands {
         lang: Option<Vec<String>>,
     },
     /// Generate or check the versioned alef.toml JSON Schema.
+    ///
+    /// The schema describes alef.toml itself, so vendoring a copy is optional and explicit:
+    /// no other command writes it, and `alef generate`/`alef build`/`alef all` neither create
+    /// nor refresh it. `alef verify` reports an existing copy at the default path when it has
+    /// drifted -- failing only when it describes a different config surface, not when the
+    /// embedded version stamp alone is behind.
     Schema {
         /// Output JSON Schema file.
         #[arg(long, short, default_value = crate::core::config::DEFAULT_SCHEMA_PATH)]

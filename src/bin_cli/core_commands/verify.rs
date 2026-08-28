@@ -284,6 +284,21 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
             crate::bin_cli::output::line(format_args!("  {mismatch}"));
         }
     }
+    // The consumer's vendored copy of alef's own `alef.toml` JSON Schema, if they keep one. It
+    // is not a generated binding and nothing here writes it -- see `verify_schema`'s module doc
+    // for why this reports only, why it speaks only about a file that already exists at the path
+    // `alef schema` defaults to, and why only a difference in the described config surface (never
+    // a version stamp alone) is allowed to gate the exit code below. ~keep
+    let vendored_schema =
+        super::super::verify_schema::find_stale_vendored_schema(&base_dir, crate::cli::version_pin::cli_version());
+    let has_schema_surface_drift = vendored_schema
+        .as_ref()
+        .is_some_and(|finding| finding.describes_a_different_surface());
+    if let Some(finding) = &vendored_schema {
+        for line in finding.report_lines() {
+            crate::bin_cli::output::line(line);
+        }
+    }
     if !snippet_coverage_issues.is_empty() {
         crate::bin_cli::output::line("Snippet coverage issues detected:");
         for issue in &snippet_coverage_issues {
@@ -412,6 +427,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         && !has_stage_failures
         && !has_missing_snippet_roots
         && !has_incomplete_crates
+        && !has_schema_surface_drift
     {
         crate::bin_cli::output::line("All bindings and versions are up to date.");
     } else {
@@ -533,7 +549,8 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
             || has_orphan_files
             || has_abi_disagreement
             || has_frb_generated_drift
-            || has_stage_failures,
+            || has_stage_failures
+            || has_schema_surface_drift,
         has_version_issues,
         snippet_coverage_issues.len(),
         report_only,
