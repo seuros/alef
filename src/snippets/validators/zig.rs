@@ -9,6 +9,8 @@ pub struct ZigValidator;
 mod batch;
 mod manifest;
 #[cfg(test)]
+mod cache_dirs_tests;
+#[cfg(test)]
 mod session_command_tests;
 
 impl SnippetValidator for ZigValidator {
@@ -39,7 +41,7 @@ impl SnippetValidator for ZigValidator {
                 command.args(["build-exe", "-fno-emit-bin"]).arg(&file);
             }
         }
-        apply_cache_dirs(&mut command, dir.path());
+        apply_cache_dirs(&mut command, dir.path(), None);
 
         let (success, output) = run_command(&mut command, timeout_secs)?;
         if success {
@@ -117,7 +119,7 @@ impl SnippetValidator for ZigValidator {
             apply_include_paths(&mut command, &session.include_paths);
             apply_include_paths(&mut command, &declared_include_paths);
         }
-        apply_cache_dirs(&mut command, dir.path());
+        apply_cache_dirs(&mut command, dir.path(), Some(session));
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
@@ -150,17 +152,37 @@ impl SnippetValidator for ZigValidator {
     }
 }
 
-/// Point zig's caches inside the snippet's own temp directory.
+/// Points zig's caches at a directory this invocation controls, rather than letting zig resolve
+/// one from `HOME`/`XDG_CACHE_HOME` -- `run_command`'s `sanitize_environment` allowlist carries
+/// neither, so without an explicit override zig aborts with `error: unable to resolve zig cache
+/// directory: AppDataDirUnavailable` before it reads a single line of the snippet, and every zig
+/// snippet fails identically at compile level in a way that looks like a defect in the snippet.
 ///
-/// ~keep zig resolves its cache directory from `HOME`/`XDG_CACHE_HOME`, and `run_command`'s
-/// `sanitize_environment` allowlist carries neither. Without these variables zig aborts with
-/// `error: unable to resolve zig cache directory: AppDataDirUnavailable` before it reads a single
-/// line of the snippet, so every zig snippet fails identically at compile level and the failure
-/// looks like a defect in the snippet. Setting them explicitly keeps the run hermetic instead of
-/// widening the allowlist, which would leak the developer's real zig cache into validation.
-fn apply_cache_dirs(command: &mut std::process::Command, dir: &std::path::Path) {
-    command.env("ZIG_GLOBAL_CACHE_DIR", dir.join("zig-global-cache"));
+/// `ZIG_LOCAL_CACHE_DIR` is always scoped to `dir`, the caller's own scratch directory for this
+/// invocation -- zig's local cache holds incremental state for one specific build and is not
+/// designed to be shared across snippets with different source.
+///
+/// `ZIG_GLOBAL_CACHE_DIR` is different: when `session` is `Some`, this function deliberately does
+/// *not* set it, because `ValidationSession::apply`/`apply_environment` (called by every caller
+/// immediately after this one) sets it to a fingerprint-scoped directory that persists across runs
+/// and is shared by every zig snippet validated under that session -- zig's global cache is
+/// content-addressed and explicitly designed for concurrent sharing across processes (this is how
+/// `zig build` itself parallelizes sub-compilations against one cache), so sharing it here is safe,
+/// not merely convenient. Setting it here too used to work only by accident of call order --
+/// `Command::env` is last-write-wins, and every caller happened to call `session.apply` second, so
+/// this function's own `ZIG_GLOBAL_CACHE_DIR` write was silently shadowed. That made the sharing
+/// depend on an ordering invariant nothing enforced: reordering the two calls, or introducing a
+/// caller that didn't, would silently regress every zig snippet in that session back to a fresh,
+/// unshared, `--clean`-cold global cache with no test failure to catch it. Making the two paths
+/// mutually exclusive here removes the ordering dependency entirely: with a session, only
+/// `session.apply` ever sets `ZIG_GLOBAL_CACHE_DIR`, full stop. Without one (the standalone,
+/// no-session `validate` path) there is no session cache to share against, so it falls back to the
+/// same scratch directory as the local cache, exactly as before. ~keep
+fn apply_cache_dirs(command: &mut std::process::Command, dir: &std::path::Path, session: Option<&ValidationSession>) {
     command.env("ZIG_LOCAL_CACHE_DIR", dir.join("zig-local-cache"));
+    if session.is_none() {
+        command.env("ZIG_GLOBAL_CACHE_DIR", dir.join("zig-global-cache"));
+    }
 }
 
 fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std::path::PathBuf]) {
@@ -383,26 +405,6 @@ mod tests {
             SnippetStatus::Pass,
             "zig must compile under the sanitized environment; without an explicit cache directory it \
              fails with AppDataDirUnavailable before reading the snippet: {output:?}"
-        );
-    }
-
-    #[test]
-    fn cache_directories_are_scoped_to_the_snippet_directory() {
-        let root = tempfile::tempdir().expect("temporary root");
-        let mut command = std::process::Command::new("zig");
-        apply_cache_dirs(&mut command, root.path());
-
-        let configured: Vec<_> = command
-            .get_envs()
-            .filter_map(|(key, value)| value.map(|value| (key.to_string_lossy().into_owned(), PathBuf::from(value))))
-            .collect();
-
-        assert_eq!(
-            configured,
-            vec![
-                ("ZIG_GLOBAL_CACHE_DIR".to_string(), root.path().join("zig-global-cache")),
-                ("ZIG_LOCAL_CACHE_DIR".to_string(), root.path().join("zig-local-cache")),
-            ]
         );
     }
 
@@ -636,7 +638,7 @@ mod tests {
         command
             .args(["build", "--summary", "none", "--build-file"])
             .arg(&build_file);
-        apply_cache_dirs(&mut command, &scratch);
+        apply_cache_dirs(&mut command, &scratch, None);
         let output = command.output().expect("zig must be installed to verify this test");
 
         assert!(
@@ -863,7 +865,7 @@ mod tests {
             .args(["build-lib", "-dynamic"])
             .arg(&lib_source)
             .arg(format!("-femit-bin={}", lib_path.display()));
-        apply_cache_dirs(&mut lib_command, directory.path());
+        apply_cache_dirs(&mut lib_command, directory.path(), None);
         let lib_output = lib_command
             .output()
             .expect("zig must be installed to build the fixture library");

@@ -603,6 +603,19 @@ fn validate_snippets(
         let level = level
             .parse::<crate::snippets::types::ValidationLevel>()
             .map_err(|err| anyhow::anyhow!("invalid docs.snippets.validation_level: {err}"))?;
+        // The one place this phase boundary is announced at runtime, not just in `--help` text:
+        // a consumer reaching for `alef all --clean` reasonably expects "generate, no build", and
+        // this block is the one that quietly spawns a real compiler/type-checker/interpreter per
+        // session instead. `--skip-snippet-validation` and this block's own doc comment above
+        // already explain the boundary to anyone who reads `--help` first; this line is for
+        // everyone else, at the one moment the cost is about to be paid. ~keep
+        tracing::info!(
+            crate_name = %config.name,
+            snippet_count = snippets.len(),
+            level = %level,
+            "starting snippet compile validation: spawns a real toolchain per session/snippet; pass \
+             --skip-snippet-validation for a generate-only run"
+        );
         let mut runner_cfg = crate::snippets::runner::RunnerConfig {
             level,
             fail_fast: snippet_cfg.fail_fast,

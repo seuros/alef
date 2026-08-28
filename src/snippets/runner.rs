@@ -1,6 +1,6 @@
 use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
-use crate::snippets::session::{SessionSpec, prepare_sessions_isolated};
+use crate::snippets::session::{SessionSpec, prepare_sessions_isolated_with_activation_filter};
 use crate::snippets::types::{
     DowngradeReason, RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetStatus, ValidationLevel,
     ValidationResult,
@@ -14,6 +14,7 @@ use std::time::Instant;
 mod batch;
 mod dependency_reclassification;
 mod levels;
+mod session_activation;
 mod session_locks;
 mod session_prep;
 mod session_resolution;
@@ -73,8 +74,26 @@ impl RunnerConfig {
     }
 }
 
+/// The default worker count for [`RunnerConfig::parallelism`], and for the standalone
+/// `alef snippets check` CLI command (`cli::commands::snippets::run`), which mirrors this value
+/// rather than importing it to avoid a visibility change for one duplicated expression.
+///
+/// Deliberately `rayon::current_num_threads()`, not `std::thread::available_parallelism()`: the
+/// `--jobs`/`-j` CLI flag already caps the process-wide rayon pool once, at startup
+/// (`rayon::ThreadPoolBuilder::num_threads(cli.jobs).build_global()` in `lib.rs`), and every other
+/// parallel stage in the pipeline (`build`, `generate`, `format`, `clean`, `update`, `setup`) reads
+/// that same global pool through a bare `par_iter()`/`into_par_iter()`, so `--jobs` already bounds
+/// them. `run_validation` is the one stage that does not: it builds its own dedicated
+/// `rayon::ThreadPool` sized by this function so a caller (a test forcing `parallelism: 1`, in
+/// particular) can control it independently of the global pool. Sizing that dedicated pool from
+/// raw `available_parallelism()` meant `alef all --clean`'s snippet-validation stage dispatched at
+/// full host width regardless of `--jobs`, amplifying contention on a busy host exactly where a
+/// user had asked for less of it. `rayon::current_num_threads()` reads back whatever the global
+/// pool was actually built with -- `--jobs`'s value if set, or rayon's own default (num_cpus, the
+/// same number `available_parallelism()` reported) if `--jobs` was never passed -- so this stays a
+/// query against the one cap that already exists, not a second mechanism. ~keep
 fn available_parallelism() -> usize {
-    std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
+    rayon::current_num_threads()
 }
 
 /// Run validation over the provided snippets.
@@ -84,7 +103,16 @@ fn available_parallelism() -> usize {
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
     let sessions_to_prepare = sessions_needed_for_preparation(snippets, &config.sessions);
-    let preparation = prepare_sessions_isolated(&sessions_to_prepare, config.resolved_before_timeout_secs());
+    // See `session_activation` for the whole cache-hit-skips-the-before-hook mechanism this sets
+    // up: which snippets unambiguously claim which session, and the resulting per-session
+    // activation predicate `prepare_sessions_isolated_with_activation_filter` runs below. ~keep
+    let claims_by_target = session_activation::claimed_snippets_by_target(snippets, &config.sessions);
+    let needs_before_hook = session_activation::needs_before_hook(&claims_by_target, config);
+    let preparation = prepare_sessions_isolated_with_activation_filter(
+        &sessions_to_prepare,
+        config.resolved_before_timeout_secs(),
+        &needs_before_hook,
+    );
     let sessions = preparation.sessions;
     let session_errors = preparation.errors;
     // Keyed by *fingerprint*, not by the config session name: `alef.toml` can point two
@@ -951,3 +979,9 @@ mod failure_reporting_tests;
 
 #[cfg(test)]
 mod session_scope_tests;
+
+#[cfg(test)]
+mod session_activation_cache_tests;
+
+#[cfg(test)]
+mod parallelism_tests;

@@ -304,7 +304,13 @@ fn run_check(
         .collect();
     let runner = RunnerConfig {
         level,
-        parallelism: std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get),
+        // Mirrors `RunnerConfig::default()`'s own choice (`snippets::runner::available_parallelism`,
+        // private to that module) rather than `std::thread::available_parallelism()`: this reads
+        // back whatever the top-level `--jobs`/`-j` flag already sized the process-wide rayon pool
+        // to, so a user capping parallelism on a busy host is honoured here too, not just by the
+        // build/generate/format/clean/update/setup stages that already read the same global pool
+        // through a bare `par_iter()`. ~keep
+        parallelism: rayon::current_num_threads(),
         timeout_secs: config.timeout_secs.unwrap_or(120),
         before_timeout_secs: config.before_timeout_secs,
         fail_fast: config.fail_fast,

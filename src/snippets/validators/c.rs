@@ -28,10 +28,17 @@ fn compiler() -> Option<String> {
 }
 
 impl CValidator {
-    /// One compiler start for the whole batch instead of one per snippet. `-fsyntax-only` accepts
-    /// many sources and type-checks each as its own translation unit, so the `main` every snippet
-    /// declares never collides — nothing is linked, which is exactly why the levels that do link
-    /// decline in `validate_batch_in_session`. ~keep
+    /// One compiler start for the whole batch instead of one per snippet.
+    ///
+    /// `Syntax`/`TypeCheck` reach for `-fsyntax-only`, which accepts many sources and type-checks
+    /// each as its own translation unit, so the `main` every snippet declares never collides —
+    /// nothing is linked. `Compile` reaches for `-c` instead: given N sources with no `-o`, `cc`
+    /// compiles each into its own object file named after that source's stem, entirely
+    /// independently of the others — no shared output, no link step, so the same one-invocation
+    /// shape covers it too. `Run` is the one level this cannot serve: it needs a linked, runnable
+    /// executable *per snippet*, and there is no flag that produces N distinct executables from one
+    /// invocation the way `-c`'s implicit per-source naming does for object files — that one still
+    /// declines in `validate_batch_in_session` and falls back to one process per snippet. ~keep
     fn validate_batch_with_context(
         snippets: &[&Snippet],
         level: ValidationLevel,
@@ -58,9 +65,13 @@ impl CValidator {
             paths.push(path);
         }
         let mut command = std::process::Command::new(cc);
-        command.arg("-fsyntax-only");
-        if level == ValidationLevel::TypeCheck {
-            command.args(["-Wall", "-Werror"]);
+        if level == ValidationLevel::Compile {
+            command.arg("-c");
+        } else {
+            command.arg("-fsyntax-only");
+            if level == ValidationLevel::TypeCheck {
+                command.args(["-Wall", "-Werror"]);
+            }
         }
         if let Some(session) = session {
             apply_session_includes(&mut command, session);
@@ -68,6 +79,17 @@ impl CValidator {
         command.args(&paths);
         if let Some(session) = session {
             session.apply(&mut command);
+        }
+        // A batched `-c` compile writes one `.o` per source into the compiler's current
+        // directory — there is no per-file `-o` for a multi-source invocation, so the implicit
+        // destination is all a batch call has. `session.apply` above points the process at the
+        // session's `working_directory` (needed for env resolution and any relative toolchain-cache
+        // override), which would otherwise scatter these object files into the real project tree
+        // this run is validating bindings against. Overriding `current_dir` to the batch's own
+        // fresh, self-removing scratch directory afterwards confines them there instead — the two
+        // `Command` methods are independent knobs, so this does not undo `session.apply`'s env. ~keep
+        if level == ValidationLevel::Compile {
+            command.current_dir(dir.path());
         }
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(Self::batch_results(&file_names, success, &output))
@@ -241,9 +263,10 @@ impl SnippetValidator for CValidator {
         })
     }
 
-    /// Batching covers only the levels that reach for `-fsyntax-only`. `Compile` and `Run` each
-    /// produce their own artifact from their own `main`, so one invocation cannot serve N of them;
-    /// they fall back to one process per snippet. ~keep
+    /// `Run` is the only level that declines: it needs a linked, runnable executable per snippet,
+    /// and unlike `-c`'s implicit per-source object naming, there is no way to get N distinct
+    /// executables from one invocation. `Syntax`, `TypeCheck` and `Compile` all batch — see
+    /// `validate_batch_with_context` for how each shapes its one compiler invocation. ~keep
     fn validate_batch_in_session(
         &self,
         snippets: &[&Snippet],
@@ -251,8 +274,11 @@ impl SnippetValidator for CValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Option<Result<BatchValidation>> {
-        matches!(level, ValidationLevel::Syntax | ValidationLevel::TypeCheck)
-            .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
+        matches!(
+            level,
+            ValidationLevel::Syntax | ValidationLevel::TypeCheck | ValidationLevel::Compile
+        )
+        .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
     }
 
     fn supports_batching(&self) -> bool {
@@ -312,16 +338,103 @@ mod tests {
     const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
 
     #[test]
-    fn batch_declines_the_levels_that_link_an_executable() {
+    fn batch_declines_only_the_level_that_links_an_executable() {
         let only = snippet("int main(void) { return 0; }\n");
 
-        for level in [ValidationLevel::Compile, ValidationLevel::Run] {
-            let declined = CValidator.validate_batch_in_session(&[&only], level, 10, None);
-            assert!(
-                declined.is_none(),
-                "{level:?} must fall back to one process per snippet"
-            );
+        let declined = CValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
+        assert!(declined.is_none(), "Run must fall back to one process per snippet");
+    }
+
+    /// The claim this pins: `Compile` does not need its own linked artifact the way `Run` does, so
+    /// it batches through `-c` exactly like `Syntax`/`TypeCheck` batch through `-fsyntax-only`.
+    #[test]
+    fn batch_accepts_compile_level() {
+        let only = snippet("int main(void) { return 0; }\n");
+
+        let accepted = CValidator.validate_batch_in_session(&[&only], ValidationLevel::Compile, 10, None);
+        assert!(accepted.is_some(), "Compile must batch: one `-c` invocation covers every source");
+    }
+
+    /// Real-toolchain proof that a batched `Compile` invocation produces one object file per
+    /// source with no shared `-o` and no collision between two snippets that each declare `main` --
+    /// unlike `Run`, `-c` never links, so the duplicate-symbol failure a linked batch would hit
+    /// never applies here. ~keep
+    #[test]
+    fn compile_batch_passes_two_snippets_that_each_declare_main() {
+        if compiler().is_none() {
+            return;
         }
+        let first = snippet("int main(void) { return 0; }\n");
+        let second = snippet("int main(void) { return 1; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &second],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// The compile-level counterpart of `batch_fails_only_the_broken_snippet_and_passes_its_neighbours`:
+    /// a broken snippet's `-c` diagnostic must still attribute to only that snippet, not fail the
+    /// whole batch.
+    #[test]
+    fn compile_batch_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if compiler().is_none() {
+            return;
+        }
+        let first = snippet("int first(void) { return 1; }\n");
+        let broken = snippet("int second(void) { @@@ }\n");
+        let third = snippet("int third(void) { return 3; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &broken, &third],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    /// The object files a batched `Compile` produces must land in the batch's own scratch
+    /// directory, not wherever the process's working directory happens to be -- otherwise a real
+    /// session run would scatter `.o` files into the consumer's project tree. `ScratchDir::isolated`
+    /// (the `session: None` path) creates and returns its own temp directory, so this asserts
+    /// against *that* directory rather than the test binary's `current_dir`.
+    #[test]
+    fn compile_batch_writes_object_files_into_its_own_scratch_directory_not_the_process_cwd() {
+        if compiler().is_none() {
+            return;
+        }
+        let only = snippet("int main(void) { return 0; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&only],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None)]);
+        let leaked_in_cwd = std::env::current_dir()
+            .expect("current dir")
+            .join(format!("{BATCH_FILE_PREFIX}0.o"));
+        assert!(
+            !leaked_in_cwd.exists(),
+            "a batched compile must not write its object file into the process's own working \
+             directory: {}",
+            leaked_in_cwd.display()
+        );
+        let _ = std::fs::remove_file(leaked_in_cwd);
     }
 
     #[test]

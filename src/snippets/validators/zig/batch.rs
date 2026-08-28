@@ -45,7 +45,7 @@ pub(super) fn validate_batch_with_context(
     }
     let mut command = std::process::Command::new("zig");
     command.args(["fmt", "--ast-check"]).args(&paths);
-    apply_cache_dirs(&mut command, dir.path());
+    apply_cache_dirs(&mut command, dir.path(), session);
     if let Some(session) = session {
         session.apply(&mut command);
     }

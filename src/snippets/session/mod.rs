@@ -204,6 +204,15 @@ impl ToolchainCaches {
 /// the purge and then activation.
 type ResolvedSession<'a> = (&'a String, &'a SessionSpec, ValidationSession);
 
+/// Prepares every configured session, activating (running `before` hooks for) all of them.
+///
+/// A thin wrapper over [`prepare_sessions_isolated_with_activation_filter`] for callers that have
+/// no cache-hit information to filter activation by -- every test in this module, and any future
+/// caller that wants the unconditional behaviour. ~keep
+pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
+    prepare_sessions_isolated_with_activation_filter(specs, timeout_secs, &|_, _| true)
+}
+
 /// Prepares every configured session in three phases, because the middle one is not per-session.
 ///
 /// Phase one resolves each spec far enough to know its fingerprint, without running any `before`
@@ -211,12 +220,23 @@ type ResolvedSession<'a> = (&'a String, &'a SessionSpec, ValidationSession);
 /// the *complete* set of live fingerprints for that directory — which is why it cannot be folded
 /// back into a per-session step: two targets can legitimately share one `working_directory`, and a
 /// per-session purge would delete its sibling's live scratch. Phase three runs the `before` hooks
-/// against the already-purged tree.
+/// against the already-purged tree, but only for a session `needs_activation` still says needs it.
+///
+/// `needs_activation(target, session)` runs after phase one, once a session's fingerprint is known,
+/// so a caller can compare that fingerprint against a result cache before committing to the
+/// hook's cost. It is `Sync` because phase three's sessions run on separate rayon worker threads.
+/// Returning `false` skips only that session's `before` commands; the session is still resolved,
+/// purged for, and inserted into the returned map with a real fingerprint, so cache lookups keyed
+/// on it still work identically to a session that did activate.
 ///
 /// Phases one and three each run their own work concurrently, but the phase boundary itself stays
 /// a barrier: the purge still needs every fingerprint before it removes anything, and no `before`
 /// hook may run before the purge is complete. ~keep
-pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
+pub(crate) fn prepare_sessions_isolated_with_activation_filter(
+    specs: &HashMap<String, SessionSpec>,
+    timeout_secs: u64,
+    needs_activation: &(dyn Fn(&str, &ValidationSession) -> bool + Sync),
+) -> SessionPreparation {
     let mut sessions = HashMap::new();
     let mut errors = HashMap::new();
     let mut resolved = Vec::new();
@@ -227,7 +247,7 @@ pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, ti
         }
     }
     purge_stale_session_scratch(&resolved);
-    let mut outcomes = activate_sessions(&resolved, timeout_secs);
+    let mut outcomes = activate_sessions(&resolved, timeout_secs, needs_activation);
     outcomes.sort_by_key(|(index, _)| *index);
     for ((target, spec, session), (_, outcome)) in resolved.into_iter().zip(outcomes) {
         match outcome {
@@ -265,7 +285,11 @@ fn resolve_sessions(
 ///
 /// Returns `(index into `resolved`, outcome)` pairs rather than writing into a shared collection,
 /// so grouping cannot disturb which session an outcome belongs to.
-fn activate_sessions(resolved: &[ResolvedSession<'_>], timeout_secs: u64) -> Vec<(usize, Result<()>)> {
+fn activate_sessions(
+    resolved: &[ResolvedSession<'_>],
+    timeout_secs: u64,
+    needs_activation: &(dyn Fn(&str, &ValidationSession) -> bool + Sync),
+) -> Vec<(usize, Result<()>)> {
     let span = tracing::Span::current();
     activation_groups(resolved)
         .into_par_iter()
@@ -275,8 +299,11 @@ fn activate_sessions(resolved: &[ResolvedSession<'_>], timeout_secs: u64) -> Vec
                 indices
                     .into_iter()
                     .map(|index| {
-                        let (_, spec, session) = &resolved[index];
-                        (index, activate_session(spec, session, timeout_secs, &mut ran))
+                        let (target, spec, session) = &resolved[index];
+                        (
+                            index,
+                            activate_session(target, spec, session, timeout_secs, &mut ran, needs_activation),
+                        )
                     })
                     .collect::<Vec<_>>()
             })
@@ -363,22 +390,38 @@ fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
 }
 
 fn activate_session(
+    target: &str,
     spec: &SessionSpec,
     session: &ValidationSession,
     timeout_secs: u64,
     ran: &mut HookOutcomes,
+    needs_activation: &(dyn Fn(&str, &ValidationSession) -> bool + Sync),
 ) -> Result<()> {
     let language = spec.language;
-    for command in &spec.before {
-        run_before_once(command, spec, timeout_secs, ran).map_err(|error| match error {
-            // A `before` hook's own timeout is propagated verbatim, not wrapped into
-            // `Error::Other`, so `record_preparation_error` can still tell "the build step never
-            // finished" apart from every other way session preparation can fail. Wrapping it here
-            // would erase the one signal that distinguishes an ordering problem from a broken
-            // session -- see `SessionPreparationError::ordering`. ~keep
-            Error::Timeout { .. } => error,
-            other => Error::Other(format!("preparing {language} snippet validation session: {other}")),
-        })?;
+    if needs_activation(target, session) {
+        for command in &spec.before {
+            run_before_once(command, spec, timeout_secs, ran).map_err(|error| match error {
+                // A `before` hook's own timeout is propagated verbatim, not wrapped into
+                // `Error::Other`, so `record_preparation_error` can still tell "the build step
+                // never finished" apart from every other way session preparation can fail.
+                // Wrapping it here would erase the one signal that distinguishes an ordering
+                // problem from a broken session -- see `SessionPreparationError::ordering`. ~keep
+                Error::Timeout { .. } => error,
+                other => Error::Other(format!("preparing {language} snippet validation session: {other}")),
+            })?;
+        }
+    } else {
+        // Every snippet that would use this session already has a cache-hit result on file, so the
+        // `before` hook -- the expensive part of preparation, a whole-package cold build in the
+        // reported case -- has nothing to build for. Skipping it here, not by never calling this
+        // function, keeps the session resolved with a real fingerprint and its toolchain cache
+        // directories created below, so a cache lookup keyed on it still works identically to a
+        // session that did activate. ~keep
+        tracing::debug!(
+            target = %target,
+            language = %language,
+            "skipping snippet validation session before hook: every claimed snippet is already cached"
+        );
     }
     let caches = session.cache_directories();
     for directory in caches.directories() {
