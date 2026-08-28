@@ -147,3 +147,295 @@ fn the_only_unreachable_markers_are_the_known_compound_constraints() {
         "the set of markers the customManager cannot reach changed"
     );
 }
+
+/// Why a version const carries no `// renovate:` marker at all. Every entry in
+/// `KNOWN_UNMARKED_VERSION_CONSTS` below falls into exactly one of these; grouping by
+/// category keeps the allowlist skimmable instead of a flat, rotting list of names.
+#[derive(Debug, Clone, Copy)]
+enum UnmarkedReason {
+    /// Not a dependency version at all -- a filename, or one of alef's own internal
+    /// release/contract identifiers -- so there is nothing for Renovate to bump.
+    NotAVersion,
+    /// A toolchain floor, SDK/target level, or language-version constraint that a human
+    /// deliberately reviews rather than auto-bumps.
+    ToolchainFloor,
+    /// The value's own syntax defeats the customManager regex even if a marker were added.
+    StructurallyUnmatched,
+    /// A compatibility floor where auto-bumping previously broke publishing; held below
+    /// latest on purpose.
+    DeliberateFloor,
+    /// Renovate has no datasource for this package's registry.
+    NoDatasource,
+    /// A marker was added and then removed because of an open upstream Renovate bug:
+    /// custom-regex plus `ruby` versioning computes no range strategy
+    /// (renovatebot/renovate#28090). Do not re-add it.
+    UpstreamRenovateBug,
+    /// One const's value is rendered for two different upstream packages, so a single
+    /// marker would drive updates off the wrong one.
+    SharedAcrossPackages,
+}
+
+/// One version const with no marker, why, and enough specific detail that the next
+/// reader does not have to re-derive it from git blame.
+struct UnmarkedVersionConst {
+    name: &'static str,
+    reason: UnmarkedReason,
+    detail: &'static str,
+}
+
+/// The complete, reasoned set of `pub const NAME: &str` version consts in
+/// `template_versions.rs` that deliberately carry no `// renovate:` marker. This is the
+/// guard `DELIBERATELY_UNREACHABLE` above does not provide: that list only covers consts
+/// that HAVE a marker the customManager cannot reach. A const with no marker at all is
+/// invisible to every test above it, so a new one added without either a marker or an
+/// entry here would freeze silently -- the exact failure mode this file exists to catch. ~keep
+const KNOWN_UNMARKED_VERSION_CONSTS: &[UnmarkedVersionConst] = &[
+    UnmarkedVersionConst {
+        name: "NODE_ENGINE",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "npm `engines` floor, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "NAPI_AUTO_DTS_FILENAME",
+        reason: UnmarkedReason::NotAVersion,
+        detail: "a filename (`napi build`'s auto-derived `.d.ts` output name)",
+    },
+    UnmarkedVersionConst {
+        name: "MATURIN_BUILD_REQUIRES",
+        reason: UnmarkedReason::StructurallyUnmatched,
+        detail: "a PEP 508 requirement string (`maturin>=1.0,<2.0`), not a bare version",
+    },
+    UnmarkedVersionConst {
+        name: "RB_SYS",
+        reason: UnmarkedReason::StructurallyUnmatched,
+        detail: "value embeds escaped quotes, which defeats the customManager capture group",
+    },
+    UnmarkedVersionConst {
+        name: "SORBET_RUNTIME",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RAKE_COMPILER",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RSPEC_SCAFFOLD",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RSPEC_E2E",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RUBOCOP_SCAFFOLD",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RUBOCOP_E2E",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RUBOCOP_PERFORMANCE",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RUBOCOP_RSPEC_SCAFFOLD",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "RUBOCOP_RSPEC_E2E",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "STEEP",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "FARADAY",
+        reason: UnmarkedReason::UpstreamRenovateBug,
+        detail: "Ruby gem pessimistic (`~>`) pin; marker removed in acb09bdd8, renovatebot/renovate#28090",
+    },
+    UnmarkedVersionConst {
+        name: "MAVEN_CORE",
+        reason: UnmarkedReason::DeliberateFloor,
+        detail: "auto-bumping this floor to the newest maven-core release broke publishing in 0.48.2",
+    },
+    UnmarkedVersionConst {
+        name: "GLEAM_HTTPC_VERSION_RANGE",
+        reason: UnmarkedReason::SharedAcrossPackages,
+        detail: "one range rendered for both `gleam_httpc` and `gleam_http`; a marker would track only one",
+    },
+    UnmarkedVersionConst {
+        name: "DART_SDK_CONSTRAINT",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Dart SDK constraint, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "JAVA_JVM_TARGET",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "JVM bytecode target for the Java backend, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "KOTLIN_JVM_TARGET",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "JVM bytecode target for the Kotlin/JVM backend, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "JVM_TARGET",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "deprecated alias for JAVA_JVM_TARGET/KOTLIN_JVM_TARGET, same toolchain-floor reasoning",
+    },
+    UnmarkedVersionConst {
+        name: "SWIFT_MIN_MACOS",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Swift minimum macOS target, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "SWIFT_MIN_IOS",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Swift minimum iOS target, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "ANDROID_COMPILE_SDK",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Android compileSdk level, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "ANDROID_MIN_SDK",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Android minSdk level, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "ANDROID_JVM_TARGET",
+        reason: UnmarkedReason::ToolchainFloor,
+        detail: "Android JVM target level, human-reviewed rather than auto-bumped",
+    },
+    UnmarkedVersionConst {
+        name: "REXTENDR",
+        reason: UnmarkedReason::NoDatasource,
+        detail: "Renovate has no `cran` datasource",
+    },
+    UnmarkedVersionConst {
+        name: "ALEF_REV",
+        reason: UnmarkedReason::NotAVersion,
+        detail: "alef's own release tag; set only by `task set-version`, never by Renovate",
+    },
+    UnmarkedVersionConst {
+        name: "CODEGEN_FORMAT_VERSION",
+        reason: UnmarkedReason::NotAVersion,
+        detail: "alef's own internal codegen-format contract version, not a third-party dependency",
+    },
+    UnmarkedVersionConst {
+        name: "HANDLE_ABI_VERSION",
+        reason: UnmarkedReason::NotAVersion,
+        detail: "alef's own internal handle-ABI contract version, not a third-party dependency",
+    },
+];
+
+/// Floor on how many `pub const NAME: &str` declarations the scan below must find, well
+/// under the real count (140 as of this writing) so routine additions do not churn it, and
+/// well over zero so a broken declaration regex -- one that matched nothing -- could not
+/// make every assertion in the test below pass vacuously by comparing two empty sets.
+const MINIMUM_VERSION_CONST_DECLARATIONS: usize = 130;
+
+/// Matches a real `pub const NAME: &str = ...;` declaration, anchored so only leading
+/// whitespace may precede `pub`. That anchor is what keeps this from matching this very
+/// module's own top-of-file doc comment, which illustrates the pattern with a literal
+/// `` pub const NAME: &str = "..." `` inside a `//!` line -- the same illustrative-marker
+/// trap `every_marker_directly_above_a_const_reaches_that_const` above is anchored to avoid,
+/// applied here to the const side instead of the marker side. ~keep
+fn version_const_declaration_pattern() -> regex::Regex {
+    regex::Regex::new(r"^\s*pub const ([A-Za-z0-9_]+): &str").expect("const-declaration regex compiles")
+}
+
+/// Every `pub const NAME: &str` declaration in the file, paired with whether a
+/// `// renovate:` marker sits on the line directly above it.
+fn version_const_marker_status(source: &str) -> Vec<(String, bool)> {
+    let const_pattern = version_const_declaration_pattern();
+    let marker = regex::Regex::new(r"^\s*// renovate:.*\bdepName=(\S+)").expect("marker regex compiles");
+    let lines: Vec<&str> = source.lines().collect();
+
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let captures = const_pattern.captures(line)?;
+            let name = captures[1].to_string();
+            let has_marker = index > 0 && marker.is_match(lines[index - 1]);
+            Some((name, has_marker))
+        })
+        .collect()
+}
+
+/// The gap `DELIBERATELY_UNREACHABLE` does not cover: that list only pins markers the
+/// customManager cannot reach, which presupposes a marker exists. A const with NO marker
+/// at all -- the common case, 30 of ~140 today -- is invisible to every test above this
+/// one. Without this test, a new unmarked const is indistinguishable from an intentional
+/// exception: it just freezes at whatever it was written as. This test fails in both
+/// directions: a new unmarked const not on the allowlist, and an allowlisted const that
+/// has since grown a real marker (a stale entry here would hide the next real regression).
+#[test]
+fn every_unmarked_version_const_is_a_known_and_reasoned_exception() {
+    let source = template_versions_source();
+    let declarations = version_const_marker_status(&source);
+
+    assert!(
+        declarations.len() > MINIMUM_VERSION_CONST_DECLARATIONS,
+        "the `pub const NAME: &str` scan should reach nearly every version const in the file, \
+         reached {}; see MINIMUM_VERSION_CONST_DECLARATIONS's doc comment for why this floor exists",
+        declarations.len()
+    );
+
+    let expected_unmarked: BTreeSet<String> = KNOWN_UNMARKED_VERSION_CONSTS
+        .iter()
+        .map(|entry| entry.name.to_string())
+        .collect();
+    assert_eq!(
+        expected_unmarked.len(),
+        KNOWN_UNMARKED_VERSION_CONSTS.len(),
+        "KNOWN_UNMARKED_VERSION_CONSTS has a duplicate `name` entry"
+    );
+
+    let actual_unmarked: BTreeSet<String> = declarations
+        .into_iter()
+        .filter(|(_, has_marker)| !has_marker)
+        .map(|(name, _)| name)
+        .collect();
+
+    let newly_unmarked: Vec<&String> = actual_unmarked.difference(&expected_unmarked).collect();
+    let now_marked: Vec<String> = expected_unmarked
+        .difference(&actual_unmarked)
+        .map(|name| {
+            let entry = KNOWN_UNMARKED_VERSION_CONSTS
+                .iter()
+                .find(|entry| entry.name == name.as_str())
+                .expect("name came from KNOWN_UNMARKED_VERSION_CONSTS");
+            format!(
+                "{} (was allowlisted as {:?}: {})",
+                entry.name, entry.reason, entry.detail
+            )
+        })
+        .collect();
+
+    assert!(
+        newly_unmarked.is_empty() && now_marked.is_empty(),
+        "the set of unmarked version consts in template_versions.rs changed.\n\
+         Newly unmarked (no marker, and not in KNOWN_UNMARKED_VERSION_CONSTS): {newly_unmarked:?} \
+         -- add a `// renovate: datasource=... depName=...` marker directly above the const, or \
+         add an entry to KNOWN_UNMARKED_VERSION_CONSTS in this file explaining why it must stay \
+         unmarked.\n\
+         No longer unmarked (listed in KNOWN_UNMARKED_VERSION_CONSTS but a marker now sits above \
+         them): {now_marked:?} -- remove the stale entry; leaving it there would hide the next \
+         real regression."
+    );
+}
