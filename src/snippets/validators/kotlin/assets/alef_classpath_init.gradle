@@ -5,11 +5,26 @@
 // entry per line as `ALEF_CLASSPATH_ENTRY:<absolute path>`. Matched by task name rather than by
 // Kotlin Gradle plugin type, so this needs no Kotlin/AGP classes on the init-script classpath and
 // covers both the plain `kotlin("jvm")` plugin and every Android build variant alike.
+//
+// The match uses `=~` (find), not `==~` (full match): Kotlin Multiplatform compile task names put
+// the target *after* `Kotlin` -- `compileKotlinJvm`, `compileKotlinIosArm64`, `compileKotlinJs` --
+// so a full-string match against `compile.*Kotlin` silently excludes every one of them and every
+// dependency (including transitive ones) reachable only through that target's classpath. `=~`
+// matches the same single-target task names (`compileKotlin`, `compileDebugKotlin`) it always did,
+// plus these. ~keep
+//
+// Each matched task also prints an unconditional `ALEF_CLASSPATH_TASK:<name>` marker before either
+// try/catch below runs, so the Rust side can tell a resolution that legitimately found few
+// dependencies apart from one where a task matched but its classpath/library property silently
+// contributed nothing: every real Kotlin compilation depends on kotlin-stdlib at minimum, so a
+// matched task contributing no more than its own destination directory is a resolution defect, not
+// a small project. ~keep
 allprojects { proj ->
     proj.tasks.register("alefPrintClasspath") {
         doLast {
             def entries = new LinkedHashSet<String>()
-            proj.tasks.matching { it.name ==~ /(?i)compile.*Kotlin/ }.each { compileTask ->
+            proj.tasks.matching { it.name =~ /(?i)compile.*Kotlin/ }.each { compileTask ->
+                println "ALEF_CLASSPATH_TASK:" + compileTask.name
                 try {
                     if (compileTask.hasProperty('destinationDirectory')) {
                         entries << compileTask.destinationDirectory.get().asFile.absolutePath

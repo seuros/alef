@@ -22,6 +22,11 @@ const INIT_SCRIPT: &str = include_str!("assets/alef_classpath_init.gradle");
 const INIT_SCRIPT_FILE_NAME: &str = "alef_classpath_init.gradle";
 const CLASS_PATH_TASK: &str = "alefPrintClasspath";
 const CLASS_PATH_ENTRY_PREFIX: &str = "ALEF_CLASSPATH_ENTRY:";
+/// Printed once per matched `compile*Kotlin` task, independently of whether that task contributed
+/// any classpath entries. Lets `run_gradle_class_path` tell a small-but-real classpath apart from
+/// one where a task matched but its `libraries`/`classpath` property resolved to nothing -- see the
+/// completeness check below. ~keep
+const CLASS_PATH_TASK_MARKER_PREFIX: &str = "ALEF_CLASSPATH_TASK:";
 const MANIFEST_NAMES: [&str; 2] = ["build.gradle.kts", "build.gradle"];
 
 #[cfg(unix)]
@@ -122,6 +127,27 @@ fn run_gradle_class_path(
             "resolving Gradle classpath for {}: {}",
             root.display(),
             crate::snippets::diagnostics::bounded_text(&output)
+        )));
+    }
+    let matched_tasks = output
+        .lines()
+        .filter(|line| line.starts_with(CLASS_PATH_TASK_MARKER_PREFIX))
+        .count();
+    // A matched task always contributes at least its own destination directory, so a resolution
+    // that found `n` compile tasks but no more than `n` total entries got zero library files across
+    // every one of them -- kotlin-stdlib alone rules that out for any real compilation. Accepting
+    // this silently is exactly the "check that passed because it examined nothing" shape: the entry
+    // list looks non-empty and downstream code has no way to tell it apart from a project that
+    // genuinely has few dependencies. Treat it as a failed resolution so the caller falls back to
+    // directory probing instead of compiling snippets against a classpath missing every dependency,
+    // transitive or not. ~keep
+    if matched_tasks > 0 && entries.len() <= matched_tasks {
+        return Err(Error::Other(format!(
+            "resolving Gradle classpath for {}: matched {matched_tasks} Kotlin compile task(s) but \
+             resolved only {} classpath entries -- no dependency artifacts were found for any of them, \
+             which is implausible for a real Kotlin compilation",
+            root.display(),
+            entries.len()
         )));
     }
     std::env::join_paths(entries)
@@ -255,5 +281,101 @@ mod tests {
         let class_path = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("falls back to probing");
 
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
+    }
+
+    /// Reproduces the reported defect directly: a Gradle response that matched real compile tasks
+    /// but resolved no dependency artifacts for any of them (only their own destination
+    /// directories) -- exactly what a task whose `libraries`/`classpath` property silently resolved
+    /// to nothing would report. Before the completeness check this was accepted at face value
+    /// (`entries.is_empty()` is false), so every snippet touching a transitive dependency compiled
+    /// against a classpath that never had it. This must now be rejected and fall back to directory
+    /// probing, which at least finds the project's own compiled output. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn a_gradle_response_with_matched_tasks_but_no_dependency_entries_is_rejected_as_incomplete() {
+        let root = tempfile::tempdir().expect("project root");
+        let classes = root.path().join("build/classes/kotlin/main");
+        std::fs::create_dir_all(&classes).expect("classes directory");
+        let manifest = root.path().join("build.gradle.kts");
+        std::fs::write(&manifest, "plugins {}").expect("manifest");
+        write_executable(
+            &root.path().join(WRAPPER_NAME),
+            "#!/bin/sh\necho \"ALEF_CLASSPATH_TASK:compileKotlin\"\necho \"ALEF_CLASSPATH_ENTRY:/fake/build/classes/kotlin/main\"\n",
+        );
+        let working_directory = tempfile::tempdir().expect("working directory");
+        let session = session(working_directory.path(), "incomplete-wrapper-fixture");
+
+        let class_path = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("falls back to probing");
+
+        let resolved: Vec<_> = std::env::split_paths(&class_path).collect();
+        assert_eq!(
+            resolved,
+            vec![classes],
+            "the one-entry-per-task Gradle response must be discarded in favor of real directory \
+             probing, not returned as-is: {resolved:?}"
+        );
+    }
+
+    /// The positive counterpart of the completeness check above: a response with more entries than
+    /// matched tasks (real dependency jars beyond each task's own destination directory) must be
+    /// accepted and used as-is, not rejected as a false positive. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn a_gradle_response_with_dependency_entries_beyond_matched_tasks_is_accepted() {
+        let root = tempfile::tempdir().expect("project root");
+        let manifest = root.path().join("build.gradle.kts");
+        std::fs::write(&manifest, "plugins {}").expect("manifest");
+        write_executable(
+            &root.path().join(WRAPPER_NAME),
+            "#!/bin/sh\necho \"ALEF_CLASSPATH_TASK:compileKotlin\"\necho \"ALEF_CLASSPATH_ENTRY:/fake/build/classes/kotlin/main\"\necho \"ALEF_CLASSPATH_ENTRY:/fake/caches/direct-dependency.jar\"\necho \"ALEF_CLASSPATH_ENTRY:/fake/caches/transitive-dependency.jar\"\n",
+        );
+        let working_directory = tempfile::tempdir().expect("working directory");
+        let session = session(working_directory.path(), "complete-wrapper-fixture");
+
+        let class_path = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("resolves from Gradle");
+
+        let expected = std::env::join_paths([
+            PathBuf::from("/fake/build/classes/kotlin/main"),
+            PathBuf::from("/fake/caches/direct-dependency.jar"),
+            PathBuf::from("/fake/caches/transitive-dependency.jar"),
+        ])
+        .expect("expected classpath");
+        assert_eq!(class_path, expected);
+    }
+
+    /// The init script's compile-task match must use `=~` (find), not `==~` (full string match).
+    /// Kotlin Multiplatform names its per-target compile tasks with the target *after* `Kotlin`
+    /// (`compileKotlinJvm`, `compileKotlinIosArm64`, ...); a full-string match against
+    /// `compile.*Kotlin` silently excludes every one of them, dropping any dependency -- transitive
+    /// or not -- reachable only through that target's classpath. This cannot be exercised without a
+    /// live Gradle + Kotlin Multiplatform project, so this pins the operator in the shipped asset
+    /// instead: reverting it to `==~` would pass every other test in this file untouched while
+    /// silently reintroducing the completeness gap. ~keep
+    #[test]
+    fn the_init_script_matches_compile_tasks_by_find_not_full_string_match() {
+        assert!(
+            INIT_SCRIPT.contains("it.name =~ /(?i)compile.*Kotlin/"),
+            "the compile-task match must use `=~` (find) so multiplatform per-target task names \
+             like `compileKotlinJvm` still match"
+        );
+        assert!(
+            !INIT_SCRIPT.contains("it.name ==~"),
+            "a full-string match (`==~`) would exclude Kotlin Multiplatform per-target compile task \
+             names, silently dropping their classpaths"
+        );
+    }
+
+    /// Pins the other half of the completeness check: the init script must actually emit the task
+    /// marker `run_gradle_class_path` counts, for every matched task unconditionally (outside the
+    /// try/catch blocks that guard the destination-directory and classpath lookups). Without this
+    /// marker, `matched_tasks` is always zero and the Rust-side completeness check above can never
+    /// fire regardless of what a real Gradle run returns. ~keep
+    #[test]
+    fn the_init_script_prints_a_task_marker_for_every_matched_compile_task() {
+        assert!(
+            INIT_SCRIPT.contains("println \"ALEF_CLASSPATH_TASK:\" + compileTask.name"),
+            "every matched compile task must print its marker unconditionally, before either \
+             try/catch block runs"
+        );
     }
 }
