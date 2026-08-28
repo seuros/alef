@@ -90,6 +90,76 @@ fn rust_type_to_php_type(ty: &TypeRef, _is_ref: bool, optional: bool, _type_path
     }
 }
 
+/// Description used for the callback's context parameter when the configured context type is not
+/// in the API surface or carries no rustdoc of its own -- deliberately says nothing beyond what
+/// the parameter's own name and declared type already say, rather than inventing detail alef
+/// cannot source. ~keep
+const GENERIC_CONTEXT_PARAM_DOC: &str = "Visitor context information";
+
+/// The `@param` description for the callback's context argument: the context type's own rustdoc
+/// summary when it has one.
+///
+/// The docblock previously spelled this detail out in prose that named a specific context type;
+/// when the type names became template variables, the prose was replaced wholesale rather than
+/// re-derived, so the generated interface stopped saying anything about what the context carries.
+/// Deriving it from the type's own doc restores that without hardcoding any consumer's type. ~keep
+fn context_param_doc(api: &ApiSurface, context_type: &str) -> String {
+    api.types
+        .iter()
+        .find(|type_def| type_def.name == context_type)
+        .map(|type_def| sanitize_rust_idioms(&type_def.doc, DocTarget::PhpDoc))
+        .and_then(|doc| {
+            doc.lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| GENERIC_CONTEXT_PARAM_DOC.to_string())
+}
+
+/// The parenthetical naming the values a callback may return, e.g. ` (Proceed, Halt, or Replace)`.
+///
+/// Derived from the configured result enum's own variants, so it stays true for any trait bridge
+/// instead of restating one crate's variant names the way the hardcoded original did. Empty when
+/// the result type resolves to no enum in the API surface: a return alef cannot enumerate gets no
+/// invented description. ~keep
+fn result_values_suffix(api: &ApiSurface, bridge_cfg: &TraitBridgeConfig) -> String {
+    let Some(metadata) = crate::codegen::visitor_result::visitor_result_metadata(api, bridge_cfg) else {
+        return String::new();
+    };
+    let names: Vec<&str> = metadata
+        .unit_variants
+        .iter()
+        .chain(metadata.string_payload_variants.iter())
+        .map(|variant| variant.name.as_str())
+        .collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [only] => format!(" ({only})"),
+        [first, second] => format!(" ({first} or {second})"),
+        [leading @ .., last] => format!(" ({}, or {last})", leading.join(", ")),
+    }
+}
+
+/// The `Result::Variant` expression the interface's default implementations return, for the
+/// interface-level docblock -- `None` when the result enum is unresolvable, or when any method
+/// lacks a default implementation, in which case the sentence would be false.
+///
+/// Asked of the trait itself rather than trusted from the caller's own visitor-bridge gate: the
+/// gate and this sentence would otherwise be two derivations of one fact. ~keep
+fn default_result_expression(
+    api: &ApiSurface,
+    bridge_cfg: &TraitBridgeConfig,
+    trait_type: &TypeDef,
+    result_type: &str,
+) -> Option<String> {
+    if !trait_type.methods.iter().all(|method| method.has_default_impl) {
+        return None;
+    }
+    crate::codegen::visitor_result::visitor_result_metadata(api, bridge_cfg)
+        .map(|metadata| crate::codegen::visitor_result::default_result_expr(result_type, &metadata))
+}
+
 /// Generate a PHP interface stub definition for the trait.
 /// This allows PHP users to implement the interface and pass their implementation to functions.
 pub fn gen_visitor_interface(
@@ -97,10 +167,14 @@ pub fn gen_visitor_interface(
     bridge_cfg: &TraitBridgeConfig,
     namespace: &str,
     type_paths: &HashMap<String, String>,
+    api: &ApiSurface,
 ) -> String {
     let interface_name = visitor_interface_class_name(&bridge_cfg.trait_name);
     let context_type = bridge_cfg.context_type.as_deref().unwrap_or("mixed");
     let result_type = bridge_cfg.result_type.as_deref().unwrap_or("mixed");
+    let context_doc = context_param_doc(api, context_type);
+    let result_values = result_values_suffix(api, bridge_cfg);
+    let default_result_expr = default_result_expression(api, bridge_cfg, trait_type, result_type);
     let mut out = String::with_capacity(2048);
 
     out.push_str("<?php\n\n");
@@ -116,6 +190,7 @@ pub fn gen_visitor_interface(
         "php_visitor_interface_start.jinja",
         context! {
             interface_name => &interface_name,
+            default_result_expr => &default_result_expr,
         },
     ));
     out.push('\n');
@@ -172,7 +247,9 @@ pub fn gen_visitor_interface(
                 doc_lines => &doc_lines,
                 param_docs => &param_docs_str,
                 context_type => context_type,
+                context_doc => &context_doc,
                 result_type => result_type,
+                result_values => &result_values,
             },
         ));
         out.push('\n');

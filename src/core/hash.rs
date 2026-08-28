@@ -660,9 +660,50 @@ pub fn compute_file_hash(content: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// Every `(prefix, suffix)` pair alef wraps a stamp line in, one per comment syntax it emits
+/// markers in.
+///
+/// The emit side ([`stamp_delimiters_for_marker`]) selects one *entry of this table*, and the
+/// read-back side ([`parse_generated_hash_line`], [`extract_stamp`]) tries *every* entry in it,
+/// so a stamp shape alef can write is by construction one it can also recognize. The two were
+/// previously separate literal lists and drifted: [`CommentStyle::Semicolon`] was added for
+/// `.npmrc` on the header side without a matching arm here, so an INI file got a `; ` prose
+/// header and a `// ` hash line -- and `//` is not a comment in INI, it is the prefix of a
+/// registry-auth key. Recognition intentionally accepts any entry regardless of which syntax the
+/// file's own marker line uses, which is what lets a file stamped under an older, wrong prefix
+/// keep being read back as alef-generated. ~keep
+const STAMP_DELIMITERS: &[(&str, &str)] = &[("<!-- ", " -->"), ("// ", ""), ("# ", ""), ("; ", ""), (" * ", "")];
+
+/// The delimiters a stamp line placed under `marker_line` must use, chosen from
+/// [`STAMP_DELIMITERS`] by the comment syntax the marker line itself opens with.
+///
+/// Falls back to `// ` for a marker in a syntax this function does not recognize, matching the
+/// pre-existing behavior for such lines.
+fn stamp_delimiters_for_marker(marker_line: &str) -> (&'static str, &'static str) {
+    let trimmed = marker_line.trim();
+    let opener = if trimmed.starts_with("<!--") {
+        "<!-- "
+    } else if trimmed.starts_with("//") {
+        "// "
+    } else if trimmed.starts_with('#') {
+        "# "
+    } else if trimmed.starts_with(';') {
+        "; "
+    } else if trimmed.starts_with("/*") || trimmed.starts_with('*') || trimmed.ends_with("*/") {
+        " * "
+    } else {
+        "// "
+    };
+    STAMP_DELIMITERS
+        .iter()
+        .copied()
+        .find(|&(prefix, _)| prefix == opener)
+        .unwrap_or(("// ", ""))
+}
+
 /// Inject an `alef:hash:<hex>` line immediately after the first header marker
 /// line found in the first [`MARKER_SCAN_LINES`] lines. The comment syntax is
-/// inferred from the marker line itself.
+/// inferred from the marker line itself, via [`stamp_delimiters_for_marker`].
 ///
 /// The window must stay tied to [`MARKER_SCAN_LINES`] rather than repeat its value: a marker this
 /// function declines to stamp is still one [`content_has_alef_marker`] claims, and a claimed but
@@ -679,19 +720,8 @@ pub fn inject_hash_line(content: &str, hash: &str) -> String {
         result.push('\n');
 
         if !injected && i < MARKER_SCAN_LINES && line_has_marker(line) {
-            let trimmed = line.trim();
-            let hash_line = if trimmed.starts_with("<!--") {
-                format!("<!-- {HASH_PREFIX}{hash} -->")
-            } else if trimmed.starts_with("//") {
-                format!("// {HASH_PREFIX}{hash}")
-            } else if trimmed.starts_with('#') {
-                format!("# {HASH_PREFIX}{hash}")
-            } else if trimmed.starts_with("/*") || trimmed.starts_with('*') || trimmed.ends_with("*/") {
-                format!(" * {HASH_PREFIX}{hash}")
-            } else {
-                format!("// {HASH_PREFIX}{hash}")
-            };
-            result.push_str(&hash_line);
+            let (prefix, suffix) = stamp_delimiters_for_marker(line);
+            result.push_str(&format!("{prefix}{HASH_PREFIX}{hash}{suffix}"));
             result.push('\n');
             injected = true;
         }
@@ -718,9 +748,11 @@ pub fn inject_hash_line(content: &str, hash: &str) -> String {
 /// rather than the other way around. If no marker line is found, the content
 /// is returned unchanged.
 ///
-/// Deliberately duplicates `inject_hash_line`'s comment-style detection
-/// instead of sharing it, so this new, unused-by-any-caller-yet primitive
-/// cannot change `alef:hash:` injection behavior. ~keep
+/// Shares [`stamp_delimiters_for_marker`] with [`inject_hash_line`] rather than repeating its
+/// comment-style detection. The duplication this replaced was deliberate -- so a then-unused
+/// primitive could not perturb `alef:hash:` injection -- but it is the mechanism by which the
+/// two sides drifted apart for INI files, and a stamp line whose prefix is not a comment in its
+/// own format is a defect in either function. ~keep
 pub fn inject_stamp_line(content: &str, key: &str, value: &str) -> String {
     let mut result = String::with_capacity(content.len() + key.len() + value.len() + 16);
     let mut injected = false;
@@ -730,19 +762,8 @@ pub fn inject_stamp_line(content: &str, key: &str, value: &str) -> String {
         result.push('\n');
 
         if !injected && i < MARKER_SCAN_LINES && line_has_marker(line) {
-            let trimmed = line.trim();
-            let stamp_line = if trimmed.starts_with("<!--") {
-                format!("<!-- alef:{key}:{value} -->")
-            } else if trimmed.starts_with("//") {
-                format!("// alef:{key}:{value}")
-            } else if trimmed.starts_with('#') {
-                format!("# alef:{key}:{value}")
-            } else if trimmed.starts_with("/*") || trimmed.starts_with('*') || trimmed.ends_with("*/") {
-                format!(" * alef:{key}:{value}")
-            } else {
-                format!("// alef:{key}:{value}")
-            };
-            result.push_str(&stamp_line);
+            let (prefix, suffix) = stamp_delimiters_for_marker(line);
+            result.push_str(&format!("{prefix}alef:{key}:{value}{suffix}"));
             result.push('\n');
             injected = true;
         }
@@ -763,10 +784,7 @@ pub fn inject_stamp_line(content: &str, key: &str, value: &str) -> String {
 /// returned as-is with no hex-digit constraint, since a generation marker need
 /// not be a hash (a small integer version is the expected case).
 pub fn extract_stamp(content: &str, key: &str) -> Option<String> {
-    let prefix_slash = format!("// alef:{key}:");
-    let prefix_hash = format!("# alef:{key}:");
-    let prefix_block = format!(" * alef:{key}:");
-    let prefix_html = format!("<!-- alef:{key}:");
+    let stamp = format!("alef:{key}:");
 
     let mut past_marker = false;
     for (line_index, line) in content.lines().enumerate() {
@@ -777,19 +795,20 @@ pub fn extract_stamp(content: &str, key: &str) -> Option<String> {
             past_marker = line_has_marker(line);
             continue;
         }
-        if let Some(value) = line
-            .strip_prefix(prefix_slash.as_str())
-            .or_else(|| line.strip_prefix(prefix_hash.as_str()))
-            .or_else(|| line.strip_prefix(prefix_block.as_str()))
-            .or_else(|| {
-                line.strip_prefix(prefix_html.as_str())
-                    .and_then(|v| v.strip_suffix(" -->"))
-            })
-        {
+        if let Some(value) = strip_stamp_delimiters(line, &stamp) {
             return Some(value.to_string());
         }
     }
     None
+}
+
+/// Strip any [`STAMP_DELIMITERS`] pair plus `stamp` from `line`, yielding the stamp's value.
+fn strip_stamp_delimiters<'a>(line: &'a str, stamp: &str) -> Option<&'a str> {
+    STAMP_DELIMITERS.iter().find_map(|&(prefix, suffix)| {
+        line.strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix(stamp))
+            .and_then(|value| value.strip_suffix(suffix))
+    })
 }
 
 fn generated_hash_line(content: &str) -> Option<(usize, &str)> {
@@ -810,15 +829,13 @@ fn generated_hash_line(content: &str) -> Option<(usize, &str)> {
     None
 }
 
+/// Accepts *every* [`STAMP_DELIMITERS`] shape, not only the one the file's own marker line would
+/// select today. That is deliberate and load-bearing for upgrades: a file stamped by an older
+/// alef whose emit side picked a different prefix (INI files carried `// alef:hash:` under a
+/// `; ` marker before the two sides were unified) must still read back as alef-generated, or the
+/// whole tree would look hand-written to the ownership guard on the first run after the fix. ~keep
 fn parse_generated_hash_line(line: &str) -> Option<&str> {
-    let hash = line
-        .strip_prefix("// alef:hash:")
-        .or_else(|| line.strip_prefix("# alef:hash:"))
-        .or_else(|| line.strip_prefix(" * alef:hash:"))
-        .or_else(|| {
-            line.strip_prefix("<!-- alef:hash:")
-                .and_then(|value| value.strip_suffix(" -->"))
-        })?;
+    let hash = strip_stamp_delimiters(line, HASH_PREFIX)?;
     (!hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(hash)
 }
 

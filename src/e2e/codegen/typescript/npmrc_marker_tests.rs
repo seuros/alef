@@ -47,6 +47,63 @@ fn generated_npmrc_content() -> String {
     generated_npmrc_file().content
 }
 
+/// The leading whitespace-delimited token of a line -- its comment opener, for a comment line.
+fn leading_token(line: &str) -> &str {
+    line.split_whitespace().next().unwrap_or_default()
+}
+
+/// The `.npmrc` alef actually ships: the generator's content with the real stamping pass
+/// (`finalize_hashes` calls exactly this) applied on top, since the hash line is injected after
+/// the file is written and is therefore absent from `GeneratedFile::content`.
+fn stamped_npmrc_content() -> String {
+    let content = generated_npmrc_content();
+    crate::core::hash::inject_hash_line(&content, &crate::core::hash::compute_file_hash(&content))
+}
+
+/// Every line of the shipped `.npmrc` must be legal INI: a `;`/`#` comment, a `key=value`
+/// setting, or blank. alef stamped the provenance block in two syntaxes at once -- a `;` prose
+/// header (`hash::CommentStyle::Semicolon`, chosen per format) with a `// alef:hash:` line under
+/// it (chosen by sniffing the marker line, whose table had no `;` arm) -- and `//` is not a
+/// comment opener in INI at all: npm's `ini` parser reads `//` as the start of a registry-scoped
+/// auth key, so the stamp line parses as configuration with no `=`, not as provenance. ~keep
+#[test]
+fn npmrc_provenance_block_is_legal_ini_comment_syntax() {
+    let stamped = stamped_npmrc_content();
+    for line in stamped.lines() {
+        let trimmed = line.trim();
+        let is_comment = trimmed.starts_with(';') || trimmed.starts_with('#');
+        let is_setting = trimmed.contains('=');
+        assert!(
+            trimmed.is_empty() || is_comment || is_setting,
+            "line {line:?} is neither an INI comment nor a key=value setting, so npm's ini \
+             parser reads it as a bare key; full file:\n{stamped}"
+        );
+    }
+}
+
+/// The prose marker and the `alef:hash:` stamp under it are one file's provenance block and must
+/// speak one comment syntax. Asserted by comparing the two emitted lines rather than pinning the
+/// literal `;`, so it stays true if `.npmrc`'s registered comment style ever changes -- what must
+/// not recur is the two sides deriving that style independently and disagreeing. ~keep
+#[test]
+fn npmrc_marker_and_hash_line_share_one_comment_character() {
+    let stamped = stamped_npmrc_content();
+    let marker = stamped
+        .lines()
+        .find(|line| line.ends_with(crate::core::hash::STANDARD_HEADER_LINE))
+        .expect("generated .npmrc must carry the standard alef header line");
+    let hash_line = stamped
+        .lines()
+        .find(|line| line.contains("alef:hash:"))
+        .expect("stamping pass must inject an alef:hash: line under the marker");
+
+    assert_eq!(
+        leading_token(hash_line),
+        leading_token(marker),
+        "the hash line and the marker line above it use different comment openers:\n{stamped}"
+    );
+}
+
 /// Asserts through the real guard function (`hash::content_has_alef_marker`) rather than a
 /// hand-copied literal, so this fails if the emitter and the guard ever disagree again.
 #[test]

@@ -881,6 +881,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     bridge_cfg,
                     &php_namespace,
                     &HashMap::new(),
+                    api,
                 )
             } else {
                 crate::backends::php::trait_bridge::gen_registration_interface(

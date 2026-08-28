@@ -1,8 +1,8 @@
     /**
      * {{ doc_lines }}
      *
-     * @param {{ context_type }} $context Visitor context information
+     * @param {{ context_type }} $context {{ context_doc }}
 {{ param_docs }}
-     * @return {{ result_type }} How to proceed with traversal
+     * @return {{ result_type }} How to proceed with traversal{{ result_values }}
      */
     public function {{ method_name }}({{ context_type }} $context{% if method_params %}, {{ method_params }}{% endif %}): {{ result_type }};

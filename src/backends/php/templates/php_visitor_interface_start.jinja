@@ -4,6 +4,9 @@
  * Implement this interface and pass your implementation to the configured options bridge field
  * to customize visitor callbacks.
  *
+{% if default_result_expr %}
+ * All methods have default no-op implementations that return `{{ default_result_expr }}`.
+{% endif %}
  * Override only the methods you need.
  */
 interface {{ interface_name }}
