@@ -77,6 +77,26 @@ pub struct FixtureDocs {
     /// back through `sample_url_vars` and then `sample_base_url` exactly as it always has.
     #[serde(default)]
     pub body_file: Option<String>,
+    /// The public address THIS fixture's sample input really is served at, overriding
+    /// `[crates.e2e.snippets].sample_base_url` for this fixture alone.
+    ///
+    /// Exists for the asymmetric corpus: a project declares `[crates.e2e.snippets].mock_only`
+    /// because almost none of its sample inputs are hosted anywhere, and the handful that
+    /// genuinely are say so here. The override wins over the corpus default in BOTH directions
+    /// -- it supplies an address where the corpus declares none, and it replaces the corpus
+    /// base where one is configured -- so a mock-only corpus is a default, never a ceiling.
+    ///
+    /// Resolved through exactly the same validator and the same `join` as the corpus-level
+    /// base, so a fixture whose URL argument is undeclared publishes this value verbatim, and
+    /// one whose input declares a mock-relative path (`"/pdf/report.pdf"`) publishes this value
+    /// with that path appended -- identical to what a corpus-wide `sample_base_url` of this
+    /// value would have produced for this fixture.
+    ///
+    /// Declaring it also re-enables the reserved-domain warning for this fixture: `mock_only`
+    /// suppresses "no public address exists for this fixture", never "this fixture claimed one
+    /// and it did not resolve". See `crate::e2e::snippets::sample_url_policy`.
+    #[serde(default)]
+    pub sample_url: Option<String>,
 }
 
 /// How a documentation snippet constructs its client, for fixtures whose subject

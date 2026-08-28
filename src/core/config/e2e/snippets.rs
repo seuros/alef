@@ -24,6 +24,34 @@ pub struct SnippetConfig {
     /// snippet run reports every fixture whose published snippet carries it.
     #[serde(default)]
     pub sample_base_url: Option<String>,
+    /// Declares that this project's sample corpus is mock-only: its fixtures' sample inputs are
+    /// served by the e2e mock harness or fetched from a private bucket and are not published at
+    /// any public address at all.
+    ///
+    /// Every other key in this group answers *what* a fixture's public address is. This one
+    /// answers whether the corpus has such addresses in the first place, which the other three
+    /// cannot express: the reserved-domain warning asks a consumer to configure a sample host
+    /// or acknowledge each fixture/language pair, and neither is actionable for a corpus whose
+    /// URLs genuinely do not exist. Per-pair acknowledgement of hundreds of occurrences is not
+    /// a fix, it is bookkeeping.
+    ///
+    /// Snippets render byte-identically with and without this key -- the reserved documentation
+    /// domain still stands in as the illustrative address, because a snippet still has to show
+    /// *some* URL. Only the diagnosis changes.
+    ///
+    /// Deliberately narrow, and specifically not a mute for the whole warning: it suppresses
+    /// "no public address exists for this fixture" and never "this fixture claimed a public
+    /// address and it did not resolve". A fixture opts back in to a real address, and back in
+    /// to the second warning with it, through `docs.sample_url` (see
+    /// [`crate::e2e::fixture::FixtureDocs::sample_url`]); see
+    /// `crate::e2e::snippets::sample_url_policy` for how the two classes stay separate.
+    ///
+    /// Mutually exclusive with `sample_base_url`, `sample_url_template` and
+    /// `sample_url_manifest` below -- each of those asserts a public address does exist for
+    /// every fixture, so pairing them states two contradictory facts about one corpus and fails
+    /// the run rather than letting whichever key the resolver reads first decide.
+    #[serde(default)]
+    pub mock_only: bool,
     /// A per-fixture URL template, e.g. `"https://cdn.example.org/objects/{digest}"`, resolved
     /// against a fixture's mock-relative path (`{path}`) and its own `docs.sample_url_vars` for
     /// every other placeholder (see [`crate::core::config::e2e::SampleUrlTemplate`]).
@@ -205,6 +233,28 @@ mod tests {
 
         assert_eq!(resolved.base(), "https://samples.example.org");
         assert!(!resolved.is_placeholder());
+    }
+
+    /// `SnippetConfig` is `deny_unknown_fields`, so a key that is not declared on the struct is
+    /// rejected outright rather than silently discarded. This proves `mock_only` is a real
+    /// field and reaches the resolved config, not a key a consumer can write into `alef.toml`
+    /// and watch do nothing.
+    #[test]
+    fn mock_only_is_an_accepted_key_and_defaults_to_false() {
+        assert!(
+            !SnippetConfig::default().mock_only,
+            "an unconfigured corpus is not mock-only: the existing warning must keep firing"
+        );
+
+        let config: SnippetConfig = toml::from_str(
+            r#"
+            output = "docs/snippets-generated"
+            mock_only = true
+        "#,
+        )
+        .expect("mock_only is an accepted key");
+
+        assert!(config.mock_only);
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod adapter_handled;
 mod binding_excluded;
 mod coverage;
 mod curated;
+mod mock_only;
 mod rust_crate_requirements;
 mod sample_urls;
 
@@ -69,6 +70,7 @@ fn documented_fixture() -> Fixture {
         id: "extension_owned".into(),
         description: "Extension-owned example".into(),
         docs: Some(FixtureDocs {
+            sample_url: None,
             topic: "api".into(),
             stem: None,
             paths: BTreeMap::new(),
@@ -386,6 +388,7 @@ c_engine_factory = "EngineConfig"
         description: "Stream a batch of items".into(),
         category: Some("batch".into()),
         docs: Some(FixtureDocs {
+            sample_url: None,
             topic: "batch".into(),
             stem: Some("batch-stream-basic".into()),
             paths: BTreeMap::new(),
@@ -457,6 +460,7 @@ mod path_resolution;
 fn frontmatter_fields_are_pinned_by_exact_equality() {
     let render = |fixture: &Fixture, side_effects: SideEffectClass, target: &str| {
         let docs = FixtureDocs {
+            sample_url: None,
             topic: "api".into(),
             stem: None,
             paths: BTreeMap::new(),
@@ -517,6 +521,7 @@ fn frontmatter_fields_are_pinned_by_exact_equality() {
 #[test]
 fn safe_side_effects_snippet_is_not_level_capped() {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "api".into(),
         stem: None,
         paths: BTreeMap::new(),
@@ -570,6 +575,7 @@ fn unsafe_side_effects_snippet_keeps_the_typecheck_cap() {
         SideEffectClass::Server,
     ] {
         let docs = FixtureDocs {
+            sample_url: None,
             topic: "api".into(),
             stem: None,
             paths: BTreeMap::new(),
@@ -615,6 +621,7 @@ fn unsafe_side_effects_snippet_keeps_the_typecheck_cap() {
 /// A snippet exactly as `generate_snippet_report` emits it, for the ownership tests below.
 fn rendered_snippet() -> String {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "api".into(),
         stem: None,
         paths: BTreeMap::new(),
@@ -662,6 +669,7 @@ fn rendered_snippet_without_header() -> String {
 fn no_front_matter_key_renders_an_explicit_yaml_null() {
     for side_effects in [SideEffectClass::Safe, SideEffectClass::Server] {
         let docs = FixtureDocs {
+            sample_url: None,
             topic: "api".into(),
             stem: None,
             paths: BTreeMap::new(),
@@ -766,6 +774,7 @@ fn snippet_marker_lands_inside_the_read_side_scan_window() {
 #[test]
 fn a_body_ending_in_a_newline_does_not_open_a_blank_line_before_the_closing_fence() {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "smoke".into(),
         stem: None,
         paths: BTreeMap::new(),

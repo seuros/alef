@@ -92,6 +92,7 @@ mod tests {
             id: "list_entries".into(),
             description: "List entries".into(),
             docs: Some(FixtureDocs {
+                sample_url: None,
                 topic: "guides".into(),
                 stem: None,
                 paths: Default::default(),

@@ -52,6 +52,7 @@ fn shows_fixture(path: &str) -> Fixture {
         description: "Analyze a document".into(),
         input: serde_json::Value::Null,
         docs: Some(FixtureDocs {
+            sample_url: None,
             topic: "guides".into(),
             stem: None,
             paths: Default::default(),

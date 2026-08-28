@@ -30,6 +30,7 @@ fn snippet_generator_resolution_rejects_alias_duplicates() {
 #[test]
 fn markdown_wrapper_uses_backend_body_and_metadata() {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "api".into(),
         stem: None,
         paths: BTreeMap::new(),

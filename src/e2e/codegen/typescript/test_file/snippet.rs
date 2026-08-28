@@ -549,6 +549,7 @@ mod tests {
     fn docs_argument_override_imports_its_referenced_input_type() {
         let mut fixture = fixture();
         fixture.docs = Some(crate::e2e::fixture::FixtureDocs {
+            sample_url: None,
             topic: "guides".into(),
             stem: None,
             paths: Default::default(),

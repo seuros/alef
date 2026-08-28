@@ -7,6 +7,7 @@ use super::*;
 #[test]
 fn snippet_paths_reject_traversal() {
     let mut docs = FixtureDocs {
+        sample_url: None,
         topic: "..".into(),
         stem: None,
         paths: BTreeMap::new(),
@@ -49,6 +50,7 @@ fn snippet_paths_reject_traversal() {
 #[test]
 fn target_path_override_precedes_topic_and_stem() {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "fallback".into(),
         stem: Some("fallback".into()),
         paths: BTreeMap::from([("node".into(), "config/basic_usage.md".into())]),
@@ -108,6 +110,7 @@ fn language_aliases_include_core_and_ffi_targets() {
 #[test]
 fn generated_docs_use_validator_canonical_language_identity() {
     let docs = FixtureDocs {
+        sample_url: None,
         topic: "api".into(),
         stem: None,
         paths: BTreeMap::new(),

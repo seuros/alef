@@ -21,7 +21,7 @@
 //! moment a placeholder has no matching fact, and every caller in `crate::e2e::snippets` and
 //! `crate::e2e::fixture::docs_presentation` falls back to `sample_base_url` -- the placeholder
 //! domain when that too is unconfigured -- exactly as it did before this type existed. That
-//! fallback is what keeps `report_placeholder_sample_urls` warning correctly for a fixture a
+//! fallback is what keeps `report_unconfigured_sample_urls` warning correctly for a fixture a
 //! template was configured for but cannot actually resolve: an unresolved occurrence still
 //! publishes the flat base, and the existing "does the body still carry the placeholder"
 //! check still catches it. Configuring a template is therefore strictly additive over

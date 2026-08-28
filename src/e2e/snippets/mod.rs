@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SampleUrlManifest, SampleUrlTemplate, SnippetConfig};
+use crate::core::config::e2e::{E2eConfig, SnippetConfig};
 use crate::core::config::warning_ack::{AcknowledgeableWarningCategory, WarningAcknowledgement};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
@@ -21,6 +21,7 @@ mod mock_url_defaults;
 pub mod ownership;
 mod recipe_policy;
 mod render_body;
+mod sample_url_policy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnippetInclusion {
@@ -183,8 +184,13 @@ pub struct SnippetGenerationReport {
     pub coverage: SnippetCoverageLedger,
     /// Always empty on a successful run: a non-empty value aborts generation. ~keep
     pub guard_rejections: Vec<SnippetGuardRejection>,
-    /// Fixtures whose published snippets carry the reserved-domain placeholder because the ~keep
-    /// project configured no `[crates.e2e.snippets].sample_base_url`.
+    /// Fixtures whose published snippets carry the reserved-domain placeholder, from either ~keep
+    /// cause `render_body::PlaceholderSampleUrlLedger` keeps apart: no public address was
+    /// configured for them, or the fixture's own `docs.sample_url` failed to produce one.
+    ///
+    /// Empty for a fixture that inherited `[crates.e2e.snippets].mock_only`, which states that
+    /// no such address exists to configure -- and never empty merely because that flag is set,
+    /// since it does not reach the second cause. See `sample_url_policy`'s module doc comment.
     ///
     /// Not a failure -- a project may have no public sample host, and refusing to generate
     /// would break every consumer that has lived with the placeholder. It is reported so the
@@ -310,22 +316,11 @@ fn generate_snippet_report_with_extensions(
     extensions: &[Box<dyn crate::Extension>],
 ) -> Result<SnippetGenerationReport> {
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
-    // Resolve before anything renders: an unusable `sample_base_url` must fail the run, not ~keep
-    // reach published documentation as a broken address.
-    let sample_base_url = snippets
-        .docs_sample_base_url()
-        .map_err(|error| anyhow::anyhow!("invalid documentation sample base URL: {error}"))?;
-    // Resolved alongside `sample_base_url`, for the same reason: an unusable template must fail
-    // the run before anything renders, not reach documentation as a broken address. ~keep
-    let sample_url_template: Option<SampleUrlTemplate> = snippets
-        .sample_url_template()
-        .map_err(|error| anyhow::anyhow!("invalid documentation sample URL template: {error}"))?;
-    // Resolved alongside `sample_url_template`, for the same reason: a configured manifest that
-    // is missing, unreadable, or malformed must fail the run before anything renders, naming the
-    // file, rather than silently behaving as if it were never configured. ~keep
-    let sample_url_manifest: Option<SampleUrlManifest> = snippets
-        .sample_url_manifest(Path::new("."))
-        .map_err(|error| anyhow::anyhow!("invalid documentation sample URL manifest: {error}"))?;
+    // Resolve before anything renders: an unusable sample base URL, template or manifest must ~keep
+    // fail the run, not reach published documentation as a broken address -- and a corpus that
+    // both declares itself mock-only and configures a public host must fail before that
+    // contradiction gets to decide a warning. See `sample_url_policy::SampleUrlPolicy::resolve`.
+    let url_policy = sample_url_policy::SampleUrlPolicy::resolve(snippets, Path::new("."))?;
     // Pin the *previous* run's ownership record before this run computes, let alone writes,
     // anything. `e2e::run` hands the freshly computed ledger to the same write batch as the
     // snippets, and `.alef-snippet-coverage.json` sorts ahead of every sibling snippet directory
@@ -343,8 +338,7 @@ fn generate_snippet_report_with_extensions(
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
     let mut guard_rejections = Vec::<SnippetGuardRejection>::new();
-    let mut placeholder_sample_url_fixtures = BTreeSet::<String>::new();
-    let mut placeholder_sample_url_occurrences = Vec::<(String, String)>::new();
+    let mut placeholder_sample_urls = render_body::PlaceholderSampleUrlLedger::default();
     let mut coverage = SnippetCoverageLedger {
         format_version: COVERAGE_MANIFEST_VERSION,
         ..SnippetCoverageLedger::default()
@@ -353,6 +347,12 @@ fn generate_snippet_report_with_extensions(
         validate_requirements(fixture)?;
         validate_coverage_exceptions(fixture)?;
         validate_docs_paths(fixture, languages)?;
+        // Resolved here, beside the other per-fixture validators, rather than inside the render
+        // seam below: a render failure there is caught and recorded as a missing coverage cell,
+        // so an unusable `docs.sample_url` would degrade into a silently absent snippet instead
+        // of failing the run the way an unusable corpus-level base does. Also the natural place
+        // for it -- the answer is per fixture, not per fixture/language. ~keep
+        let sample_url = url_policy.for_fixture(fixture)?;
         for (language, generator) in &generators {
             // A function this language's `exclude_functions` (or the crate-wide
             // `[crates.exclude].functions` that `language_excludes` folds in) drops can
@@ -432,9 +432,7 @@ fn generate_snippet_report_with_extensions(
                 fixture,
                 language,
                 context,
-                sample_base_url,
-                sample_url_template.as_ref(),
-                sample_url_manifest.as_ref(),
+                &sample_url,
             ) {
                 Ok(rendered) => rendered,
                 Err(error) => {
@@ -470,21 +468,9 @@ fn generate_snippet_report_with_extensions(
             };
             let render_body::RenderedSnippetBody {
                 body,
-                used_placeholder_sample_url,
+                placeholder_class,
             } = rendered;
-            if used_placeholder_sample_url {
-                // Keyed by BOTH the fixture id (warning identity) and this target language
-                // (source target) -- an acknowledgement for one target must never silence the
-                // same fixture publishing the placeholder for a different one. ~keep
-                let category = AcknowledgeableWarningCategory::DocSnippetReservedDomain;
-                match ack_ledger.check(category, &fixture.id, language) {
-                    AckOutcome::Acknowledged { .. } => {}
-                    AckOutcome::NotAcknowledged { .. } => {
-                        placeholder_sample_url_fixtures.insert(fixture.id.clone());
-                        placeholder_sample_url_occurrences.push((fixture.id.clone(), language.to_string()));
-                    }
-                }
-            }
+            placeholder_sample_urls.record(&mut ack_ledger, placeholder_class, &fixture.id, language);
             let content = render_snippet_markdown(&body, fixture, docs, language, lang);
             let requirements = snippet_requirements(fixture, language, &body);
             let file = GeneratedFile {
@@ -527,8 +513,8 @@ fn generate_snippet_report_with_extensions(
     ensure_no_guard_rejections(&guard_rejections)?;
     coverage = coverage::normalize(coverage);
     coverage::validate(&coverage)?;
-    let placeholder_sample_url_fixtures: Vec<String> = placeholder_sample_url_fixtures.into_iter().collect();
-    render_body::report_placeholder_sample_urls(&placeholder_sample_url_occurrences, sample_base_url);
+    let placeholder_sample_url_fixtures = placeholder_sample_urls.fixtures();
+    placeholder_sample_urls.report(url_policy.base());
     // Requirement 2: a configured acknowledgement that matched nothing this run -- because the
     // warning was fixed, never fired for that identity/target, or was mistyped -- fails the run
     // here, before the caller writes any snippet to disk. This is deliberately not deferred the

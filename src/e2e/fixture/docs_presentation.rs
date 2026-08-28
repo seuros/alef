@@ -327,6 +327,7 @@ mod tests {
 
     fn fixture_docs(topic: &str) -> FixtureDocs {
         FixtureDocs {
+            sample_url: None,
             topic: topic.to_string(),
             stem: None,
             paths: Default::default(),

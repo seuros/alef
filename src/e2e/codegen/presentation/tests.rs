@@ -11,6 +11,7 @@ fn fixture() -> Fixture {
         description: "Present returned items".into(),
         input: serde_json::json!({"old_source": "test.txt"}),
         docs: Some(FixtureDocs {
+            sample_url: None,
             topic: "configuration".into(),
             stem: None,
             paths: BTreeMap::new(),

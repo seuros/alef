@@ -456,6 +456,7 @@ fn a_fixture_whose_body_file_the_manifest_does_not_cover_falls_back_to_sample_ba
 
 fn empty_docs() -> FixtureDocs {
     FixtureDocs {
+        sample_url: None,
         topic: "contract".to_string(),
         stem: None,
         paths: Default::default(),

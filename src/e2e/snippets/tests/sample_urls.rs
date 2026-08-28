@@ -18,7 +18,7 @@ const CONTENT_ADDRESSED_TEMPLATE: &str = "https://cdn.example.org/objects/{diges
 
 /// A fixture with a `mock_url` argument, documentation metadata, and a relative input path
 /// -- the shape a URL-centric consumer's fixtures actually have.
-fn url_fixture() -> Fixture {
+pub(super) fn url_fixture() -> Fixture {
     serde_json::from_value(serde_json::json!({
         "id": "extract_uri",
         "description": "Extract a document from a URI",
@@ -41,7 +41,7 @@ fn url_fixture_with_digest(digest: &str) -> Fixture {
     fixture
 }
 
-fn url_e2e_config() -> (E2eConfig, ResolvedCrateConfig) {
+pub(super) fn url_e2e_config() -> (E2eConfig, ResolvedCrateConfig) {
     let cfg_str = r#"
 [workspace]
 languages = ["python"]
@@ -143,7 +143,7 @@ fn url_fixture_with_body_file(body_file: &str) -> Fixture {
     fixture
 }
 
-fn only_snippet_content(report: &SnippetGenerationReport) -> &str {
+pub(super) fn only_snippet_content(report: &SnippetGenerationReport) -> &str {
     assert_eq!(
         report.snippets.len(),
         1,

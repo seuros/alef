@@ -23,7 +23,8 @@ pub use harness::{HarnessConfig, HarnessOverride, RouteCallForm};
 pub use package::{DependencyMode, HomebrewCliTest, PackageRef, RegistryConfig};
 pub use root::E2eConfig;
 pub use sample_url::{
-    DEFAULT_DOCS_SAMPLE_BASE_URL, DocsSampleBaseUrl, InvalidSampleBaseUrl, SAMPLE_BASE_URL_CONFIG_KEY,
+    DEFAULT_DOCS_SAMPLE_BASE_URL, DOCS_SAMPLE_URL_FIXTURE_KEY, DocsSampleBaseUrl, InvalidSampleBaseUrl,
+    SAMPLE_BASE_URL_CONFIG_KEY, SAMPLE_URL_MOCK_ONLY_CONFIG_KEY,
 };
 pub use sample_url_manifest::{
     InvalidSampleUrlManifest, SAMPLE_URL_MANIFEST_CONFIG_KEY, SampleUrlManifest, SampleUrlManifestConfig,
