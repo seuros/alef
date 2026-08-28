@@ -159,6 +159,7 @@ fn diff_does_not_regress_a_language_manifest_generate_already_reconciled() {
             // Lenient, deliberately: this fixture run must not depend on which formatters the
             // machine running the suite has installed. ~keep
             strict: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -242,6 +243,7 @@ fn verify_command_reports_and_fails_on_a_real_orphaned_generated_file() {
             strict: false,
             skip_frb: true,
             skip_snippet_validation: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -342,6 +344,7 @@ fn verify_reports_an_incomplete_generation_run_instead_of_ordinary_staleness() {
             strict: false,
             skip_frb: true,
             skip_snippet_validation: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -403,6 +406,7 @@ fn verify_reports_an_incomplete_generation_run_instead_of_ordinary_staleness() {
             strict: false,
             skip_frb: true,
             skip_snippet_validation: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -459,6 +463,7 @@ fn verify_passes_with_zero_findings_despite_a_gitignored_dependency_cache_direct
             strict: false,
             skip_frb: true,
             skip_snippet_validation: false,
+            skip_compile: false,
         },
         &context,
     )

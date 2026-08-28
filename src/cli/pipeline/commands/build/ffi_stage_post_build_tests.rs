@@ -103,6 +103,65 @@ fn run_post_build_skips_ffi_staging_without_error_when_artifact_is_absent() {
     );
 }
 
+/// The control that keeps the generation-only gate honest: when a build WAS expected and the
+/// artifact is missing, the warning -- and its build hint -- must still fire. Suppressing this
+/// case would be strictly worse than the noise it replaced: `alef test --e2e` is about to run
+/// suites that link this library, so nothing on disk means the build the operator was supposed
+/// to have run never happened. ~keep
+#[tracing_test::traced_test]
+#[test]
+fn e2e_staging_still_warns_when_the_native_library_is_missing() {
+    let base_dir = tempfile::tempdir().expect("failed to create temp dir");
+
+    run_post_build(
+        Language::Go,
+        &go_build_config(),
+        &go_config(),
+        base_dir.path(),
+        StagingProfile::PreferOnDisk,
+    )
+    .expect("a missing build artifact must be a warning, not a post-build failure");
+
+    assert!(
+        logs_contain("no built FFI shared library found"),
+        "a caller that expected a build must still be told the artifact it needs is absent"
+    );
+    assert!(
+        logs_contain("alef build --release"),
+        "the warning must still name the command that produces the missing artifact"
+    );
+}
+
+/// THE FIX for the generation-only half: the identical missing artifact, staged from a caller
+/// that never requested a build, is the ordinary state of an unbuilt checkout. Warning about it
+/// advised `alef build --release` for a condition `alef generate`/`alef all` never intended to
+/// satisfy -- once per FFI-dependent language, on every run, unavoidably. The step still runs and
+/// still reports at `DEBUG`; only the severity changed, and only for this caller. ~keep
+#[tracing_test::traced_test]
+#[test]
+fn generation_only_staging_does_not_warn_when_the_native_library_is_missing() {
+    let base_dir = tempfile::tempdir().expect("failed to create temp dir");
+
+    run_post_build(
+        Language::Go,
+        &go_build_config(),
+        &go_config(),
+        base_dir.path(),
+        StagingProfile::NoBuildRequested,
+    )
+    .expect("a missing build artifact must be a warning, not a post-build failure");
+
+    assert!(
+        !logs_contain("no built FFI shared library found"),
+        "a command that never asked for a build must not advise one for the artifact it did not \
+         request"
+    );
+    assert!(
+        !base_dir.path().join("packages/go/.lib").exists(),
+        "no destination directory should be created when nothing was staged"
+    );
+}
+
 /// Negative control: a backend with no C FFI dependency (`BuildDependency::None`) must never
 /// carry `PostBuildStep::StageFfiLibrary` -- staging is meaningless for it (there is no `-ffi`
 /// crate to stage), and `ffi_stage::staging_dir` only recognizes Go/Java/C#, so attaching this

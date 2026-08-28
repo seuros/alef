@@ -81,6 +81,7 @@ fn generate_formats_the_rust_glue_crate_it_stamps() {
             clean: false,
             skip_frb: false,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -160,6 +161,7 @@ fn run_java_generate(root: &Path) {
             clean: false,
             skip_frb: false,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )

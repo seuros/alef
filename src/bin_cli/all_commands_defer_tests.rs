@@ -16,6 +16,18 @@ fn all_command() -> Commands {
         strict: false,
         skip_frb: false,
         skip_snippet_validation: false,
+        skip_compile: false,
+    }
+}
+
+fn all_command_skipping_compile() -> Commands {
+    Commands::All {
+        clean: false,
+        clobber_create_once_seeds: false,
+        strict: false,
+        skip_frb: false,
+        skip_snippet_validation: false,
+        skip_compile: true,
     }
 }
 
@@ -304,5 +316,53 @@ fn a_crate_post_build_failure_does_not_abort_its_own_remaining_stages() {
         readme.is_file(),
         "the README stage must still have run despite the post-build failure: {} is missing",
         readme.display()
+    );
+}
+
+/// The generation-only mode, proved end-to-end against the same fixture the test above uses as
+/// its positive control -- so the pair together shows the flag changes exactly one thing.
+///
+/// `[crates.build_commands.ffi] build = "exit 42"` is what `ensure_ffi_header_freshness`'s
+/// refresh closure runs, and the test above asserts that `alef all` without this flag reaches it
+/// and fails on it. With the flag, `complete_generated_artifacts` must not invoke the refresh at
+/// all, so `exit 42` can never appear in this run: the fixture's own configuration is the
+/// tripwire, and it costs no compilation, no network, and no host toolchain. The header is still
+/// *checked* -- only never rebuilt -- so a stale one would still fail; this fresh tree has no
+/// header at all, which `check_ffi_header_freshness` reports as a warning and allows. ~keep
+#[tracing_test::traced_test]
+#[test]
+fn skip_compile_writes_source_without_invoking_the_ffi_build() {
+    let _skip_guard = crate::test_support::SkipCommandsGuard::set("");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().unwrap_or_else(|_| temp.path().to_path_buf());
+    write_post_build_fixture_workspace(&root);
+    let _cwd = CwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    let message = match handle(all_command_skipping_compile(), &context) {
+        Ok(_) => String::new(),
+        Err(error) => format!("{error:#}"),
+    };
+
+    assert!(
+        !message.contains("exit 42"),
+        "--skip-compile must not reach the FFI header refresh -- the only thing in this fixture \
+         that can run `exit 42`: {message}"
+    );
+    assert!(
+        logs_contain("not building the FFI crate to refresh its cbindgen header"),
+        "the skipped rebuild must be announced, so an operator can tell a skipped refresh from a \
+         header that was already fresh"
+    );
+
+    let ffi_source = root.join("crates/postbuildlib-ffi/src/lib.rs");
+    assert!(
+        ffi_source.is_file(),
+        "generation must still write its source with the compile skipped: {} is missing",
+        ffi_source.display()
     );
 }

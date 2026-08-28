@@ -50,7 +50,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             clean,
             skip_frb,
             strict,
-        } => generate::handle_generate(lang, clean, skip_frb, strict, config_path, context),
+            skip_compile,
+        } => generate::handle_generate(lang, clean, skip_frb, strict, skip_compile, config_path, context),
         Commands::Stubs { lang } => {
             let (_workspace, resolved) = load_config(config_path)?;
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;

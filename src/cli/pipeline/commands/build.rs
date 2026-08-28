@@ -16,8 +16,10 @@ mod frb_cache;
 mod frb_cfg_gates;
 mod frb_version_check;
 mod observability;
+mod staging_profile;
 
 use build_command::{build_command_for, output_path_for, resolve_crate_dir};
+pub use staging_profile::StagingProfile;
 
 #[cfg(test)]
 mod build_command_tests;
@@ -557,24 +559,6 @@ fn record_post_build_outcome(
     }
 }
 
-/// Which build profile [`crate::core::backend::PostBuildStep::StageFfiLibrary`] and
-/// [`crate::core::backend::PostBuildStep::StageDartNatives`] should look for.
-///
-/// `run_post_build` runs from two kinds of caller with different guarantees about what was just
-/// built. `build_with_environment`'s own two dispatch loops call it immediately after running
-/// exactly one cargo profile for this invocation -- staging must look at that same profile
-/// (`JustBuilt`), because a stale artifact from the *other* profile existing on disk from an
-/// earlier, unrelated run must never silently satisfy this run's staging step. `alef generate`'s
-/// post-build pass and `alef test`'s e2e FFI staging never invoke `cargo build` at all, so neither
-/// can name a profile the way `JustBuilt` requires; they ask for whichever profile is already on
-/// disk, release preferred (`PreferOnDisk`). Neither variant ever consults `deps/` -- see
-/// [`crate::publish::package::find_built_artifact`]'s doc comment for why. ~keep
-#[derive(Debug, Clone, Copy)]
-pub enum StagingProfile {
-    JustBuilt(crate::publish::package::BuildProfile),
-    PreferOnDisk,
-}
-
 /// Run post-build processing steps (e.g., patching .d.ts files).
 pub fn run_post_build(
     lang: Language,
@@ -689,20 +673,18 @@ pub fn run_post_build(
                 // Same `staging_profile` dispatch as `StageFfiLibrary` below -- a stale artifact
                 // from the *other* profile must never silently satisfy this run's staging step.
                 // ~keep
-                let status = match staging_profile {
-                    StagingProfile::JustBuilt(profile) => crate::publish::dart_native::stage_dart_native_libraries(
+                let status = match staging_profile.just_built() {
+                    Some(profile) => crate::publish::dart_native::stage_dart_native_libraries(
                         base_dir,
                         &package_root,
                         lib_stem,
                         profile,
                     ),
-                    StagingProfile::PreferOnDisk => {
-                        crate::publish::dart_native::stage_dart_native_libraries_preferring_release(
-                            base_dir,
-                            &package_root,
-                            lib_stem,
-                        )
-                    }
+                    None => crate::publish::dart_native::stage_dart_native_libraries_preferring_release(
+                        base_dir,
+                        &package_root,
+                        lib_stem,
+                    ),
                 }
                 .with_context(|| format!("failed to stage Dart native libraries for stem '{lib_stem}'"))?;
                 match status {
@@ -720,13 +702,9 @@ pub fn run_post_build(
                 // Which profile(s) to look for, and the matching build command to suggest in the
                 // warning below if none is found -- kept together so the two can never name
                 // different profiles. ~keep
-                let (profile_description, build_hint) = match staging_profile {
-                    StagingProfile::JustBuilt(profile) => {
-                        (profile.to_string(), format!("alef build{}", profile.cargo_flag()))
-                    }
-                    StagingProfile::PreferOnDisk => {
-                        ("release or debug".to_string(), "alef build --release".to_string())
-                    }
+                let (profile_description, build_hint) = match staging_profile.just_built() {
+                    Some(profile) => (profile.to_string(), format!("alef build{}", profile.cargo_flag())),
+                    None => ("release or debug".to_string(), "alef build --release".to_string()),
                 };
                 // `ffi_artifact_built*` (not a bare `stage_ffi*` + match-on-error) so this step
                 // can tell "nothing was built this run" -- expected when this fires from `alef
@@ -735,20 +713,14 @@ pub fn run_post_build(
                 // allowed to fail this backend's build; the former is always a warning, never a
                 // silent no-op. Deliberately does not fall back to `deps/`: see
                 // `crate::publish::package::find_built_artifact`'s doc comment. ~keep
-                let artifact_built = match staging_profile {
-                    StagingProfile::JustBuilt(profile) => {
-                        crate::publish::ffi_stage::ffi_artifact_built(config, &target, base_dir, profile)
-                    }
-                    StagingProfile::PreferOnDisk => {
-                        crate::publish::ffi_stage::ffi_artifact_built_preferring_release(config, &target, base_dir)
-                    }
+                let artifact_built = match staging_profile.just_built() {
+                    Some(profile) => crate::publish::ffi_stage::ffi_artifact_built(config, &target, base_dir, profile),
+                    None => crate::publish::ffi_stage::ffi_artifact_built_preferring_release(config, &target, base_dir),
                 };
                 if artifact_built {
-                    let stage_result = match staging_profile {
-                        StagingProfile::JustBuilt(profile) => {
-                            crate::publish::ffi_stage::stage_ffi(config, lang, &target, base_dir, profile)
-                        }
-                        StagingProfile::PreferOnDisk => {
+                    let stage_result = match staging_profile.just_built() {
+                        Some(profile) => crate::publish::ffi_stage::stage_ffi(config, lang, &target, base_dir, profile),
+                        None => {
                             crate::publish::ffi_stage::stage_ffi_preferring_release(config, lang, &target, base_dir)
                         }
                     };
@@ -766,11 +738,26 @@ pub fn run_post_build(
                     let dest_description = crate::publish::ffi_stage::staging_dir(config, lang, &target, base_dir)
                         .map(|dir| dir.display().to_string())
                         .unwrap_or_else(|_| format!("{lang} native-library directory"));
-                    warn!(
-                        "[{lang}] no built FFI shared library found for target {} ({profile_description}); \
-                         skipping staging into {} (run `{build_hint}` to produce one)",
-                        target.triple, dest_description
-                    );
+                    // A miss is only news when the caller expected a build to have produced the
+                    // artifact. `alef generate`/`alef all` never ask for one, so on any unbuilt
+                    // tree this warning fired for a condition the invoked command was never
+                    // going to satisfy and advised a build it deliberately does not run -- one
+                    // unavoidable line per FFI-dependent language, on every generation-only run.
+                    // Demoted to DEBUG for that caller alone: `alef test --e2e` is about to link
+                    // this library, so its miss keeps the warning and the build hint. ~keep
+                    if staging_profile.build_was_expected() {
+                        warn!(
+                            "[{lang}] no built FFI shared library found for target {} ({profile_description}); \
+                             skipping staging into {} (run `{build_hint}` to produce one)",
+                            target.triple, dest_description
+                        );
+                    } else {
+                        debug!(
+                            "[{lang}] no built FFI shared library on disk for target {} ({profile_description}); \
+                             nothing to stage into {} -- no build was requested by this command",
+                            target.triple, dest_description
+                        );
+                    }
                 }
             }
             PostBuildStep::MaterializeSwiftBridge {

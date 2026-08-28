@@ -624,6 +624,7 @@ fn lang_manifest_all_command() -> Commands {
         strict: false,
         skip_frb: false,
         skip_snippet_validation: false,
+        skip_compile: false,
     }
 }
 

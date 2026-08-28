@@ -394,6 +394,7 @@ fn alef_all_generated_python_package_type_checks_clean_under_pyrefly() {
             strict: false,
             skip_frb: false,
             skip_snippet_validation: true,
+            skip_compile: false,
         },
         &context,
     )

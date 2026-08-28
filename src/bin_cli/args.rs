@@ -83,6 +83,23 @@ pub(crate) enum Commands {
         /// rejects the code always fails, with or without this.
         #[arg(long)]
         strict: bool,
+        /// Write and post-process source without invoking a compiler.
+        ///
+        /// Generation is documented as a source-writing step, but two of its post-build stages
+        /// legitimately shell out to cargo: Swift's, to run the swift-bridge crate's `build.rs`
+        /// so the `SwiftBridgeCore.swift`/`{crate}.swift`/`RustBridgeC.h` trio exists in
+        /// `OUT_DIR` for `MaterializeSwiftBridge` to copy out, and the FFI header gate, to let
+        /// cbindgen re-emit a header before checking it against the generated source. Even as a
+        /// `cargo check`, the first walks the consumer's entire dependency graph.
+        ///
+        /// This flag skips exactly those two and nothing else. It is OFF by default, so a
+        /// workflow that relies on `alef all` producing them keeps getting them; pass it only
+        /// when a separate build task compiles the crate. The artifacts they derive then keep
+        /// whatever content is already on disk until `alef build` runs, and every skipped step
+        /// says so in the log. A cbindgen header that is present but *stale* still fails the
+        /// run -- this flag suppresses the rebuild, never the check.
+        #[arg(long)]
+        skip_compile: bool,
     },
     /// Generate type stubs (.pyi, .rbs).
     Stubs {
@@ -309,6 +326,23 @@ pub(crate) enum Commands {
         /// this flag is useful whenever those artifacts are not already present.
         #[arg(long)]
         skip_snippet_validation: bool,
+        /// Write and post-process source without invoking a compiler.
+        ///
+        /// Generation is documented as a source-writing step, but two of its post-build stages
+        /// legitimately shell out to cargo: Swift's, to run the swift-bridge crate's `build.rs`
+        /// so the `SwiftBridgeCore.swift`/`{crate}.swift`/`RustBridgeC.h` trio exists in
+        /// `OUT_DIR` for `MaterializeSwiftBridge` to copy out, and the FFI header gate, to let
+        /// cbindgen re-emit a header before checking it against the generated source. Even as a
+        /// `cargo check`, the first walks the consumer's entire dependency graph.
+        ///
+        /// This flag skips exactly those two and nothing else. It is OFF by default, so a
+        /// workflow that relies on `alef all` producing them keeps getting them; pass it only
+        /// when a separate build task compiles the crate. The artifacts they derive then keep
+        /// whatever content is already on disk until `alef build` runs, and every skipped step
+        /// says so in the log. A cbindgen header that is present but *stale* still fails the
+        /// run -- this flag suppresses the rebuild, never the check.
+        #[arg(long)]
+        skip_compile: bool,
     },
     /// Initialize a new alef.toml config.
     Init {

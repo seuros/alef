@@ -105,6 +105,7 @@ fn run_generate_expecting_post_build_failure(root: &Path) -> anyhow::Error {
             clean: false,
             skip_frb: false,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -247,6 +248,7 @@ fn every_marked_generated_file_is_stamped_after_generate() {
             clean: false,
             skip_frb: true,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )

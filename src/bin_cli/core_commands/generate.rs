@@ -18,9 +18,15 @@ pub(crate) fn handle_generate(
     clean: bool,
     skip_frb: bool,
     strict: bool,
+    skip_compile: bool,
     config_path: &std::path::Path,
     context: &DispatchContext,
 ) -> Result<Option<Commands>> {
+    let compile_policy = if skip_compile {
+        crate::core::backend::CompilePolicy::Skipped
+    } else {
+        crate::core::backend::CompilePolicy::Allowed
+    };
     if skip_frb {
         let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
         let updated = if existing.is_empty() {
@@ -386,7 +392,7 @@ pub(crate) fn handle_generate(
         // fix already shipped for `alef all` (`all_commands.rs`'s `stage_failures.record(...)` at
         // its own `complete_generated_artifacts` call site) -- see `StageFailures`'s module doc for
         // the general hazard and task #186 for the multi-crate half of it. ~keep
-        if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
+        if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir, compile_policy) {
             stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
         }
 

@@ -4,6 +4,8 @@
 
 use anyhow::Result;
 
+use crate::core::backend::CompilePolicy;
+
 /// Run every language's required post-build step, isolating one language's failure from
 /// every other language's.
 ///
@@ -71,22 +73,57 @@ pub(crate) fn languages_with_post_build_steps(
         .collect()
 }
 
-pub(super) fn run_required_post_builds(
+/// The `(language, BuildConfig)` list [`run_required_post_builds`] will actually run, after
+/// `compile` has had its say.
+///
+/// Split out of `run_required_post_builds` so the decision "which steps does this policy leave"
+/// is answerable -- and testable -- without running a single external command. That matters more
+/// here than for most seams: the step this drops is the one whose absence is invisible until a
+/// consumer notices their Swift package never got its bridge trio, and the step it keeps
+/// (`MaterializeSwiftBridge`) must survive the drop or generation stops copying the trio even on
+/// the runs where a previous build did leave one in `OUT_DIR`. ~keep
+fn resolve_post_build_configs(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
-    base_dir: &std::path::Path,
-) -> Result<()> {
-    let resolved: Vec<(crate::core::config::Language, crate::core::backend::BuildConfig)> = languages
+    compile: CompilePolicy,
+) -> Vec<(crate::core::config::Language, crate::core::backend::BuildConfig)> {
+    languages
         .iter()
         .filter_map(|&language| {
             let backend = crate::cli::registry::try_get_backend(language)?;
-            let build_config = backend.generate_post_build_config(config)?;
+            let mut build_config = backend.generate_post_build_config(config)?;
+            if compile == CompilePolicy::Skipped {
+                let dropped = build_config
+                    .post_build
+                    .iter()
+                    .filter(|step| step.invokes_rust_compiler())
+                    .count();
+                if dropped > 0 {
+                    // Never silent: this is the one place a caller learns that the artifacts a
+                    // cargo step derives (Swift's swift-bridge trio) will keep whatever content
+                    // is already on disk until a real build refreshes them. ~keep
+                    tracing::warn!(
+                        "  [{language}] skipping {dropped} compiling post-build step(s) -- artifacts \
+                         derived from them keep their current on-disk content until `alef build` runs"
+                    );
+                }
+                build_config.post_build.retain(|step| !step.invokes_rust_compiler());
+            }
             if build_config.post_build.is_empty() {
                 return None;
             }
             Some((language, build_config))
         })
-        .collect();
+        .collect()
+}
+
+pub(super) fn run_required_post_builds(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+    compile: CompilePolicy,
+) -> Result<()> {
+    let resolved = resolve_post_build_configs(languages, config, compile);
     run_resolved_post_builds(&resolved, languages.len(), config, base_dir)
 }
 
@@ -115,13 +152,16 @@ fn run_resolved_post_builds(
         tracing::info!("  [{language}] running post-build...");
         // This pass never invokes `cargo build` itself (see `PostBuildStep::StageFfiLibrary`'s
         // handler), so it cannot name a profile the way `alef build`'s own post-build dispatch
-        // can -- ask for whichever is already on disk instead. ~keep
+        // can -- ask for whichever is already on disk instead. `NoBuildRequested`, not
+        // `PreferOnDisk`: the two look in the same places, but this caller is a generation
+        // command that never asked for a cdylib, so a missing one is the ordinary state of an
+        // unbuilt tree rather than the missed build `alef test --e2e` reports. ~keep
         match crate::cli::pipeline::run_post_build(
             language,
             build_config,
             config,
             base_dir,
-            crate::cli::pipeline::StagingProfile::PreferOnDisk,
+            crate::cli::pipeline::StagingProfile::NoBuildRequested,
         ) {
             Ok(outcome) if outcome.skipped_missing_tools.is_empty() => {
                 tracing::info!("  [{language}] post-build processing complete");
@@ -155,7 +195,10 @@ fn run_resolved_post_builds(
 
 #[cfg(test)]
 mod tests {
-    use super::{languages_have_post_build_steps, run_required_post_builds, run_resolved_post_builds};
+    use super::{
+        languages_have_post_build_steps, resolve_post_build_configs, run_required_post_builds, run_resolved_post_builds,
+    };
+    use crate::core::backend::CompilePolicy;
     use crate::core::config::Language;
 
     /// A language with a real, always-runs post-build (see `run_post_build`'s
@@ -204,6 +247,136 @@ mod tests {
         ));
     }
 
+    /// Positive control for the two tests below: Swift's generation-time post-build genuinely
+    /// contains a compiling step, so a later assertion that the step is gone is answering a
+    /// real question rather than describing a config that never had one. `cargo check` is still
+    /// a compile of the consumer's whole dependency graph -- cheaper than the `cargo build
+    /// --release` task #541 replaced, but still minutes inside a command whose contract is
+    /// "write source, do not compile". ~keep
+    #[test]
+    fn swifts_generation_post_build_contains_a_compiling_step_by_default() {
+        let resolved = resolve_post_build_configs(
+            &[Language::Swift],
+            &crate::core::config::ResolvedCrateConfig::default(),
+            CompilePolicy::Allowed,
+        );
+        let (_, build_config) = resolved
+            .first()
+            .expect("swift must resolve a generation-time post-build config");
+        assert_eq!(
+            build_config
+                .post_build
+                .iter()
+                .filter(|step| step.invokes_rust_compiler())
+                .count(),
+            1,
+            "swift's generate config must still carry exactly the one cargo step the \
+             generation-only mode exists to drop: {:?}",
+            build_config.post_build
+        );
+    }
+
+    /// THE FIX, half one: a generation-only run must resolve no compiling step at all -- while
+    /// still keeping `MaterializeSwiftBridge`. Dropping the materialization along with the cargo
+    /// invocation would stop generation copying the swift-bridge trio even on the runs where an
+    /// earlier real build already left one in `OUT_DIR`, which is a regression the consumer never
+    /// asked for. ~keep
+    #[test]
+    fn generation_only_mode_drops_the_compiling_step_and_keeps_materialization() {
+        use crate::core::backend::PostBuildStep;
+
+        let resolved = resolve_post_build_configs(
+            &[Language::Swift],
+            &crate::core::config::ResolvedCrateConfig::default(),
+            CompilePolicy::Skipped,
+        );
+        let (_, build_config) = resolved
+            .first()
+            .expect("swift must still resolve a post-build config once its cargo step is dropped");
+        assert!(
+            !build_config.post_build.iter().any(|step| step.invokes_rust_compiler()),
+            "a generation-only run must invoke no compiler: {:?}",
+            build_config.post_build
+        );
+        assert!(
+            build_config
+                .post_build
+                .iter()
+                .any(|step| matches!(step, PostBuildStep::MaterializeSwiftBridge { .. })),
+            "the non-compiling materialization step must survive the drop: {:?}",
+            build_config.post_build
+        );
+    }
+
+    /// THE FIX, half two, observed end-to-end rather than at the config: the same call that
+    /// fails below on a missing Swift cargo project must succeed when no compile was requested,
+    /// because no `cargo` process is spawned at all. Nothing but the absence of that spawn can
+    /// make this pass -- the temp dir has no `Cargo.toml` anywhere, so a `cargo check` reaching
+    /// it can only error.
+    ///
+    /// Holds `SKIP_COMMANDS_LOCK` for the same reason
+    /// `required_post_build_failure_is_propagated_with_language_context` does: a concurrent test
+    /// setting `ALEF_SKIP_COMMANDS=cargo` would skip the invocation regardless, which would make
+    /// this pass without the fix. ~keep
+    #[tracing_test::traced_test]
+    #[test]
+    fn generation_only_mode_never_spawns_the_swift_compile() {
+        let _skip_guard = crate::test_support::SkipCommandsGuard::set("");
+        let directory = tempfile::tempdir().expect("temporary project");
+
+        run_required_post_builds(
+            &[Language::Swift],
+            &crate::core::config::ResolvedCrateConfig::default(),
+            directory.path(),
+            CompilePolicy::Skipped,
+        )
+        .expect("a generation-only post-build pass must not attempt the swift-bridge compile");
+
+        assert!(
+            logs_contain("skipping 1 compiling post-build step"),
+            "the skip must be announced, not silent -- a consumer whose swift-bridge trio stops \
+             refreshing has to be able to see why"
+        );
+    }
+
+    /// The missing-native-library warning, asked at the level the generation path actually runs
+    /// it. Go's only post-build step is `StageFfiLibrary`, and `alef generate`/`alef all` never
+    /// build the `-ffi` cdylib it stages, so on any unbuilt tree this used to emit one
+    /// unavoidable "run `alef build --release`" warning per FFI-dependent language. It must now
+    /// be silent here while staying a warning for `alef test --e2e` (see
+    /// `ffi_stage_post_build_tests::e2e_staging_still_warns_when_the_native_library_is_missing`,
+    /// the control that proves this is a gate and not a deletion). ~keep
+    #[tracing_test::traced_test]
+    #[test]
+    fn generation_post_build_does_not_warn_about_an_unbuilt_native_library() {
+        let directory = tempfile::tempdir().expect("temporary project");
+
+        run_required_post_builds(
+            &[Language::Go],
+            &crate::core::config::ResolvedCrateConfig::default(),
+            directory.path(),
+            CompilePolicy::Allowed,
+        )
+        .expect("staging nothing must not fail a generation run");
+
+        assert!(
+            !logs_contain("no built FFI shared library found"),
+            "a generation command never asked for a cdylib, so its absence must not be reported \
+             as a missing build"
+        );
+        // ~keep Both halves are load-bearing, and the negative one alone is not enough. The WARN
+        // and the DEBUG that replaced it share the prefix `no built FFI shared library`, so the
+        // absence assertion has to name the warning's own wording (`found for target`) rather
+        // than the shared prefix -- asserting the prefix fails on the fix's own DEBUG line. And
+        // without the positive assertion this test would pass just as well if the staging step
+        // never ran at all: a Go config that resolved no post-build step, or a miss branch never
+        // reached, emits no warning either and is indistinguishable from the gate working.
+        assert!(
+            logs_contain("no built FFI shared library on disk"),
+            "the step must still run and still report the miss -- only its severity changed"
+        );
+    }
+
     #[test]
     fn required_post_build_failure_is_propagated_with_language_context() {
         // Swift's post-build genuinely `cargo build`s the missing project below and must fail
@@ -218,6 +391,7 @@ mod tests {
             &[Language::Swift],
             &crate::core::config::ResolvedCrateConfig::default(),
             directory.path(),
+            CompilePolicy::Allowed,
         )
         .expect_err("missing Swift build project must fail");
 

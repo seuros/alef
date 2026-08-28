@@ -12,14 +12,32 @@ pub(crate) use post_build::{languages_have_post_build_steps, languages_with_post
 /// enforce FFI source/header parity. Keeping these operations together prevents
 /// commands from validating a cbindgen header before its producer runs or from
 /// omitting the final parity gate. ~keep
+///
+/// `compile` is the whole of the generation-only mode (`alef all --skip-compile`,
+/// `alef generate --skip-compile`): this function holds both of the generation path's compiling
+/// steps, so gating them here -- rather than at each producer -- is what makes "generation writes
+/// source, `alef build` compiles" a property of one function instead of a convention. Under
+/// [`crate::core::backend::CompilePolicy::Skipped`] the FFI header is still *checked*, only never rebuilt: a stale
+/// header still fails the run (it describes an ABI the source no longer has, which no flag makes
+/// safe), while a missing one degrades to the warning `check_ffi_header_freshness` already emits
+/// for that case. ~keep
 pub(crate) fn complete_generated_artifacts(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
     base_dir: &std::path::Path,
+    compile: crate::core::backend::CompilePolicy,
 ) -> Result<()> {
-    run_required_post_builds(languages, config, base_dir)?;
+    run_required_post_builds(languages, config, base_dir, compile)?;
     if !languages.contains(&crate::core::config::Language::Ffi) {
         return Ok(());
+    }
+
+    if compile == crate::core::backend::CompilePolicy::Skipped {
+        tracing::warn!(
+            "[ffi] --skip-compile: not building the FFI crate to refresh its cbindgen header; \
+             checking the header already on disk instead"
+        );
+        return crate::cli::pipeline::check_ffi_header_freshness(config, base_dir);
     }
 
     crate::cli::pipeline::ensure_ffi_header_freshness(config, base_dir, || {

@@ -30,7 +30,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             skip_frb,
             strict,
             skip_snippet_validation,
+            skip_compile,
         } => {
+            let compile_policy = if skip_compile {
+                crate::core::backend::CompilePolicy::Skipped
+            } else {
+                crate::core::backend::CompilePolicy::Allowed
+            };
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
                 let updated = if existing.is_empty() {
@@ -388,7 +394,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // this function, covering this failure alongside every other write refusal --
                 // which is what turns "install/enable flutter_rust_bridge_codegen" (misleading;
                 // the tool is present) into "run `alef adopt <path>`" (the actual fix). ~keep
-                if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
+                if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir, compile_policy) {
                     stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
                 }
 

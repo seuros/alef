@@ -173,6 +173,7 @@ fn run_generate(root: &Path) {
             clean: false,
             skip_frb: false,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )
@@ -359,6 +360,7 @@ fn run_all(root: &Path) {
             skip_frb: true,
             strict: false,
             skip_snippet_validation: true,
+            skip_compile: false,
         },
         &context,
     )
@@ -539,6 +541,7 @@ fn run_generate_python(root: &Path) {
             clean: false,
             skip_frb: true,
             strict: false,
+            skip_compile: false,
         },
         &context,
     )

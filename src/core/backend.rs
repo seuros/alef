@@ -204,7 +204,43 @@ pub enum PostBuildStep {
     },
 }
 
+/// Whether a generation run (`alef generate`, `alef all`) is allowed to invoke a compiler while
+/// completing its generated artifacts.
+///
+/// Generation's documented contract is that it writes and post-processes source; compiling is
+/// `alef build`'s job. Two steps on the generation path break that contract anyway, because the
+/// bytes they need only exist as a side effect of a cargo invocation: Swift's post-build has to
+/// run the swift-bridge crate's own `build.rs` before `MaterializeSwiftBridge` can copy the
+/// `SwiftBridgeCore.swift`/`{crate}.swift`/`RustBridgeC.h` trio out of `OUT_DIR`, and the FFI
+/// header gate has to build the `-ffi` crate before cbindgen has written a header to check. Both
+/// are load-bearing, so [`Self::Allowed`] stays the default and no consumer relying on `alef all`
+/// to produce them loses anything by upgrading. [`Self::Skipped`] is the opt-in escape for a
+/// workflow that compiles in a separate task and only wants source written -- it drops exactly
+/// those two steps, logs what it dropped and what will refresh them, and changes nothing else. ~keep
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompilePolicy {
+    /// Run compiling post-build steps (the default for every generation command).
+    Allowed,
+    /// Skip them, leaving the artifacts they derive to a later `alef build`.
+    Skipped,
+}
+
 impl PostBuildStep {
+    /// Whether running this step invokes the Rust compiler on the consumer's crate graph.
+    ///
+    /// `cargo` is the only command any backend puts in a `RunCommand` that compiles anything --
+    /// Dart's `flutter_rust_bridge_codegen` parses source and writes Dart, and every other
+    /// variant is a pure in-process file rewrite, copy, or check. Swift's is the one that
+    /// compiles: `cargo build --release` for `alef build`, and a `cargo check` on the generation
+    /// path, which is cheaper but still walks the consumer's whole dependency graph (measured at
+    /// over 17 minutes on a real workspace) inside a command contractually forbidden from
+    /// compiling. Asking the step rather than matching on the language keeps the question with
+    /// the thing that answers it, so a future backend that adds a cargo step is covered without
+    /// touching the generation path. ~keep
+    pub fn invokes_rust_compiler(&self) -> bool {
+        matches!(self, PostBuildStep::RunCommand { cmd, .. } if *cmd == "cargo")
+    }
+
     /// Paths this step writes directly to disk, outside the ownership-guarded writer
     /// (`cli::pipeline::generate::write::write_files_report`).
     ///
@@ -541,6 +577,67 @@ mod generated_file_tests {
             !file("class X {}\n", false).carries_alef_marker(),
             "scaffold-once files alef does not own must stay unclaimed"
         );
+    }
+}
+
+#[cfg(test)]
+mod invokes_rust_compiler_tests {
+    use super::{PostBuildStep, PostProcessor};
+    use std::path::PathBuf;
+
+    /// The generation path drops exactly the steps this predicate claims, so a false negative
+    /// here re-introduces a multi-minute compile into a command contractually forbidden from
+    /// compiling, and a false positive silently stops a real post-build step from running.
+    /// Table-driven over every variant that could plausibly shell out. ~keep
+    #[test]
+    fn only_a_cargo_run_command_counts_as_invoking_the_compiler() {
+        let cases: Vec<(&str, PostBuildStep, bool)> = vec![
+            (
+                "swift's release build",
+                PostBuildStep::RunCommand {
+                    cmd: "cargo",
+                    args: vec!["build", "--release"],
+                },
+                true,
+            ),
+            (
+                "swift's generate-time check -- still a whole-graph compile",
+                PostBuildStep::RunCommand {
+                    cmd: "cargo",
+                    args: vec!["check"],
+                },
+                true,
+            ),
+            (
+                "dart's frb codegen parses source and writes dart",
+                PostBuildStep::RunCommand {
+                    cmd: "flutter_rust_bridge_codegen",
+                    args: vec!["generate"],
+                },
+                false,
+            ),
+            ("copying a built cdylib", PostBuildStep::StageFfiLibrary, false),
+            (
+                "an in-process file rewrite",
+                PostBuildStep::PostProcessFile {
+                    path: PathBuf::from("lib.dart"),
+                    processor: PostProcessor::DartStripTrailingWhitespace,
+                },
+                false,
+            ),
+            (
+                "copying swift-bridge output out of OUT_DIR",
+                PostBuildStep::MaterializeSwiftBridge {
+                    binding_crate_name: "sample-lib-swift".to_owned(),
+                    package_root: "packages/swift".to_owned(),
+                },
+                false,
+            ),
+        ];
+
+        for (description, step, expected) in cases {
+            assert_eq!(step.invokes_rust_compiler(), expected, "{description}: {step:?}");
+        }
     }
 }
 
