@@ -266,18 +266,67 @@ pub(super) fn gen_enum(
 
     lines.push("}".to_string());
 
-    if let Some((first, first_cfg)) = declared_variants.first() {
+    if !declared_variants.is_empty() {
+        let candidates = default_impl_cfg_cascade(&declared_variants);
         lines.push(String::new());
-        if let Some(cfg) = first_cfg {
-            lines.push(format!("#[cfg({cfg})]"));
-        }
-        lines.push("#[allow(clippy::derivable_impls)]".to_string());
-        lines.push(format!("impl Default for {prefix}{} {{", enum_def.name));
-        lines.push(format!("    fn default() -> Self {{ Self::{} }}", first.name));
-        lines.push("}".to_string());
+        lines.push(
+            crate::backends::napi::template_env::render(
+                "enum_default_impl_cascade.jinja",
+                minijinja::context! {
+                    binding_name => format!("{prefix}{}", enum_def.name),
+                    candidates,
+                },
+            )
+            .trim_end()
+            .to_string(),
+        );
     }
 
     lines.join("\n")
+}
+
+/// Build the mutually-exclusive `#[cfg(...)]` guards for a cascade of single-variant `Default`
+/// impls, one candidate per declared variant in declaration order, so that exactly one impl
+/// compiles under any feature combination that leaves at least one declared variant enabled.
+///
+/// Emitting the whole `impl Default` block under only the FIRST declared variant's own `cfg` (the
+/// previous approach) is wrong the moment that variant's feature is off but a LATER variant's
+/// feature is on: the enum type itself carries no `cfg` of its own (only individual variants do),
+/// so it still exists and still needs a `Default` impl, but the impl vanished along with the first
+/// variant. Reported against a real consumer: an enum with per-variant feature-gated variants fed
+/// a struct's `#[derive(Default)]`, and building with only a later variant's feature enabled left
+/// that struct with no working `Default` bound. ~keep
+///
+/// Each subsequent candidate's guard is `all(<this variant's cfg>, not(any(<all prior
+/// variants' cfgs>)))`, so it only "wins" when every earlier-declared alternative is unavailable --
+/// deterministically preferring the first-declared variant when more than one is enabled, exactly
+/// like the previous single-impl behavior did in the common case where the first variant's feature
+/// is on. A declared variant with no `cfg` at all (unconditionally present) always satisfies its
+/// own guard once reached, so it terminates the cascade: nothing declared after it can ever be
+/// needed as a fallback. ~keep
+fn default_impl_cfg_cascade(declared_variants: &[(&EnumVariant, Option<String>)]) -> Vec<minijinja::Value> {
+    let mut candidates = Vec::new();
+    let mut prior_cfgs: Vec<String> = Vec::new();
+    for (variant, cfg) in declared_variants {
+        let candidate_cfg = match cfg {
+            None if prior_cfgs.is_empty() => None,
+            None => Some(format!("not(any({}))", prior_cfgs.join(", "))),
+            Some(c) if prior_cfgs.is_empty() => Some(c.clone()),
+            Some(c) => Some(format!("all({c}, not(any({})))", prior_cfgs.join(", "))),
+        };
+        candidates.push(minijinja::context! {
+            variant_name => variant.name.clone(),
+            cfg => candidate_cfg,
+        });
+        let is_unconditional = cfg.is_none();
+        if let Some(c) = cfg {
+            prior_cfgs.push(c.clone());
+        }
+        if is_unconditional {
+            break;
+        }
+    }
+    candidates
 }
 
 /// Generate an untagged data enum as a thin wrapper around `serde_json::Value`.
@@ -583,3 +632,6 @@ pub(super) fn tagged_enum_binding_struct_fields<'a>(
 #[cfg(test)]
 #[allow(clippy::print_stderr)] // test-only debug output ~keep
 mod tests;
+
+#[cfg(test)]
+mod default_impl_cfg_tests;

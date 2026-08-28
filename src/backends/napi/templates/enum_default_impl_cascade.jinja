@@ -1,0 +1,9 @@
+{% for candidate in candidates %}
+{% if candidate.cfg %}
+#[cfg({{ candidate.cfg }})]
+{% endif %}
+#[allow(clippy::derivable_impls)]
+impl Default for {{ binding_name }} {
+    fn default() -> Self { Self::{{ candidate.variant_name }} }
+}
+{% endfor %}
