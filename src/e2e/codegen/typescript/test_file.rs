@@ -43,6 +43,8 @@ mod visitor;
 mod void_not_error_call_tests;
 mod wasm;
 #[cfg(test)]
+mod wasm_enum_import_tests;
+#[cfg(test)]
 mod wasm_enum_member_agreement_tests;
 #[cfg(test)]
 mod wasm_optional_chain_tests;

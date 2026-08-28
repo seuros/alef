@@ -200,6 +200,25 @@ fn rename_napi_serde_tags_recursive(
     }
 }
 
+/// The `EnumType.Member` expression the generated body will contain, recorded as it is produced.
+///
+/// Producing the reference and recording the identifier in the same step is the whole point: the
+/// import block does not re-derive which enums a test file names, it imports exactly the strings
+/// this function handed back, so the imported symbol and the referenced symbol are the same string
+/// by construction — binding prefix included. A separately-derived import list is how a fixture
+/// ended up emitting `WasmOutputFormat.Markdown` against an import line that carried either
+/// nothing or the unprefixed `OutputFormat`, both of which fail as
+/// `ReferenceError: WasmOutputFormat is not defined`. Every site in this module that emits an
+/// enum member must go through here rather than formatting the reference itself. ~keep
+fn enum_member_reference(
+    enum_type: &str,
+    member: &str,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
+) -> String {
+    referenced_enums.insert(enum_type.to_string());
+    format!("{enum_type}.{member}")
+}
+
 /// Convert a JS numeric literal expression to a BigInt-compatible literal
 /// (`123n`, `-7n`) for wasm-bindgen `u64`/`i64` setters which reject Number.
 /// Non-integer or non-numeric expressions are wrapped in `BigInt(...)` so the
@@ -416,9 +435,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
-                        referenced_enums.insert(enum_type.clone());
                         let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, s);
-                        format!("{enum_type}.{member}")
+                        enum_member_reference(enum_type, &member, referenced_enums)
                     } else {
                         json_to_js(&preprocessed)
                     }
@@ -573,7 +591,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         {
             let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, variant);
             let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
-            stmts.push(format!("{var}.{camel_key} = {enum_type}.{member};"));
+            let reference = enum_member_reference(&enum_type, &member, referenced_enums);
+            stmts.push(format!("{var}.{camel_key} = {reference};"));
         } else if let Some(enum_type) = resolve_enum_type(enum_fields, Some(ir_owner_name), key, &camel_key)
             && !wasm_enum_bridged_as_raw_value(enum_type, enums, wasm_type_prefix)
         {
@@ -590,7 +609,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
             if let serde_json::Value::String(s) = val {
                 let member = declared_enum_member_for_prefixed(&enum_type, enums, wasm_type_prefix, s);
-                stmts.push(format!("{var}.{camel_key} = {enum_type}.{member};"));
+                let reference = enum_member_reference(&enum_type, &member, referenced_enums);
+                stmts.push(format!("{var}.{camel_key} = {reference};"));
             } else {
                 stmts.push(format!("{var}.{camel_key} = {};", json_to_js(val)));
             }
@@ -658,17 +678,15 @@ fn node_value_expression(
         && enums.iter().any(|definition| definition.name == *type_name)
         && let Some(variant) = value.as_str()
     {
-        referenced_enums.insert(type_name.clone());
         let member = declared_enum_member_for_prefixed(type_name, enums, "", variant);
-        return format!("{type_name}.{member}");
+        return enum_member_reference(type_name, &member, referenced_enums);
     }
     let camel_field = snake_to_camel(field);
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
-        referenced_enums.insert(enum_type.clone());
         let member = declared_enum_member_for_prefixed(enum_type, enums, "", variant);
-        return format!("{enum_type}.{member}");
+        return enum_member_reference(enum_type, &member, referenced_enums);
     }
     match value {
         serde_json::Value::Object(object) => {

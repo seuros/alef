@@ -67,6 +67,28 @@ fn handle_config_classes(
     used_types
 }
 
+/// The identifiers an already-built `import { .. } from ".."` line brings into scope.
+///
+/// Returns an empty set for an empty or unrecognised line, so a caller that finds nothing simply
+/// re-adds what it needs — a duplicate import name is a compile error the generated file would
+/// surface immediately, whereas a missing one only fails at run time.
+fn imported_identifiers(import_line: &str) -> std::collections::BTreeSet<String> {
+    let Some(open) = import_line.find("import { ") else {
+        return std::collections::BTreeSet::new();
+    };
+    let rest = &import_line[open + "import { ".len()..];
+    let Some(close) = rest.rfind(" } from") else {
+        return std::collections::BTreeSet::new();
+    };
+    rest[..close]
+        .split(", ")
+        .map(|entry| {
+            let entry = entry.trim();
+            entry.strip_prefix("type ").unwrap_or(entry).to_string()
+        })
+        .collect()
+}
+
 /// Render a complete test file for the given category.
 ///
 /// `lang` is the language key used for per-fixture call override resolution
@@ -181,7 +203,6 @@ pub fn render_test_file(
     // per-call override is absent.
     let mut all_options_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut all_nested_types: std::collections::HashMap<String, String> = nested_types.clone();
-    let mut all_enum_fields: std::collections::HashMap<String, String> = enum_fields.clone();
     let mut all_result_enum_classes: std::collections::BTreeSet<String> =
         result_enum_fields.values().cloned().collect();
     if let Some(opts) = options_type {
@@ -201,9 +222,6 @@ pub fn render_test_file(
             }
             for (k, v) in &o.nested_types {
                 all_nested_types.entry(k.clone()).or_insert_with(|| v.clone());
-            }
-            for (k, v) in &o.enum_fields {
-                all_enum_fields.entry(k.clone()).or_insert_with(|| v.clone());
             }
             for v in o.result_enum_fields.values() {
                 all_result_enum_classes.insert(v.clone());
@@ -447,15 +465,8 @@ pub fn render_test_file(
                         imports.push(nested_type.clone());
                     }
                 }
-                // Also import enum types referenced in this test file
-                let mut enum_field_values: Vec<&String> = all_enum_fields.values().collect();
-                enum_field_values.sort();
-                for enum_type in enum_field_values {
-                    let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
-                    if !imports.contains(&enum_type) {
-                        imports.push(enum_type);
-                    }
-                }
+                // Enum classes are deliberately absent from this branch: they come from
+                // `referenced_enums` below, which the builder fills as it emits. ~keep
             }
         }
 
@@ -486,11 +497,18 @@ pub fn render_test_file(
             }
         }
 
-        if lang == "node" {
-            for enum_type in &referenced_enums {
-                if !imports.contains(enum_type) {
-                    imports.push(enum_type.clone());
-                }
+        // Every enum class the rendered bodies above actually named, as they named it.
+        //
+        // `referenced_enums` is filled by `builders::enum_member_reference` at the moment it
+        // formats an `EnumType.Member` expression, so this is not a second opinion about which
+        // enums a fixture touches — it is the emitter's own record. Deriving the list instead
+        // from the `enum_fields` config (as the wasm branch above used to) was wrong twice over:
+        // it missed a field whose enum type comes from the IR with no hand-written entry, and it
+        // imported the bare IR name where the body emits the `wasm_type_prefix`-ed one. Both
+        // failures look identical at run time — `ReferenceError: WasmFoo is not defined`. ~keep
+        for enum_type in &referenced_enums {
+            if !imports.contains(enum_type) {
+                imports.push(enum_type.clone());
             }
         }
 
@@ -507,7 +525,7 @@ pub fn render_test_file(
     // used in handle config construction in setup lines. Example: WasmAuthConfig
     // is used when building WasmCrawlConfig fields, even if there's no direct
     // json_object arg in the fixture input.
-    if lang == "wasm" && !all_nested_types.is_empty() {
+    if lang == "wasm" && (!all_nested_types.is_empty() || !referenced_enums.is_empty()) {
         let mut additional_imports: Vec<String> = Vec::new();
         // Sort values for deterministic import ordering — HashMap iteration
         // order is non-deterministic and would thrash git on each regen.
@@ -518,11 +536,14 @@ pub fn render_test_file(
                 additional_imports.push(nested_type.clone());
             }
         }
-        // Also import enum types that might be used in handle config
-        let mut enum_field_values: Vec<&String> = all_enum_fields.values().collect();
-        enum_field_values.sort();
-        for enum_type in enum_field_values {
-            if !import_modules.contains(enum_type) && !additional_imports.contains(enum_type) {
+        // The enum classes the rendered bodies named — again the emitter's own record, not a
+        // re-derivation from `enum_fields` (see the `referenced_enums` loop above). Membership is
+        // tested against the parsed import list rather than `import_modules.contains`: a
+        // substring test reports `WasmKind` as already imported when only `WasmKindDetail` is,
+        // and a silently-dropped enum import is exactly the failure this is here to prevent. ~keep
+        let already_imported = imported_identifiers(&import_modules);
+        for enum_type in &referenced_enums {
+            if !already_imported.contains(enum_type.as_str()) && !additional_imports.contains(enum_type) {
                 additional_imports.push(enum_type.clone());
             }
         }
