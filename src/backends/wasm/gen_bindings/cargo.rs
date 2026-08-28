@@ -232,6 +232,7 @@ ignored = [
     "js-sys",
     "wasm-bindgen-futures",
     "serde",
+    "serde-wasm-bindgen",
     "serde_json",
 {tracing_ignored_line}]
 

@@ -932,3 +932,53 @@ fn core_dep_path_matches_the_layout_the_manifest_is_written_into() {
         "the core dep path must be derived from the emitted layout, got:\n{cargo_toml}"
     );
 }
+
+/// Every dependency the wasm manifest declares must either be referenced by the generated Rust
+/// or be listed in `[package.metadata.cargo-machete].ignored`.
+///
+/// `cargo-machete` runs as a pre-commit stage in consumer repos, so a dependency this emitter
+/// declares unconditionally while only *sometimes* generating a reference to it blocks every
+/// commit in a repo whose surface never triggers that reference. The manifest is alef-generated,
+/// which leaves the consumer with nothing to fix on their side. `serde-wasm-bindgen` was exactly
+/// that case: emitted for every wasm crate, referenced only when a field, trait bridge or return
+/// value actually bridges through it. Asserting the general rule rather than that one name keeps
+/// the next unconditional dependency from reintroducing it. ~keep
+#[test]
+fn every_unreferenced_wasm_dependency_is_declared_machete_ignored() {
+    let config = make_config();
+    let files = WasmBackend.generate_bindings(&empty_api(), &config).unwrap();
+    let generated_rust: String = files
+        .iter()
+        .filter(|f| f.path.extension().is_some_and(|e| e == "rs"))
+        .map(|f| f.content.as_str())
+        .collect();
+
+    let manifest: toml::Value =
+        toml::from_str(&gen_cargo_toml(&empty_api(), &config)).expect("manifest must be valid TOML");
+    let ignored: std::collections::HashSet<&str> = manifest["package"]["metadata"]["cargo-machete"]["ignored"]
+        .as_array()
+        .expect("cargo-machete.ignored must be an array")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    let dependencies = manifest["dependencies"]
+        .as_table()
+        .expect("[dependencies] must be a table");
+
+    // A `path` dependency is the crate's own core, which the generated code always calls into and
+    // whose key alef derives rather than fixes; every registry name has to earn its place either
+    // by appearing in the emitted Rust or by being ignored. ~keep
+    let unjustified: Vec<&str> = dependencies
+        .iter()
+        .filter(|(_, spec)| spec.get("path").is_none())
+        .map(|(name, _)| name.as_str())
+        .filter(|name| !ignored.contains(name))
+        .filter(|name| !generated_rust.contains(&name.replace('-', "_")))
+        .collect();
+
+    assert!(
+        unjustified.is_empty(),
+        "cargo-machete will flag these declared-but-unreferenced dependencies, and the consumer \
+         cannot fix an alef-generated manifest: {unjustified:?}"
+    );
+}
