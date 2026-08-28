@@ -7,7 +7,6 @@ expression: "&file.content"
 // This file contains generated FFI glue for trait bridge registration.
 
 import Foundation
-import RustBridge
 
 /// Protocol for outbound `ImageProcessor` implementations.
 /// Conform your Swift class or struct to this protocol to implement

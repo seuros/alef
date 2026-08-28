@@ -24,9 +24,16 @@ use crate::e2e::fixture::Fixture;
 /// the same spelling `kotlin/http.rs` already emits, fully qualified so no import is needed.
 /// `kotlin_android` shares this renderer and its generated project is JUnit 5 too, so the same
 /// construct covers both.
-pub(super) fn refuse_inert_example(out: &mut String, assertions_start: usize, fixture: &Fixture) {
+///
+/// ~keep `language` is threaded in rather than spelled `"kotlin"` here because this renderer
+/// serves two distinct ledger languages. `inert_verdict` reads the skip ledger back through
+/// `peek_skip_records`, which filters on an exact language match, so this argument must be the
+/// same string `render_test_method` gave `fail_on_unavailable_field_markers` and
+/// `fail_on_unsupported_assertion_type_markers` for the same body — otherwise the verdict sees
+/// zero markers and misclassifies a fully-skipped example as `RenderedNothing`.
+pub(super) fn refuse_inert_example(out: &mut String, assertions_start: usize, fixture: &Fixture, language: &str) {
     let Some(refusal) =
-        inert_example::inert_verdict(&out[assertions_start..], "kotlin", &fixture.id, &fixture.assertions)
+        inert_example::inert_verdict(&out[assertions_start..], language, &fixture.id, &fixture.assertions)
     else {
         return;
     };

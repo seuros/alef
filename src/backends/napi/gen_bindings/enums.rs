@@ -100,14 +100,27 @@ fn napi_string_enum_case(enum_def: &EnumDef) -> Option<&'static str> {
     })
 }
 
-/// Runtime string values a `#[napi(string_enum)]` accepts, in declaration order.
+/// The variants a `#[napi(string_enum)]` wrapper actually declares, paired with the runtime
+/// string value each one accepts, in declaration order.
 ///
 /// `None` when [`gen_enum`] does not emit the enum as a string enum — tagged and untagged data
 /// enums become objects and value wrappers instead, and have no set of string literals.
 ///
-/// Mirrors [`gen_enum`]: `#[napi(value = "...")]` from `#[serde(rename)]` wins per variant,
-/// otherwise napi applies the enum-wide case to the variant name.
-pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
+/// Mirrors [`gen_enum`] on both axes. The value: `#[napi(value = "...")]` from `#[serde(rename)]`
+/// wins per variant, otherwise napi applies the enum-wide case to the variant name. The
+/// membership: variants are filtered through `codegen::conversions::enum_variant_declaration`,
+/// the SAME authority `gen_enum` consults, so a foreign cfg-gated variant this binding's
+/// configured feature set proves unreachable — one `gen_enum` omits from the emitted Rust enum
+/// body entirely — is never advertised on any TypeScript surface either. Passing
+/// `configured_features: None` reproduces the conservative pre-feature-analysis behavior (keep
+/// every variant). ~keep alef's public `index.d.ts` overlay and the `ts_type` attribute both
+/// declared such a variant after `gen_enum` learned to drop it, so a consumer could write a
+/// literal that type-checked cleanly and could never exist at runtime.
+pub(super) fn declared_string_enum_variants<'a>(
+    enum_def: &'a EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> Option<Vec<(&'a EnumVariant, String)>> {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     // Internal tagging is always an object, even for all-unit variants — mirrors `gen_enum`'s
     // `is_tagged_data_enum` gate. (~keep)
@@ -125,12 +138,33 @@ pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
         enum_def
             .variants
             .iter()
-            .map(|variant| match variant.serde_rename.as_deref() {
-                Some(rename) => rename.to_string(),
-                None => apply_napi_case(&variant.name, case),
+            .filter(|variant| {
+                !matches!(
+                    crate::codegen::conversions::enum_variant_declaration(variant, is_host_enum, configured_features),
+                    crate::codegen::conversions::VariantDeclaration::Drop
+                )
+            })
+            .map(|variant| {
+                let value = match variant.serde_rename.as_deref() {
+                    Some(rename) => rename.to_string(),
+                    None => apply_napi_case(&variant.name, case),
+                };
+                (variant, value)
             })
             .collect(),
     )
+}
+
+/// Runtime string values a `#[napi(string_enum)]` accepts, in declaration order.
+///
+/// Thin projection of [`declared_string_enum_variants`] for callers that need only the literals.
+pub(super) fn string_enum_js_values(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> Option<Vec<String>> {
+    declared_string_enum_variants(enum_def, is_host_enum, configured_features)
+        .map(|declared| declared.into_iter().map(|(_, value)| value).collect())
 }
 
 /// Applies the same case transform `napi-derive-backend` applies to a `#[napi(string_enum)]`

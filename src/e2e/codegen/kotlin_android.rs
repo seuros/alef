@@ -5,6 +5,8 @@
 //! without requiring an Android emulator — the tests run directly on the host JVM against
 //! the shared library.
 
+#[cfg(test)]
+mod assertion_guard_tests;
 mod enum_fixtures;
 mod gradle;
 #[cfg(test)]

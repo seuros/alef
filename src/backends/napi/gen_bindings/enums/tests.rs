@@ -614,7 +614,7 @@ fn string_enum_js_values_matches_napi_runtime_wire_value_for_digit_boundary_vari
         ..Default::default()
     };
 
-    let values = string_enum_js_values(&enum_def).expect("plain string enum must yield wire values");
+    let values = string_enum_js_values(&enum_def, true, None).expect("plain string enum must yield wire values");
 
     assert_eq!(
         values,

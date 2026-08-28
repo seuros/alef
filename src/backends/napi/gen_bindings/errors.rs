@@ -31,6 +31,8 @@ pub(super) fn gen_dts(
     streaming_item_types: &ahash::AHashMap<String, String>,
     default_types: &ahash::AHashSet<String>,
     adapter_bodies: &crate::adapters::AdapterBodies,
+    core_import: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
 ) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
     let mut lines: Vec<String> = header.lines().map(|l| l.to_string()).collect();
@@ -292,6 +294,10 @@ pub(super) fn gen_dts(
                 // variant is a unit variant (`{"kind":"A"}`), so the gate must not require a
                 // data-bearing variant. (~keep)
                 let is_data_enum = e.serde_tag.is_some();
+                // Same host/foreign verdict `enums::gen_enum` reaches for the emitted Rust enum,
+                // from the same authority, so the overlay and the wrapper agree on which crate
+                // owns a cfg-gated variant's feature. ~keep
+                let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &e.rust_path);
                 let ts_name = node_type_name(&e.name);
                 lines.extend(format_jsdoc(&e.doc, ""));
                 if is_data_enum && e.serde_content.is_some() {
@@ -380,24 +386,31 @@ pub(super) fn gen_dts(
                     // runtime value comes from napi-derive-backend's own `convert_case`-based
                     // case transform — a different algorithm that disagrees with serde's for
                     // identifiers with a letter-to-digit boundary (`Bm25` -> serde's helper gives
-                    // `"bm25"`, napi's actual runtime value is `"bm_25"`). `string_enum_js_values`
-                    // (`enums.rs`) is the canonical derivation of that napi-side value, so ask it
-                    // instead of re-deriving the wire string here. Fall back to the serde name
-                    // only for enum shapes `string_enum_js_values` declines to classify as a
-                    // string enum, preserving prior behavior for those. (~keep)
-                    let napi_values = enums::string_enum_js_values(e);
-                    for (index, variant) in e.variants.iter().enumerate() {
-                        let value = napi_values
-                            .as_ref()
-                            .and_then(|values| values.get(index))
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                wire_variant_value(
+                    // `"bm25"`, napi's actual runtime value is `"bm_25"`).
+                    // `declared_string_enum_variants` (`enums.rs`) is the canonical derivation of
+                    // both that napi-side value AND of which variants the `#[napi(string_enum)]`
+                    // wrapper actually declares, so ask it instead of re-deriving either here.
+                    // Asking it for membership too is what keeps this overlay from advertising a
+                    // foreign cfg-gated variant `gen_enum` proved unreachable and omitted from the
+                    // emitted Rust enum — a value a consumer could name in TypeScript and never
+                    // construct at runtime. Fall back to the serde name over every variant only
+                    // for enum shapes it declines to classify as a string enum, preserving prior
+                    // behavior for those. (~keep)
+                    let declared = enums::declared_string_enum_variants(e, is_host_enum, configured_features);
+                    let members: Vec<(&EnumVariant, String)> = declared.unwrap_or_else(|| {
+                        e.variants
+                            .iter()
+                            .map(|variant| {
+                                let value = wire_variant_value(
                                     &variant.name,
                                     variant.serde_rename.as_deref(),
                                     e.serde_rename_all.as_deref(),
-                                )
-                            });
+                                );
+                                (variant, value)
+                            })
+                            .collect()
+                    });
+                    for (variant, value) in members {
                         lines.extend(format_jsdoc(&variant.doc, "  "));
                         lines.push(format!("  {} = \"{}\",", variant.name, value));
                     }

@@ -1,7 +1,7 @@
 use crate::backends::napi::gen_bindings::errors;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{
-    AdapterPattern, NodeCapsuleTypeConfig, OutputLayout, ResolvedCrateConfig, resolve_output_dir,
+    AdapterPattern, Language, NodeCapsuleTypeConfig, OutputLayout, ResolvedCrateConfig, resolve_output_dir,
 };
 use crate::core::ir::ApiSurface;
 use std::collections::HashMap;
@@ -34,7 +34,14 @@ pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
         .filter(|t| t.has_default)
         .map(|t| t.name.clone())
         .collect();
-    let adapter_bodies = crate::adapters::build_adapter_bodies(config, crate::core::config::Language::Node)?;
+    let adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::Node)?;
+    // The overlay must declare exactly the variants `gen_bindings`'s emitted Rust enum declares,
+    // so it is given the same two inputs that emitter resolves them from -- `gen_enum` and
+    // `gen_dts` then reach one verdict from one authority instead of two independent readings of
+    // the IR. See `codegen::conversions::enum_variant_declaration`. ~keep
+    let core_import = config.core_import_name();
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Node);
+    let configured_features: std::collections::HashSet<&str> = enabled_features.iter().map(String::as_str).collect();
     let content = errors::gen_dts(
         api,
         &prefix,
@@ -44,6 +51,8 @@ pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
         &streaming_item_types,
         &default_types,
         &adapter_bodies,
+        &core_import,
+        Some(&configured_features),
     );
     let src_dir = resolve_output_dir(config.output_paths.get("node"), &config.name, "crates/{name}-node/src/");
 

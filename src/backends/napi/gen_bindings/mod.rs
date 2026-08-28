@@ -16,6 +16,8 @@ pub mod types;
 mod cfg_variant_e2e_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ts_surface_cfg_variant_tests;
 
 use crate::backends::napi::type_map::NapiMapper;
 use crate::codegen::builder::RustFileBuilder;
@@ -358,6 +360,7 @@ impl Backend for NapiBackend {
                     &api.enums,
                     &core_import,
                     &core_to_binding_for_deserialize,
+                    Some(&configured_features_set),
                 ));
                 // Emit impl methods as standalone #[napi] free functions.
                 // #[napi(object)] structs cannot have impl blocks, so each method becomes a

@@ -407,7 +407,7 @@ pub(super) fn render_test_method(
             let _ = writeln!(out, "            {call_expr}");
             let _ = writeln!(out, "            client.close()");
             let _ = writeln!(out, "        }}");
-            crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "kotlin");
+            crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", lang);
             // Trailing `Unit` so the runBlocking { ... } lambda's final
             // expression is Unit (not the Exception returned by assertFailsWith).
             // The enclosing `fun ... = runBlocking { ... }` then infers Unit
@@ -451,16 +451,12 @@ pub(super) fn render_test_method(
         }
         crate::e2e::codegen::fail_on_unavailable_field_markers(
             &out[assertions_start..],
-            "kotlin",
+            lang,
             &fixture.id,
             &fixture.assertions,
         );
-        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(
-            &out[assertions_start..],
-            "kotlin",
-            &fixture.id,
-        );
-        refuse_inert_example(out, assertions_start, fixture);
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], lang, &fixture.id);
+        refuse_inert_example(out, assertions_start, fixture, lang);
         let _ = writeln!(out, "        client.close()");
         let _ = writeln!(out, "    }}");
         return Ok(());
@@ -479,7 +475,7 @@ pub(super) fn render_test_method(
         }
         let _ = writeln!(out, "            {call_receiver}.{function_name}({args_str})");
         let _ = writeln!(out, "        }}");
-        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "kotlin");
+        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", lang);
         // Trailing Unit — see comment in the client-factory branch above.
         let _ = writeln!(out, "        Unit");
         let _ = writeln!(out, "    }}");
@@ -517,14 +513,14 @@ pub(super) fn render_test_method(
             not_error_may_assert_presence,
         );
     }
-    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "kotlin", &fixture.id);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], lang, &fixture.id);
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &out[assertions_start..],
-        "kotlin",
+        lang,
         &fixture.id,
         &fixture.assertions,
     );
-    refuse_inert_example(out, assertions_start, fixture);
+    refuse_inert_example(out, assertions_start, fixture, lang);
 
     let _ = writeln!(out, "    }}");
     Ok(())

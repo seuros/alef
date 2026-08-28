@@ -1,5 +1,9 @@
         do {
+{% if binds_result %}
             let result = try self.bridge.{{ method_name }}({{ call_args }})
+{% else %}
+            try self.bridge.{{ method_name }}({{ call_args }})
+{% endif %}
 {{ success_body }}        } catch {
             return marshal_error_result(error)
         }

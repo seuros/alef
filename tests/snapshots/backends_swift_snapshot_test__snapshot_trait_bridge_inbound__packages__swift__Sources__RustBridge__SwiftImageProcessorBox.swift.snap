@@ -7,7 +7,6 @@ expression: "&file.content"
 // This file contains generated FFI glue for plugin Box classes.
 
 import Foundation
-import RustBridge
 
 /// Opaque box class retained by Rust via `Unmanaged<SwiftImageProcessorBox>.passRetained`.
 /// Wraps `any SwiftImageProcessorBridge` and exposes `alef_*` FFI shim methods.

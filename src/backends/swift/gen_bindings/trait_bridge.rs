@@ -183,6 +183,7 @@ fn gen_single_trait_bridge_file(
                     method_name => &method_camel,
                     call_args => &call_args_str,
                     success_body => success_body,
+                    binds_result => adapter_binds_result(&method.return_type),
                 },
             )
         } else {
@@ -192,6 +193,7 @@ fn gen_single_trait_bridge_file(
                 minijinja::context! {
                     method_name => &method_camel,
                     call_args => &call_args_str,
+                    binds_result => adapter_binds_result(&method.return_type),
                 },
             )
         };
@@ -220,6 +222,17 @@ fn gen_single_trait_bridge_file(
             adapter_methods => adapter_methods,
         },
     )
+}
+
+/// Whether the adapter body binds the bridged call to `result`.
+///
+/// A `Void`-returning bridge method must be called as a bare statement: binding it declares
+/// `result` as `()`, which Swift reports twice -- an unexpected `Void` inference and an unused
+/// variable -- and a warnings-as-errors build rejects. This is the same question
+/// [`trait_adapter_success_body`] answers when it marshals `Empty()` for `TypeRef::Unit` without
+/// ever reading `result`, so both sites must keep deriving it from this one predicate. ~keep
+fn adapter_binds_result(return_type: &TypeRef) -> bool {
+    !matches!(return_type, TypeRef::Unit)
 }
 
 fn trait_adapter_success_body(return_type: &TypeRef, bridge_exclude_types: &HashSet<String>) -> String {
@@ -503,3 +516,6 @@ fn trait_bridge_pascal_name(s: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod void_binding_tests;

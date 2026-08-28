@@ -128,6 +128,8 @@ fn dts_declaration_and_reference_names_agree_for_every_named_type() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     let cases = [
@@ -244,6 +246,8 @@ fn adjacent_enum_dts_declares_runtime_namespace() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
     assert!(dts.contains("| { type: 'custom'; output: string }"));
     assert!(dts.contains("export declare const Action: {"));
@@ -299,6 +303,8 @@ fn internally_tagged_newtype_variants_declare_discriminated_union() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert_eq!(
@@ -377,6 +383,8 @@ fn internally_tagged_struct_variants_declare_discriminated_union() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert_eq!(
@@ -435,6 +443,8 @@ fn internally_tagged_all_unit_variants_declare_object_not_string_enum() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(
@@ -478,6 +488,8 @@ fn plain_string_enum_dts_uses_napis_own_case_algorithm_not_serdes() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(
@@ -542,6 +554,8 @@ fn untagged_enum_declares_bare_union_of_variant_shapes() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(
@@ -615,6 +629,8 @@ fn gen_dts_includes_service_entrypoint_bridge_functions() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
     assert!(
         dts.contains("export declare function appIntoRouter"),
@@ -677,6 +693,8 @@ fn opaque_by_value_param_without_adapter_is_not_declared_in_dts() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(
@@ -718,6 +736,8 @@ fn sanitized_static_method_without_adapter_is_not_declared_in_dts() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(
@@ -767,6 +787,8 @@ fn delegatable_methods_are_still_declared_in_dts() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        "",
+        None,
     );
 
     assert!(

@@ -19,6 +19,7 @@ pub(crate) mod dto;
 mod enums;
 mod errors;
 mod forwarders;
+mod module_imports;
 pub(crate) mod opaque_handles;
 mod overloads;
 pub mod plugin_marshal;
@@ -205,11 +206,11 @@ impl Backend for SwiftBackend {
 
         if let Some(swift_config) = &config.swift {
             for capsule_cfg in swift_config.capsule_types.values() {
-                if let Some(module_name) = capsule_cfg.host_type.split('.').next()
-                    && !module_name.is_empty()
-                    && !module_name.contains(['*', '?', '&'])
+                if let Some(host_module) = capsule_cfg.host_type.split('.').next()
+                    && !host_module.is_empty()
+                    && !host_module.contains(['*', '?', '&'])
                 {
-                    imports.insert(format!("import {module_name}"));
+                    imports.insert(format!("import {host_module}"));
                 }
             }
         }
@@ -670,7 +671,7 @@ impl Backend for SwiftBackend {
             });
         }
 
-        Ok(files)
+        Ok(module_imports::strip_self_module_imports(files))
     }
 
     fn generate_service_api(
@@ -682,7 +683,7 @@ impl Backend for SwiftBackend {
         // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
         let sorted_api = crate::backends::ir_order::with_sorted_items(api);
         let api = &sorted_api;
-        service_api::generate(api, config)
+        service_api::generate(api, config).map(module_imports::strip_self_module_imports)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

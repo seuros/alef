@@ -39,6 +39,7 @@ fn js_name_ignores_serde_rename_but_wire_rename_is_preserved() {
         &[],
         "sample_core",
         &ahash::AHashSet::default(),
+        None,
     );
 
     assert!(
@@ -107,6 +108,7 @@ fn delegates_deserialize_for_sound_two_field_pair_in_convertible_set() {
         &[],
         "sample_core",
         &convertible,
+        None,
     );
 
     assert!(
@@ -151,6 +153,7 @@ fn keeps_derive_when_type_not_confirmed_in_convertible_set() {
         &[],
         "sample_core",
         &ahash::AHashSet::default(),
+        None,
     );
 
     assert!(derive_line(&out).contains("serde::Deserialize"));
@@ -187,6 +190,7 @@ fn keeps_derive_when_unsound_opaque_field() {
         &[],
         "sample_core",
         &convertible,
+        None,
     );
 
     // Falls back to the derived, field-by-field Deserialize -- the existing

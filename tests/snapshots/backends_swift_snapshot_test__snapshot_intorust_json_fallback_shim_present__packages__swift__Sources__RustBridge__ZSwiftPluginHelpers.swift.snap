@@ -6,7 +6,6 @@ expression: "&file.content"
 // swift-format-ignore-file
 
 import Foundation
-import RustBridge
 
 // MARK: - JSON Envelope
 
