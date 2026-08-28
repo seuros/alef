@@ -16,7 +16,7 @@ tasks.register("buildAndroidJniLibs", Exec::class) {
     val androidAbis = listOf({{ abi_literals }})
     val jniLibsRoot = layout.projectDirectory.dir("src/main/jniLibs").asFile
     val expectedJniLib = "lib{{ jni_lib_name }}.so"
-    if (project.properties["alef.skipAndroidJni"] != "true") {
+    if (project.providers.gradleProperty("alef.skipAndroidJni").orNull != "true") {
         val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
         val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) { it.parentFile }
             .map { it.resolve("{{ jni_manifest_workspace_path }}") }

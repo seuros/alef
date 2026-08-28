@@ -316,3 +316,97 @@ fn sealed_class_field_annotation(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{CoreWrapper, TypeDef};
+
+    fn make_field(name: &str, ty: TypeRef, serde_rename: Option<&str>) -> crate::core::ir::FieldDef {
+        crate::core::ir::FieldDef {
+            version: Default::default(),
+            name: name.to_string(),
+            ty,
+            optional: false,
+            default: None,
+            doc: String::new(),
+            sanitized: false,
+            is_boxed: false,
+            type_rust_path: None,
+            cfg: None,
+            typed_default: None,
+            core_wrapper: CoreWrapper::None,
+            vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
+            serde_rename: serde_rename.map(str::to_string),
+            serde_flatten: false,
+            serde_with: None,
+            serde_skip_serializing_if: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            original_type: None,
+        }
+    }
+
+    /// Regression: Kotlin now warns that an annotation on a primary-constructor `val` with no
+    /// explicit use-site target "currently applies to a value parameter only [and] in a future
+    /// release it will apply to the property/field" and suggests `@param:` or `@field:`. Jackson
+    /// creator-based deserialization (via jackson-module-kotlin) needs `@JsonProperty` on the
+    /// constructor parameter, which is exactly today's implicit behavior — so the fix locks that
+    /// in with an explicit `@param:` rather than silently also targeting the backing field.
+    #[test]
+    fn json_property_annotation_targets_the_constructor_parameter_explicitly() {
+        let timeout_field = make_field(
+            "timeout_ms",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::U64),
+            Some("timeoutMs"),
+        );
+        let ty = TypeDef {
+            name: "ClientConfig".to_string(),
+            rust_path: "crate::ClientConfig".to_string(),
+            fields: vec![timeout_field],
+            has_serde: true,
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        let mut imports = std::collections::BTreeSet::new();
+        emit_type_with_imports(
+            &ty,
+            &mut out,
+            &mut imports,
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            None,
+        );
+
+        assert!(
+            out.contains("@param:com.fasterxml.jackson.annotation.JsonProperty(\"timeoutMs\")"),
+            "renamed field must carry an explicit @param: use-site target: {out}"
+        );
+        assert!(
+            !out.contains("\n    @com.fasterxml.jackson.annotation.JsonProperty("),
+            "the annotation must not be emitted with no explicit use-site target: {out}"
+        );
+    }
+
+    /// Regression: the value-method JNI mapper (`VALUE_METHOD_MAPPER`) is Jackson-configured
+    /// the same way as the module facade's mapper and carries the same deprecated
+    /// `setSerializationInclusion(...)` call (Jackson deprecated it since 2.13 in favor of
+    /// `setDefaultPropertyInclusion(...)`) until fixed.
+    #[test]
+    fn value_method_mapper_uses_the_non_deprecated_default_property_inclusion_setter() {
+        let mut out = String::new();
+        emit_value_method_mapper(&mut out);
+
+        assert!(
+            out.contains(".setDefaultPropertyInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)"),
+            "value-method mapper must configure inclusion via the non-deprecated setter: {out}"
+        );
+        assert!(
+            !out.contains(".setSerializationInclusion("),
+            "value-method mapper must not call the deprecated (since Jackson 2.13) setSerializationInclusion: {out}"
+        );
+    }
+}

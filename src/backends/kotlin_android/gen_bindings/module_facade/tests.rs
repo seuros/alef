@@ -204,3 +204,25 @@ fn android_trait_bridge_lifecycle_functions_are_managed_by_bridge_object() {
         &config
     ));
 }
+
+/// Regression: Jackson deprecated `ObjectMapper.setSerializationInclusion(...)` (since 2.13,
+/// in favor of `setDefaultPropertyInclusion(...)`). The two are drop-in equivalents on
+/// `ObjectMapper` itself — no need to migrate the whole facade mapper to `JsonMapper.builder()`
+/// — so the fix is a straight rename that keeps the same mutable-chain construction style.
+#[test]
+fn facade_jackson_config_uses_the_non_deprecated_default_property_inclusion_setter() {
+    let rendered = crate::backends::kotlin_android::template_env::render(
+        "android_facade_jackson_config.jinja",
+        minijinja::context! {},
+    );
+
+    assert!(
+        rendered
+            .contains(".setDefaultPropertyInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)"),
+        "facade mapper must configure inclusion via the non-deprecated setter: {rendered}"
+    );
+    assert!(
+        !rendered.contains(".setSerializationInclusion("),
+        "facade mapper must not call the deprecated (since Jackson 2.13) setSerializationInclusion: {rendered}"
+    );
+}

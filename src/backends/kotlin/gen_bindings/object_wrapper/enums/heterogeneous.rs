@@ -61,7 +61,10 @@ pub(super) fn emit_kotlin_heterogeneous_default_deserializer(out: &mut String, e
     out.push_str("        }\n");
     out.push_str("        if (node.isObject) {\n");
     out.push_str("            val obj = node as com.fasterxml.jackson.databind.node.ObjectNode\n");
-    out.push_str("            val it = obj.fields()\n");
+    // `properties()` (Jackson 2.15+) replaces the deprecated (since 2.19) `fields()`; its ~keep
+    // `Set<Map.Entry<...>>` return type still needs `.iterator()` to keep the identical ~keep
+    // hasNext()/next() single-entry-object shape below. ~keep
+    out.push_str("            val it = obj.properties().iterator()\n");
     out.push_str("            if (it.hasNext()) {\n");
     out.push_str("                val entry = it.next()\n");
     out.push_str("                if (!it.hasNext()) {\n");
@@ -206,4 +209,104 @@ pub(super) fn emit_kotlin_heterogeneous_default_serializer(out: &mut String, en:
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{CoreWrapper, EnumVariant, FieldDef};
+
+    fn make_field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            version: Default::default(),
+            name: name.to_string(),
+            ty,
+            optional: false,
+            default: None,
+            doc: String::new(),
+            sanitized: false,
+            is_boxed: false,
+            type_rust_path: None,
+            cfg: None,
+            typed_default: None,
+            core_wrapper: CoreWrapper::None,
+            vec_inner_core_wrapper: CoreWrapper::None,
+            newtype_wrapper: None,
+            serde_rename: None,
+            serde_flatten: false,
+            serde_with: None,
+            serde_skip_serializing_if: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            original_type: None,
+        }
+    }
+
+    fn make_variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields,
+            doc: String::new(),
+            is_default: false,
+            serde_rename: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_tuple: false,
+            originally_had_data_fields: false,
+            cfg: None,
+            version: Default::default(),
+        }
+    }
+
+    fn mixed_unit_and_data_enum() -> EnumDef {
+        EnumDef {
+            name: "Shape".to_string(),
+            rust_path: "crate::Shape".to_string(),
+            original_rust_path: "crate::Shape".to_string(),
+            variants: vec![
+                make_variant("Empty", vec![]),
+                make_variant(
+                    "Circle",
+                    vec![make_field(
+                        "_0",
+                        TypeRef::Primitive(crate::core::ir::PrimitiveType::F64),
+                    )],
+                ),
+            ],
+            methods: vec![],
+            doc: String::new(),
+            cfg: None,
+            is_copy: false,
+            has_serde: true,
+            serde_content: None,
+            serde_tag: None,
+            serde_untagged: false,
+            serde_rename_all: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            excluded_variants: vec![],
+            version: Default::default(),
+            has_default: false,
+        }
+    }
+
+    /// Regression: Jackson deprecated `JsonNode.fields()` (returning an `Iterator`) in favor
+    /// of `properties()` (returning a `Set`) as of 2.19. The single-entry-object probe below
+    /// relies on `Iterator`'s `hasNext()`/`next()`, so the generated deserializer must keep
+    /// calling `.iterator()` on the replacement rather than dropping it.
+    #[test]
+    fn heterogeneous_deserializer_uses_properties_not_the_deprecated_fields_method() {
+        let en = mixed_unit_and_data_enum();
+        let mut out = String::new();
+        emit_kotlin_heterogeneous_default_deserializer(&mut out, &en);
+
+        assert!(
+            out.contains("val it = obj.properties().iterator()"),
+            "deserializer must read entries via the non-deprecated properties() accessor: {out}"
+        );
+        assert!(
+            !out.contains(".fields()"),
+            "deserializer must not call the deprecated (since Jackson 2.19) fields() method: {out}"
+        );
+    }
 }

@@ -254,7 +254,7 @@ dependencies {{
 // and stages it into src/test/resources/host-jni/<platform>/ for the test loader.
 // Set alef.skipHostJni=true to disable this (e.g., in publish-only builds).
 tasks.register("buildHostJni", Exec::class) {{
-    if (project.properties["alef.skipHostJni"] != "true") {{
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {{
         val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
         val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) {{ it.parentFile }}
             .map {{ it.resolve("{jni_manifest_workspace_path}") }}
@@ -273,7 +273,7 @@ tasks.register("buildHostJni", Exec::class) {{
 }}
 
 tasks.register("copyHostJni", Copy::class) {{
-    if (project.properties["alef.skipHostJni"] != "true") {{
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {{
         description = "Copy host JNI library to test resources"
         dependsOn("buildHostJni")
 
@@ -306,7 +306,7 @@ tasks.register("copyHostJni", Copy::class) {{
 }}
 
 tasks.withType<Test> {{
-    if (project.properties["alef.skipHostJni"] != "true") {{
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {{
         val hostPlatform = when {{
             System.getProperty("os.name").lowercase().contains("mac") -> "darwin"
             System.getProperty("os.name").lowercase().contains("win") -> "windows"
@@ -325,7 +325,7 @@ tasks.withType<Test> {{
 // the dylib emitted by `copyHostJni`, so AGP 8.10+ requires an explicit
 // dependency declaration to satisfy Gradle's task-output validation.
 tasks.matching {{ it.name.startsWith("processDebug") || it.name.startsWith("processRelease") }}.configureEach {{
-    if (project.properties["alef.skipHostJni"] != "true" && name.contains("UnitTestJavaRes")) {{
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true" && name.contains("UnitTestJavaRes")) {{
         dependsOn("copyHostJni")
     }}
 }}
@@ -708,6 +708,42 @@ description = "Test library"
         assert!(
             !gradle.contains("arm64-v8a\", \"x86_64"),
             "a configured ABI list must replace the default, not be appended to it"
+        );
+    }
+
+    /// Regression: current Gradle ("The Project.getProperties method has been deprecated.
+    /// This will fail with an error in Gradle 10.") rejects `project.properties[...]` reads.
+    /// Every alef-owned opt-out flag must go through the lazy `providers.gradleProperty(...)`
+    /// accessor instead, both in this file's own host-JNI tasks and in the
+    /// `android_jni_libs_task.jinja` cross-compile task it embeds.
+    #[test]
+    fn gradle_property_reads_use_the_provider_api_not_the_deprecated_properties_map() {
+        let gradle = emit_android_gradle("");
+
+        assert!(
+            gradle.contains(r#"project.providers.gradleProperty("alef.skipHostJni").orNull != "true""#),
+            "buildHostJni-family tasks must read alef.skipHostJni via providers.gradleProperty: {gradle}"
+        );
+        assert!(
+            gradle.contains(r#"project.providers.gradleProperty("alef.skipAndroidJni").orNull != "true""#),
+            "the Android cross-compile task must read alef.skipAndroidJni via providers.gradleProperty: {gradle}"
+        );
+        assert!(
+            !gradle.contains("project.properties["),
+            "no task may read a Gradle property via the deprecated project.properties map: {gradle}"
+        );
+    }
+
+    /// Regression: current AGP ("Setting the namespace via the package attribute is no
+    /// longer supported") requires the namespace to live in `android { namespace = ... }`
+    /// rather than the manifest's `package` attribute (see `gen_manifest` tests for that half).
+    #[test]
+    fn android_block_sets_the_namespace_that_the_manifest_no_longer_carries() {
+        let gradle = emit_android_gradle("");
+
+        assert!(
+            gradle.contains("namespace = \"dev.example\""),
+            "the android {{ }} block must set namespace from the resolved kotlin_android package: {gradle}"
         );
     }
 }
