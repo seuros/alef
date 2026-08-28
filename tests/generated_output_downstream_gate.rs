@@ -224,7 +224,8 @@ fn clippy_lane_languages() -> Vec<&'static str> {
 
 #[path = "generated_output_downstream_gate/fixture.rs"]
 mod fixture;
-use fixture::{FIXTURE_ALEF_TOML, FIXTURE_CARGO_TOML, FIXTURE_SOURCE};
+// `FIXTURE_SOURCE`/`FIXTURE_ALEF_TOML` moved to `foreign_cfg_gate::write_fixture_workspace`.
+use fixture::FIXTURE_CARGO_TOML;
 
 // ---------------------------------------------------------------------------
 // Tooling: present and executable, or the gate fails
@@ -276,6 +277,12 @@ use poly_fmt_exclusions::poly_fmt_check_args;
 // instead of more lines here. See that module's doc for the full rationale. ~keep
 #[path = "generated_output_downstream_gate/ffi_allowlist_gate.rs"]
 mod ffi_allowlist_gate;
+
+// The E0004 / `unreachable_patterns` foreign-cfg-enum shape (alef commit f9795aea9) needs its
+// own fixture crate and two compile-level sabotages; see that module's doc for why this is not
+// inline here either. ~keep
+#[path = "generated_output_downstream_gate/foreign_cfg_gate.rs"]
+mod foreign_cfg_gate;
 
 const CARGO: GateTool = GateTool {
     program: "cargo",
@@ -406,21 +413,10 @@ enum Sabotage {
     RedundantPointerCast,
 }
 
-fn write_fixture_workspace(root: &Path) {
-    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
-    // `trim_start`: the raw literal opens with a newline, which poly reports as a reformat of
-    // the fixture's own source rather than of anything alef produced. ~keep
-    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE.trim_start()).expect("write fixture source");
-    std::fs::write(root.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
-    let config = FIXTURE_ALEF_TOML
-        .replace("__ALEF_VERSION__", env!("CARGO_PKG_VERSION"))
-        .replace("__LANGUAGES__", &fixture_language_list());
-    std::fs::write(root.join("alef.toml"), config).expect("write fixture alef.toml");
-}
-
 struct EmittedTree {
     root: PathBuf,
-    /// Every `Cargo.toml` alef emitted, excluding the fixture's own core manifest.
+    /// Every `Cargo.toml` alef emitted, excluding the fixture's two hand-authored manifests
+    /// (`toolkit`'s own root and the sibling `foreign_core` crate -- see `foreign_cfg_gate`).
     manifests: Vec<PathBuf>,
     /// Every `.toml` alef emitted, the poly lane's evidence surface.
     toml_files: Vec<PathBuf>,
@@ -436,6 +432,7 @@ struct EmittedTree {
 impl EmittedTree {
     fn new(workspace: tempfile::TempDir, root: PathBuf) -> Self {
         let core_manifest = root.join("Cargo.toml");
+        let foreign_core_manifest = root.join("foreign_core/Cargo.toml");
         let mut manifests = Vec::new();
         let mut toml_files = Vec::new();
         for path in WalkDir::new(&root)
@@ -447,7 +444,8 @@ impl EmittedTree {
             if path.extension().is_some_and(|extension| extension == "toml") {
                 toml_files.push(path.clone());
             }
-            if path.file_name().is_some_and(|name| name == "Cargo.toml") && path != core_manifest {
+            let is_hand_authored = path == core_manifest || path == foreign_core_manifest;
+            if path.file_name().is_some_and(|name| name == "Cargo.toml") && !is_hand_authored {
                 manifests.push(path);
             }
         }
@@ -512,7 +510,7 @@ fn emit_tree(sabotage: Sabotage) -> EmittedTree {
         .path()
         .canonicalize()
         .unwrap_or_else(|_| workspace.path().to_path_buf());
-    write_fixture_workspace(&root);
+    foreign_cfg_gate::write_fixture_workspace(&root);
     assert_emitted_tree_is_isolated(&root);
 
     for stage in ["generate", "scaffold"] {

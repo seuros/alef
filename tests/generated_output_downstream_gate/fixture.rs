@@ -141,6 +141,51 @@ pub fn get_language(name: String) -> Result<Language, String> {
     }
     Ok(Language { handle: 1 })
 }
+
+// A crate whose public API takes and returns a foreign type re-exports it, or no Rust caller
+// could name the argument without depending on `foreign_core` directly. Alef's emitted bindings
+// reach a `[[crates.source_crates]]` type through the core crate path (`toolkit::Swatch`), so
+// without this the generated pyo3 crate fails `E0425: cannot find type Swatch in crate toolkit`
+// -- a fixture defect, not a codegen one. ~keep
+pub use foreign_core::Swatch;
+
+/// Exercises `Swatch` (see `FOREIGN_CRATE_SOURCE`) in both directions: as a parameter, so
+/// `impl From<BindingEnum> for foreign_core::Swatch` is actually generated (`input_type_names`
+/// only sees a type used as a parameter, not merely returned), and as a return type, so `impl
+/// From<foreign_core::Swatch> for BindingEnum` is generated too. See
+/// `foreign_cfg_gate::write_foreign_crate` for how `foreign_core` reaches this crate's
+/// dependency graph, and `[[crates.source_crates]]` below for how `Swatch` reaches the IR. ~keep
+pub fn recolor(swatch: foreign_core::Swatch) -> foreign_core::Swatch {
+    swatch
+}
+"#;
+
+// A FOREIGN crate (a `[[crates.source_crates]].roots` merge target, not a file the `toolkit`
+// crate itself is built from) providing `Swatch`: an enum whose cfg-gated variant is owned by a
+// crate other than the one every binding wraps. `foreign_cfg_gate.rs` writes this alongside
+// `toolkit` in the fixture workspace and sabotages the emitted pyo3 conversion to prove the
+// downstream gate actually compiles this shape -- see that module's doc for the full rationale
+// (alef commit f9795aea9's E0004 fix and its `unreachable_patterns` opposite). ~keep
+pub(crate) const FOREIGN_CRATE_CARGO_TOML: &str =
+    "[package]\nname = \"foreign_core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nspot-colors = []\n";
+
+pub(crate) const FOREIGN_CRATE_SOURCE: &str = r#"
+/// A fieldless enum standing in for a dependency-owned type merged into `toolkit`'s binding
+/// surface via `[[crates.source_crates]].roots`. `Spot` is gated on a feature only THIS crate
+/// declares -- `toolkit` never enables it, directly or via `extra_dependencies`, so every
+/// binding crate compiles `foreign_core` with `spot-colors` off and `Spot` genuinely absent
+/// from the type this enum compiles to. Fieldless only: a data-carrying enum never reaches the
+/// codegen path this fixture exercises (see `Pyo3Backend`'s own `enum_has_data_variants` skip).
+/// `Default` is required: the binding-to-core direction's `_ => Default::default()` catch-all
+/// (kept for the E0004 shape this fixture exists to reproduce) needs `Self: Default`. ~keep
+#[derive(Clone, Copy, Default)]
+pub enum Swatch {
+    #[default]
+    Base,
+    Accent,
+    #[cfg(feature = "spot-colors")]
+    Spot,
+}
 "#;
 
 // The fixture's own core crate derives serde, so it needs the dependency to compile. It went
@@ -159,9 +204,16 @@ pub fn get_language(name: String) -> Result<Language, String> {
 // `[workspace]` (see `cli::pipeline::workspace_lints`), but this fixture's root is a plain
 // `[package]` manifest -- the common case for a small, pre-existing consumer crate -- so it
 // carries the allowlist itself, exactly as a real consumer in that shape has to today. ~keep
+// `foreign_core` is alphabetized ahead of `serde` in `[dependencies]` -- `cargo sort --check`
+// runs over this manifest too (it is reachable from every clippy-lane binding crate), so an
+// out-of-order fixture-authored dependency would fail a lane this file has nothing to do with.
+// The path itself is a placeholder: `foreign_cfg_gate::write_foreign_crate` substitutes an
+// absolute path at fixture-write time, so it resolves regardless of how deep the clippy-lane
+// binding crate that pulls `toolkit` in as a path dependency happens to sit. ~keep
 pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
                                               [features]\nchunking-tokenizers = []\n\n\
-                                              [dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n\
+                                              [dependencies]\nforeign_core = { path = \"__FOREIGN_CORE_DEP_PATH__\" }\n\
+                                              serde = { version = \"1\", features = [\"derive\"] }\n\n\
                                               [lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(alef)'] }\n";
 
 // `java` and `elixir` scaffolders bail `alef generate` outright when repository/license/
@@ -189,4 +241,12 @@ authors = ["Example Author <author@example.invalid>"]
 [crates.ffi.capsule_types.Language]
 into_raw_type = "toolkit::RawLanguage"
 c_return_type = "RawLanguage"
+
+[crates.extra_dependencies]
+foreign_core = { path = "__FOREIGN_CORE_DEP_PATH__" }
+
+[[crates.source_crates]]
+name = "foreign_core"
+sources = ["__FOREIGN_CORE_SOURCE_PATH__"]
+roots = ["Swatch"]
 "#;
