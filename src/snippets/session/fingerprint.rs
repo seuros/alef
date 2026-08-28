@@ -319,6 +319,8 @@ mod tests {
                 &snippet,
                 ValidationLevel::Compile,
                 Some(before_fingerprint.as_str()),
+                false,
+                &[],
                 &passing,
             )
             .expect("store the passing result");
@@ -331,7 +333,13 @@ mod tests {
         // fail if someone "fixed" the bug that way. ~keep
         assert_eq!(
             cache
-                .load(&snippet, ValidationLevel::Compile, Some(before_fingerprint.as_str()))
+                .load(
+                    &snippet,
+                    ValidationLevel::Compile,
+                    Some(before_fingerprint.as_str()),
+                    false,
+                    &[]
+                )
                 .map(|result| result.status),
             Some(crate::snippets::types::SnippetStatus::Pass),
             "an unchanged snippet against an unchanged binding surface must still hit the cache"
@@ -346,7 +354,13 @@ mod tests {
 
         assert!(
             cache
-                .load(&snippet, ValidationLevel::Compile, Some(after_fingerprint.as_str()))
+                .load(
+                    &snippet,
+                    ValidationLevel::Compile,
+                    Some(after_fingerprint.as_str()),
+                    false,
+                    &[]
+                )
                 .is_none(),
             "a cached Pass must not survive a change to the linked binding package it was validated \
              against"

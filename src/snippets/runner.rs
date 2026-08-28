@@ -13,11 +13,13 @@ use std::time::Instant;
 
 mod batch;
 mod dependency_reclassification;
+mod levels;
 mod session_locks;
 mod session_prep;
 mod session_resolution;
 
 use batch::validate_batches;
+use levels::{capped_level, effective_validation_level, structurally_unreachable};
 use session_locks::{session_lock_for, session_locks_by_fingerprint};
 use session_prep::{session_preparation_error, session_preparation_result};
 
@@ -488,62 +490,6 @@ fn batch_level(
     validator.is_available_at(level).then_some(level)
 }
 
-/// The ceiling imposed by a `<!-- snippet:*-only -->` comment annotation, if any. Distinct from
-/// `snippet.metadata.level` (a front-matter `level:` contract): an annotation is the author
-/// suppressing validation below what the run requested, so `finalize_result` keeps it a
-/// `Downgraded` cause, while `snippet.metadata.level` is read directly wherever the contract
-/// counterpart is needed. ~keep
-fn annotation_level_limit(snippet: &Snippet) -> Option<ValidationLevel> {
-    snippet
-        .annotation
-        .as_ref()
-        .and_then(|annotation| match annotation.kind {
-            SnippetAnnotationKind::SyntaxOnly => Some(ValidationLevel::Syntax),
-            SnippetAnnotationKind::CompileOnly => Some(ValidationLevel::Compile),
-            SnippetAnnotationKind::TypeCheckOnly => Some(ValidationLevel::TypeCheck),
-            SnippetAnnotationKind::Skip => None,
-        })
-}
-
-/// The level implied by the snippet's own declarations, independent of the validator or
-/// environment: an annotation lowers it as a downgrade; a front-matter `level:` lowers it as a
-/// contract instead. Both narrow the level actually attempted the same way here — only
-/// `finalize_result` tells the two apart, to decide whether hitting this level is a violation or
-/// a satisfied request. ~keep
-fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> ValidationLevel {
-    [annotation_level_limit(snippet), snippet.metadata.level]
-        .into_iter()
-        .flatten()
-        .fold(requested, ValidationLevel::min)
-}
-
-/// The level a validator will actually be invoked at: the requested level, narrowed by the
-/// snippet's own declarations (`effective_validation_level`), by the validator's permanent
-/// `max_level` ceiling, and by `achievable_level` — this run's environment-dependent limit (e.g.
-/// no real type-checker binary on `PATH`). ~keep
-fn capped_level(
-    snippet: &Snippet,
-    config: &RunnerConfig,
-    validator: &dyn crate::snippets::validators::SnippetValidator,
-) -> ValidationLevel {
-    effective_validation_level(snippet, config.level)
-        .min(validator.max_level())
-        .min(validator.achievable_level(config.level))
-}
-
-/// Whether the validator can never reach `requested` for this snippet's language, in any
-/// environment: either its permanent `max_level` sits below it, or its `achievable_level` gap is
-/// declared structural (see `SnippetValidator::achievable_level_is_structural`). Both make a
-/// strict request for `requested` unsatisfiable for this language regardless of the user's
-/// environment, so `finalize_result` treats them the same way. ~keep
-fn structurally_unreachable(
-    validator: &dyn crate::snippets::validators::SnippetValidator,
-    requested: ValidationLevel,
-) -> bool {
-    validator.max_level() < requested
-        || (validator.achievable_level(requested) < requested && validator.achievable_level_is_structural(requested))
-}
-
 /// The subset of `all_sessions` this run actually needs prepared: every session a snippet in
 /// `snippets` resolves to (via `session_resolution::resolve_session_claim`, run against the
 /// *full* configured map so ambiguity detection is unaffected downstream), expanded to include
@@ -905,6 +851,8 @@ fn finalize_result(
             snippet,
             config.level,
             session.map(|value| value.fingerprint.as_str()),
+            config.deny_unclassified,
+            &config.allowed_side_effects,
             &result,
         )
     {
@@ -922,7 +870,13 @@ fn cached_result(
         return None;
     }
     let cache = config.cache_dir.clone().map(ValidationCache::new)?;
-    let mut result = cache.load(snippet, config.level, session.map(|value| value.fingerprint.as_str()))?;
+    let mut result = cache.load(
+        snippet,
+        config.level,
+        session.map(|value| value.fingerprint.as_str()),
+        config.deny_unclassified,
+        &config.allowed_side_effects,
+    )?;
     result.snippet = snippet.clone();
     result.duration_ms = 0;
     result.message = result.message.or_else(|| Some("cached".to_string()));

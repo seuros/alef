@@ -438,7 +438,7 @@ fn cached_cells_are_excluded_from_batches() {
         1,
     );
     ValidationCache::new(cache_directory.path().into())
-        .store(&snippets[0], ValidationLevel::Compile, None, &cached)
+        .store(&snippets[0], ValidationLevel::Compile, None, false, &[], &cached)
         .expect("cache entry");
     let config = RunnerConfig {
         level: ValidationLevel::Compile,
@@ -609,7 +609,7 @@ fn a_cached_unresolved_dependency_result_is_replayed_without_reinvoking_the_vali
         )
     };
     ValidationCache::new(cache_directory.path().into())
-        .store(&snippet, ValidationLevel::Compile, None, &cached)
+        .store(&snippet, ValidationLevel::Compile, None, false, &[], &cached)
         .expect("cache entry");
     let config = RunnerConfig {
         level: ValidationLevel::Compile,

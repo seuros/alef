@@ -611,9 +611,11 @@ fn validate_snippets(
             // Paired with `cache_dir` deliberately: `RunnerConfig::default()` leaves `changed_only`
             // off, so this path wrote a cache entry for every snippet of every run and never read
             // one back — a guaranteed 100% miss on the stage that dominates `alef all`. Cache
-            // entries are keyed on the snippet's own content *and* the session fingerprint (see
-            // `ValidationCache::key`), so a regenerated binding or an edited snippet still
-            // revalidates. ~keep
+            // entries are keyed on the snippet's own content, its annotation, the session
+            // fingerprint, and this same side-effect policy (see
+            // `ValidationCache::invalidation_key`), so a regenerated binding, an edited snippet or
+            // annotation, or an `allowed_side_effects`/`deny_unclassified` edit all still
+            // revalidate. ~keep
             changed_only: true,
             sessions: snippet_cfg
                 .sessions
