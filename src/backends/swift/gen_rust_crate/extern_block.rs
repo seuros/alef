@@ -404,6 +404,7 @@ pub(crate) fn emit_extern_block_for_functions(
     functions: &[FunctionDef],
     handle_returned_types: &HashSet<String>,
     enum_names: &HashSet<String>,
+    unit_enum_names: &HashSet<&str>,
     deferred_empty_handle_types: &HashSet<String>,
     capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
     opaque_types: &ahash::AHashSet<String>,
@@ -458,9 +459,31 @@ pub(crate) fn emit_extern_block_for_functions(
         let is_capsule_return =
             matches!(&effective_return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
 
+        // A unit-enum parameter's wire string can fail to parse back into the enum (see
+        // `swift_call_arg`'s `?`-based reconstruction in `shims.rs`), so `emit_function_shim`
+        // forces the SHIM's own return type to `Result<_, String>` even when the underlying
+        // Rust function itself is infallible -- purely to give that `?` somewhere to propagate
+        // to. The extern declaration built here must describe that same forced-fallible
+        // function, or swift-bridge sees a declared return type that disagrees with the actual
+        // `pub fn` signature (error[E0308]: expected enum `Swatch`, found enum
+        // `Result<Swatch, String>`) for any function whose ONLY source of fallibility is this
+        // reconstruction -- `f.error_type.is_some()` alone, unlike `shims.rs`'s equivalent
+        // check, missed exactly that case. See `emit_function_shim`'s identical
+        // `has_fallible_enum_param`/`forced_fallible` computation, which this mirrors. ~keep
+        let has_fallible_enum_param = f.params.iter().any(|p| match &p.ty {
+            TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
+            TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
+            _ => false,
+        });
+        let forced_fallible = has_fallible_enum_param && f.error_type.is_none();
+
         let return_ty = if is_capsule_return {
-            "usize".to_string()
-        } else if f.error_type.is_some() {
+            if forced_fallible {
+                "Result<usize, String>".to_string()
+            } else {
+                "usize".to_string()
+            }
+        } else if f.error_type.is_some() || forced_fallible {
             let ok_ty = bridge_result_ok_type_with_handles(&effective_return_type, handle_returned_types);
             if matches!(effective_return_type, TypeRef::Unit) {
                 "Result<(), String>".to_string()
@@ -706,3 +729,6 @@ mod streaming_extern_tests;
 
 #[cfg(test)]
 mod capsule_function_tests;
+
+#[cfg(test)]
+mod foreign_enum_tests;

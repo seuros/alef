@@ -33,6 +33,7 @@ fn capsule_function_returns_usize() {
 
     let handle_returned = HashSet::new();
     let enum_names = HashSet::new();
+    let unit_enum_names: HashSet<&str> = HashSet::new();
     let deferred_empty = HashSet::new();
 
     let opaque_types = ahash::AHashSet::default();
@@ -40,6 +41,7 @@ fn capsule_function_returns_usize() {
         &functions,
         &handle_returned,
         &enum_names,
+        &unit_enum_names,
         &deferred_empty,
         &capsule_types,
         &opaque_types,
@@ -75,6 +77,7 @@ fn fallible_capsule_function_returns_usize() {
 
     let handle_returned = HashSet::new();
     let enum_names = HashSet::new();
+    let unit_enum_names: HashSet<&str> = HashSet::new();
     let deferred_empty = HashSet::new();
 
     let opaque_types = ahash::AHashSet::default();
@@ -82,6 +85,7 @@ fn fallible_capsule_function_returns_usize() {
         &functions,
         &handle_returned,
         &enum_names,
+        &unit_enum_names,
         &deferred_empty,
         &capsule_types,
         &opaque_types,
@@ -109,6 +113,7 @@ fn non_capsule_function_unaffected() {
     let mut handle_returned = HashSet::new();
     handle_returned.insert("Metadata".to_string());
     let enum_names = HashSet::new();
+    let unit_enum_names: HashSet<&str> = HashSet::new();
     let deferred_empty = HashSet::new();
 
     let opaque_types = ahash::AHashSet::default();
@@ -116,6 +121,7 @@ fn non_capsule_function_unaffected() {
         &functions,
         &handle_returned,
         &enum_names,
+        &unit_enum_names,
         &deferred_empty,
         &capsule_types,
         &opaque_types,
