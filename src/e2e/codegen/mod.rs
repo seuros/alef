@@ -69,6 +69,8 @@ pub mod typescript;
 mod unavailable_field_marker_tests;
 pub mod wasm;
 #[cfg(test)]
+pub(crate) mod wildcard_element_fixture;
+#[cfg(test)]
 mod working_directory_guard_tests;
 pub mod zig;
 mod zig_visitors;

@@ -334,9 +334,9 @@ pub(super) fn render_assertion(
         } else {
             raw_array_accessor
         };
-        // Passing the lambda parameter as the result var is what lets a nested element
-        // sub-path resolve against the loop variable instead of the result. ~keep
-        let elem_accessor = field_resolver.accessor(&elem_part, accessor_lang, "e");
+        // `element_accessor`, not `accessor`: the path is already element-relative, so the
+        // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
+        let elem_accessor = field_resolver.element_accessor(&elem_part, accessor_lang, "e");
         match assertion.assertion_type.as_str() {
             "contains" | "contains_all" | "not_contains" => {
                 let negated = assertion.assertion_type == "not_contains";

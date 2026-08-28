@@ -147,7 +147,7 @@ pub(super) fn render_assertion(
         let elem_accessor = if elem_part.is_empty() {
             "e".to_string()
         } else {
-            field_resolver.accessor(&elem_part, "typescript", "e")
+            field_resolver.element_accessor(&elem_part, "typescript", "e")
         };
         render_wildcard_assertion(out, assertion, &array_accessor, &elem_accessor, f);
         return;

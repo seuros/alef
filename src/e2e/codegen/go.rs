@@ -935,6 +935,8 @@ use test_file::{GoTestFileContext, render_test_file};
 use test_function::fixture_has_go_callable;
 
 #[cfg(test)]
+mod assertion_wildcard_element_tests;
+#[cfg(test)]
 mod file_dto_tests;
 #[cfg(test)]
 mod import_pruning_tests;

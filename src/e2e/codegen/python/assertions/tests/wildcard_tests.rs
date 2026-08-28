@@ -60,3 +60,8 @@ fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() 
         "no quantifier may be emitted for a refused path: {out}"
     );
 }
+
+/// ~keep Registered here rather than in `python/mod.rs`, which is at its recorded file-size
+/// ceiling and may not grow by even a `mod` declaration.
+#[path = "assertion_wildcard_element_tests.rs"]
+mod assertion_wildcard_element_tests;

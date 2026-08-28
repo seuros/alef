@@ -1097,9 +1097,9 @@ fn render_wildcard_assertion(
     } else {
         field_resolver.accessor(array_part, "go", result_var)
     };
-    // Passing the loop variable as the result var is what makes a nested element sub-path
-    // resolve against the element rather than against the whole result. ~keep
-    let elem_accessor = field_resolver.accessor(elem_part, "go", "e");
+    // `element_accessor`, not `accessor`: the path is already element-relative, so the
+    // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
+    let elem_accessor = field_resolver.element_accessor(elem_part, "go", "e");
     let suffix = wildcard_local_suffix(assertion);
 
     let emit_scan = |out: &mut String, local: &str, cond: &str| {

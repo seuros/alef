@@ -239,7 +239,7 @@ pub(super) fn swift_traversal_contains_assert(
     if let Some(line) = nested_wildcard_skip_line("        ", "//", full_field, resolved_elem_part) {
         return line;
     }
-    let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
+    let elem_accessor = field_resolver.element_accessor(resolved_elem_part, "swift", "$0");
     // `field_resolver.is_enum` consults the hand-maintained `fields_enum` config first and falls
     // back to the IR-derived classification when the config is silent — see `render_assertion`'s
     // `field_is_enum` comment for the failure mode a config-only check produced. ~keep

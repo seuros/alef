@@ -269,6 +269,8 @@ mod visitor;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod assertion_wildcard_element_tests;
+#[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
 mod is_empty_collection_tests;

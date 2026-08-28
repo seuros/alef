@@ -1233,9 +1233,9 @@ fn render_wildcard_assertion(
         field_resolver.accessor(array_part, "csharp", result_var)
     };
     let param = wildcard_lambda_param(assertion);
-    // Passing the lambda parameter as the result var is what resolves a nested element
-    // sub-path against the loop element instead of the whole result. ~keep
-    let elem_accessor = field_resolver.accessor(elem_part, "csharp", &param);
+    // `element_accessor`, not `accessor`: the path is already element-relative, so the
+    // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
+    let elem_accessor = field_resolver.element_accessor(elem_part, "csharp", &param);
 
     let any_expr = |value: &serde_json::Value| -> Option<(String, String)> {
         let serde_json::Value::String(s) = value else {

@@ -100,3 +100,8 @@ fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() 
         "got: {out}"
     );
 }
+
+/// ~keep Registered here rather than in `csharp.rs` or `csharp/assertions.rs`, both of which are
+/// at their recorded file-size ceilings and may not grow by even a `mod` declaration.
+#[path = "wildcard_element_tests.rs"]
+mod wildcard_element_tests;

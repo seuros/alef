@@ -160,12 +160,12 @@ fn render_python_wildcard_assertion(
     } else {
         field_resolver.accessor(array_part, "python", result_var)
     };
-    // Passing the comprehension variable as the "result var" is what makes nested element
-    // sub-paths (`links[].meta.kind`) resolve against the loop variable. ~keep
+    // `element_accessor`, not `accessor`: the path is already element-relative, so the
+    // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
     let elem_accessor = if elem_part.is_empty() {
         "_e".to_string()
     } else {
-        field_resolver.accessor(elem_part, "python", "_e")
+        field_resolver.element_accessor(elem_part, "python", "_e")
     };
     let iterable = format!("({array_accessor} or [])");
 

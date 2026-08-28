@@ -966,7 +966,7 @@ fn render_wildcard_assertion(
                 .find("[].")
                 .map(|d| &resolved_full[d + 3..])
                 .unwrap_or(elem_part);
-            let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
+            let elem_accessor = field_resolver.element_accessor(resolved_elem_part, "swift", "$0");
             let elem_is_enum = field_resolver.is_enum(field);
             let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
                 || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));

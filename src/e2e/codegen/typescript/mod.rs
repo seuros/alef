@@ -1,5 +1,7 @@
 //! TypeScript e2e test generator using vitest.
 
+#[cfg(test)]
+mod assertion_wildcard_element_tests;
 mod assertions;
 pub(crate) mod config;
 #[cfg(test)]
