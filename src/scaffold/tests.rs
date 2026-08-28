@@ -107,4 +107,5 @@ mod poly;
 mod poly_migrations;
 mod python_node;
 mod repair;
+mod unstamped_cache_miss;
 mod workspace_inheritance;

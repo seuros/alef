@@ -189,8 +189,8 @@ fn hashes_dir(crate_name: &str) -> PathBuf {
 /// `alef generate` answered `Generated 0 files` while leaving the edit untouched — a skip
 /// indistinguishable from a verification. The stamp comparison is the same one `alef verify`
 /// runs (`hash::compute_file_hash` against the embedded value), so a tree that passes verify
-/// passes here; unstamped outputs (`generated_header: false`, create-once seeds) have nothing
-/// to compare and keep the existence-only rule. ~keep
+/// passes here; unmarked outputs (`generated_header: false`, create-once seeds) keep the
+/// existence-only rule, while a marked-but-unstamped one is a miss so stamping retries. ~keep
 pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{lang}.hash"));
@@ -1005,9 +1005,9 @@ pub fn write_toml_merge_provenance(
 /// manifest-existence check alone cannot tell a hand-edited stage output (e2e suite, scaffold
 /// file, README, docs page) from an untouched one, so a consumer's edit to e.g. a generated e2e
 /// test survived a stage-cache hit silently. See [`is_lang_cached`]'s doc for the full incident
-/// and [`stamped_outputs_agree_with_disk`]'s doc for why an unstamped output (`generated_header:
-/// false`, create-once seeds) keeps the existence-only rule instead of forcing a permanent miss.
-/// ~keep
+/// and [`stamped_outputs_agree_with_disk`]'s doc for why an unmarked output (`generated_header:
+/// false`, create-once seeds) keeps the existence-only rule instead of forcing a permanent miss --
+/// and why an output that carries the marker but no stamp is a miss rather than agreement. ~keep
 pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{stage}.hash"));

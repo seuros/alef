@@ -54,10 +54,24 @@ pub(crate) fn outputs_exist(manifest_path: &Path) -> bool {
 /// value.
 ///
 /// This is the same comparison `alef verify` runs, so a tree that passes verify passes here.
-/// Paths that are absent (already a miss via [`outputs_exist`]), unreadable as UTF-8, or carry no
-/// marker return `true`: the question is "was a stamped file modified after alef wrote it", and
-/// only a stamped file can be asked. Unstamped outputs -- `generated_header: false`, create-once
-/// seeds -- must keep the existence-only rule or a warm run would never hit again.
+/// Paths that are absent (already a miss via [`outputs_exist`]) or unreadable as UTF-8 return
+/// `true`: the question is "was a stamped file modified after alef wrote it", and only a stamped
+/// file can be asked. Genuinely unstampable outputs -- `generated_header: false` create-once seeds,
+/// and formats with no comment syntax at all (`.json`, `.jar`) -- carry no alef marker either, so
+/// they keep the existence-only rule and a warm run still hits.
+///
+/// A file that carries the marker but *no* `alef:hash:` line is the one unstamped shape that must
+/// NOT be read as agreement. It is not an unstampable output: alef claims it, and
+/// `hash::inject_hash_line` shares `content_has_alef_marker`'s scan window, so anything claimed is
+/// stampable. The missing line therefore means the stamping pass never ran for it -- an
+/// interrupted run, or a stage that aborted before `finalize_hashes`. Answering `true` there is
+/// what makes that state permanent: the stage reads as cached, its `finalize_hashes` call is
+/// skipped, and the file stays claimed-but-unstamped, so `poly`'s hash-keyed skip never covers it,
+/// `poly fmt` reformats it, and the next alef write puts alef's own bytes back -- an unbreakable
+/// ping-pong neither tool yields on. Repo-root scaffold files (`.cargo/config.toml`,
+/// `rust-toolchain.toml`, `poly.toml`, `rustfmt.toml`) have no second route out: they sit outside
+/// every `generate::orphans::generate_sweep_roots` root, so `finalize_hashes_sweeping`'s disk-scan
+/// self-heal cannot reach them either. ~keep
 pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path) -> bool {
     let Ok(manifest) = fs::read_to_string(manifest_path) else {
         return false;
@@ -67,6 +81,14 @@ pub(crate) fn stamped_outputs_agree_with_disk(manifest_path: &Path) -> bool {
             continue;
         };
         let Some(embedded) = crate::core::hash::extract_hash(&content) else {
+            if crate::core::hash::content_has_alef_marker(&content) {
+                tracing::debug!(
+                    path = line,
+                    "manifested output carries an alef marker but no alef:hash: line; treating the \
+                     cache entry as a miss so the stamping pass runs again"
+                );
+                return false;
+            }
             continue;
         };
         if crate::core::hash::compute_file_hash(&content) != embedded {
