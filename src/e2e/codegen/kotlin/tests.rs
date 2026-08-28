@@ -17,17 +17,6 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 use std::collections::{HashMap, HashSet};
 
-fn make_resolver_for_finish_reason() -> FieldResolver {
-    // Resolver for `choices[0].finish_reason` where:
-    //   - `choices` is a registered array field (default index 0)
-    //   - `choices.finish_reason` is optional (`@Nullable`)
-    let mut optional = HashSet::new();
-    optional.insert("choices.finish_reason".to_string());
-    let mut arrays = HashSet::new();
-    arrays.insert("choices".to_string());
-    FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new())
-}
-
 /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
 /// (present, non-`binding_excluded`, on some IR type) but missing from the
 /// hand-maintained `result_fields` config must still render a real assertion,
@@ -128,7 +117,7 @@ fn kotlin_ir_excluded_field_present_in_result_fields_is_still_skipped() {
 /// is invalid Kotlin because `T?.orEmpty()` is only defined for `String?`.
 #[test]
 fn assertion_enum_optional_uses_safe_get_value_then_or_empty() {
-    let resolver = make_resolver_for_finish_reason();
+    let resolver = resolver_helpers::make_resolver_for_finish_reason();
     let mut enum_fields = HashSet::new();
     enum_fields.insert("choices.finish_reason".to_string());
     let assertion = Assertion {
@@ -1239,5 +1228,7 @@ fn assertion_json_scalar_accepts_both_bracket_and_dotted_spellings() {
 
 #[cfg(test)]
 mod android;
+#[cfg(test)]
+mod resolver_helpers;
 #[cfg(test)]
 mod wildcard;

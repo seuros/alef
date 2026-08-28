@@ -209,6 +209,7 @@ type ResolvedSession<'a> = (&'a String, &'a SessionSpec, ValidationSession);
 /// A thin wrapper over [`prepare_sessions_isolated_with_activation_filter`] for callers that have
 /// no cache-hit information to filter activation by -- every test in this module, and any future
 /// caller that wants the unconditional behaviour. ~keep
+#[cfg(test)]
 pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
     prepare_sessions_isolated_with_activation_filter(specs, timeout_secs, &|_, _| true)
 }

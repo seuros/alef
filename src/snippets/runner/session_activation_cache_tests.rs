@@ -197,7 +197,7 @@ fn a_session_with_any_uncached_snippet_still_runs_its_before_hook() {
     };
     let cached_snippet = snippet(Language::Python);
 
-    let first = run_validation(&[cached_snippet.clone()], &registry, &config).expect("first run completes");
+    let first = run_validation(std::slice::from_ref(&cached_snippet), &registry, &config).expect("first run completes");
     assert_eq!(first.passed, 1);
     std::fs::remove_file(&marker).expect("remove marker between runs");
     assert_eq!(*invocations.lock().expect("invocations"), 1);
