@@ -3,6 +3,7 @@
 use heck::ToUpperCamelCase;
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::config::ArgMapping;
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::fixture::Fixture;
@@ -43,6 +44,13 @@ pub(super) struct KotlinArgsContext<'a> {
     /// line is still emitted, only its presence in the positional argument
     /// list is skipped. ~keep
     pub(super) owner_handle_is_receiver: bool,
+    /// What the core IR declares about the target's parameters, keyed to whichever of
+    /// `"kotlin"`/`"kotlin_android"` this context renders. [`TargetParams::IrAbsent`] keeps the
+    /// pre-IR lowering exactly, so a call site with no IR to supply is unaffected. Consulted
+    /// only when a fixture's own `ArgMapping::optional` claims an absent value may be defaulted
+    /// — see the `arg.optional` branch below for why that claim is not, by itself, a claim about
+    /// this target's generated signature. ~keep
+    pub(super) target_params: TargetParams<'a>,
 }
 
 pub(super) fn build_args_and_setup(
@@ -60,15 +68,21 @@ pub(super) fn build_args_and_setup(
         type_defs,
         enums,
         owner_handle_is_receiver,
+        target_params,
     } = context;
     if args.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
+    let lang = if kotlin_android_style {
+        "kotlin_android"
+    } else {
+        "kotlin"
+    };
 
     let mut setup_lines: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if arg.arg_type == "mock_url" {
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             let value = input.get(field).unwrap_or(&serde_json::Value::Null);
@@ -270,18 +284,27 @@ pub(super) fn build_args_and_setup(
                     };
                     parts.push(default_constructor);
                 } else {
-                    parts.push("null".to_string());
+                    // `arg.optional` is the *fixture author's* claim that the fixture's own
+                    // `input` JSON may leave this field out — not a claim about what this
+                    // Kotlin target actually declares. The facade signature generator
+                    // (`facade_param`) grants a parameter `= null` only when the IR's own
+                    // `ParamDef::optional` says so; when it does not, the generated Kotlin
+                    // parameter is non-nullable and required, and splicing a bare `null` here
+                    // is a compile error (`Null can not be a value of a non-null type`) rather
+                    // than the harmless placeholder it is in Java, whose boxed types accept
+                    // `null` syntactically. Ask the same authority the signature generator
+                    // used before trusting the fixture's claim. ~keep
+                    let target_requires_argument =
+                        target_params.declares_param_optional(lang, &arg.name, index, type_defs) == Some(false);
+                    if target_requires_argument {
+                        parts.push(typed_zero_default(&arg.arg_type));
+                    } else {
+                        parts.push("null".to_string());
+                    }
                 }
             }
             None | Some(serde_json::Value::Null) => {
-                let default_val = match arg.arg_type.as_str() {
-                    "string" => "\"\"".to_string(),
-                    "int" | "integer" => "0".to_string(),
-                    "float" | "number" => "0.0".to_string(),
-                    "bool" | "boolean" => "false".to_string(),
-                    _ => "null".to_string(),
-                };
-                parts.push(default_val);
+                parts.push(typed_zero_default(&arg.arg_type));
             }
             Some(v) => {
                 // Typed arrays carry `element_type` and are materialised as `listOf(...)`.
@@ -543,6 +566,21 @@ pub(super) fn build_args_and_setup(
     }
 
     Ok((setup_lines, parts.join(", ")))
+}
+
+/// A type-appropriate non-null literal for a declared-required Kotlin parameter with no fixture
+/// value, keyed on `arg.arg_type`. Shared by the "genuinely required, no value" arm and the
+/// "fixture claims optional, but the target requires it" arm so the two can never emit different
+/// placeholders for the same situation — a bare `null` is only ever safe for a nullable Kotlin
+/// type. ~keep
+fn typed_zero_default(arg_type: &str) -> String {
+    match arg_type {
+        "string" => "\"\"".to_string(),
+        "int" | "integer" => "0".to_string(),
+        "float" | "number" => "0.0".to_string(),
+        "bool" | "boolean" => "false".to_string(),
+        _ => "null".to_string(),
+    }
 }
 
 fn normalize_typed_json(

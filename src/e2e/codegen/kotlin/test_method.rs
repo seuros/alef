@@ -181,8 +181,10 @@ pub(super) fn render_test_method(
     let function_name = effective_function_name.as_str();
     let class_name_for_call = effective_class_name.as_str();
     let result_var = call_config.effective_result_var();
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
+        .with_functions(functions);
     let args: &[crate::e2e::config::ArgMapping] = recipe.args;
+    let target_params = recipe.target_params(lang);
     // Resolve per-fixture options_type using per-fixture call config resolution.
     // Per-fixture kotlin overrides take precedence, then fall back to class-level,
     // then to any other language's options_type for the same call (kotlin_android, java, csharp, etc.).
@@ -356,6 +358,7 @@ pub(super) fn render_test_method(
             type_defs,
             enums,
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
+            target_params,
         },
     )?;
     if streaming_owner_handle.is_some()

@@ -60,7 +60,8 @@ pub(crate) fn render_snippet_body_with_ir(
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs)
+        .with_functions(functions);
     let overrides = recipe.override_config;
     let class_name = overrides
         .and_then(|value| value.class.as_deref())
@@ -135,6 +136,7 @@ pub(crate) fn render_snippet_body_with_ir(
             type_defs,
             enums,
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
+            target_params: recipe.target_params(lang),
         },
     )?;
     let mut setup_lines = setup_lines

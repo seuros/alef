@@ -218,6 +218,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
             type_defs: &[],
             owner_handle_is_receiver: false,
             enums: &[],
+            target_params: crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
         },
     )
     .expect("args build succeeds");
@@ -271,6 +272,7 @@ fn json_object_arg_with_mock_url_placeholder_binds_once_at_runtime() {
             type_defs: &[],
             owner_handle_is_receiver: false,
             enums: &[],
+            target_params: crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
         },
     )
     .expect("args build succeeds");
