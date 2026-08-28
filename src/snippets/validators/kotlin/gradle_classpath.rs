@@ -17,6 +17,14 @@ use super::KotlinValidator;
 /// `build/tmp/kotlin-classes/<variant>`), and probing cannot see a project's *dependency*
 /// classpath — kotlinx-coroutines, Jackson, etc. — at all. Asking Gradle's own task model instead
 /// of guessing a path handles both, and needs no change to the consumer's build file. ~keep
+///
+/// The script also unions in each project's `*RuntimeClasspath` configuration(s), not just the
+/// matched compile tasks' own `libraries`/`classpath` property. A compile task's classpath mirrors
+/// `compileClasspath`, which by Gradle's `api`/`implementation` design only exposes a dependency's
+/// `api`-scoped transitive dependencies; an `implementation`-scoped transitive dependency — a real
+/// artifact the module ships with and that shows up on `runtimeClasspath` — stays invisible there.
+/// A doc snippet is not bound by the module's own internal api/implementation boundary the way the
+/// module's own source is, so validation needs the runtime-visible classpath too. ~keep
 const INIT_SCRIPT: &str = include_str!("assets/alef_classpath_init.gradle");
 
 const INIT_SCRIPT_FILE_NAME: &str = "alef_classpath_init.gradle";
@@ -376,6 +384,39 @@ mod tests {
             INIT_SCRIPT.contains("println \"ALEF_CLASSPATH_TASK:\" + compileTask.name"),
             "every matched compile task must print its marker unconditionally, before either \
              try/catch block runs"
+        );
+    }
+
+    /// A compile task's own `libraries`/`classpath` property mirrors `compileClasspath`, which by
+    /// Gradle's `api`/`implementation` design excludes an `implementation`-scoped transitive
+    /// dependency of a directly-declared library — even though that dependency is a real artifact
+    /// the module ships with and that appears on `runtimeClasspath`. That is a "one category of
+    /// dependency missing" gap, not the "matched a task but got nothing" shape the completeness
+    /// check above catches: most classpath entries are still present, so `entries.len() >
+    /// matched_tasks` and the check never fires, yet snippets exercising the runtime-only-visible
+    /// dependency still fail as an unresolved reference. This cannot be exercised without a live
+    /// Gradle + Android project (compile vs. runtime classpath visibility is a real dependency-graph
+    /// distinction, not something a fake shell-script wrapper can fake), so this pins the fix in the
+    /// shipped asset instead: reverting it would pass every other test in this file untouched while
+    /// silently reintroducing the gap. ~keep
+    #[test]
+    fn the_init_script_also_unions_in_the_runtime_classpath() {
+        assert!(
+            INIT_SCRIPT.contains("endsWith('runtimeclasspath')"),
+            "the runtime classpath configuration(s) must be located generically by name suffix, not \
+             a hardcoded variant such as `debugRuntimeClasspath`, so this covers Android's \
+             per-variant configurations, a plain JVM project's `runtimeClasspath`, and Kotlin \
+             Multiplatform's per-target ones alike"
+        );
+        assert!(
+            INIT_SCRIPT.contains("viewConfiguration.lenient(true)"),
+            "runtime classpath resolution must be lenient so one unresolvable artifact cannot \
+             silently drop every other real dependency the configuration would otherwise report"
+        );
+        assert!(
+            INIT_SCRIPT.contains("if (matchedAnyTask)"),
+            "runtime classpath resolution must be scoped to projects that actually have a matched \
+             Kotlin compile task, not run unconditionally across every project in the build"
         );
     }
 }

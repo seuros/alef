@@ -19,11 +19,27 @@
 // contributed nothing: every real Kotlin compilation depends on kotlin-stdlib at minimum, so a
 // matched task contributing no more than its own destination directory is a resolution defect, not
 // a small project. ~keep
+//
+// A compile task's own `libraries`/`classpath` property mirrors that variant's `compileClasspath`
+// configuration, which by Gradle's own `api`/`implementation` design only exposes a dependency's
+// `api`-scoped transitive dependencies -- an `implementation`-scoped transitive dependency stays
+// invisible there even though it is a real, resolvable artifact the module ships with, because it
+// also appears on that variant's `runtimeClasspath`. A doc snippet demonstrating a capability the
+// module gets from such a dependency is not bound by the module's own internal api/implementation
+// boundary the way the module's own source is, so this also unions in every `*RuntimeClasspath`
+// configuration once a project has at least one matched Kotlin compile task, resolved leniently so
+// one unresolvable artifact cannot silently drop every other real dependency the configuration
+// would otherwise report. Matched by name suffix rather than a hardcoded variant name so this
+// covers Android's per-variant configurations (`debugRuntimeClasspath`, `releaseRuntimeClasspath`,
+// ...), a plain JVM project's single `runtimeClasspath`, and Kotlin Multiplatform's per-target ones
+// alike. ~keep
 allprojects { proj ->
     proj.tasks.register("alefPrintClasspath") {
         doLast {
             def entries = new LinkedHashSet<String>()
+            def matchedAnyTask = false
             proj.tasks.matching { it.name =~ /(?i)compile.*Kotlin/ }.each { compileTask ->
+                matchedAnyTask = true
                 println "ALEF_CLASSPATH_TASK:" + compileTask.name
                 try {
                     if (compileTask.hasProperty('destinationDirectory')) {
@@ -40,6 +56,25 @@ allprojects { proj ->
                     }
                 } catch (Exception ignored) {
                     // Best-effort: a task that does not expose either property contributes nothing.
+                }
+            }
+            if (matchedAnyTask) {
+                proj.configurations.matching { configuration ->
+                    configuration.canBeResolved && configuration.name.toLowerCase().endsWith('runtimeclasspath')
+                }.each { configuration ->
+                    try {
+                        configuration.incoming.artifactView { viewConfiguration -> viewConfiguration.lenient(true) }
+                            .files.each { artifact ->
+                                // An Android runtime classpath can report `.aar` archives, which kotlinc cannot
+                                // read as classpath entries; a plain jar or a classes directory is what every
+                                // compile-task classpath above already contributes. ~keep
+                                if (artifact.isDirectory() || artifact.name.toLowerCase().endsWith('.jar')) {
+                                    entries << artifact.absolutePath
+                                }
+                            }
+                    } catch (Exception ignored) {
+                        // Best-effort: a configuration that cannot resolve even leniently contributes nothing.
+                    }
                 }
             }
             entries.each { println "ALEF_CLASSPATH_ENTRY:" + it }
