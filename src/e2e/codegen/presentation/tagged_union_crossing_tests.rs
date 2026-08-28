@@ -224,3 +224,111 @@ fn the_same_path_without_a_declared_crossing_is_still_dropped() {
         "an undeclared crossing must still be refused even though the IR enum data resolves: {operations:?}"
     );
 }
+
+/// [`type_defs`] and [`enums`], one union level deeper: `VariantDetail` (the FIRST crossing's own
+/// payload type) declares a SECOND enum-typed field, `nested: NestedInfo`, itself a tagged union
+/// with a single variant `Deep(DeepDetail)`, and `DeepDetail { value: String }` is reachable only
+/// by crossing that second union in turn. Mirrors the shape a follow-up consumer report described
+/// as still dropped from generated doc snippets even after the first crossing was fixed.
+fn type_defs_double_crossing() -> Vec<TypeDef> {
+    let mut type_defs = type_defs();
+    for type_def in &mut type_defs {
+        if type_def.name == "VariantDetail" {
+            type_def
+                .fields
+                .push(field("nested", TypeRef::Named("NestedInfo".to_string())));
+        }
+    }
+    type_defs.push(TypeDef {
+        name: "DeepDetail".to_string(),
+        fields: vec![field("value", TypeRef::String)],
+        ..TypeDef::default()
+    });
+    type_defs
+}
+
+fn enums_double_crossing() -> Vec<EnumDef> {
+    let mut enums = enums();
+    enums.push(EnumDef {
+        name: "NestedInfo".to_string(),
+        variants: vec![EnumVariant {
+            name: "Deep".to_string(),
+            fields: vec![field("deep", TypeRef::Named("DeepDetail".to_string()))],
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    });
+    enums
+}
+
+fn config_with_both_crossings_declared() -> E2eConfig {
+    E2eConfig {
+        call: CallConfig {
+            function: "convert".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        },
+        fields_method_calls: [
+            "document.format.variant".to_string(),
+            "document.format.variant.nested.deep".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        ..E2eConfig::default()
+    }
+}
+
+/// The decisive case this module exists to add: a leaf reached through TWO chained declared
+/// crossings (`variant`, then `deep`) must survive doc-snippet trimming, not just a leaf one
+/// crossing deep. Both crossings are declared in `fields_method_calls`.
+#[test]
+fn a_derived_show_through_two_chained_method_call_crossings_survives() {
+    let fixture = derived_docs_fixture(serde_json::json!([
+        {"type": "equals", "field": "document.format.variant.nested.deep.value", "value": "ok"},
+    ]));
+
+    let operations = resolve(
+        &fixture,
+        &config_with_both_crossings_declared(),
+        "python",
+        &type_defs_double_crossing(),
+        &enums_double_crossing(),
+        &convert_returning("Envelope"),
+    );
+
+    assert_eq!(
+        operations
+            .iter()
+            .map(|operation| operation.expression.as_str())
+            .collect::<Vec<_>>(),
+        vec!["result.document.format.variant.nested.deep.value"],
+        "a leaf reached through two chained declared crossings must not be silently dropped: {operations:?}"
+    );
+}
+
+/// The negative control for the chained case: only the OUTER crossing (`variant`) is declared,
+/// the inner one (`nested.deep`) is not. The leaf past the undeclared inner crossing must still
+/// be dropped -- proving the walk commits to a real refusal for an inner crossing missing its own
+/// declaration, rather than treating the outer declaration as blanket permission for everything
+/// beneath it.
+#[test]
+fn a_derived_show_through_an_undeclared_inner_crossing_is_still_dropped() {
+    let fixture = derived_docs_fixture(serde_json::json!([
+        {"type": "equals", "field": "document.format.variant.nested.deep.value", "value": "ok"},
+    ]));
+
+    let operations = resolve(
+        &fixture,
+        &config_with_crossing_declared(),
+        "python",
+        &type_defs_double_crossing(),
+        &enums_double_crossing(),
+        &convert_returning("Envelope"),
+    );
+
+    assert_eq!(
+        operations,
+        Vec::new(),
+        "an undeclared inner crossing must still be dropped even with the outer one declared: {operations:?}"
+    );
+}

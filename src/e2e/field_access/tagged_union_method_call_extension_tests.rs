@@ -135,6 +135,133 @@ fn a_path_stopping_exactly_at_the_covered_variant_resolves() {
     assert_eq!(resolver.result_field_oracle_knows("metadata.format.excel"), Some(true));
 }
 
+/// `Envelope { metadata: Metadata }`, `Metadata { format: FormatMetadata }`, `FormatMetadata`
+/// (enum) with variant `Excel(ExcelMetadata)`, `ExcelMetadata { sheet_count, sheet_names, sheet:
+/// SheetKind }` where `SheetKind` is a SECOND enum (not `TypeDef`) with variant `Named
+/// (SheetNameMetadata)`, `SheetNameMetadata { label: String }`.
+///
+/// One union level deeper than [`type_defs_with_tagged_union`]: the leaf (`label`) is reachable
+/// only by crossing TWO declared unions in sequence (`excel`, then `named`), not one.
+fn type_defs_with_nested_tagged_union() -> Vec<TypeDef> {
+    vec![
+        TypeDef {
+            name: "Envelope".to_string(),
+            fields: vec![FieldDef {
+                name: "metadata".to_string(),
+                ty: TypeRef::Named("Metadata".to_string()),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "Metadata".to_string(),
+            fields: vec![FieldDef {
+                name: "format".to_string(),
+                ty: TypeRef::Named("FormatMetadata".to_string()),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "ExcelMetadata".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "sheet_count".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                },
+                FieldDef {
+                    name: "sheet_names".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                },
+                FieldDef {
+                    name: "sheet".to_string(),
+                    ty: TypeRef::Named("SheetKind".to_string()),
+                    ..FieldDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "SheetNameMetadata".to_string(),
+            fields: vec![FieldDef {
+                name: "label".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        },
+    ]
+}
+
+fn sheet_kind_enum_def() -> EnumDef {
+    EnumDef {
+        name: "SheetKind".to_string(),
+        variants: vec![EnumVariant {
+            name: "Named".to_string(),
+            fields: vec![FieldDef {
+                name: "named".to_string(),
+                ty: TypeRef::Named("SheetNameMetadata".to_string()),
+                ..FieldDef::default()
+            }],
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    }
+}
+
+fn resolver_with_nested_union(method_calls: &[&str]) -> FieldResolver {
+    let type_defs = type_defs_with_nested_tagged_union();
+    let enums = vec![format_enum_def(), sheet_kind_enum_def()];
+    let result_map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
+    let enum_map = FieldResolver::ir_enum_fields(&type_defs, &enums);
+    let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
+    let method_calls_set: HashSet<String> = method_calls.iter().map(|s| s.to_string()).collect();
+
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &method_calls_set,
+    )
+    .with_ir_result_fields(result_map, Some("Envelope".to_string()))
+    .with_ir_enum_map(enum_map, Some("Envelope".to_string()))
+    .with_ir_fields(reachable, excluded, optional)
+}
+
+/// One union level deeper than the tests above: a crossing's own payload type (`ExcelMetadata`)
+/// can declare ANOTHER enum-typed field (`sheet: SheetKind`) that is, in turn, its own declared
+/// crossing. With both crossings named in `fields_method_calls`, `label` -- reachable only by
+/// crossing both -- must resolve, not just the first union boundary.
+#[test]
+fn a_path_through_two_chained_method_call_covered_unions_resolves() {
+    let resolver = resolver_with_nested_union(&["metadata.format.excel", "metadata.format.excel.sheet.named"]);
+
+    assert_eq!(
+        resolver.result_field_oracle_knows("metadata.format.excel.sheet.named.label"),
+        Some(true),
+        "a leaf reached through two chained declared crossings must resolve"
+    );
+}
+
+/// The decisive negative control for the chained case: the outer crossing (`excel`) is declared,
+/// but the INNER one (`named`) is not. The walk must still commit to a definite refusal for the
+/// leaf past the undeclared second crossing, not silently allow it just because the first one
+/// validated -- otherwise a version of the fix that stopped checking after the first crossing
+/// would pass the positive test above for the wrong reason.
+#[test]
+fn the_inner_crossing_of_a_chain_still_requires_its_own_declaration() {
+    let resolver = resolver_with_nested_union(&["metadata.format.excel"]);
+
+    assert_eq!(
+        resolver.result_field_oracle_knows("metadata.format.excel.sheet.named.label"),
+        Some(false),
+        "an undeclared inner crossing must still be refused even with the outer one declared"
+    );
+}
+
 /// A field whose type is unjudgeable (a `serde_json::Value`, not a tagged union) must keep
 /// abstaining past its own leaf rather than being rejected -- the fix must not turn every
 /// declared-but-unresolvable field into a hard refusal, only ones a `fields_method_calls` entry

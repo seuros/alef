@@ -5,7 +5,6 @@ use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
 };
 use super::super::types::{FieldResolver, PathSegment, StringyField};
-use heck::ToUpperCamelCase;
 use std::borrow::Cow;
 use std::collections::HashSet;
 
@@ -896,51 +895,15 @@ impl FieldResolver {
     ///   (e.g., `"sheet_count"`)
     ///
     /// Returns `None` if no tagged-union segment exists in the path.
+    ///
+    /// See `resolver::tagged_union_crossing` for the underlying scan
+    /// ([`Self::find_crossing`]) and for [`Self::tagged_union_method_call_declares`], which walks
+    /// a whole CHAIN of these -- split into its own module because a single crossing's payload
+    /// type can itself declare another crossing, and that recursive walk earns its own concern
+    /// rather than growing this one past the file's line budget.
     pub fn tagged_union_split(&self, fixture_field: &str) -> Option<(String, String, String)> {
         let resolved = self.resolve(fixture_field);
-        let segments: Vec<&str> = resolved.split('.').collect();
-        let mut path_so_far = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if !path_so_far.is_empty() {
-                path_so_far.push('.');
-            }
-            path_so_far.push_str(seg);
-            if self.method_calls.contains(&path_so_far) {
-                // Everything before the last segment of path_so_far is the prefix.
-                let prefix = segments[..i].join(".");
-                let variant = (*seg).to_string();
-                let suffix = segments[i + 1..].join(".");
-                return Some((prefix, variant, suffix));
-            }
-        }
-        None
-    }
-
-    /// Whether the IR confirms a `fields_method_calls`-covered tagged-union crossing in
-    /// `fixture_field`, and if so, whether the path segment(s) past the crossing are declared on
-    /// the variant's own payload type.
-    ///
-    /// `None` when `fixture_field` does not cross a method-call-covered union at all
-    /// ([`Self::tagged_union_split`] found no covering entry), or when the IR cannot resolve the
-    /// union type at `prefix` or the variant's single-field payload type — callers must fall back
-    /// to their pre-existing unwalkable-field refusal in that case, exactly as if this method did
-    /// not exist. `Some(true)` for an empty suffix: the path stops AT the variant accessor itself,
-    /// which is a real, IR-confirmed member once the union and variant both resolve, with nothing
-    /// further to walk.
-    ///
-    /// `variant` is pascal-cased before the [`Self::union_variant_payload`] lookup, matching every
-    /// other caller of that method (gleam/dart/kotlin/swift assertion rendering): the fixture path
-    /// spells the accessor segment lower (`excel`), but `variant_payload_types` is keyed by the
-    /// Rust variant's own declared name (`Excel`).
-    fn tagged_union_method_call_declares(&self, fixture_field: &str) -> Option<bool> {
-        let (prefix, variant, suffix) = self.tagged_union_split(fixture_field)?;
-        let union_type = enum_type_at_path(&self.ir_enum_map, &prefix)?;
-        let variant_pascal = variant.to_upper_camel_case();
-        let (_, payload_type) = self.union_variant_payload(&union_type, &variant_pascal)?;
-        if suffix.is_empty() {
-            return Some(true);
-        }
-        super::super::ir_result_fields::type_declares_path(&self.ir_result_field_map, payload_type, &suffix)
+        self.find_crossing("", resolved)
     }
 
     /// Split a bracket-wildcard path (`foo[].bar`) into its array-root path and

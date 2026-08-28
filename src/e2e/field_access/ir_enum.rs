@@ -147,9 +147,19 @@ pub(super) fn is_enum_path(map: &IrEnumMap, path: &str) -> bool {
 /// of re-walking the path themselves.
 pub(super) fn enum_type_at_path(map: &IrEnumMap, path: &str) -> Option<String> {
     let root = map.root_type.as_deref()?;
+    enum_type_at_path_from(map, root, path)
+}
+
+/// The same walk [`enum_type_at_path`] does, starting from an explicit `owner` type instead of
+/// `map.root_type` -- for a caller that has already crossed into a tagged-union variant's own
+/// payload type and needs to resolve a SECOND enum-typed field declared on it (a union nested
+/// inside another union's payload), which is not `map.root_type` and has no other way to anchor
+/// this walk. [`enum_type_at_path`] delegates here with `map.root_type` so both callers share one
+/// walk and can never disagree about which type a path reaches. ~keep
+pub(super) fn enum_type_at_path_from(map: &IrEnumMap, owner: &str, path: &str) -> Option<String> {
     let segments = parse_path(path);
     let (last, prefix) = segments.split_last()?;
-    let owner = resolve_owner(map, root, prefix)?;
+    let owner = resolve_owner(map, owner, prefix)?;
     let name = segment_name(last)?;
     map.enum_field_types
         .get(owner)
