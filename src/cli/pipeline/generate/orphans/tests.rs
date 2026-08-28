@@ -632,3 +632,164 @@ fn root_with_both_manifest_and_keep_entries_stays_quiet() {
     );
     assert!(kept.exists());
 }
+
+/// The disk-scan loop's own skip message. Present in BOTH of its branches, so asserting it is
+/// what proves the root reached classification at all -- a fixture whose root does not exist is
+/// skipped silently by `sweep_manifest_orphans` and would otherwise make every "must not warn"
+/// assertion below pass by examining nothing. ~keep
+const DISK_SCAN_SKIPPED: &str = "disk-scan orphan reclaim skipped for";
+/// Only the no-previous-baseline (first run / cleared cache / newly introduced ownership
+/// manifest) branch.
+const DISK_SCAN_NO_BASELINE: &str = "no previous-run manifest exists at all";
+/// Only the real-defect branch: a baseline exists and still vouches for nothing under this root.
+const DISK_SCAN_BACKEND_DEFECT: &str = "a backend whose own bookkeeping has never vouched";
+
+/// Fixture shared by the three disk-scan classification tests below: one real, existing,
+/// git-tracked output root holding one alef-marked file. Only the manifest/keep state differs
+/// between the three tests, so any difference in what they log is attributable to that state
+/// alone rather than to one of them handing `sweep_manifest_orphans` a root it skips as
+/// non-existent before classifying anything. ~keep
+fn disk_scan_fixture(dir: &tempfile::TempDir, package_subdir: &str) -> (PathBuf, PathBuf) {
+    let package_dir = dir.path().join(package_subdir);
+    std::fs::create_dir_all(&package_dir).expect("package dir");
+    git_init(&package_dir);
+    let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
+    let marked = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+    let generated = package_dir.join("Bridge.java");
+    std::fs::write(&generated, &marked).expect("generated file");
+    git_add(&package_dir, &["Bridge.java"]);
+    assert!(
+        package_dir.is_dir(),
+        "fixture produced no existing root at {} -- sweep_manifest_orphans skips a non-existent \
+         root before it classifies anything, so every assertion below would pass vacuously",
+        package_dir.display()
+    );
+    (package_dir, generated)
+}
+
+/// Case (c), the one a consumer hit on a clean regen: `alef cache clear` (or a fresh checkout, or
+/// the first run after `{stage}-ownership` manifests were introduced) leaves
+/// `cache::read_stage_paths` returning an empty `Vec` for EVERY language, so `previous_paths` is
+/// globally empty and every existing output root reports `0 manifest entry(s)` at once. That is
+/// the absence of a baseline, not a backend that keeps no books -- and it self-resolves as soon as
+/// this run's callers write their ownership manifests back, which they do immediately after
+/// `sweep_manifest_orphans` returns.
+///
+/// `sweep_manifest_orphans`' sibling `allowed_roots` loop already made this exact distinction
+/// (commit ba58517b1); the disk-scan loop did not, and reported the cleared cache as
+/// "this backend's bookkeeping has never vouched for anything" across 20+ roots. ~keep
+#[traced_test]
+#[test]
+fn disk_scan_root_with_no_baseline_anywhere_is_not_reported_as_a_backend_bookkeeping_defect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (package_dir, generated) = disk_scan_fixture(&dir, "packages/java");
+
+    let previous: Vec<PathBuf> = Vec::new();
+    let keep = std::collections::HashSet::from([generated.clone()]);
+
+    let removed = sweep_manifest_orphans(
+        &previous,
+        &keep,
+        std::slice::from_ref(&package_dir),
+        std::slice::from_ref(&package_dir),
+    )
+    .expect("manifest sweep");
+
+    assert_eq!(removed, 0, "the disk-scan route never deletes");
+    assert!(
+        logs_contain(DISK_SCAN_SKIPPED),
+        "the root must reach classification and report a skip -- without this the assertions \
+         below would pass on a root that was never examined"
+    );
+    assert!(
+        !logs_contain(DISK_SCAN_BACKEND_DEFECT),
+        "a wholly absent previous-run baseline (cleared cache, fresh checkout, first run under \
+         these ownership manifests) must not be reported as a backend that never records its own \
+         output -- there is no baseline for that claim to be measured against"
+    );
+    assert!(
+        logs_contain(DISK_SCAN_NO_BASELINE),
+        "the no-baseline case must stay visible at a lower severity, and must say so, rather than \
+         going silent -- the consumer asked whether a second run would settle it"
+    );
+    assert!(generated.exists());
+}
+
+/// Case (a), the real defect this warning exists for, and the control that proves the fix above
+/// did not simply make the check quiet: a previous-run manifest DOES exist and recorded paths --
+/// just none under this root. That is a backend whose bookkeeping has never vouched for its own
+/// output tree, and it must keep warning at unchanged severity. ~keep
+#[traced_test]
+#[test]
+fn disk_scan_root_unrecorded_while_baseline_covers_another_root_still_warns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (package_dir, generated) = disk_scan_fixture(&dir, "packages/java");
+
+    let previous: Vec<PathBuf> = vec![dir.path().join("packages/python/client.py")];
+    let keep = std::collections::HashSet::from([generated.clone()]);
+
+    let removed = sweep_manifest_orphans(
+        &previous,
+        &keep,
+        std::slice::from_ref(&package_dir),
+        std::slice::from_ref(&package_dir),
+    )
+    .expect("manifest sweep");
+
+    assert_eq!(removed, 0, "the disk-scan route never deletes");
+    assert!(
+        logs_contain(DISK_SCAN_SKIPPED),
+        "the root must reach classification and report a skip"
+    );
+    assert!(
+        logs_contain(DISK_SCAN_BACKEND_DEFECT),
+        "a baseline that recorded paths elsewhere but nothing under this root is the genuine \
+         bookkeeping gap and must still warn"
+    );
+    assert!(
+        !logs_contain(DISK_SCAN_NO_BASELINE),
+        "this root has a baseline; it must not be excused as a first run"
+    );
+    assert!(generated.exists());
+}
+
+/// Case (b)'s negative control, and the anti-vacuity anchor for the two tests above: a root with
+/// BOTH manifest and keep entries is not skipped at all, it is scanned. Asserted through a
+/// positive artefact of the scan -- the unrecorded-file report -- so "no skip message" here means
+/// "the scan ran and reached a verdict", not "nothing happened". ~keep
+#[traced_test]
+#[test]
+fn disk_scan_root_with_both_manifest_and_keep_entries_is_scanned_not_skipped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (package_dir, generated) = disk_scan_fixture(&dir, "packages/java");
+
+    let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
+    let marked = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+    let unrecorded = package_dir.join("Legacy.java");
+    std::fs::write(&unrecorded, &marked).expect("unrecorded file");
+    git_add(&package_dir, &["Legacy.java"]);
+
+    let previous: Vec<PathBuf> = vec![generated.clone()];
+    let keep = std::collections::HashSet::from([generated.clone()]);
+
+    let removed = sweep_manifest_orphans(
+        &previous,
+        &keep,
+        std::slice::from_ref(&package_dir),
+        std::slice::from_ref(&package_dir),
+    )
+    .expect("manifest sweep");
+
+    assert_eq!(removed, 0, "the disk-scan route reports, it never deletes");
+    assert!(
+        logs_contain("are not in this run's recorded output"),
+        "the scan must actually have run and reported the unrecorded file -- this is what makes \
+         the two `!logs_contain` assertions below meaningful instead of vacuous"
+    );
+    assert!(
+        !logs_contain(DISK_SCAN_SKIPPED),
+        "a root vouched for by both the baseline and this run's keep set must be scanned, not skipped"
+    );
+    assert!(unrecorded.exists(), "reported candidates are never deleted");
+    assert!(generated.exists());
+}

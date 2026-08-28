@@ -264,13 +264,11 @@ pub fn sweep_manifest_orphans(
         let manifest_entries_under_root = previous_paths.iter().filter(|path| path.starts_with(root)).count();
         let keep_entries_under_root = keep.iter().filter(|path| path.starts_with(root)).count();
         if manifest_entries_under_root == 0 || keep_entries_under_root == 0 {
-            tracing::warn!(
-                "disk-scan orphan reclaim skipped for {}: {manifest_entries_under_root} manifest entry(s) and \
-                 {keep_entries_under_root} keep entry(s) recorded under this root -- a backend whose own \
-                 bookkeeping has never vouched for anything under its output root cannot be trusted to tell a \
-                 real orphan from output it simply never recorded; a stale file here is left in place until that \
-                 backend's own path tracking is fixed",
-                root.display()
+            report_unscannable_root(
+                root,
+                manifest_entries_under_root,
+                keep_entries_under_root,
+                previous_paths.len(),
             );
             continue;
         }
@@ -374,6 +372,58 @@ pub fn sweep_manifest_orphans(
         info!("Swept {removed} manifest orphan(s)");
     }
     Ok(removed)
+}
+
+/// Explain, at the severity the evidence actually supports, why a caller-supplied
+/// `disk_scan_roots` candidate was refused. **The refusal itself is identical either way** — a
+/// root this function cannot vouch for is never scanned — only the classification differs.
+///
+/// `previous_total` is `previous_paths.len()` across ALL roots, before any per-root filter, and a
+/// zero there answers a strictly different question than `manifest_entries_under_root == 0`.
+/// Every production call site merges `previous_paths` from
+/// `{stage}-ownership` manifests via `cache::read_stage_paths`, which returns an empty `Vec` both
+/// when the manifest file is absent and when it is present but records nothing — the reader cannot
+/// distinguish the two (see its doc). So a globally empty `previous_paths` means no manifest this
+/// call consulted recorded a single path anywhere: there is no previous-run baseline for a
+/// bookkeeping gap to exist in. That is the ordinary shape of `alef cache clear` followed by a
+/// regen, a fresh checkout, or the first run after the `{stage}-ownership` manifests were
+/// introduced — not a defect, and it fires for *every* existing root at once, which is the
+/// signature to recognise it by.
+///
+/// It self-resolves on the next run, and the mechanism is the caller's, not this function's: both
+/// disk-scan call sites (`bin_cli::all_commands`' `all-bindings-{lang}-ownership` and
+/// `bin_cli::core_commands::generate`'s `generate-{lang}-ownership`) write that manifest back for
+/// every configured language immediately after this call returns, deliberately after the sweep so
+/// it never observes this run's own writes as "previous" state. Once written, `previous_paths` is
+/// no longer globally empty on the following run, and a root that is *still* unrecorded then takes
+/// the `warn!` branch below — which is exactly the real defect (a backend recording only its Rust
+/// crate source path and never its own language-output tree) at unchanged severity.
+///
+/// This mirrors the same split `sweep_manifest_orphans`' `allowed_roots` loop already makes for its
+/// "orphan-reclaim bookkeeping gap" warning. That loop got the carve-out and this one did not, so a
+/// consumer's clean regen reported 20+ roots as untrustworthy backend bookkeeping when the only
+/// thing missing was the cache they had just cleared. ~keep
+fn report_unscannable_root(root: &Path, manifest_entries: usize, keep_entries: usize, previous_total: usize) {
+    if previous_total == 0 {
+        tracing::debug!(
+            "disk-scan orphan reclaim skipped for {}: no previous-run manifest exists at all ({keep_entries} keep \
+             entry(s) recorded under this root this run, and every manifest this call consulted has zero entries \
+             anywhere). Expected after `alef cache clear`, on a fresh checkout, or on the first run after the \
+             ownership manifests were introduced -- not a bookkeeping defect. It self-resolves once this run \
+             writes its own ownership manifests, which happens immediately after this sweep; it is only a real \
+             gap if the same root is still unrecorded on the next run, which warns instead",
+            root.display()
+        );
+        return;
+    }
+    tracing::warn!(
+        "disk-scan orphan reclaim skipped for {}: {manifest_entries} manifest entry(s) and {keep_entries} keep \
+         entry(s) recorded under this root, even though a previous-run manifest does exist and recorded \
+         {previous_total} path(s) overall -- a backend whose own bookkeeping has never vouched for anything \
+         under its output root cannot be trusted to tell a real orphan from output it simply never recorded; a \
+         stale file here is left in place until that backend's own path tracking is fixed",
+        root.display()
+    );
 }
 
 /// True when `path` has enough ownership evidence to be reclaimed by
