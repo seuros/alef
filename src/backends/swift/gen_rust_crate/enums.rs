@@ -94,10 +94,10 @@ pub(crate) fn emit_enum_wrapper(
         // crate's own cfg gate; this swift-bridge crate never declares a Cargo feature for it
         // (see `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim onto the match arm
         // is an `unexpected cfg condition value` error. Drop the arm entirely instead -- named
-        // and counted via `tracing::warn!`, not silently -- and fall through to the `_ =>
+        // and counted via `tracing::debug!`, not silently -- and fall through to the `_ =>
         // unreachable!()` catch-all below. ~keep
         if variant.cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %en.name,
                 enum_rust_path = %en.rust_path,
                 variant_name = %variant.name,
@@ -214,7 +214,7 @@ pub(crate) fn emit_enum_wrapper(
             // (see the From-impl loop above and `codegen::cfg::collect_cfg_gates`), so that case
             // drops the arm entirely instead of gating it. ~keep
             if variant.cfg.is_some() && !is_host_enum {
-                tracing::warn!(
+                tracing::debug!(
                     enum_name = %en.name,
                     enum_rust_path = %en.rust_path,
                     variant_name = %variant.name,

@@ -78,14 +78,15 @@ fn sanitized_core_to_binding_expr(f: &str, ty: &TypeRef, optional: bool) -> Stri
 /// cfg gate; this NAPI crate never declares a Cargo feature for it (see
 /// `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(feature = "...")]` is
 /// an `unexpected cfg condition value` error. Such an arm is dropped entirely instead --
-/// named and counted via `tracing::warn!`, not silently -- mirroring
+/// named and counted via `tracing::debug!`, not silently; `codegen::foreign_cfg_variants` raises
+/// the same fact to WARN once for the whole run -- mirroring
 /// `codegen::conversions::enums::emit_cfg_gated_arm` and
 /// `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper`. A host-owned cfg keeps its
 /// arm and its `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
 fn napi_variant_cfg(enum_def: &EnumDef, variant: &EnumVariant, is_host_enum: bool, direction: &str) -> Option<String> {
     let cfg = variant.cfg.as_deref()?;
     if !is_host_enum {
-        tracing::warn!(
+        tracing::debug!(
             enum_name = %enum_def.name,
             enum_rust_path = %enum_def.rust_path,
             variant_name = %variant.name,

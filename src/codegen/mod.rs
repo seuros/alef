@@ -15,6 +15,7 @@ pub mod enum_variant_size;
 pub mod error_gen;
 pub mod field_init;
 pub mod fn_dedup;
+pub mod foreign_cfg_variants;
 pub mod generators;
 pub mod keywords;
 pub mod mut_writeback;

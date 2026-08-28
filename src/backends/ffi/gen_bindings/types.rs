@@ -530,7 +530,8 @@ pub(super) fn gen_enum_to_i32(
 /// `[[crates.source_crates]]` crate carries that crate's own cfg gate, and this FFI crate's
 /// `Cargo.toml` never declares a feature for it, so an emitted `#[cfg(feature = "...")]`
 /// referencing it is an `unexpected cfg condition value` error. Such an arm is dropped
-/// entirely -- not silently, a `tracing::warn!` names the enum, variant, and cfg -- rather than
+/// entirely -- not silently, a `tracing::debug!` names the enum, variant, and cfg, and
+/// `codegen::foreign_cfg_variants` raises the same fact to WARN once for the whole run -- rather than
 /// emitting either an invalid attribute or, worse, an ungated reference to a variant that may
 /// not even exist in the linked build. The discriminant is still reserved, so numbering stays
 /// stable across feature subsets. A host-owned cfg keeps its arm and its `#[cfg(...)]`
@@ -543,7 +544,7 @@ pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str,
     let mut arms = String::new();
     for (i, variant) in enum_def.variants.iter().enumerate() {
         if variant.cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %enum_def.name,
                 enum_rust_path = %enum_def.rust_path,
                 variant_name = %variant.name,

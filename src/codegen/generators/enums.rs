@@ -344,7 +344,7 @@ fn gen_pyo3_enum_variant_constructors_content(
             None => None,
             Some(_) if is_host_enum => source_cfg,
             Some(cfg) => {
-                tracing::warn!(
+                tracing::debug!(
                     enum_name = %enum_def.name,
                     enum_rust_path = %enum_def.rust_path,
                     variant_name = %ctor.variant_name,
@@ -584,7 +584,7 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
                     None => true,
                     Some(_) if is_host_enum => true,
                     Some(cfg) => {
-                        tracing::warn!(
+                        tracing::debug!(
                             enum_name = %enum_def.name,
                             enum_rust_path = %enum_def.rust_path,
                             variant_name = %variant.name,

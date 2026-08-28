@@ -133,10 +133,20 @@ mod variant_name_for_wire_tests {
         }
     }
 
+    /// One row of the rename-resolution table: the case's name, the enum's `rename_all`, its
+    /// variants as `(name, serde_rename)`, the wire value to resolve, and the variant that must
+    /// come back (`None` for "no variant matches").
+    type RenameCase<'a> = (
+        &'a str,
+        Option<&'a str>,
+        &'a [(&'a str, Option<&'a str>)],
+        &'a str,
+        Option<&'a str>,
+    );
+
     #[test]
     fn should_resolve_every_rename_strategy_back_to_the_declared_variant() {
-        // (case, rename_all, variants, wire value, expected variant)
-        let cases: [(&str, Option<&str>, &[(&str, Option<&str>)], &str, Option<&str>); 7] = [
+        let cases: [RenameCase<'_>; 7] = [
             (
                 "single word, no rename",
                 None,

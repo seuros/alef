@@ -398,7 +398,8 @@ pub(crate) fn gen_flat_data_enum_from_impls(
     // own cfg gate; this PHP crate never declares a Cargo feature for it (see
     // `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(...)]` produces an
     // `unexpected cfg condition value` error. Such a variant is dropped from both match arms
-    // below instead -- named via `tracing::warn!` -- mirroring
+    // below instead -- named via `tracing::debug!`, with `codegen::foreign_cfg_variants` raising
+    // the same fact to WARN once for the whole run -- mirroring
     // `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper` and
     // `codegen::conversions::enums::gen_enum_from_core_to_binding_cfg`. A host-owned cfg keeps
     // its arm and its `#[cfg(...)]`. ~keep
@@ -425,7 +426,7 @@ pub(crate) fn gen_flat_data_enum_from_impls(
     ));
     for variant in &enum_def.variants {
         if variant.cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %enum_def.name,
                 enum_rust_path = %enum_def.rust_path,
                 variant_name = %variant.name,
@@ -570,7 +571,7 @@ pub(crate) fn gen_flat_data_enum_from_impls(
     ));
     for variant in &enum_def.variants {
         if variant.cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %enum_def.name,
                 enum_rust_path = %enum_def.rust_path,
                 variant_name = %variant.name,

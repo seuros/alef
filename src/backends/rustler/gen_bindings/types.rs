@@ -12,14 +12,15 @@ use ahash::AHashSet;
 /// cfg gate; this Rustler crate never declares a Cargo feature for it (see
 /// `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(feature = "...")]` is
 /// an `unexpected cfg condition value` error. Such a variant is dropped entirely instead --
-/// named and counted via `tracing::warn!`, not silently -- mirroring
+/// named and counted via `tracing::debug!`, not silently; `codegen::foreign_cfg_variants` raises
+/// the same fact to WARN once for the whole run -- mirroring
 /// `codegen::conversions::enums::emit_cfg_gated_arm`. A host-owned cfg keeps its arm and its
 /// `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
 fn rustler_flat_variant_kept(enum_def: &EnumDef, variant: &EnumVariant, is_host_enum: bool, direction: &str) -> bool {
     if variant.cfg.is_none() || is_host_enum {
         return true;
     }
-    tracing::warn!(
+    tracing::debug!(
         enum_name = %enum_def.name,
         enum_rust_path = %enum_def.rust_path,
         variant_name = %variant.name,

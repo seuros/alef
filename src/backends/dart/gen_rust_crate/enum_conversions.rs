@@ -35,7 +35,7 @@ pub(super) fn emit_from_mirror_to_core_enum(
         let vname = &variant.name;
         let cfg = variant.cfg.as_deref();
         if cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %en.name,
                 enum_rust_path = %en.rust_path,
                 variant_name = %variant.name,
@@ -306,7 +306,7 @@ pub(super) fn emit_from_impl_for_enum(
         let vname = &variant.name;
         let cfg = variant.cfg.as_deref();
         if cfg.is_some() && !is_host_enum {
-            tracing::warn!(
+            tracing::debug!(
                 enum_name = %en.name,
                 enum_rust_path = %en.rust_path,
                 variant_name = %variant.name,

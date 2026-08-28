@@ -170,7 +170,9 @@ fn configured_features_set<'a>(config: &ConversionConfig<'a>) -> Option<HashSet<
 /// cfg gate; the generated binding crate never declares a Cargo feature for it (see
 /// `codegen::cfg::collect_cfg_gates`, the same authority this asks), so forwarding it verbatim as
 /// `#[cfg(feature = "...")]` is an `unexpected cfg condition value` error. Such an arm is dropped
-/// entirely instead -- named and counted via `tracing::warn!`, not silently -- mirroring
+/// entirely instead -- named and counted via `tracing::debug!`, not silently;
+/// `codegen::foreign_cfg_variants` raises the same fact to WARN once for the whole run, instead of
+/// once per backend and direction that drops the arm -- mirroring
 /// `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper` and
 /// `backends::swift::gen_rust_crate::enums::emit_enum_wrapper`. A host-owned cfg keeps its arm and
 /// its `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
@@ -190,7 +192,7 @@ fn emit_cfg_gated_arm(
         return Some(minijinja::context! { arm => arm, cfg => Option::<&str>::None });
     };
     if !is_host_enum {
-        tracing::warn!(
+        tracing::debug!(
             enum_name = %enum_def.name,
             enum_rust_path = %enum_def.rust_path,
             variant_name = %variant.name,

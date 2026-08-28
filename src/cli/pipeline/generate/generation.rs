@@ -41,6 +41,12 @@ pub fn generate(
         );
     }
 
+    // Once for the run, before the per-language loop: a foreign cfg-gated enum variant is dropped
+    // by every Rust-emitting backend and in both conversion directions, and reporting it from each
+    // of those fifteen sites restated one fact up to fifteen times per variant on every clean
+    // regen. The sites keep the detail at DEBUG. ~keep
+    crate::codegen::foreign_cfg_variants::warn_foreign_cfg_gated_variants(api, config, languages);
+
     let ir_json = serde_json::to_string(api)?;
     let mut config_toml =
         toml::to_string(config).with_context(|| "failed to serialize resolved crate config for cache key")?;

@@ -72,7 +72,7 @@ fn visitor_variant_cfg(
         return Ok(None);
     };
     if !is_host_enum {
-        tracing::warn!(
+        tracing::debug!(
             enum_name = %enum_def.name,
             enum_rust_path = %enum_def.rust_path,
             variant_name = %variant.name,

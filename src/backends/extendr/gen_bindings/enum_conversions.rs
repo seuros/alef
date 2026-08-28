@@ -11,8 +11,9 @@ use std::collections::HashMap;
 /// feature, so the gate is valid. A variant merged in from a foreign `[[crates.source_crates]]`
 /// crate carries that crate's own cfg gate, which this generated crate's `Cargo.toml` never
 /// declares as a feature; re-emitting it verbatim is an `unexpected cfg condition value` error,
-/// so the arm is dropped entirely instead -- named and counted via `tracing::warn!`, not
-/// silently -- mirroring `codegen::conversions::enums::emit_cfg_gated_arm` and
+/// so the arm is dropped entirely instead -- named and counted via `tracing::debug!`, not
+/// silently; `codegen::foreign_cfg_variants` raises the same fact to WARN once for the whole run
+/// rather than once per backend and direction -- mirroring `codegen::conversions::enums::emit_cfg_gated_arm` and
 /// `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper`. ~keep
 fn emit_cfg_gated_arm(
     enum_def: &EnumDef,
@@ -23,7 +24,7 @@ fn emit_cfg_gated_arm(
     direction: &str,
 ) -> Option<String> {
     if variant.cfg.is_some() && !is_host_enum {
-        tracing::warn!(
+        tracing::debug!(
             enum_name = %enum_def.name,
             enum_rust_path = %enum_def.rust_path,
             variant_name = %variant.name,
