@@ -7,9 +7,9 @@ use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command
 pub struct ZigValidator;
 
 mod batch;
-mod manifest;
 #[cfg(test)]
 mod cache_dirs_tests;
+mod manifest;
 #[cfg(test)]
 mod session_command_tests;
 

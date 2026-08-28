@@ -352,7 +352,10 @@ mod tests {
         let only = snippet("int main(void) { return 0; }\n");
 
         let accepted = CValidator.validate_batch_in_session(&[&only], ValidationLevel::Compile, 10, None);
-        assert!(accepted.is_some(), "Compile must batch: one `-c` invocation covers every source");
+        assert!(
+            accepted.is_some(),
+            "Compile must batch: one `-c` invocation covers every source"
+        );
     }
 
     /// Real-toolchain proof that a batched `Compile` invocation produces one object file per

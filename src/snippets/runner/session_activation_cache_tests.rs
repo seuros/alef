@@ -89,7 +89,11 @@ fn sh_path(path: &Path) -> String {
 /// `session::tests::posix_hook` wraps its instruments -- `cmd` cannot parse `touch` at all.
 fn touch_hook(marker: &Path) -> String {
     let script = format!("touch {}", sh_path(marker));
-    if cfg!(windows) { format!("sh -c '{script}'") } else { script }
+    if cfg!(windows) {
+        format!("sh -c '{script}'")
+    } else {
+        script
+    }
 }
 
 fn python_session(working_directory: &Path, marker: &Path) -> SessionSpec {
@@ -124,10 +128,7 @@ fn a_fully_cached_run_does_not_rerun_the_sessions_before_hook() {
     }));
 
     let mut sessions = HashMap::new();
-    sessions.insert(
-        "python".to_string(),
-        python_session(working_directory.path(), &marker),
-    );
+    sessions.insert("python".to_string(), python_session(working_directory.path(), &marker));
 
     let config = RunnerConfig {
         level: ValidationLevel::Syntax,
@@ -140,14 +141,20 @@ fn a_fully_cached_run_does_not_rerun_the_sessions_before_hook() {
     let snippets = vec![snippet(Language::Python)];
 
     let first = run_validation(&snippets, &registry, &config).expect("first run completes");
-    assert_eq!(first.passed, 1, "the uncached first pass must validate and pass the snippet");
+    assert_eq!(
+        first.passed, 1,
+        "the uncached first pass must validate and pass the snippet"
+    );
     assert!(marker.exists(), "the before hook must run on the first, uncached pass");
     assert_eq!(*invocations.lock().expect("invocations"), 1);
 
     std::fs::remove_file(&marker).expect("remove marker between runs");
 
     let second = run_validation(&snippets, &registry, &config).expect("second run completes");
-    assert_eq!(second.passed, 1, "the cached second pass must still report the same passing result");
+    assert_eq!(
+        second.passed, 1,
+        "the cached second pass must still report the same passing result"
+    );
     assert!(
         !marker.exists(),
         "a fully cached run must not re-run the session's before hook"
@@ -178,10 +185,7 @@ fn a_session_with_any_uncached_snippet_still_runs_its_before_hook() {
     }));
 
     let mut sessions = HashMap::new();
-    sessions.insert(
-        "python".to_string(),
-        python_session(working_directory.path(), &marker),
-    );
+    sessions.insert("python".to_string(), python_session(working_directory.path(), &marker));
 
     let config = RunnerConfig {
         level: ValidationLevel::Syntax,
@@ -200,10 +204,12 @@ fn a_session_with_any_uncached_snippet_still_runs_its_before_hook() {
 
     let mut new_snippet = snippet(Language::Python);
     new_snippet.code = "a body never seen before, so it cannot be a cache hit".into();
-    let second =
-        run_validation(&[cached_snippet, new_snippet], &registry, &config).expect("second run completes");
+    let second = run_validation(&[cached_snippet, new_snippet], &registry, &config).expect("second run completes");
 
-    assert_eq!(second.passed, 2, "both the cached and the uncached snippet must still pass");
+    assert_eq!(
+        second.passed, 2,
+        "both the cached and the uncached snippet must still pass"
+    );
     assert!(
         marker.exists(),
         "a session with any uncached snippet must still run its before hook"

@@ -54,12 +54,10 @@ pub(super) fn needs_before_hook<'claims>(
 ) -> impl Fn(&str, &ValidationSession) -> bool + Sync + 'claims {
     move |target: &str, session: &ValidationSession| -> bool {
         match claims_by_target.get(target) {
-            Some(claimed) if !claimed.is_empty() => {
-                !claimed
-                    .iter()
-                    .copied()
-                    .all(|snippet| cached_result(snippet, config, Some(session)).is_some())
-            }
+            Some(claimed) if !claimed.is_empty() => !claimed
+                .iter()
+                .copied()
+                .all(|snippet| cached_result(snippet, config, Some(session)).is_some()),
             _ => true,
         }
     }

@@ -64,7 +64,10 @@ fn with_a_session_apply_cache_dirs_leaves_the_global_cache_unset() {
         !configured.contains_key("ZIG_GLOBAL_CACHE_DIR"),
         "apply_cache_dirs must not set ZIG_GLOBAL_CACHE_DIR when a session is present: {configured:?}"
     );
-    assert_eq!(configured.get("ZIG_LOCAL_CACHE_DIR"), Some(&root.path().join("zig-local-cache")));
+    assert_eq!(
+        configured.get("ZIG_LOCAL_CACHE_DIR"),
+        Some(&root.path().join("zig-local-cache"))
+    );
 
     // The other half of the invariant: once `session.apply` runs (as every real caller does
     // immediately afterward), the global cache resolves to the session's own fingerprint-scoped
