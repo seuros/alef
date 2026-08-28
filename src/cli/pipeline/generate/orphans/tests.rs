@@ -532,15 +532,19 @@ fn collect_alef_headered_paths_refuses_git_ignored_copies_and_keeps_uncommitted_
     );
 }
 
-/// alef#479: a caller that opts out of the disk-scan reclaim route for a root (passing `&[]` for
-/// `disk_scan_roots` -- scaffold, README/docs, and e2e/test_apps sweeps all do, see their call
-/// sites) must still learn that the root's bookkeeping is broken: this run recorded kept output
-/// under the root, but the previous-run manifest recorded nothing under it at all. Before this
-/// diagnostic, that condition produced no signal whatsoever for any of those callers -- only the
-/// disk-scan loop's own skip check warned, and only for roots a caller opted into scanning. ~keep
+/// alef-task #557 (follow-up): a crate's genuinely FIRST run -- no manifest this call consulted
+/// (`previous_paths` overall, not merely under this one root) recorded anything anywhere -- must
+/// NOT be reported as the "orphan-reclaim bookkeeping gap" warning. That warning's own text
+/// asserts the condition is "never legitimate", but an absent previous-run manifest (a fresh
+/// checkout, a wiped `.alef/` cache, or truly the first run ever) is exactly legitimate: there is
+/// no previous baseline for anything to have gone wrong in. This reproduces the false positive a
+/// consumer reported across 14 generated roots on their first run under this bookkeeping --
+/// before the fix this asserted `logs_contain("orphan-reclaim bookkeeping gap")`, which is the
+/// bug, not the spec. See `root_with_entries_under_other_root_and_none_under_this_one_still_warns`
+/// below for the real-gap case this must keep catching. ~keep
 #[traced_test]
 #[test]
-fn root_with_keep_entries_and_no_manifest_entries_warns_even_without_disk_scan() {
+fn root_with_keep_entries_and_wholly_absent_previous_manifest_is_not_a_bookkeeping_gap() {
     let dir = tempfile::tempdir().expect("tempdir");
     let package_dir = dir.path().join("packages/java");
     std::fs::create_dir_all(&package_dir).expect("package dir");
@@ -558,8 +562,47 @@ fn root_with_keep_entries_and_no_manifest_entries_warns_even_without_disk_scan()
         "disk-scan reclaim is opted out of for this root, so nothing is ever removed here"
     );
     assert!(
+        !logs_contain("orphan-reclaim bookkeeping gap"),
+        "a wholly absent previous-run manifest (first run, nothing recorded anywhere) must not be \
+         reported as the bookkeeping-gap defect -- there is no previous baseline to have a gap in"
+    );
+    assert!(
+        logs_contain("no previous-run manifest"),
+        "the first-run case must still be visible at a lower severity, not silently dropped"
+    );
+    assert!(kept.exists());
+}
+
+/// The real defect (alef#158, alef-task #557's original regression): a previous-run manifest DID
+/// exist and recorded entries under a DIFFERENT root, proving the bookkeeping mechanism itself
+/// works, yet it recorded nothing under THIS root even though this run has kept output here. This
+/// is the case the warning exists to catch, and it must keep firing at full severity even after
+/// the first-run false positive above is fixed -- otherwise the fix would have made the check
+/// vacuous instead of accurate. ~keep
+#[traced_test]
+#[test]
+fn root_with_entries_under_other_root_and_none_under_this_one_still_warns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package_dir = dir.path().join("packages/java");
+    std::fs::create_dir_all(&package_dir).expect("package dir");
+    let kept = package_dir.join("Bridge.java");
+    std::fs::write(&kept, "class Bridge {}\n").expect("kept file");
+
+    let other_root_entry = dir.path().join("packages/python/client.py");
+    let previous: Vec<PathBuf> = vec![other_root_entry];
+    let keep = std::collections::HashSet::from([kept.clone()]);
+
+    let removed =
+        sweep_manifest_orphans(&previous, &keep, std::slice::from_ref(&package_dir), &[]).expect("manifest sweep");
+
+    assert_eq!(
+        removed, 0,
+        "disk-scan reclaim is opted out of for this root, so nothing is ever removed here"
+    );
+    assert!(
         logs_contain("orphan-reclaim bookkeeping gap"),
-        "expected a warning naming the manifest/keep mismatch for a root outside disk_scan_roots"
+        "a previous manifest that recorded entries elsewhere but nothing under this root is the \
+         real bookkeeping gap and must still warn at full severity"
     );
     assert!(kept.exists());
 }

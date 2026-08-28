@@ -305,11 +305,25 @@ pub fn sweep_manifest_orphans(
     // pass `&[]` there, deliberately, because that route's reclaim is a stronger, riskier
     // operation those stages do not want. But the underlying observation -- a root this run
     // recorded kept output under, with the previous-run manifest recording nothing under it at
-    // all -- is never a legitimate state regardless of whether the caller wants reclaim to act on
-    // it, and every caller supplies `allowed_roots` unconditionally. Reporting it here, once per
-    // root not already covered by the disk-scan loop above (which already warns on this same
-    // condition as part of its own skip check), closes the gap: a caller that opts out of
-    // disk-scan reclaim still gets the diagnostic, even with no reclaim action attached. ~keep
+    // all -- can mean two different things, and this loop must not render them identically
+    // (alef-task #557's original version collapsed them, and fired on every legitimate first
+    // run for a crate with no prior manifest bookkeeping at all -- see the `previous_paths.is_empty()`
+    // branch below).
+    //
+    // `previous_paths` is the caller's FULL baseline for this call, not pre-filtered to any one
+    // root: every production call site merges it from one or more `{stage}.manifest` /
+    // `{lang}.manifest` files (`cache::read_stage_paths` / `read_lang_manifest` /
+    // `read_scaffold_manifest`), each of which returns an empty `Vec` both when the file is
+    // absent (no previous run ever recorded this stage/language) and when it is present but
+    // records nothing -- those readers cannot and do not distinguish the two on their own (see
+    // their doc comments). So `previous_paths.is_empty()` (checked across ALL roots, before the
+    // per-root filter below) answers a strictly different question than
+    // `manifest_entries_under_root == 0`: it is true only when NO manifest this call consulted
+    // recorded a single path anywhere, which is exactly the first-run/migration state -- there
+    // is no previous baseline to have a bookkeeping gap in. The real defect this warning exists
+    // to catch (alef#158, alef-task #557) instead shows up as `previous_paths` recording entries
+    // under OTHER roots while this one root is empty -- proof a previous manifest DID exist and
+    // simply never covered this root. ~keep
     for root in allowed_roots {
         if disk_scan_roots.contains(root) {
             continue;
@@ -320,6 +334,24 @@ pub fn sweep_manifest_orphans(
         }
         let keep_entries_under_root = keep.iter().filter(|path| path.starts_with(root)).count();
         if keep_entries_under_root == 0 {
+            continue;
+        }
+        if previous_paths.is_empty() {
+            // No manifest consulted by this call recorded ANYTHING, under any root -- there is no
+            // previous-run baseline at all, so this is not a bookkeeping gap, it is the expected
+            // shape of a crate's first `alef generate`/`alef all` run under this bookkeeping (a
+            // fresh checkout, a wiped `.alef/` cache, or truly the first run ever). `debug`, not
+            // `warn`: this self-resolves the moment this run's own manifest is written. If the
+            // SAME root still has zero manifest entries on the NEXT run (once `previous_paths` is
+            // no longer globally empty), the `warn!` branch below fires instead.
+            tracing::debug!(
+                "no previous-run manifest for {}: this run recorded {keep_entries_under_root} file(s) as \
+                 kept output under this root, and every manifest this call consulted has zero entries \
+                 anywhere -- expected on a first run with no prior bookkeeping, not a defect. Self-resolves \
+                 once this run's manifest is written; it is only a real gap if the same root is still \
+                 unrecorded on the next run",
+                root.display()
+            );
             continue;
         }
         tracing::warn!(
