@@ -1,7 +1,9 @@
 //! Build provenance rendered into `alef --version`.
 //!
 //! `build.rs` stamps the commit sha, working-tree state, and build time into `rustc-env` vars at
-//! compile time; this module turns them into the long version string clap prints for `--version`.
+//! compile time; this module turns them into the long version string clap prints for `--version`
+//! and into the [`build_identity`] salt every cache that can skip work is keyed on. Two renderings
+//! of one set of constants, never two independent answers to "which alef is this".
 //!
 //! The bare semver stays alone on the first line. Existing consumers — release gates, the
 //! `alef_version` pin in `alef.toml`, `expect_contains` checks in generated Homebrew test apps —
@@ -34,6 +36,59 @@ const DIRTY_MARKER: &str = "DIRTY";
 
 static LONG_VERSION: LazyLock<String> =
     LazyLock::new(|| render_long_version(env!("CARGO_PKG_VERSION"), COMMIT_SHORT, COMMIT, TREE_STATE, TIMESTAMP));
+
+static BUILD_IDENTITY: LazyLock<String> =
+    LazyLock::new(|| render_build_identity(env!("CARGO_PKG_VERSION"), COMMIT, TREE_STATE, TIMESTAMP));
+
+/// This binary's build identity: the cache-salting form of exactly the provenance
+/// [`long_version`] prints.
+///
+/// Both are rendered from the same four stamped constants, so a cache key and the `--version`
+/// banner can never disagree about which alef is running. That is the whole reason this lives
+/// here rather than beside a cache: during a release cycle many candidate binaries report the
+/// same semver while differing by commit, and a cache that salts on the semver alone replays one
+/// candidate's verdicts under another. A consumer agent observed exactly that — the binary on its
+/// PATH changed commit mid-investigation while `alef 0.72.0` never moved.
+///
+/// The build time is folded in **only for a `dirty` tree**, and the asymmetry is load-bearing in
+/// both directions:
+///
+/// * `clean` — the commit fully determines the source, so two builds of one tag on two machines
+///   at two times must produce the *same* identity. Including the timestamp here would give every
+///   released binary a private key space and turn every release run into a cold-cache run.
+/// * `unknown` — a crates.io tarball has no `.git` but is byte-identical source for every user at
+///   a given version, so the semver already identifies it completely and the timestamp would
+///   again only destroy sharing. The residual this accepts: two *git* checkouts built at
+///   different commits on a machine without git collide. `--version` already shouts that such a
+///   build is "not attributable to any commit"; nothing here can recover what was never stamped.
+/// * `dirty` — the commit does *not* determine the source, which is precisely the local
+///   development case where a stale verdict does the most damage. The timestamp moves whenever
+///   `build.rs` re-runs, i.e. whenever a watched compile input changed, so a rebuilt binary gets
+///   a cold cache while repeated runs of one dirty binary stay warm. That is narrower than
+///   bypassing the cache on dirty, which would make every local run of an expensive validation
+///   pass start from nothing.
+///
+/// This inherits `build.rs`'s documented gap: an uncommitted edit confined to an unwatched
+/// tracked path leaves the stamp in place. `dirty` and the sha are trustworthy; `clean` is only
+/// as fresh as the last watched path to move. ~keep
+pub(crate) fn build_identity() -> &'static str {
+    BUILD_IDENTITY.as_str()
+}
+
+/// Field separator for [`build_identity`]. Not a hash — the string is read by humans in cache
+/// diagnostics, and none of the four components can contain it. ~keep
+const IDENTITY_SEPARATOR: char = '/';
+
+/// Render [`build_identity`] from explicit provenance, so a test can compare two builds without
+/// producing two real binaries. Production reaches this only through [`BUILD_IDENTITY`].
+pub(crate) fn render_build_identity(semver: &str, commit: &str, tree_state: &str, timestamp: &str) -> String {
+    let mut identity = format!("{semver}{IDENTITY_SEPARATOR}{commit}{IDENTITY_SEPARATOR}{tree_state}");
+    if tree_state == TREE_DIRTY {
+        identity.push(IDENTITY_SEPARATOR);
+        identity.push_str(timestamp);
+    }
+    identity
+}
 
 /// Whether this binary's own working tree was stamped clean at compile time.
 ///
@@ -220,6 +275,109 @@ mod tests {
         assert!(
             matches!(TREE_STATE, TREE_CLEAN | TREE_DIRTY | UNKNOWN),
             "unexpected tree state {TREE_STATE}"
+        );
+    }
+
+    /// A second sha, differing from [`FULL_SHA`] in every position so a truncating bug cannot
+    /// make the two look equal by accident. ~keep
+    const OTHER_SHA: &str = "1d3b5f7902e4c6a8b0d2f4061e3c5a7b9d0f2e48";
+
+    /// The defect: during a release cycle many candidate binaries self-report one semver while
+    /// being built from different commits, so a cache salted on the semver alone replays one
+    /// candidate's verdicts under the next. Everything but the commit is held identical here. ~keep
+    #[test]
+    fn two_clean_builds_of_one_version_differ_when_only_the_commit_differs() {
+        assert_ne!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_CLEAN, EPOCH),
+            render_build_identity("0.72.0", OTHER_SHA, TREE_CLEAN, EPOCH),
+            "two candidate binaries reporting the same semver from different commits must not \
+             share a cache identity, or a fix shipped between them is masked by a stale verdict"
+        );
+    }
+
+    /// The half that proves the identity did not simply become unique per run. A released binary
+    /// is built from a tag with a clean tree: two builds of it, on two machines at two times, must
+    /// agree — otherwise every release run is a cold-cache run of an expensive validation pass. ~keep
+    #[test]
+    fn two_clean_builds_of_one_commit_agree_regardless_of_build_time() {
+        assert_eq!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_CLEAN, EPOCH),
+            render_build_identity("0.72.0", FULL_SHA, TREE_CLEAN, "1999999999"),
+            "a clean build's identity must depend on the commit, not on when it was compiled, or \
+             released binaries never share a warm cache"
+        );
+    }
+
+    /// A crates.io tarball has no `.git`, so its commit is `unknown` for everyone — but its source
+    /// is byte-identical at a given version, so the semver already identifies it and the identity
+    /// must stay shareable. This is what keeps a consumer's CI cache warm across `cargo install
+    /// alef` re-installs. ~keep
+    #[test]
+    fn builds_without_git_metadata_stay_shareable_across_install_times() {
+        assert_eq!(
+            render_build_identity("0.72.0", UNKNOWN, UNKNOWN, EPOCH),
+            render_build_identity("0.72.0", UNKNOWN, UNKNOWN, "1999999999"),
+            "a tarball build's identity must not vary with install time, or every consumer CI run \
+             that re-installs alef discards its restored snippet cache"
+        );
+    }
+
+    /// The dirty case a commit sha cannot cover: two different working trees at one commit are two
+    /// different binaries. The build time is the discriminator because it moves exactly when
+    /// `build.rs` re-runs, which is when a watched compile input changed. ~keep
+    #[test]
+    fn dirty_builds_at_one_commit_are_separated_by_build_time() {
+        assert_ne!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_DIRTY, EPOCH),
+            render_build_identity("0.72.0", FULL_SHA, TREE_DIRTY, "1999999999"),
+            "two different dirty trees at one commit must not share a cache identity"
+        );
+        assert_eq!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_DIRTY, EPOCH),
+            render_build_identity("0.72.0", FULL_SHA, TREE_DIRTY, EPOCH),
+            "one dirty binary must stay warm across repeated runs; this is a salt, not a bypass"
+        );
+    }
+
+    /// A dirty tree must never be mistaken for the clean build at the same commit. ~keep
+    #[test]
+    fn tree_state_alone_separates_a_dirty_build_from_the_clean_one_beneath_it() {
+        assert_ne!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_CLEAN, EPOCH),
+            render_build_identity("0.72.0", FULL_SHA, TREE_DIRTY, EPOCH)
+        );
+    }
+
+    #[test]
+    fn version_bump_alone_still_moves_the_identity() {
+        assert_ne!(
+            render_build_identity("0.72.0", FULL_SHA, TREE_CLEAN, EPOCH),
+            render_build_identity("0.72.1", FULL_SHA, TREE_CLEAN, EPOCH)
+        );
+    }
+
+    /// The wiring assertion: `build_identity` must render the constants this binary was actually
+    /// stamped with, not merely expose a pure helper that nothing calls with real provenance. ~keep
+    #[test]
+    fn build_identity_renders_the_constants_this_binary_was_stamped_with() {
+        assert_eq!(
+            build_identity(),
+            render_build_identity(env!("CARGO_PKG_VERSION"), COMMIT, TREE_STATE, TIMESTAMP)
+        );
+        assert_eq!(
+            build_identity(),
+            build_identity(),
+            "identity must be stable within a run"
+        );
+        assert!(
+            build_identity().starts_with(env!("CARGO_PKG_VERSION")),
+            "{}",
+            build_identity()
+        );
+        assert_ne!(
+            build_identity(),
+            env!("CARGO_PKG_VERSION"),
+            "the identity must carry more than the semver, which is the entire defect"
         );
     }
 

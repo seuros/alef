@@ -80,7 +80,17 @@ pub(crate) fn key_for_test(label: &str) -> CacheKey {
 /// The only constructor of [`CacheKey`]. Routing all three key builders through it is what
 /// makes "no cache entry outlives the alef build that wrote it" a property of the module
 /// rather than of each call site remembering. ~keep
+///
+/// Three inputs, deliberately, and they fail in different directions.
+/// `bin_cli::build_info::build_identity()` is the stamped provenance `alef --version` itself
+/// prints -- commit, tree state, and (for a dirty tree only) build time -- so two candidate
+/// binaries sharing one semver cannot share a key, and two clean builds of one commit still can.
+/// It is asked for rather than re-derived: a second local answer to "which alef is this" is how
+/// two components come to disagree about one fact. [`binary_identity`] catches what a compile-time
+/// stamp cannot -- a binary swapped underneath a fixed source tree -- but silently contributes
+/// nothing when `current_exe` fails. [`alef_version`] is the one input that cannot fail. ~keep
 fn finish(mut hasher: blake3::Hasher, alef_version: &str) -> CacheKey {
+    hasher.update(crate::bin_cli::build_info::build_identity().as_bytes());
     hasher.update(binary_identity().as_bytes());
     hasher.update(alef_version.as_bytes());
     CacheKey {
@@ -404,6 +414,33 @@ mod tests {
         assert_ne!(
             base,
             compute_stage_hash_for_version(version, IR, "stubs", CONFIG, b"fixture")
+        );
+    }
+
+    /// Same defect as the snippet cache's #612, on the `.alef/` caches: a semver does not identify
+    /// a build, and every release candidate shares one. [`binary_identity`] narrowed that case
+    /// already but contributes nothing whenever `current_exe` fails, so the stamped provenance has
+    /// to be in the key too.
+    ///
+    /// [`build_identity`](crate::bin_cli::build_info::build_identity) is a compile-time constant,
+    /// so no test can vary it. What this can prove is that it is *present*: the key is recomputed
+    /// here from every other input in [`finish`]'s exact order, and must not match. Mirroring that
+    /// order is the point -- drop the identity from `finish` and these two become equal. ~keep
+    #[test]
+    fn every_cache_key_salts_on_the_stamped_build_identity_not_only_the_semver() {
+        let version = "0.64.0";
+        let mut without_identity = blake3::Hasher::new();
+        without_identity.update(IR.as_bytes());
+        without_identity.update(b"stubs");
+        without_identity.update(CONFIG.as_bytes());
+        without_identity.update(binary_identity().as_bytes());
+        without_identity.update(version.as_bytes());
+
+        assert_ne!(
+            compute_stage_hash_for_version(version, IR, "stubs", CONFIG, &[]).as_str(),
+            without_identity.finalize().to_hex().to_string(),
+            "the cache key must fold in the build identity `alef --version` reports; without it, \
+             two candidate binaries of one semver share every `.alef/` cache entry"
         );
     }
 

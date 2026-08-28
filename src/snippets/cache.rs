@@ -24,6 +24,12 @@ const CACHE_SCHEMA_VERSION: u32 = 2;
 /// version is simply a cache miss under a different filename, not a stored verdict a version
 /// check has to remember to compare -- the same reasoning [`CACHE_SCHEMA_VERSION`] already uses
 /// for the entry's own shape, extended to cover the logic that filled it in. ~keep
+///
+/// It is a complete proxy only for *released* logic. Two builds of one unreleased version are two
+/// different validators wearing one number, which is defect #612 on
+/// [`ValidationCache::invalidation_key`]. That key now salts on the full build identity instead;
+/// this constant remains the salt for [`ValidationCache::key`], whose job is naming compilation
+/// scratch directories, not deciding whether a verdict survives. ~keep
 const ALEF_VALIDATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,6 +99,21 @@ impl ValidationCache {
     /// an explicit `alef cache clear` -- and, in the dangerous direction nobody reported, a
     /// snippet whose annotation or side-effect policy newly makes it *fail* would just as silently
     /// keep serving a stale cached `Pass`. ~keep
+    ///
+    /// Alef defect #612: the salt above was [`ALEF_VALIDATOR_VERSION`] -- the semver and nothing
+    /// else. A semver does not identify a build. During a release cycle every candidate binary
+    /// self-reports the same version while being built from a different commit, so a verdict
+    /// computed by one candidate is served to the next: a validator fix shipped between the two is
+    /// masked by a stale `Pass`, and -- the direction nobody reports -- a breakage introduced
+    /// between them is masked the same way. Five candidate binaries all reporting `0.72.0` were
+    /// handed to a consumer in one cycle, and a consumer agent independently noticed the binary on
+    /// its PATH changing commit mid-investigation while the version string never moved.
+    ///
+    /// The salt is now `bin_cli::build_info::build_identity()`, the same stamped provenance
+    /// `alef --version` prints, asked for rather than re-derived: see that function for why a
+    /// clean build's identity deliberately excludes the build time (so released binaries keep a
+    /// warm, shareable cache) and a dirty build's deliberately includes it. It subsumes
+    /// [`ALEF_VALIDATOR_VERSION`], which the identity's first component still is. ~keep
     fn invalidation_key(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -100,29 +121,30 @@ impl ValidationCache {
         deny_unclassified: bool,
         allowed_side_effects: &[SideEffectClass],
     ) -> String {
-        Self::invalidation_key_for_validator_version(
+        Self::invalidation_key_for_build_identity(
             snippet,
             level,
             session_fingerprint,
             deny_unclassified,
             allowed_side_effects,
-            ALEF_VALIDATOR_VERSION,
+            crate::bin_cli::build_info::build_identity(),
         )
     }
 
-    /// [`Self::invalidation_key`] with the alef version supplied by the caller, so a test can
-    /// observe the effect of an alef upgrade without rebuilding the binary -- mirrors
+    /// [`Self::invalidation_key`] with the alef build identity supplied by the caller, so a test
+    /// can observe the effect of an alef upgrade -- or of a same-version rebuild from another
+    /// commit -- without producing two real binaries. Mirrors
     /// [`Self::key_for_validator_version`]'s reason for existing.
-    fn invalidation_key_for_validator_version(
+    fn invalidation_key_for_build_identity(
         snippet: &Snippet,
         level: ValidationLevel,
         session_fingerprint: Option<&str>,
         deny_unclassified: bool,
         allowed_side_effects: &[SideEffectClass],
-        validator_version: &str,
+        alef_build_identity: &str,
     ) -> String {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(validator_version.as_bytes());
+        hasher.update(alef_build_identity.as_bytes());
         hasher.update(snippet.language.to_string().as_bytes());
         hasher.update(level.to_string().as_bytes());
         hasher.update(snippet.code.as_bytes());
@@ -391,6 +413,164 @@ mod tests {
              previous annotation's verdict -- in either direction: a snippet whose corrected \
              annotation should now pass must not keep reporting the old downgrade, and a snippet \
              whose new annotation should now fail must not keep reporting the old cached pass"
+        );
+    }
+
+    /// One release candidate's identity: this crate's real semver, a clean tree, a fixed build
+    /// time, and the caller's commit -- so a test that varies only `commit` really varies only
+    /// the commit.
+    fn clean_build(commit: &str) -> String {
+        crate::bin_cli::build_info::render_build_identity(env!("CARGO_PKG_VERSION"), commit, "clean", "1000000000")
+    }
+
+    const SHA_A: &str = "964c552a267ccfb50a0e6f1d3b2c4a8e7f019d24";
+    const SHA_B: &str = "1d3b5f7902e4c6a8b0d2f4061e3c5a7b9d0f2e48";
+
+    /// Alef defect #612, the failing direction: two candidate binaries of one unreleased version,
+    /// differing only by the commit they were built from, must not share a cache key. Everything
+    /// else -- semver, snippet, level, session, annotation, side-effect policy -- is held
+    /// byte-identical, so the commit is the only thing that can move the key. ~keep
+    #[test]
+    fn invalidation_key_separates_two_builds_of_one_version_at_different_commits() {
+        let snippet = snippet("value = 1");
+        let key_of = |identity: &str| {
+            ValidationCache::invalidation_key_for_build_identity(
+                &snippet,
+                ValidationLevel::Compile,
+                None,
+                false,
+                &[],
+                identity,
+            )
+        };
+
+        assert_ne!(
+            key_of(&clean_build(SHA_A)),
+            key_of(&clean_build(SHA_B)),
+            "two candidate binaries reporting the same semver from different commits must not \
+             share a snippet cache key, or one candidate's verdicts are replayed for the other -- \
+             masking both a fix shipped between them and a breakage introduced between them"
+        );
+    }
+
+    /// Alef defect #612, the half that proves caching survives the fix. A key made unique per run
+    /// would satisfy the test above and silently destroy a cache whose cost a consumer already
+    /// reported as a bottleneck. A released binary is built from a tag with a clean tree, so two
+    /// builds of it must agree no matter when they were compiled. ~keep
+    #[test]
+    fn invalidation_key_is_shared_by_two_clean_builds_of_one_commit() {
+        let snippet = snippet("value = 1");
+        let key_of = |identity: &str| {
+            ValidationCache::invalidation_key_for_build_identity(
+                &snippet,
+                ValidationLevel::Compile,
+                None,
+                false,
+                &[],
+                identity,
+            )
+        };
+        let morning =
+            crate::bin_cli::build_info::render_build_identity(env!("CARGO_PKG_VERSION"), SHA_A, "clean", "1000000000");
+        let evening =
+            crate::bin_cli::build_info::render_build_identity(env!("CARGO_PKG_VERSION"), SHA_A, "clean", "1999999999");
+
+        assert_eq!(
+            key_of(&morning),
+            key_of(&evening),
+            "two clean builds of one commit must share a cache key; a key that varies per build \
+             turns every release run into a cold-cache run of the whole validation pass"
+        );
+        assert_eq!(
+            key_of(&morning),
+            key_of(&clean_build(SHA_A)),
+            "the invalidation key must be deterministic for one build identity"
+        );
+    }
+
+    /// The disk-level half, taking the exact read path `runner::cached_result` takes. A verdict
+    /// keyed the way the pre-fix code keyed it -- on the semver alone -- is sitting in the cache
+    /// directory; `load` must not find it. The second assertion is what stops that from being
+    /// satisfied by a cache that never hits at all. ~keep
+    #[test]
+    fn cache_load_ignores_a_verdict_keyed_on_the_semver_alone() {
+        let directory = tempfile::tempdir().expect("cache directory");
+        let cache = ValidationCache::new(directory.path().into());
+        let subject = snippet("value = 1");
+        let verdict = passing_result(&subject, ValidationLevel::Compile);
+
+        let stale_key = ValidationCache::invalidation_key_for_build_identity(
+            &subject,
+            ValidationLevel::Compile,
+            None,
+            false,
+            &[],
+            ALEF_VALIDATOR_VERSION,
+        );
+        let entry = CacheEntry {
+            schema_version: CACHE_SCHEMA_VERSION,
+            result: verdict.clone(),
+        };
+        std::fs::write(
+            directory.path().join(format!("{stale_key}.json")),
+            serde_json::to_vec_pretty(&entry).expect("serialize cache entry"),
+        )
+        .expect("plant a semver-keyed cache entry");
+
+        assert!(
+            cache
+                .load(&subject, ValidationLevel::Compile, None, false, &[])
+                .is_none(),
+            "a verdict keyed on the semver alone must not be replayed: it could have been computed \
+             by any of the candidate binaries that share this version string, including one built \
+             before the validator fix under test"
+        );
+
+        cache
+            .store(&subject, ValidationLevel::Compile, None, false, &[], &verdict)
+            .expect("store cache entry");
+        assert!(
+            cache
+                .load(&subject, ValidationLevel::Compile, None, false, &[])
+                .is_some(),
+            "this binary's own verdict must still be served, or the fix has replaced stale caching \
+             with no caching"
+        );
+    }
+
+    /// The wiring assertion. `invalidation_key` -- the one every `store`/`load` goes through --
+    /// must salt on the running binary's full stamped provenance, not merely delegate to a helper
+    /// that could be handed the semver. This is what a hand-copied reimplementation would miss. ~keep
+    #[test]
+    fn invalidation_key_is_pinned_to_this_build_provenance_not_just_its_semver() {
+        let subject = snippet("value = 1");
+        let live = ValidationCache::invalidation_key(&subject, ValidationLevel::Compile, None, false, &[]);
+
+        assert_ne!(
+            live,
+            ValidationCache::invalidation_key_for_build_identity(
+                &subject,
+                ValidationLevel::Compile,
+                None,
+                false,
+                &[],
+                ALEF_VALIDATOR_VERSION,
+            ),
+            "the snippet cache key must salt on more than the semver -- a semver does not identify \
+             a build, and every candidate binary in a release cycle shares one"
+        );
+        assert_eq!(
+            live,
+            ValidationCache::invalidation_key_for_build_identity(
+                &subject,
+                ValidationLevel::Compile,
+                None,
+                false,
+                &[],
+                crate::bin_cli::build_info::build_identity(),
+            ),
+            "the salt must be the same build identity `alef --version` reports, asked for rather \
+             than re-derived"
         );
     }
 
