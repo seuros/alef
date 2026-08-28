@@ -33,6 +33,8 @@ mod node_enum_import_tests;
 mod optional_segment_len_tests;
 mod render;
 mod snippet;
+#[cfg(test)]
+mod tagged_union_wiring_tests;
 mod test_case;
 #[cfg(test)]
 mod tests;

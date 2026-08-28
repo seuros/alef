@@ -145,6 +145,23 @@ field_skip_variants! {
         "field ",
         " crosses a tagged-union variant boundary (not expressible in Swift)",
     ),
+    /// ~keep The node (NAPI) and wasm (wasm-bindgen) e2e suites are emitted by one TypeScript
+    /// generator, and neither binding gives the variant segment a member to spell. NAPI lowers a
+    /// data enum to a single FLATTENED `#[napi(object)]` struct — a discriminant field plus every
+    /// variant's own fields as optional siblings (see `backends::napi::gen_bindings::types`'s
+    /// `gen_enum` doc and its `gen_tagged_enum_struct_variant_emits_field_names` test), so
+    /// `format.excel.sheetCount` has no `excel` property at all and is `TS2339`, not a narrowing
+    /// problem. wasm-bindgen's structural `.d.ts` union (`backends::wasm::gen_bindings::ts_union`)
+    /// does keep the members apart, but a straight-line assertion cannot narrow to one of them,
+    /// which is the same reason Dart and Swift record.
+    ///
+    /// Classified with Ruby's and PHP's `EnumVariantAccessorNotAvailableIn*` — a property of the
+    /// binding's chosen representation, which no `alef.toml` edit changes — rather than as an
+    /// `AuthoringGap`, which is fatal and would fail a consumer for a fixture path that is right.
+    CrossesTaggedUnionBoundaryInTypescript: LanguageLimitation => (
+        "field ",
+        " crosses a tagged-union variant boundary (no variant member on the generated TypeScript type)",
+    ),
     /// ~keep Unlike Dart/Swift's boundary, Kotlin sealed classes ARE narrowable by pattern
     /// matching — `kotlin/assertions.rs` renders real `is <Union>.<Variant> ->` narrowing for
     /// every single-payload variant `FieldResolver::union_variant_payload` resolves. This fires
@@ -379,6 +396,12 @@ mod tests {
         assert_eq!(
             FieldSkip::CrossesTaggedUnionBoundaryInDart.class(),
             SkipClass::LanguageLimitation
+        );
+        assert_eq!(
+            FieldSkip::CrossesTaggedUnionBoundaryInTypescript.class(),
+            SkipClass::LanguageLimitation,
+            "NAPI flattens a data enum into one object with no variant member, so no fixture or \
+             alef.toml edit reaches the path; an authoring gap here would fail a correct consumer"
         );
         assert_eq!(FieldSkip::NotAvailableInCFfi.class(), SkipClass::LanguageLimitation);
         assert_eq!(

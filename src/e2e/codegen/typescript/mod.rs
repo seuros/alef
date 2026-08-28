@@ -6,6 +6,7 @@ mod assertions;
 pub(crate) mod config;
 #[cfg(test)]
 mod emit_test_backend_tests;
+mod field_refusal;
 #[cfg(test)]
 mod is_true_tests;
 mod json;

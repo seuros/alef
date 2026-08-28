@@ -111,15 +111,14 @@ pub(super) fn render_assertion(
         }
     }
 
-    // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field
+    // Every reason this generator refuses an assertion FIELD outright, in one place — the
+    // result-type miss it always had, plus the tagged-union crossing it used to render as a
+    // dotted accessor that could not compile. See `field_refusal::refusal_line`. ~keep
+    if let Some(f) = assertion.field.as_deref()
         && !f.is_empty()
-        && !field_resolver.is_valid_for_result(f)
+        && let Some(line) = super::field_refusal::refusal_line(f, field_resolver)
     {
-        out.push_str(&format!(
-            "    // skipped: {}\n",
-            FieldSkip::NotAvailableOnResultType.message(f)
-        ));
+        out.push_str(&line);
         return;
     }
 

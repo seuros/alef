@@ -72,9 +72,21 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         e2e_config.effective_fields_optional(call_config),
         e2e_config.effective_result_fields(call_config),
         e2e_config.effective_fields_array(call_config),
-        &std::collections::HashSet::new(),
+        // The consumer's own `fields_method_calls` is what declares a tagged-union crossing, and
+        // `FieldResolver::tagged_union_split` scans exactly this set. Passing a fresh empty set
+        // (as this generator did) makes that scan answer `None` for every path, so the node/wasm
+        // suites rendered a raw dotted accessor across the boundary — `TS2339`, because NAPI
+        // flattens a data enum into one object with no variant member. Every sibling generator
+        // (gleam, kotlin, dart, python, elixir, rust, java, zig) already passes it. TypeScript's
+        // accessor renderer takes no `method_calls` argument, so this only enables the crossing
+        // detector and the `is_known_via_sibling_field_config` acceptance it feeds — it cannot
+        // change an emitted accessor. ~keep
+        e2e_config.effective_fields_method_calls(call_config),
     )
-    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type.clone())
+    // Anchored at the same declared return type, so a crossing this generator refuses can be
+    // named against the IR's real union type rather than re-derived from the path's shape.
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
     // `with_ir_fields` only proves a BARE field name optional, by crate-wide unanimity — no
     // path context. The `_with_optionals` renderers key their per-segment `?.`/`?.[0]` check by
