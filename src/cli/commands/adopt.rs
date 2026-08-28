@@ -453,7 +453,22 @@ fn stamp_for(full_path: &Path, existing: &str, generated: &str) -> Option<String
 /// the frozen e2e snippets as drifted, because the only difference between them and
 /// generated output is the marker block adoption is about to add. That would have
 /// demanded 12,000 individual diff reads for 12,000 files with nothing to read. ~keep
+///
+/// `AlreadyOwned` must mean exactly what [`AdoptionState::AlreadyOwned`]'s doc says --
+/// "the guard already permits writes" -- and for an unmarkable path the guard's own
+/// `owned` predicate (`write_scaffold_files_report`/`write_files_report`) is `has_marker
+/// || (!is_markable && is_owned_by_ownership_record(..))`, not `has_marker` alone. Before
+/// this, `classify` only ever asked `content_has_alef_marker`, so a JSON-strict path the
+/// guard already unconditionally accepts (`.alef-snippet-coverage.json`, matched by
+/// `is_alef_derived_output`) or a binary/text path the committed `.alef-ownership.toml`
+/// already lists was misreported as `Converged`/`Drifted` -- re-offered for adoption on
+/// every run even though the write guard had nothing left to refuse. `classify_binary`
+/// already asked the record (`is_scaffold_owned_path`) for exactly this reason; this
+/// closes the same gap on the text rail. See `cli::pipeline::generate::write::
+/// is_owned_by_ownership_record`'s doc for why a single union, not a second copy, answers
+/// this for every caller. ~keep
 pub fn classify(
+    base_dir: &Path,
     full_path: &Path,
     relative: &Path,
     generated: &str,
@@ -461,7 +476,10 @@ pub fn classify(
     create_once: bool,
 ) -> AdoptCandidate {
     let stamped = stamp_for(full_path, existing, generated);
-    let state = if crate::core::hash::content_has_alef_marker(existing) {
+    let is_markable = crate::cli::pipeline::marker_comment_style(full_path).is_some();
+    let state = if crate::core::hash::content_has_alef_marker(existing)
+        || (!is_markable && crate::cli::pipeline::is_owned_by_ownership_record(base_dir, full_path))
+    {
         AdoptionState::AlreadyOwned
     } else if crate::core::hash::strip_hash_line(stamped.as_deref().unwrap_or(existing))
         == crate::core::hash::strip_hash_line(generated)

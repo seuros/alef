@@ -183,6 +183,7 @@ impl<'m> AdoptSession<'m> {
         }
         match String::from_utf8(bytes) {
             Ok(existing) => Classification::Ready(Rc::new(classify(
+                &self.base_dir,
                 full_path,
                 &output.relative,
                 &output.content,
@@ -258,6 +259,7 @@ impl<'m> AdoptSession<'m> {
     fn refresh_after_apply(&mut self, candidate: &AdoptCandidate) {
         let refreshed = match (&candidate.stamped, &candidate.binary) {
             (Some(stamped), _) => classify(
+                &self.base_dir,
                 &candidate.full_path,
                 &candidate.relative,
                 &candidate.generated,
