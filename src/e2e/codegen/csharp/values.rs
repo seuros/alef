@@ -4,6 +4,11 @@ use crate::core::hash::{self, CommentStyle};
 use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::escape::escape_csharp;
 
+mod field_types;
+pub(crate) use field_types::{
+    json_array_to_csharp_list, resolve_csharp_field_element_type_from_struct, resolve_csharp_field_type_from_struct,
+};
+
 /// The call's declared Rust result type, resolved from the IR itself (not a hand-configured
 /// override) — anchors `FieldResolver`'s IR-derived enum classification (`with_ir_enum_map`) at
 /// the exact struct/enum this call returns, mirroring the rust e2e generator's fix for the same

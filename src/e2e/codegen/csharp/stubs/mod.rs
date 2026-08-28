@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 mod class_scope_tests;
+#[cfg(test)]
+mod nullable_return_tests;
 
 use crate::backends::csharp::trait_bridge::csharp_type_visible_pub;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
@@ -66,6 +68,27 @@ fn emit_csharp_stub_default(
     } else {
         // Visible type, use the default logic
         defaults.emit_default(original_type)
+    }
+}
+
+/// Coerce a computed stub default expression so it is legal for a non-nullable C# type.
+///
+/// `CSharpDefaults::emit_default` answers per-`TypeRef` with no view of the *rendered*
+/// `visible_type` a stub actually declares. `TypeRef::Path` defaults to the literal string
+/// `"null"`, correct only when the declared property/return type is itself nullable (`?`) --
+/// `PathBuf` maps to plain non-nullable `string`, so a trait-bridge method returning it compiled
+/// to `public string Method() => null;`: CS8603, three times over in one registered plugin
+/// backend whose trait declares three path-returning members. Guard at the one call site where
+/// both facts (the computed default and the declared type string) are already in scope, rather
+/// than teaching the shared `CSharpDefaults` table about a per-callsite rendering it never sees. ~keep
+fn non_null_stub_default(default_val: String, visible_type: &str) -> String {
+    if default_val != "null" || visible_type.ends_with('?') {
+        return default_val;
+    }
+    if visible_type == "string" {
+        "\"\"".to_string()
+    } else {
+        format!("new {visible_type}()")
     }
 }
 
@@ -143,6 +166,7 @@ fn emit_csharp_stub_method(
             emit_csharp_stub_default(&method.return_type, &ret_ty, defaults, visible_type_names)
         }
     });
+    let default_val = non_null_stub_default(default_val, &ret_ty);
 
     // Build parameter list using visible types (internal types like HiddenRecord
     // are mapped to string to avoid stub referencing non-public types).

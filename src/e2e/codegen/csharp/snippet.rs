@@ -168,8 +168,14 @@ pub(super) fn render_snippet_body_with_ir(
     let needs_collections = setup_lines
         .iter()
         .any(|line| line.contains("List<") || line.contains("Dictionary<"));
-    let presentation =
-        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "csharp", type_defs, enums, functions);
+    let result_var = call.effective_result_var();
+    let presentation = disambiguate_presentation_items(
+        dereference_optional_iterate_collections(crate::e2e::codegen::presentation::resolve(
+            fixture, e2e_config, "csharp", type_defs, enums, functions,
+        )),
+        result_var,
+        client_factory.is_some(),
+    );
     Ok(crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
         minijinja::context! {
@@ -180,7 +186,7 @@ pub(super) fn render_snippet_body_with_ir(
             client_args => client_args,
             function_name => function_name,
             args => args,
-            result_var => call.effective_result_var(),
+            result_var => result_var,
             returns_void => returns_void,
             is_async => is_async,
             is_streaming => is_streaming,
@@ -266,6 +272,71 @@ fn dedent_file_scope_declaration(declaration: &str) -> String {
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Append a null-forgiving `!` to an `iterate` operation's own collection `expression` when the
+/// iterated value is itself optional -- e.g. `foreach (var keyword in result.Keywords!)`.
+///
+/// This is deliberately narrower than the general-purpose accessor every language and every
+/// context shares (`FieldResolver::accessor` / `render_csharp_with_optionals`): reading an
+/// optional SCALAR leaf bare (an assertion, a `Console.WriteLine`) is not a dereference and needs
+/// no `!` -- `render_csharp_with_optionals` already gets that right by only marking non-leaf
+/// segments, and every other backend's accessor contract (e.g. Rust's `.as_ref().unwrap()` on the
+/// optional PARENT, never the leaf) agrees. `foreach` is different: it calls `GetEnumerator()` on
+/// whatever `expression` evaluates to, so an optional COLLECTION consumed directly as a `foreach`
+/// source needs the mark regardless of leaf/non-leaf position. `operation.optional` (`*optional ||
+/// resolver.is_optional(path)`, the same signal the TypeScript backend already trusts for its own
+/// `?? []` guard) answers exactly "is the thing this `expression` names itself absent-able" -- the
+/// one question relevant here, asked only where a collection is about to be consumed, not baked
+/// into the shared accessor every other reader of a field path also goes through. ~keep
+fn dereference_optional_iterate_collections(
+    mut operations: Vec<crate::e2e::codegen::presentation::PresentationOperation>,
+) -> Vec<crate::e2e::codegen::presentation::PresentationOperation> {
+    for operation in &mut operations {
+        if operation.kind == "iterate" && operation.optional && !operation.expression.ends_with('!') {
+            operation.expression.push('!');
+        }
+    }
+    operations
+}
+
+/// Rename a fixture-authored `docs.presentation` `iterate` operation's `item` when it reuses a
+/// name already bound in the snippet's own scope -- the call's own `result_var` binding, and
+/// (when the fixture constructs one) the `client`/`apiKey` bindings just above it.
+///
+/// A batch/list call's presentation naturally spells its loop variable as the singular of the
+/// collection it walks (`results` -> `result`), which collides with the outer `var result =
+/// ...Call(...)` the template already emitted -- `foreach (var result in result.Items)`. C#'s
+/// block scoping rejects that with CS0136 ("A local ... named 'result' cannot be declared in
+/// this scope because that name is used in an enclosing scope to denote something else"); this
+/// presentation layer is shared by every backend, and Python/Go/etc. accept the shadowing
+/// without complaint, which is why no other backend needed this guard. Renaming here -- after
+/// resolution, before the template ever sees it -- means the template stays a straight
+/// `foreach (var {{ operation.item }} in ...)` with no scope awareness of its own. ~keep
+fn disambiguate_presentation_items(
+    mut operations: Vec<crate::e2e::codegen::presentation::PresentationOperation>,
+    result_var: &str,
+    constructs_client: bool,
+) -> Vec<crate::e2e::codegen::presentation::PresentationOperation> {
+    let reserved: std::collections::HashSet<&str> = if constructs_client {
+        [result_var, "client", "apiKey"].into_iter().collect()
+    } else {
+        [result_var].into_iter().collect()
+    };
+    for operation in &mut operations {
+        if operation.kind != "iterate" || !reserved.contains(operation.item.as_str()) {
+            continue;
+        }
+        let candidate = format!("{}Item", operation.item);
+        let old_prefix = format!("{}.", operation.item);
+        for field in &mut operation.fields {
+            if let Some(rest) = field.strip_prefix(old_prefix.as_str()) {
+                *field = format!("{candidate}.{rest}");
+            }
+        }
+        operation.item = candidate;
+    }
+    operations
 }
 
 #[cfg(test)]
@@ -891,3 +962,21 @@ mod tests {
         );
     }
 }
+
+/// Regression coverage for `disambiguate_presentation_items`, split into its own file per the
+/// `file-modularization` rule: `snippet.rs` was already close to the 1,000-line cap.
+#[cfg(test)]
+#[path = "snippet/collision_tests.rs"]
+mod collision_tests;
+
+/// End-to-end coverage, through the full snippet pipeline, for the CS8602 fix in
+/// `dereference_optional_iterate_collections`.
+#[cfg(test)]
+#[path = "snippet/nullable_presentation_tests.rs"]
+mod nullable_presentation_tests;
+
+/// Unit-level coverage for `dereference_optional_iterate_collections`, split into its own file
+/// per the `file-modularization` rule.
+#[cfg(test)]
+#[path = "snippet/optional_iterate_tests.rs"]
+mod optional_iterate_tests;

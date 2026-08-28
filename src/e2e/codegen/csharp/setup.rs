@@ -9,7 +9,10 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::HashMap;
 
 use super::stubs::emit_test_backend_with_class_name;
-use super::{classify_bytes_value_csharp, json_to_csharp, render_collection_literal, resolve_handle_config_type};
+use super::values::{
+    json_array_to_csharp_list, resolve_csharp_field_element_type_from_struct, resolve_csharp_field_type_from_struct,
+};
+use super::{classify_bytes_value_csharp, json_to_csharp, resolve_handle_config_type};
 
 fn json_object_csharp_type<'a>(
     arg: &'a crate::e2e::config::ArgMapping,
@@ -587,49 +590,6 @@ fn resolve_json_object_default(
     "null".to_string()
 }
 
-/// Convert a JSON array to a typed C# `List<T>` expression.
-///
-/// Mapping from `ArgMapping::element_type`:
-/// - `None` or any string type → `List<string>`
-/// - `"f32"` → `List<float>` with `(float)` casts
-/// - `"(String, String)"` → `List<List<string>>` for key-value pair arrays
-fn json_array_to_csharp_list(arr: &[serde_json::Value], element_type: Option<&str>) -> String {
-    match element_type {
-        Some("f32") => {
-            let items: Vec<String> = arr.iter().map(|v| format!("(float){}", json_to_csharp(v))).collect();
-            render_collection_literal("new List<float>()", items)
-        }
-        Some("(String, String)") => {
-            let items: Vec<String> = arr
-                .iter()
-                .map(|v| {
-                    let strs: Vec<String> = v
-                        .as_array()
-                        .map_or_else(Vec::new, |a| a.iter().map(json_to_csharp).collect());
-                    render_collection_literal("new List<string>()", strs)
-                })
-                .collect();
-            render_collection_literal("new List<List<string>>()", items)
-        }
-        Some(et) if et != "f32" && et != "(String, String)" && et != "string" => {
-            // Class/record types: deserialize each element from JSON
-            let items: Vec<String> = arr
-                .iter()
-                .map(|v| {
-                    let json_str = serde_json::to_string(v).unwrap_or_default();
-                    let escaped = escape_csharp(&json_str);
-                    format!("JsonSerializer.Deserialize<{et}>(\"{escaped}\", ConfigOptions)!")
-                })
-                .collect();
-            render_collection_literal(&format!("new List<{et}>()"), items)
-        }
-        _ => {
-            let items: Vec<String> = arr.iter().map(json_to_csharp).collect();
-            render_collection_literal("new List<string>()", items)
-        }
-    }
-}
-
 /// Recursively sort JSON objects so that any key named `"type"` appears first.
 ///
 /// System.Text.Json's `[JsonPolymorphic]` requires the type discriminator to be
@@ -777,68 +737,6 @@ pub(super) fn csharp_object_initializer(
     format!("new {} {{ {} }}", csharp_type_name(type_name), props.join(", "))
 }
 
-/// Resolve the actual C# field type from a struct definition in type_defs.
-///
-/// Given a struct name and a field key (in snake_case), looks up the struct in type_defs
-/// and returns the C# type name of that field. For sealed unions (discriminated unions),
-/// returns the correct variant type (e.g., RerankerModelType for RerankerConfig.model).
-fn resolve_csharp_field_type_from_struct(
-    struct_name: &str,
-    field_key: &str,
-    type_defs: &[crate::core::ir::TypeDef],
-) -> Option<String> {
-    // Find the struct definition
-    let struct_def = type_defs.iter().find(|td| td.name == struct_name)?;
-
-    // field_key is snake_case from fixture JSON and matches Rust field names
-    let field_name = field_key;
-
-    // Find the field in the struct
-    let field = struct_def.fields.iter().find(|f| f.name == field_name)?;
-
-    // Extract type name from TypeRef
-    match &field.ty {
-        crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
-        crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
-        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
-            crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
-            crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Resolve the C# element type of a collection-typed struct field (`Vec<T>` /
-/// `Option<Vec<T>>`), for array-valued fields inside an object initializer.
-///
-/// `resolve_csharp_field_type_from_struct` only unwraps `Named`/`Json` at the top
-/// level, so it returns `None` for any `Vec<_>` field — which is exactly the field
-/// shape an array-valued JSON property has. Without this, `csharp_object_initializer`
-/// had no way to learn a collection field's real element type and hardcoded
-/// `List<string>` for every array, silently corrupting genuinely-typed collections
-/// (`List<Message>`, `List<RerankDocument>`, ...) into unusable string lists.
-fn resolve_csharp_field_element_type_from_struct(
-    struct_name: &str,
-    field_key: &str,
-    type_defs: &[crate::core::ir::TypeDef],
-) -> Option<String> {
-    let struct_def = type_defs.iter().find(|td| td.name == struct_name)?;
-    let field = struct_def.fields.iter().find(|f| f.name == field_key)?;
-    let ty = match &field.ty {
-        crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
-        other => other,
-    };
-    match ty {
-        crate::core::ir::TypeRef::Vec(inner) => match inner.as_ref() {
-            crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
-            crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Convert enum values in a JSON object to lowercase to match C# [JsonPropertyName] attributes.
 /// The JSON deserialization uses JsonPropertyName("lowercase_value"), so fixture enum values
 /// (typically PascalCase like "Tildes") must be converted to lowercase ("tildes") for correct
@@ -868,6 +766,38 @@ fn normalize_csharp_enum_values(value: &serde_json::Value, enum_fields: &HashMap
 mod tests {
     use super::*;
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    /// End-to-end regression through the real object-initializer entry point (not just the
+    /// element-type resolver in isolation): a `Vec<u8>` struct field given an empty fixture
+    /// value must render as an explicitly-typed `byte[]`, never the untyped `List<string>`
+    /// default that used to get spliced into a `byte[]`-typed property -- CS0029. ~keep
+    #[test]
+    fn an_empty_bytes_field_in_an_object_initializer_renders_a_byte_array_not_a_string_list() {
+        let type_defs = vec![TypeDef {
+            name: "ExtractConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "payload".to_string(),
+                ty: TypeRef::Bytes,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let obj = serde_json::json!({ "payload": [] });
+        let obj = obj.as_object().expect("object").clone();
+
+        let rendered = csharp_object_initializer(
+            &obj,
+            "ExtractConfig",
+            &HashMap::new(),
+            &HashMap::new(),
+            &type_defs,
+            &[],
+            "",
+        );
+
+        assert_eq!(rendered, "new ExtractConfig { Payload = new byte[] {  } }");
+        assert!(!rendered.contains("List<string>"), "{rendered}");
+    }
 
     #[test]
     fn test_resolve_json_object_default_with_default_constructible_type() {
