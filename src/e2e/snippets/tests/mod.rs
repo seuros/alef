@@ -82,6 +82,7 @@ fn documented_fixture() -> Fixture {
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         }),
         ..Fixture::default()
     }
@@ -398,6 +399,7 @@ c_engine_factory = "EngineConfig"
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         }),
         input: serde_json::json!({}),
         ..Fixture::default()
@@ -468,6 +470,7 @@ fn frontmatter_fields_are_pinned_by_exact_equality() {
             side_effects,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         };
         render_snippet_markdown(
             "example()",
@@ -527,6 +530,7 @@ fn safe_side_effects_snippet_is_not_level_capped() {
         side_effects: SideEffectClass::Safe,
         coverage_exceptions: BTreeMap::new(),
         sample_url_vars: Default::default(),
+        body_file: None,
     };
     let rendered = render_snippet_markdown(
         "example()",
@@ -579,6 +583,7 @@ fn unsafe_side_effects_snippet_keeps_the_typecheck_cap() {
             side_effects,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         };
         let rendered = render_snippet_markdown(
             "example()",
@@ -623,6 +628,7 @@ fn rendered_snippet() -> String {
         side_effects: SideEffectClass::Safe,
         coverage_exceptions: BTreeMap::new(),
         sample_url_vars: Default::default(),
+        body_file: None,
     };
     render_snippet_markdown(
         "example()",
@@ -669,6 +675,7 @@ fn no_front_matter_key_renders_an_explicit_yaml_null() {
             side_effects,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         };
         let rendered = render_snippet_markdown(
             "example()",
@@ -772,6 +779,7 @@ fn a_body_ending_in_a_newline_does_not_open_a_blank_line_before_the_closing_fenc
         side_effects: SideEffectClass::Safe,
         coverage_exceptions: BTreeMap::new(),
         sample_url_vars: Default::default(),
+        body_file: None,
     };
     let rendered = render_snippet_markdown(
         "example()\n",

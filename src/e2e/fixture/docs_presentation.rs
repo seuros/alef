@@ -9,7 +9,7 @@
 use super::Fixture;
 #[cfg(test)]
 use super::FixtureDocs;
-use crate::core::config::e2e::SampleUrlTemplate;
+use crate::core::config::e2e::{SampleUrlManifest, SampleUrlTemplate, merge_manifest_vars};
 use std::collections::BTreeMap;
 
 impl Fixture {
@@ -31,22 +31,27 @@ impl Fixture {
     /// [`Fixture::docs_call_fixture`], binding `$mock_url` to `sample_base_url` -- the
     /// project's own public sample host -- rather than the reserved-domain placeholder.
     pub fn docs_call_fixture_with_sample_base_url(&self, sample_base_url: &str) -> Self {
-        self.docs_call_fixture_with_sample_url(sample_base_url, None)
+        self.docs_call_fixture_with_sample_url(sample_base_url, None, None)
     }
 
     /// [`Fixture::docs_call_fixture_with_sample_base_url`], additionally trying this fixture's
     /// own per-fixture sample URL resolution first: when `template` is configured (see
     /// `[crates.e2e.snippets].sample_url_template`), each `$mock_url<path>` occurrence resolves
-    /// `{path}` and this fixture's own `docs.sample_url_vars` against it, and publishes the
-    /// templated address in place of `sample_base_url` for exactly the occurrences it can fully
-    /// resolve. Any occurrence the template cannot resolve -- including every one when
-    /// `template` is `None` -- keeps binding `sample_base_url` exactly as before, which is what
-    /// keeps the reserved-domain warning firing correctly for a fixture that declares no facts
-    /// a configured template needs. ~keep
+    /// `{path}` against it, plus every other placeholder against the merge of `manifest`'s
+    /// entry for this fixture's `docs.body_file` (see
+    /// `[crates.e2e.snippets].sample_url_manifest`) and this fixture's own
+    /// `docs.sample_url_vars` -- the latter winning on a shared key, see
+    /// [`crate::core::config::e2e::merge_manifest_vars`]. The templated address publishes in
+    /// place of `sample_base_url` for exactly the occurrences it can fully resolve. Any
+    /// occurrence the template cannot resolve -- including every one when `template` is `None`
+    /// -- keeps binding `sample_base_url` exactly as before, which is what keeps the
+    /// reserved-domain warning firing correctly for a fixture that declares (or has manifested)
+    /// no facts a configured template needs. ~keep
     pub fn docs_call_fixture_with_sample_url(
         &self,
         sample_base_url: &str,
         template: Option<&SampleUrlTemplate>,
+        manifest: Option<&SampleUrlManifest>,
     ) -> Self {
         let mut fixture = self.clone();
         if let Some(input) = self.docs.as_ref().and_then(|docs| docs.input.as_ref()) {
@@ -73,8 +78,10 @@ impl Fixture {
             input.remove("mock_responses");
         }
         let empty_vars = BTreeMap::new();
-        let vars = self.docs.as_ref().map_or(&empty_vars, |docs| &docs.sample_url_vars);
-        replace_docs_mock_urls(&mut fixture.input, sample_base_url, template, vars);
+        let fixture_vars = self.docs.as_ref().map_or(&empty_vars, |docs| &docs.sample_url_vars);
+        let body_file = self.docs.as_ref().and_then(|docs| docs.body_file.as_deref());
+        let vars = merge_manifest_vars(manifest, body_file, fixture_vars);
+        replace_docs_mock_urls(&mut fixture.input, sample_base_url, template, &vars);
         fixture
     }
 }
@@ -203,7 +210,7 @@ mod tests {
             .expect("valid template resolves")
             .expect("a configured value produces a template");
 
-        let docs = fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template));
+        let docs = fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template), None);
 
         assert_eq!(
             docs.input.get("url").and_then(|value| value.as_str()),
@@ -226,13 +233,95 @@ mod tests {
             .expect("valid template resolves")
             .expect("a configured value produces a template");
 
-        let docs = fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template));
+        let docs = fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template), None);
 
         assert_eq!(
             docs.input.get("url").and_then(|value| value.as_str()),
             Some("https://samples.example.org/pdf/fake_memo.pdf"),
             "a fixture that cannot satisfy the template's placeholders must keep publishing the \
              flat sample_base_url address, which is what keeps the reserved-domain warning honest"
+        );
+    }
+
+    /// The manifest's reason to exist: a fixture that declares no `docs.sample_url_vars` at all
+    /// still publishes the templated address, because `docs.body_file` names the manifest entry
+    /// that supplies it -- exactly the case a hundred-entry content-addressed corpus needs, where
+    /// hand-copying a digest into every fixture does not scale.
+    #[test]
+    fn a_fixture_whose_body_file_is_covered_by_the_manifest_publishes_the_manifest_derived_address() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            directory.path().join("manifest.json"),
+            r#"{"pdf/fake_memo.pdf": "9f86d081884c7d659a2feaa"}"#,
+        )
+        .expect("write manifest");
+        let manifest_config = crate::core::config::e2e::SampleUrlManifestConfig {
+            path: "manifest.json".to_string(),
+            variable: "digest".to_string(),
+        };
+        let manifest = SampleUrlManifest::resolve(Some(&manifest_config), directory.path())
+            .expect("valid manifest resolves")
+            .expect("a configured value produces a manifest");
+        let fixture = Fixture {
+            input: serde_json::json!({"url": "$mock_url/pdf/fake_memo.pdf"}),
+            docs: Some(FixtureDocs {
+                body_file: Some("pdf/fake_memo.pdf".to_string()),
+                ..fixture_docs("contract")
+            }),
+            ..Fixture::default()
+        };
+        let template = SampleUrlTemplate::resolve(Some("https://cdn.example.org/objects/{digest}"))
+            .expect("valid template resolves")
+            .expect("a configured value produces a template");
+
+        let docs =
+            fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template), Some(&manifest));
+
+        assert_eq!(
+            docs.input.get("url").and_then(|value| value.as_str()),
+            Some("https://cdn.example.org/objects/9f86d081884c7d659a2feaa")
+        );
+    }
+
+    /// Precedence: when both the manifest and this fixture's own `docs.sample_url_vars` supply
+    /// the same placeholder, the fixture's explicit declaration wins -- the defensible default,
+    /// since a fixture author correcting or overriding one entry locally should not have to edit
+    /// the shared manifest to do it.
+    #[test]
+    fn a_fixtures_own_sample_url_var_outranks_the_manifest_for_the_same_placeholder() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            directory.path().join("manifest.json"),
+            r#"{"pdf/fake_memo.pdf": "from-manifest"}"#,
+        )
+        .expect("write manifest");
+        let manifest_config = crate::core::config::e2e::SampleUrlManifestConfig {
+            path: "manifest.json".to_string(),
+            variable: "digest".to_string(),
+        };
+        let manifest = SampleUrlManifest::resolve(Some(&manifest_config), directory.path())
+            .expect("valid manifest resolves")
+            .expect("a configured value produces a manifest");
+        let fixture = Fixture {
+            input: serde_json::json!({"url": "$mock_url/pdf/fake_memo.pdf"}),
+            docs: Some(FixtureDocs {
+                body_file: Some("pdf/fake_memo.pdf".to_string()),
+                sample_url_vars: BTreeMap::from([("digest".to_string(), "from-fixture".to_string())]),
+                ..fixture_docs("contract")
+            }),
+            ..Fixture::default()
+        };
+        let template = SampleUrlTemplate::resolve(Some("https://cdn.example.org/objects/{digest}"))
+            .expect("valid template resolves")
+            .expect("a configured value produces a template");
+
+        let docs =
+            fixture.docs_call_fixture_with_sample_url("https://samples.example.org", Some(&template), Some(&manifest));
+
+        assert_eq!(
+            docs.input.get("url").and_then(|value| value.as_str()),
+            Some("https://cdn.example.org/objects/from-fixture"),
+            "an explicit docs.sample_url_vars entry must win over the manifest for the same key"
         );
     }
 
@@ -251,6 +340,7 @@ mod tests {
             side_effects: Default::default(),
             coverage_exceptions: Default::default(),
             sample_url_vars: Default::default(),
+            body_file: None,
         }
     }
 }

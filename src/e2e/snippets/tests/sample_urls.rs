@@ -88,11 +88,36 @@ fn python_snippet_report_with_template(
     sample_url_template: Option<&str>,
     fixtures: &[Fixture],
 ) -> Result<SnippetGenerationReport> {
+    python_snippet_report_with_template_and_manifest(sample_base_url, sample_url_template, None, fixtures)
+}
+
+/// As [`python_snippet_report_with_template`], additionally configuring
+/// `[crates.e2e.snippets].sample_url_manifest` against a manifest file this helper writes to a
+/// temporary project root -- `generate_snippet_report_with_extensions` resolves the manifest
+/// path relative to the process current directory, so the run must actually execute inside that
+/// directory (see [`crate::test_support::CwdGuard`]), the same mechanism `tests::curated` uses
+/// for `curated_snippets`.
+fn python_snippet_report_with_template_and_manifest(
+    sample_base_url: Option<&str>,
+    sample_url_template: Option<&str>,
+    manifest: Option<(&str, &str)>,
+    fixtures: &[Fixture],
+) -> Result<SnippetGenerationReport> {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let _cwd = crate::test_support::CwdGuard::enter(directory.path());
+    let sample_url_manifest = manifest.map(|(manifest_json, variable)| {
+        std::fs::write(directory.path().join("manifest.json"), manifest_json).expect("write manifest");
+        crate::core::config::e2e::SampleUrlManifestConfig {
+            path: "manifest.json".to_string(),
+            variable: variable.to_string(),
+        }
+    });
     let (e2e, crate_config) = url_e2e_config();
     let snippet_config = SnippetConfig {
         output: "docs/snippets".into(),
         sample_base_url: sample_base_url.map(str::to_string),
         sample_url_template: sample_url_template.map(str::to_string),
+        sample_url_manifest,
         ..SnippetConfig::default()
     };
     let context = SnippetRenderContext {
@@ -104,6 +129,18 @@ fn python_snippet_report_with_template(
         errors: &[],
     };
     generate_snippet_report_with_extensions(fixtures, &["python".into()], &snippet_config, &context, &[])
+}
+
+/// [`url_fixture`], additionally declaring [`FixtureDocs::body_file`] -- the corpus-relative
+/// path a `[crates.e2e.snippets].sample_url_manifest` entry is looked up by, distinct from
+/// [`url_fixture_with_digest`]'s direct `docs.sample_url_vars` declaration.
+fn url_fixture_with_body_file(body_file: &str) -> Fixture {
+    let mut fixture = url_fixture();
+    fixture.docs = Some(crate::e2e::fixture::FixtureDocs {
+        body_file: Some(body_file.to_string()),
+        ..fixture.docs.expect("url_fixture always carries docs")
+    });
+    fixture
 }
 
 fn only_snippet_content(report: &SnippetGenerationReport) -> &str {
@@ -383,6 +420,188 @@ fn an_unusable_sample_url_template_fails_generation_naming_the_config_key() {
     assert!(
         message.contains("sample_url_template"),
         "the error must name the key to fix: {message}"
+    );
+}
+
+/// The measured defect `[crates.e2e.snippets].sample_url_manifest` exists to fix: hand-copying a
+/// digest into every fixture's `docs.sample_url_vars` does not scale for a content-addressed
+/// corpus with hundreds of entries. With the manifest configured and this fixture's
+/// `docs.body_file` covered by it, the published snippet carries the manifest-derived address.
+#[test]
+fn a_fixture_whose_body_file_the_manifest_covers_publishes_its_address_through_the_real_pipeline() {
+    let report = python_snippet_report_with_template_and_manifest(
+        None,
+        Some(CONTENT_ADDRESSED_TEMPLATE),
+        Some((r#"{"pdf/report.pdf": "9f86d081884c7d659a2feaa0c55ad015"}"#, "digest")),
+        &[url_fixture_with_body_file("pdf/report.pdf")],
+    )
+    .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://cdn.example.org/objects/9f86d081884c7d659a2feaa0c55ad015"),
+        "the published snippet must carry the manifest-derived address:\n{content}"
+    );
+    assert!(
+        report.placeholder_sample_url_fixtures.is_empty(),
+        "a fully resolved manifest entry has no placeholder to report"
+    );
+}
+
+/// The regression guard: a fixture whose `docs.body_file` the manifest does not mention falls
+/// back to `sample_base_url` exactly as an uncovered fixture always has -- a manifest being
+/// configured in general must never change behavior for a fixture it says nothing about.
+#[test]
+fn a_fixture_whose_body_file_the_manifest_does_not_cover_falls_back_through_the_real_pipeline() {
+    let report = python_snippet_report_with_template_and_manifest(
+        Some(SAMPLE_HOST),
+        Some(CONTENT_ADDRESSED_TEMPLATE),
+        Some((r#"{"pdf/other.pdf": "9f86d081884c7d659a2feaa0c55ad015"}"#, "digest")),
+        &[url_fixture_with_body_file("pdf/report.pdf")],
+    )
+    .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://samples.example.org/pdf/report.pdf"),
+        "a fixture the manifest does not cover must keep publishing the flat sample_base_url \
+         address:\n{content}"
+    );
+    assert!(
+        !content.contains("cdn.example.org"),
+        "no templated address may appear for a fixture the manifest never covered:\n{content}"
+    );
+}
+
+/// The anti-silencer case for the manifest specifically: a manifest is configured, but it does
+/// not cover this fixture, and the project configures no `sample_base_url` either -- the
+/// fixture must still publish the reserved placeholder and the run must still warn about it.
+/// Companion to [`a_fixture_with_neither_template_vars_nor_sample_base_url_still_warns`], which
+/// must keep passing unmodified: this manifest mechanism must never become a second way to
+/// silence that warning wholesale.
+#[test]
+fn a_manifest_configured_but_not_covering_this_fixture_still_warns() {
+    let report = python_snippet_report_with_template_and_manifest(
+        None,
+        Some(CONTENT_ADDRESSED_TEMPLATE),
+        Some((r#"{"pdf/other.pdf": "9f86d081884c7d659a2feaa0c55ad015"}"#, "digest")),
+        &[url_fixture()],
+    )
+    .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://example.com/pdf/report.pdf"),
+        "an unresolved fixture must keep publishing the reserved placeholder address:\n{content}"
+    );
+    assert_eq!(
+        report.placeholder_sample_url_fixtures,
+        vec!["extract_uri".to_string()],
+        "a manifest being configured must not silence the placeholder warning for a fixture it \
+         does not cover"
+    );
+}
+
+/// Precedence, driven through the real pipeline: a fixture's own `docs.sample_url_vars` entry
+/// wins over a manifest entry for the same placeholder -- the defensible default documented on
+/// `SnippetConfig::sample_url_manifest` and on `merge_manifest_vars`.
+#[test]
+fn a_fixtures_own_sample_url_var_outranks_the_manifest_through_the_real_pipeline() {
+    let mut fixture = url_fixture_with_body_file("pdf/report.pdf");
+    fixture.docs = Some(crate::e2e::fixture::FixtureDocs {
+        sample_url_vars: std::collections::BTreeMap::from([("digest".to_string(), "from-fixture".to_string())]),
+        ..fixture.docs.expect("url_fixture_with_body_file always carries docs")
+    });
+
+    let report = python_snippet_report_with_template_and_manifest(
+        None,
+        Some(CONTENT_ADDRESSED_TEMPLATE),
+        Some((r#"{"pdf/report.pdf": "from-manifest"}"#, "digest")),
+        &[fixture],
+    )
+    .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://cdn.example.org/objects/from-fixture"),
+        "an explicit docs.sample_url_vars entry must win over the manifest for the same key:\n{content}"
+    );
+    assert!(
+        !content.contains("from-manifest"),
+        "the manifest's value for the same key must not reach the published snippet:\n{content}"
+    );
+}
+
+/// A configured manifest that cannot be read at all -- missing from disk -- fails the run before
+/// anything renders, naming the configured path, the same posture `sample_base_url` and
+/// `sample_url_template` take on their own invalid configuration.
+#[test]
+fn a_missing_sample_url_manifest_fails_generation_naming_the_path() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let _cwd = crate::test_support::CwdGuard::enter(directory.path());
+    let (e2e, crate_config) = url_e2e_config();
+    let snippet_config = SnippetConfig {
+        output: "docs/snippets".into(),
+        sample_url_manifest: Some(crate::core::config::e2e::SampleUrlManifestConfig {
+            path: "does-not-exist.json".to_string(),
+            variable: "digest".to_string(),
+        }),
+        ..SnippetConfig::default()
+    };
+    let context = SnippetRenderContext {
+        e2e: &e2e,
+        crate_config: &crate_config,
+        type_defs: &[],
+        enums: &[],
+        functions: &[],
+        errors: &[],
+    };
+
+    let error =
+        generate_snippet_report_with_extensions(&[url_fixture()], &["python".into()], &snippet_config, &context, &[])
+            .expect_err("a missing manifest file cannot be published");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("does-not-exist.json"),
+        "the error must name the configured manifest path: {message}"
+    );
+}
+
+/// A configured manifest that is not valid JSON fails the run the same way, naming the path
+/// rather than silently behaving as if no manifest were configured -- a malformed manifest must
+/// never look identical to "not configured".
+#[test]
+fn a_malformed_sample_url_manifest_fails_generation_naming_the_path() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let _cwd = crate::test_support::CwdGuard::enter(directory.path());
+    std::fs::write(directory.path().join("manifest.json"), "not json").expect("write manifest");
+    let (e2e, crate_config) = url_e2e_config();
+    let snippet_config = SnippetConfig {
+        output: "docs/snippets".into(),
+        sample_url_manifest: Some(crate::core::config::e2e::SampleUrlManifestConfig {
+            path: "manifest.json".to_string(),
+            variable: "digest".to_string(),
+        }),
+        ..SnippetConfig::default()
+    };
+    let context = SnippetRenderContext {
+        e2e: &e2e,
+        crate_config: &crate_config,
+        type_defs: &[],
+        enums: &[],
+        functions: &[],
+        errors: &[],
+    };
+
+    let error =
+        generate_snippet_report_with_extensions(&[url_fixture()], &["python".into()], &snippet_config, &context, &[])
+            .expect_err("a malformed manifest cannot be published");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("manifest.json"),
+        "the error must name the configured manifest path: {message}"
     );
 }
 

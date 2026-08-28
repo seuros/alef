@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SampleUrlTemplate, SnippetConfig};
+use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SampleUrlManifest, SampleUrlTemplate, SnippetConfig};
 use crate::core::config::warning_ack::{AcknowledgeableWarningCategory, WarningAcknowledgement};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
@@ -319,6 +319,12 @@ fn generate_snippet_report_with_extensions(
     let sample_url_template: Option<SampleUrlTemplate> = snippets
         .sample_url_template()
         .map_err(|error| anyhow::anyhow!("invalid documentation sample URL template: {error}"))?;
+    // Resolved alongside `sample_url_template`, for the same reason: a configured manifest that
+    // is missing, unreadable, or malformed must fail the run before anything renders, naming the
+    // file, rather than silently behaving as if it were never configured. ~keep
+    let sample_url_manifest: Option<SampleUrlManifest> = snippets
+        .sample_url_manifest(Path::new("."))
+        .map_err(|error| anyhow::anyhow!("invalid documentation sample URL manifest: {error}"))?;
     // Pin the *previous* run's ownership record before this run computes, let alone writes,
     // anything. `e2e::run` hands the freshly computed ledger to the same write batch as the
     // snippets, and `.alef-snippet-coverage.json` sorts ahead of every sibling snippet directory
@@ -427,6 +433,7 @@ fn generate_snippet_report_with_extensions(
                 context,
                 sample_base_url,
                 sample_url_template.as_ref(),
+                sample_url_manifest.as_ref(),
             ) {
                 Ok(rendered) => rendered,
                 Err(error) => {

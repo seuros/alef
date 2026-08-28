@@ -6443,6 +6443,25 @@
       ],
       "type": "string"
     },
+    "SampleUrlManifestConfig": {
+      "additionalProperties": false,
+      "description": "`[crates.e2e.snippets].sample_url_manifest` -- a manifest file and the single\n`sample_url_template` placeholder its values populate.",
+      "properties": {
+        "path": {
+          "description": "Manifest file path, relative to the project root (the directory holding `alef.toml`),\nmirroring `[crates.e2e.snippets].curated_snippets`'s own path convention.",
+          "type": "string"
+        },
+        "variable": {
+          "description": "The `sample_url_template` placeholder name a manifest value fills in, e.g. `\"digest\"`\nfor a template shaped `\"https://cdn.example.org/objects/{digest}\"`. Never hard-coded by\nalef -- the project names the fact its own template needs.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "variable"
+      ],
+      "type": "object"
+    },
     "ScaffoldCargo": {
       "additionalProperties": false,
       "description": "Opt-in management of workspace-level `.cargo/config.toml`.\n\nAll fields default to canonical values that produce the same `.cargo/config.toml`\nacross polyglot repos. Override individual targets via `targets`, or inject\nrepo-specific `[env]` entries via `env`.",
@@ -6827,6 +6846,18 @@
             "string",
             "null"
           ]
+        },
+        "sample_url_manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SampleUrlManifestConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A manifest supplying `sample_url_template` variables per fixture, looked up by each\nfixture's own `docs.body_file` (see [`crate::e2e::fixture::FixtureDocs::body_file`])\ninstead of hand-declared through `docs.sample_url_vars`.\n\nExists for a content-addressed corpus with hundreds of entries, where the fact a\ntemplate needs (a digest, a bucket key, ...) is produced by a build step outside alef and\nalready lives in a manifest file -- hand-copying it into every fixture's\n`docs.sample_url_vars` does not scale. Values from this manifest and a fixture's own\n`docs.sample_url_vars` combine through the exact same\n`resolve_templated_sample_url` primitive [`Self::sample_url_template`] resolves against;\nthis is never a second parallel resolver. When both supply the same placeholder, the\nfixture's own declaration wins -- see\n[`crate::core::config::e2e::merge_manifest_vars`]'s doc comment for why.\n\nA fixture the manifest does not cover, or a fixture with no `docs.body_file` at all,\nfalls back to `sample_url_template`'s own per-fixture resolution and then to\n`sample_base_url` exactly as if this field were unset -- including the reserved-domain\nplaceholder warning when that is also unconfigured. This field can never silence that\nwarning wholesale; it only ever supplies facts a template still has to resolve\nsuccessfully to avoid it."
         },
         "sample_url_template": {
           "default": null,

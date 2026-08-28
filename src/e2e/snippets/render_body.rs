@@ -18,6 +18,11 @@ pub(super) struct RenderedSnippetBody {
     pub used_placeholder_sample_url: bool,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one more per-run resolved configuration value threaded through the render seam; grouping these into a \
+              context struct is a separate refactor from this task"
+)]
 pub(super) fn render_snippet_body(
     extensions: &[Box<dyn crate::Extension>],
     generator: &dyn E2eCodegen,
@@ -26,8 +31,10 @@ pub(super) fn render_snippet_body(
     context: &SnippetRenderContext<'_>,
     sample_base_url: DocsSampleBaseUrl<'_>,
     sample_url_template: Option<&SampleUrlTemplate>,
+    sample_url_manifest: Option<&SampleUrlManifest>,
 ) -> Result<RenderedSnippetBody> {
-    let docs_fixture = fixture.docs_call_fixture_with_sample_url(sample_base_url.base(), sample_url_template);
+    let docs_fixture =
+        fixture.docs_call_fixture_with_sample_url(sample_base_url.base(), sample_url_template, sample_url_manifest);
     for extension in extensions {
         if let Some(body) = extension
             .render_e2e_snippet(
@@ -54,8 +61,13 @@ pub(super) fn render_snippet_body(
         &docs_fixture.tags,
         &docs_fixture.input,
     );
-    let docs_fixture =
-        mock_url_defaults::with_default_mock_url_literals(docs_fixture, call, sample_base_url, sample_url_template);
+    let docs_fixture = mock_url_defaults::with_default_mock_url_literals(
+        docs_fixture,
+        call,
+        sample_base_url,
+        sample_url_template,
+        sample_url_manifest,
+    );
     let fixture = &docs_fixture;
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");

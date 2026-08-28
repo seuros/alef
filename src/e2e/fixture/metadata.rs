@@ -67,6 +67,16 @@ pub struct FixtureDocs {
     /// `sample_base_url` exactly as it always has.
     #[serde(default)]
     pub sample_url_vars: BTreeMap<String, String>,
+    /// The corpus-relative path of this fixture's underlying content file, used to look up
+    /// `[crates.e2e.snippets].sample_url_manifest` entries for it (see
+    /// `crate::core::config::e2e::SampleUrlManifest`).
+    ///
+    /// Distinct from `sample_url_vars` above: this names WHICH manifest entry belongs to this
+    /// fixture, while `sample_url_vars` declares facts directly. A fixture with no manifest
+    /// configured, or with no `body_file` declared, is unaffected either way -- resolution falls
+    /// back through `sample_url_vars` and then `sample_base_url` exactly as it always has.
+    #[serde(default)]
+    pub body_file: Option<String>,
 }
 
 /// How a documentation snippet constructs its client, for fixtures whose subject
@@ -337,6 +347,20 @@ mod tests {
             with_vars.sample_url_vars.get("digest").map(String::as_str),
             Some("9f86d081884c7d659a2feaa0c55ad015")
         );
+    }
+
+    #[test]
+    fn body_file_defaults_to_none_and_deserializes_when_declared() {
+        let bare: FixtureDocs =
+            serde_json::from_value(serde_json::json!({"topic": "configuration"})).expect("fixture docs deserialize");
+        assert_eq!(bare.body_file, None);
+
+        let with_body_file: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "body_file": "pdf/memo.pdf"
+        }))
+        .expect("fixture docs with body_file deserialize");
+        assert_eq!(with_body_file.body_file.as_deref(), Some("pdf/memo.pdf"));
     }
 
     #[test]

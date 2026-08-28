@@ -65,6 +65,7 @@ fn shows_fixture(path: &str) -> Fixture {
             side_effects: crate::e2e::fixture::SideEffectClass::Safe,
             coverage_exceptions: Default::default(),
             sample_url_vars: Default::default(),
+            body_file: None,
         }),
         ..Fixture::default()
     }

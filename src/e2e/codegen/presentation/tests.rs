@@ -46,6 +46,7 @@ fn fixture() -> Fixture {
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
             sample_url_vars: Default::default(),
+            body_file: None,
         }),
         ..Fixture::default()
     }

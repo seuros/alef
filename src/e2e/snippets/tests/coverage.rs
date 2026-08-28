@@ -43,6 +43,7 @@ fn markdown_wrapper_uses_backend_body_and_metadata() {
         side_effects: SideEffectClass::Network,
         coverage_exceptions: BTreeMap::new(),
         sample_url_vars: Default::default(),
+        body_file: None,
     };
 
     let rendered = render_snippet_markdown(
