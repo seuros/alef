@@ -32,6 +32,8 @@ fn result(id: &str, status: SnippetStatus) -> ValidationResult {
         capability_capped: false,
         downgrade_reason: None,
         unresolved_dependency: false,
+        timed_out: false,
+        preflight_skipped: false,
     }
 }
 

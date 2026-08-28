@@ -1,3 +1,4 @@
+use super::artifact_preflight::ArtifactPreflight;
 use super::{
     BatchKey, FailureReporter, RunnerConfig, ValidationOutcome, batch_level, finalize_result, session_for, session_key,
     session_lock_for, session_preparation_error, session_preparation_result,
@@ -28,6 +29,10 @@ struct GroupedSnippets {
     results: Vec<Option<ValidationResult>>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site; every argument is a distinct read-only half of the pass"
+)]
 pub(super) fn validate_batches(
     snippets: &[Snippet],
     registry: &ValidatorRegistry,
@@ -36,9 +41,17 @@ pub(super) fn validate_batches(
     session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
     reporter: &FailureReporter,
+    preflight: &ArtifactPreflight,
 ) -> Vec<Option<ValidationResult>> {
-    let GroupedSnippets { groups, mut results } =
-        group_batchable_snippets(snippets, registry, config, sessions, session_errors, reporter);
+    let GroupedSnippets { groups, mut results } = group_batchable_snippets(
+        snippets,
+        registry,
+        config,
+        sessions,
+        session_errors,
+        reporter,
+        preflight,
+    );
     let context = BatchContext {
         snippets,
         registry,
@@ -62,6 +75,7 @@ fn group_batchable_snippets(
     sessions: &HashMap<String, ValidationSession>,
     session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     reporter: &FailureReporter,
+    preflight: &ArtifactPreflight,
 ) -> GroupedSnippets {
     let mut results = vec![None; snippets.len()];
     let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
@@ -73,7 +87,7 @@ fn group_batchable_snippets(
             continue;
         }
         let session = session_for(snippet, sessions);
-        if let Some(level) = batch_level(snippet, registry, config, session) {
+        if let Some(level) = batch_level(snippet, registry, config, session, preflight) {
             let key = (
                 snippet.language,
                 session_key(snippet, sessions).map(str::to_string),
@@ -166,7 +180,7 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         );
         return Vec::new();
     };
-    let values = batch_statuses(batch, indices.len());
+    let BatchOutcome { values, timed_out } = batch_statuses(batch, indices.len());
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     tracing::info!(
         language = %language,
@@ -183,6 +197,7 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         values,
         indices,
         duration_ms,
+        timed_out,
     )
 }
 
@@ -207,19 +222,44 @@ fn run_batch(
     }
 }
 
+/// One status per snippet in a group, plus whether the group's single invocation was killed at its
+/// deadline rather than reporting on any of them.
+struct BatchOutcome {
+    values: BatchValidation,
+    timed_out: bool,
+}
+
 /// Normalizes a batch validator's return into exactly one status per snippet, so a validator that
 /// miscounts or fails outright still resolves every snippet the group claimed.
-fn batch_statuses(batch: Result<BatchValidation>, expected: usize) -> BatchValidation {
+///
+/// A timed-out group is the sharpest form of the accounting defect this flag fixes: one expired
+/// stopwatch is charged to every snippet in the group, so a single overrun batch could contribute
+/// hundreds to a count a reader would take for hundreds of broken snippets. The status stays
+/// `Error` -- the snippets really were not validated -- but `timed_out` lets the summary say which
+/// kind of number it is. ~keep
+fn batch_statuses(batch: Result<BatchValidation>, expected: usize) -> BatchOutcome {
     match batch {
-        Ok(values) if values.len() == expected => values,
+        Ok(values) if values.len() == expected => BatchOutcome {
+            values,
+            timed_out: false,
+        },
         Ok(values) => {
             let message = format!(
                 "batch validator returned {} results for {expected} snippets",
                 values.len()
             );
-            vec![(SnippetStatus::Error, Some(message)); expected]
+            BatchOutcome {
+                values: vec![(SnippetStatus::Error, Some(message)); expected],
+                timed_out: false,
+            }
         }
-        Err(error) => vec![(SnippetStatus::Error, Some(error.to_string())); expected],
+        Err(error) => {
+            let timed_out = matches!(error, crate::snippets::error::Error::Timeout { .. });
+            BatchOutcome {
+                values: vec![(SnippetStatus::Error, Some(error.to_string())); expected],
+                timed_out,
+            }
+        }
     }
 }
 
@@ -236,6 +276,7 @@ fn finalize_group(
     values: BatchValidation,
     indices: &[usize],
     duration_ms: u64,
+    timed_out: bool,
 ) -> Vec<(usize, ValidationResult)> {
     let mut finalized = Vec::with_capacity(indices.len());
     for ((index, snippet), (status, message)) in indices.iter().copied().zip(batch_snippets).zip(values) {
@@ -249,6 +290,7 @@ fn finalize_group(
                 status,
                 message,
                 duration_ms,
+                timed_out,
             },
         );
         context.reporter.record(&value);

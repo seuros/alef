@@ -4,6 +4,7 @@
 //! than guessed at, consistent with the rest of this validator's silence-vs-loudness choices. ~keep
 
 use crate::snippets::error::Result;
+use crate::snippets::validators::native_library::{directory_has_ffi_library, linkable_library_names};
 use std::path::{Path, PathBuf};
 
 /// Include directories the build manifest declares for its module, in declaration order. ~keep
@@ -148,43 +149,6 @@ fn zig_manifest_link_library_name(source: &str) -> Option<String> {
     Some(source[start..end].to_owned())
 }
 
-/// The filenames `linkSystemLibrary("<lib_name>")` can actually resolve on this host, which is
-/// the only set worth probing: a name zig does not search for is a library the build step will
-/// fail to find no matter what this reports.
-///
-/// Windows is not `lib`-prefixed for its dynamic and import libraries. Zig names its own search
-/// there -- verbatim, from the "unable to find dynamic system library" diagnostic -- as
-/// `{name}.dll`, `{name}.lib`, `lib{name}.a`, which is also what cargo emits (`{name}.dll` plus
-/// `{name}.dll.lib` for a cdylib, `{name}.lib` for a staticlib). `lib{name}.dll` is a file no
-/// Windows toolchain produces and zig never looks for, so prepending `lib` unconditionally made
-/// this probe unable to find a real Windows FFI library at all. ~keep
-fn linkable_library_names(lib_name: &str) -> [String; 3] {
-    if cfg!(windows) {
-        [
-            format!("{lib_name}.dll"),
-            format!("{lib_name}.lib"),
-            format!("lib{lib_name}.a"),
-        ]
-    } else {
-        [
-            format!("lib{lib_name}.dylib"),
-            format!("lib{lib_name}.so"),
-            format!("lib{lib_name}.a"),
-        ]
-    }
-}
-
-/// Whether `directory` directly contains a linkable artifact for `lib_name` — checked by probing
-/// the names this host's zig actually searches rather than trusting `directory.exists()` alone,
-/// and never inside a `deps/` subdirectory: that directory carries whatever feature set some other
-/// cargo invocation unified, so a copy found only there cannot be trusted. Mirrors
-/// `publish::ffi_stage`'s same refusal to accept a `deps/`-only copy. ~keep
-fn directory_has_ffi_library(directory: &Path, lib_name: &str) -> bool {
-    linkable_library_names(lib_name)
-        .iter()
-        .any(|name| directory.join(name).is_file())
-}
-
 /// The sibling `debug` directory of a `.../release` directory, or `None` when `release_dir`'s own
 /// name is not literally `release` — a consumer who points the option somewhere else entirely (a
 /// vendored prebuilt, a sibling repo) gets no guessed fallback rather than a wrong one. ~keep
@@ -205,20 +169,78 @@ fn sibling_profile_directory(release_dir: &Path) -> Option<PathBuf> {
 /// library (let zig fail with its own message rather than pass a directory that will not help).
 /// ~keep
 pub(crate) fn resolve_ffi_library_override(manifest: &Path) -> Result<Option<(String, PathBuf)>> {
-    let Some((option_name, release_dir)) = zig_manifest_library_path_option(manifest)? else {
+    let Some(declared) = declared_ffi_library(manifest)? else {
+        return Ok(None);
+    };
+    match locate_ffi_library(&declared) {
+        Some(directory) if directory == declared.release_directory => Ok(None),
+        Some(directory) => Ok(Some((declared.option_name, directory))),
+        None => Ok(None),
+    }
+}
+
+/// The FFI library this manifest links against when it is on neither the release nor the debug
+/// path -- i.e. the build artifact `alef build` was supposed to produce and did not.
+///
+/// Reported as the release-profile path the scaffolded `build.zig` searches by default, because
+/// that is the one a reader should expect a build to fill. `None` means "nothing to say": either
+/// the manifest declares no library search option or no `linkSystemLibrary` (so this file cannot
+/// know what to look for), or a library really is on disk. Sharing `locate_ffi_library` with
+/// `resolve_ffi_library_override` is what stops "which profile has the library" from being
+/// answered two different ways by the override and the preflight. ~keep
+///
+/// The one shape this could misread, recorded because a false positive costs a corpus its
+/// validation: a hand-written `build.zig` whose *first* `linkSystemLibrary` names a genuine system
+/// library (`c`, `m`) the linker resolves from its own search path, while also carrying the
+/// option-backed `addLibraryPath` this reads. Both conditions must hold — the option-backed
+/// library path is the exact construct `scaffold::languages::zig::scaffold_zig` emits to point at
+/// the FFI build output, and every `linkSystemLibrary` that scaffold emits names the FFI library
+/// itself. A consumer who hits it can still pass `--skip-snippet-validation`. ~keep
+pub(crate) fn unresolvable_ffi_library(manifest: &Path) -> Result<Option<PathBuf>> {
+    let Some(declared) = declared_ffi_library(manifest)? else {
+        return Ok(None);
+    };
+    if locate_ffi_library(&declared).is_some() {
+        return Ok(None);
+    }
+    let name = linkable_library_names(&declared.library_name)
+        .into_iter()
+        .next()
+        .expect("every host links at least one library name");
+    Ok(Some(declared.release_directory.join(name)))
+}
+
+/// A manifest's declared FFI library: the `-Doption` name that redirects its search directory, the
+/// directory that option defaults to, and the base name it links.
+struct DeclaredFfiLibrary {
+    option_name: String,
+    release_directory: PathBuf,
+    library_name: String,
+}
+
+fn declared_ffi_library(manifest: &Path) -> Result<Option<DeclaredFfiLibrary>> {
+    let Some((option_name, release_directory)) = zig_manifest_library_path_option(manifest)? else {
         return Ok(None);
     };
     let source = std::fs::read_to_string(manifest)?;
-    let Some(lib_name) = zig_manifest_link_library_name(&source) else {
+    let Some(library_name) = zig_manifest_link_library_name(&source) else {
         return Ok(None);
     };
-    if directory_has_ffi_library(&release_dir, &lib_name) {
-        return Ok(None);
+    Ok(Some(DeclaredFfiLibrary {
+        option_name,
+        release_directory,
+        library_name,
+    }))
+}
+
+/// The directory that actually holds `declared`'s library: its declared (release) directory when
+/// that one has it, otherwise the sibling `debug` directory, otherwise `None`.
+fn locate_ffi_library(declared: &DeclaredFfiLibrary) -> Option<PathBuf> {
+    if directory_has_ffi_library(&declared.release_directory, &declared.library_name) {
+        return Some(declared.release_directory.clone());
     }
-    let Some(debug_dir) = sibling_profile_directory(&release_dir) else {
-        return Ok(None);
-    };
-    Ok(directory_has_ffi_library(&debug_dir, &lib_name).then_some((option_name, debug_dir)))
+    let debug = sibling_profile_directory(&declared.release_directory)?;
+    directory_has_ffi_library(&debug, &declared.library_name).then_some(debug)
 }
 
 #[cfg(test)]
@@ -443,6 +465,73 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(resolve_ffi_library_override(&manifest).unwrap(), None);
+    }
+
+    /// The preflight's half of the same question: with neither profile built, the artifact the
+    /// manifest links is genuinely absent and must be reported, naming the release path a build
+    /// would fill. This is the fact `runner::artifact_preflight` turns into one skip instead of
+    /// one doomed `zig build` per snippet. ~keep
+    #[test]
+    fn an_unbuilt_ffi_library_is_reported_with_the_path_a_build_would_fill() {
+        let directory = tempfile::tempdir().expect("project directory");
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = package.join("build.zig");
+        std::fs::write(
+            &manifest,
+            build_root_rebased_ffi_path_build_zig("sample_ffi", "../release"),
+        )
+        .unwrap();
+
+        let missing = unresolvable_ffi_library(&manifest).unwrap().expect("nothing is built");
+
+        assert!(
+            missing.starts_with(package.join("../release")),
+            "the report must name the release directory the manifest searches: {}",
+            missing.display()
+        );
+        assert!(
+            missing.to_string_lossy().contains("sample_ffi"),
+            "the report must name the library: {}",
+            missing.display()
+        );
+    }
+
+    /// The control that keeps the preflight from skipping a session it could have validated: once
+    /// the library is on disk, nothing is missing. ~keep
+    #[test]
+    fn a_built_ffi_library_leaves_nothing_for_the_preflight_to_report() {
+        let directory = tempfile::tempdir().expect("project directory");
+        write_stand_in_library(&directory.path().join("release"), "sample_ffi");
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = package.join("build.zig");
+        std::fs::write(
+            &manifest,
+            build_root_rebased_ffi_path_build_zig("sample_ffi", "../release"),
+        )
+        .unwrap();
+
+        assert_eq!(unresolvable_ffi_library(&manifest).unwrap(), None);
+    }
+
+    /// And the debug-profile control: a library built without `--release` is still a built library,
+    /// so a run that would have validated fine must not be skipped. This is the same asymmetry
+    /// `resolve_ffi_library_override` exists for, read from the preflight's side. ~keep
+    #[test]
+    fn a_debug_only_ffi_library_leaves_nothing_for_the_preflight_to_report() {
+        let directory = tempfile::tempdir().expect("project directory");
+        write_stand_in_library(&directory.path().join("debug"), "sample_ffi");
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = package.join("build.zig");
+        std::fs::write(
+            &manifest,
+            build_root_rebased_ffi_path_build_zig("sample_ffi", "../release"),
+        )
+        .unwrap();
+
+        assert_eq!(unresolvable_ffi_library(&manifest).unwrap(), None);
     }
 
     #[test]

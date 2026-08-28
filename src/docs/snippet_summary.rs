@@ -122,6 +122,33 @@ pub(crate) fn enforce_snippet_summary(
             attribute_declared_capped(summary)
         );
     }
+    // Reported separately from the `unavailable` block below even though these results are part of
+    // it, because they are the ones nothing was spawned for -- the reader has to be able to see
+    // that the run got cheaper by checking less, not by checking faster.
+    //
+    // DELIBERATELY NOT A STRICT BAIL, and this is the one decision in the change that could
+    // reasonably have gone the other way. A preflight skip is bit-for-bit the same fact as the
+    // `unresolved_dependency` reclassification this function has exempted from strict since task
+    // #186: a build artifact `alef docs`/`alef all` structurally cannot produce in the same
+    // invocation is absent. Failing strict on the early detection while exempting the late one
+    // would mean `alef all --strict` started failing runs it passed yesterday, on identical
+    // inputs, purely because alef got better at noticing sooner -- the check becoming a behaviour
+    // change rather than a speed-up. The counterpart gates are unchanged and still fire: an
+    // entirely-skipped corpus still trips `checked_nothing` above, a missing *toolchain* still
+    // bails, and `alef snippets check` -- which runs after a build and therefore can demand a
+    // real answer -- still hard-fails on `checked_nothing` in `cli::commands::snippets`. ~keep
+    if summary.preflight_skipped > 0 {
+        tracing::warn!(
+            preflight_skipped = summary.preflight_skipped,
+            total = summary.total,
+            "docs.snippets skipped {} of {} snippet(s) WITHOUT running a validator: their session's build \
+             artifacts do not exist, so every one of them would have failed for that single reason. Nothing about \
+             these snippets was checked. Run `alef build` before validating, or pass --skip-snippet-validation to \
+             make the generate-only run explicit",
+            summary.preflight_skipped,
+            summary.total
+        );
+    }
     if summary.unavailable > 0 {
         let toolchain_missing = summary.unavailable - summary.unresolved_dependency;
         // `toolchain_missing == 0` here means every `unavailable` result in this bucket is
@@ -155,10 +182,11 @@ pub(crate) fn enforce_snippet_summary(
     }
     if summary.has_failures() {
         anyhow::bail!(
-            "snippet validation failed for crate `{}`: {} failed, {} errors{}{}",
+            "snippet validation failed for crate `{}`: {} failed, {} errors{}{}{}",
             crate_name,
             summary.failed,
             summary.errors,
+            timeout_note(summary),
             attribute_results(summary, crate::snippets::types::SnippetStatus::Fail),
             attribute_results(summary, crate::snippets::types::SnippetStatus::Error)
         );
@@ -172,6 +200,24 @@ pub(crate) fn enforce_snippet_summary(
         );
     }
     Ok(())
+}
+
+/// The clause that keeps a failing count from being read as a defect count when part of it is a
+/// stopwatch reading, or empty when nothing timed out.
+///
+/// A timeout is not a verdict on the snippet -- the toolchain was killed before it reached one --
+/// but it is still a failure of the run, so it stays inside `errors` and stays in this bail. What
+/// changes is that the reader can now tell the two apart: "32 failed, 0 errors" and "411 failed"
+/// were both reported by consumers as if every unit named a broken snippet. ~keep
+fn timeout_note(summary: &crate::snippets::types::RunSummary) -> String {
+    if summary.timed_out == 0 {
+        return String::new();
+    }
+    format!(
+        " ({} of them timed out before the toolchain reported on the snippet, so that many measure the timeout \
+         budget rather than the corpus)",
+        summary.timed_out
+    )
 }
 
 /// Human label for why a result's effective level differs from what was requested. Kept

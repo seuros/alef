@@ -95,10 +95,54 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
         summary.errors,
         summary.unavailable
     );
+    if let Some(line) = timeout_line(summary) {
+        println!("{line}");
+    }
+    if let Some(line) = preflight_skip_line(summary) {
+        println!("{line}");
+    }
     if let Some(line) = unresolved_dependency_rollup(summary) {
         println!("{line}");
     }
     println!();
+}
+
+/// States how much of `Errors` is a stopwatch reading rather than a verdict, or `None` when no
+/// result timed out.
+///
+/// The count stays inside `Errors` -- a toolchain that never finishes is a real problem and must
+/// still fail the run -- but "32 failed, 0 errors" and "411 failed" were both reported by
+/// consumers as if they named broken snippets, when a large part of each was invocations that ran
+/// out of clock against artifacts that were never built. A timeout says nothing whatsoever about
+/// the snippet: the compiler was killed before it reached a verdict. ~keep
+fn timeout_line(summary: &RunSummary) -> Option<String> {
+    if summary.timed_out == 0 {
+        return None;
+    }
+    Some(format!(
+        "Timed out: {} of {} (counted in Errors) -- these invocations were killed at the timeout before reporting \
+         on the snippet, so they measure the budget, not the corpus. Raise `docs.snippets.timeout_secs`, or build \
+         the artifacts they were waiting on.",
+        summary.timed_out, summary.total
+    ))
+}
+
+/// States how many snippets were never handed to a toolchain because the preflight already knew
+/// their session's build artifacts were absent, or `None` when none were.
+///
+/// Printed as its own line rather than folded into the `unavailable` total precisely because a
+/// skip that disappears into a bucket is indistinguishable from a check that ran. These snippets
+/// were NOT validated and NOT passed. ~keep
+fn preflight_skip_line(summary: &RunSummary) -> Option<String> {
+    if summary.preflight_skipped == 0 {
+        return None;
+    }
+    Some(format!(
+        "Skipped before spawning: {} of {} -- their session's build artifacts do not exist, so no validator was \
+         run for them and nothing about them was checked. Run `alef build` first, or pass \
+         --skip-snippet-validation for a deliberately generate-only run.",
+        summary.preflight_skipped, summary.total
+    ))
 }
 
 /// The line task #488 exists for: how much of the corpus was actually checked at the level it
@@ -356,6 +400,8 @@ mod tests {
             capability_capped: false,
             downgrade_reason,
             unresolved_dependency: false,
+            timed_out: false,
+            preflight_skipped: false,
         }
     }
 

@@ -359,6 +359,14 @@ impl SnippetValidator for GoValidator {
         ValidationLevel::Run
     }
 
+    fn missing_session_artifacts(
+        &self,
+        session: &ValidationSession,
+        _level: ValidationLevel,
+    ) -> Vec<std::path::PathBuf> {
+        crate::snippets::validators::session_artifacts::missing_go_library_directories(session)
+    }
+
     /// ~keep `undefined: x` is Go's diagnostic for any unresolved identifier — a package the
     /// module never provided and a local the generated snippet forgot to bind produce the same
     /// text — so it is the ambiguous shape task #130 rejected for `TS2304`, and accepting it

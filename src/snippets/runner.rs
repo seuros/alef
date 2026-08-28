@@ -11,15 +11,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Instant;
 
+mod artifact_preflight;
 mod batch;
 mod dependency_reclassification;
+mod failure_reporter;
 mod levels;
 mod session_activation;
 mod session_locks;
 mod session_prep;
 mod session_resolution;
 
+use artifact_preflight::ArtifactPreflight;
 use batch::validate_batches;
+use failure_reporter::FailureReporter;
+#[cfg(test)]
+use failure_reporter::{FAILURE_MESSAGE_PREVIEW_CHARS, FAILURE_PROGRESS_STRIDE, failure_preview};
 use levels::{capped_level, effective_validation_level, structurally_unreachable};
 use session_locks::{session_lock_for, session_locks_by_fingerprint};
 use session_prep::{session_preparation_error, session_preparation_result};
@@ -127,6 +133,10 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
     // batch groups that both believed they held "the" session lock wrote into the same
     // `snippet_batch_N.ts` files concurrently -- see `session_lock_for`. ~keep
     let session_locks = session_locks_by_fingerprint(sessions.values());
+    // Asked once per session, before a single validator process exists -- see
+    // `artifact_preflight` for why the question belongs to the session rather than the snippet,
+    // and why a skip here is reported rather than folded into a pass. ~keep
+    let preflight = ArtifactPreflight::inspect(snippets, registry, config, &sessions);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.parallelism)
         .build()
@@ -142,9 +152,25 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
     let results: Vec<ValidationResult> = pool.install(|| {
         let _entered = calling_span.enter();
         if fail_fast {
-            fail_fast_results(snippets, registry, config, &sessions, &session_errors, &session_locks)
+            fail_fast_results(
+                snippets,
+                registry,
+                config,
+                &sessions,
+                &session_errors,
+                &session_locks,
+                &preflight,
+            )
         } else {
-            parallel_results(snippets, registry, config, &sessions, &session_errors, &session_locks)
+            parallel_results(
+                snippets,
+                registry,
+                config,
+                &sessions,
+                &session_errors,
+                &session_locks,
+                &preflight,
+            )
         }
     });
 
@@ -158,6 +184,7 @@ fn fail_fast_results(
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
     session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
+    preflight: &ArtifactPreflight,
 ) -> Vec<ValidationResult> {
     tracing::info!(
         snippet_count = snippets.len(),
@@ -179,6 +206,7 @@ fn fail_fast_results(
             lock,
             preparation_error.as_ref(),
             Some(&reporter),
+            preflight,
         );
         reporter.record(&result);
         let should_stop =
@@ -213,6 +241,7 @@ fn parallel_results(
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
     session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
+    preflight: &ArtifactPreflight,
 ) -> Vec<ValidationResult> {
     let reporter = FailureReporter::new(snippets);
     let batched = validate_batches(
@@ -223,6 +252,7 @@ fn parallel_results(
         session_errors,
         session_locks,
         &reporter,
+        preflight,
     );
     let unclaimed_counts = fallback_counts_by_language(snippets, &batched);
     let started = Instant::now();
@@ -235,7 +265,16 @@ fn parallel_results(
             }
             let session = session_for(snippet, sessions);
             let lock = session_lock_for(session, session_locks);
-            let result = validate_one(snippet, registry, config, session, lock, None, Some(&reporter));
+            let result = validate_one(
+                snippet,
+                registry,
+                config,
+                session,
+                lock,
+                None,
+                Some(&reporter),
+                preflight,
+            );
             reporter.record(&result);
             result
         })
@@ -277,222 +316,18 @@ fn fallback_counts_by_language(
     counts
 }
 
-/// A language emits one `WARN` for its first failure, then one more every this many failures.
-/// Sized so a pathological run (1,753 failures spread over six languages) produces on the order of
-/// seventy lines rather than one per failure, while a language that fails a handful of times still
-/// gets its first-failure line immediately.
-const FAILURE_PROGRESS_STRIDE: usize = 25;
-
-/// How much of a validator's own error output the first-failure event carries. Long enough for a
-/// `javac`/`tsc` diagnostic's first lines (the part that names the actual problem), short enough
-/// that a log line stays a log line.
-const FAILURE_MESSAGE_PREVIEW_CHARS: usize = 400;
-
-#[derive(Clone, Copy, Default)]
-struct LanguageTally {
-    completed: usize,
-    failed: usize,
-    unavailable: usize,
-    /// Snippets of this language that actually reached a toolchain invocation, as counted by
-    /// [`FailureReporter::record_toolchain_start`]. ~keep Distinct from `completed`, which counts
-    /// every result including the ones `validate_one` short-circuits without running anything.
-    invoked: usize,
-}
-
-/// Emits snippet failures *while* a validation pass is running.
-///
-/// Everything reported here was already known at the moment each `ValidationResult` was built —
-/// `validate_one`/`validate_batches` hold the status and the validator's message, and
-/// `finalize_result` writes both to the result cache. None of it reached the log: a run that
-/// produced 1,753 failures across six languages failing at 100% was indistinguishable from a
-/// healthy run until the stage ended and the summary printed.
-///
-/// One event per failure would be as unreadable as silence, so the budget is bounded per language:
-/// the first failure carries the validator's own message (the only part that says *what* broke),
-/// subsequent failures are counted and surfaced every [`FAILURE_PROGRESS_STRIDE`], and each
-/// language emits exactly one terminal event once its last snippet lands — which is mid-run for
-/// every language but the slowest, because `parallel_results` interleaves all languages.
-struct FailureReporter {
-    totals: BTreeMap<crate::snippets::types::Language, usize>,
-    tallies: Mutex<BTreeMap<crate::snippets::types::Language, LanguageTally>>,
-    span: tracing::Span,
-}
-
-impl FailureReporter {
-    fn new(snippets: &[Snippet]) -> Self {
-        let mut totals = BTreeMap::new();
-        for snippet in snippets {
-            *totals.entry(snippet.language).or_insert(0_usize) += 1;
-        }
-        Self {
-            totals,
-            tallies: Mutex::new(BTreeMap::new()),
-            // Recorded from the constructing thread, which `run_validation` has already put in the
-            // caller's span, and re-entered on every emission. Most `record` calls happen on a
-            // rayon worker that `pool.install`'s one-off `Span::enter` never reached, so without
-            // this the events a consumer most needs to correlate would be the span-less ones. ~keep
-            span: tracing::Span::current(),
-        }
-    }
-
-    /// Announce, once per language, that a snippet of that language has reached an actual
-    /// toolchain invocation, and count every such invocation.
-    ///
-    /// ~keep This is called from the one place real work begins, rather than inferred beforehand
-    /// from `validate_batches` leaving an entry unclaimed. That inference was wrong: `validate_one`
-    /// short-circuits on a cache hit, a `skip` annotation, a side-effect rejection, a missing
-    /// validator and an unavailable toolchain, none of which run anything. Because
-    /// `docs::validate_snippets` runs once per crate with `changed_only`, later crates are ~100%
-    /// cache hits, so every language announced `Starting per-snippet validation snippet_count=521`
-    /// while doing nothing at all -- which read as though 13 of 14 languages had fallen out of
-    /// batching when in fact only four had. Deriving the event from the work itself cannot drift
-    /// from it the way a parallel predicate can.
-    fn record_toolchain_start(&self, language: crate::snippets::types::Language, timeout_secs: u64) {
-        let Ok(mut tallies) = self.tallies.lock() else {
-            return;
-        };
-        let tally = tallies.entry(language).or_default();
-        tally.invoked += 1;
-        let first = tally.invoked == 1;
-        drop(tallies);
-        if !first {
-            return;
-        }
-        let snippet_count = self.totals.get(&language).copied().unwrap_or(0);
-        self.span.in_scope(|| {
-            tracing::info!(
-                language = %language,
-                snippet_count = snippet_count,
-                timeout_secs = timeout_secs,
-                "Starting per-snippet validation"
-            );
-        });
-    }
-
-    /// Per-language counts of snippets that actually invoked a toolchain.
-    fn invoked_by_language(&self) -> BTreeMap<crate::snippets::types::Language, usize> {
-        let Ok(tallies) = self.tallies.lock() else {
-            return BTreeMap::new();
-        };
-        tallies
-            .iter()
-            .filter(|(_, tally)| tally.invoked > 0)
-            .map(|(language, tally)| (*language, tally.invoked))
-            .collect()
-    }
-
-    fn record(&self, result: &ValidationResult) {
-        let language = result.snippet.language;
-        let failed = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
-        // `Unavailable` is tallied separately rather than folded into `failed`, and it is tallied at
-        // all because it is not the harmless outcome its name suggests: under `strict` it fails the
-        // run exactly like a `Fail`, and the `unresolved_dependency` reclassification below turns a
-        // real validator `Fail` -- diagnostic and all -- into one. Counting only `Fail | Error` is
-        // how 566 snippets across two languages reached the final summary as
-        // "283 unresolved dependency" apiece with not one line anywhere in the log saying WHICH
-        // dependency, while the validator's own message sat unread on every result. ~keep
-        let unavailable = matches!(result.status, SnippetStatus::Unavailable);
-        // A poisoned tally lock costs reporting only. Unwrapping here would let a panic in some
-        // other worker's reporting turn a reportable run into an aborted one, which is exactly the
-        // failure mode this reporter exists to prevent. ~keep
-        let Ok(mut tallies) = self.tallies.lock() else {
-            return;
-        };
-        let tally = tallies.entry(language).or_default();
-        tally.completed += 1;
-        if failed {
-            tally.failed += 1;
-        }
-        if unavailable {
-            tally.unavailable += 1;
-        }
-        let tally = *tally;
-        drop(tallies);
-
-        let snippet_count = self.totals.get(&language).copied().unwrap_or(tally.completed);
-        self.span.in_scope(|| {
-            if failed && tally.failed == 1 {
-                tracing::warn!(
-                    language = %language,
-                    path = %result.snippet.source_origin.path.display(),
-                    line = result.snippet.source_origin.line,
-                    snippet_count = snippet_count,
-                    error = %failure_preview(result.message.as_deref()),
-                    "First snippet validation failure for this language"
-                );
-            } else if unavailable && tally.unavailable == 1 {
-                tracing::warn!(
-                    language = %language,
-                    path = %result.snippet.source_origin.path.display(),
-                    line = result.snippet.source_origin.line,
-                    snippet_count = snippet_count,
-                    unresolved_dependency = result.unresolved_dependency,
-                    error = %failure_preview(result.message.as_deref()),
-                    "First snippet validation unavailability for this language"
-                );
-            } else if failed && tally.failed % FAILURE_PROGRESS_STRIDE == 0 {
-                tracing::warn!(
-                    language = %language,
-                    failed = tally.failed,
-                    completed = tally.completed,
-                    snippet_count = snippet_count,
-                    "Snippet validation failures accumulating"
-                );
-            }
-            if tally.completed < snippet_count {
-                return;
-            }
-            if tally.failed > 0 {
-                tracing::warn!(
-                    language = %language,
-                    failed = tally.failed,
-                    unavailable = tally.unavailable,
-                    snippet_count = snippet_count,
-                    "Finished snippet validation for this language with failures"
-                );
-            } else if tally.unavailable > 0 {
-                tracing::warn!(
-                    language = %language,
-                    unavailable = tally.unavailable,
-                    snippet_count = snippet_count,
-                    "Finished snippet validation for this language with every result unvalidated"
-                );
-            } else {
-                tracing::debug!(
-                    language = %language,
-                    snippet_count = snippet_count,
-                    "Finished snippet validation for this language"
-                );
-            }
-        });
-    }
-}
-
-/// Flattens a validator's multi-line diagnostic onto one bounded log line. Truncation is by
-/// character, not byte, so a diagnostic quoting non-ASCII source cannot panic on a split boundary.
-fn failure_preview(message: Option<&str>) -> String {
-    let joined = message
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" | ");
-    if joined.is_empty() {
-        return "<no validator output>".to_string();
-    }
-    match joined.char_indices().nth(FAILURE_MESSAGE_PREVIEW_CHARS) {
-        Some((index, _)) => format!("{}...", &joined[..index]),
-        None => joined,
-    }
-}
-
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
 
 struct ValidationOutcome {
     status: SnippetStatus,
     message: Option<String>,
     duration_ms: u64,
+    /// Whether the toolchain was killed at its deadline instead of reporting a verdict — see
+    /// [`crate::snippets::types::ValidationResult::timed_out`]. Carried on the outcome rather than
+    /// re-derived from the message text in `finalize_result`, because the only place that knows it
+    /// is the `Err(Error::Timeout { .. })` arm the outcome is built from, and matching on prose
+    /// would make the distinction depend on wording that is otherwise free to change. ~keep
+    timed_out: bool,
 }
 
 fn batch_level(
@@ -500,6 +335,7 @@ fn batch_level(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
+    preflight: &ArtifactPreflight,
 ) -> Option<ValidationLevel> {
     if cached_result(snippet, config, session).is_some() || side_effect_rejection(snippet, config).is_some() {
         return None;
@@ -520,6 +356,13 @@ fn batch_level(
         return None;
     }
     let level = capped_level(snippet, config, validator);
+    // A batch group whose session has no artifacts is one process that reports N failures about a
+    // corpus nobody checked -- cheaper than N processes, and just as untrue. Declining the group
+    // sends its snippets to `validate_one`, which resolves each one through the same preflight
+    // without spawning anything. ~keep
+    if preflight.is_unsatisfiable(session, level) {
+        return None;
+    }
     validator.is_available_at(level).then_some(level)
 }
 
@@ -598,6 +441,10 @@ fn session_key<'a>(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "two call sites; every argument is a distinct read-only half of the pass"
+)]
 fn validate_one(
     snippet: &Snippet,
     registry: &ValidatorRegistry,
@@ -606,6 +453,7 @@ fn validate_one(
     session_lock: Option<&Mutex<()>>,
     session_preparation_error: Option<&crate::snippets::session::SessionPreparationError>,
     reporter: Option<&FailureReporter>,
+    preflight: &ArtifactPreflight,
 ) -> ValidationResult {
     if let Some(preparation_error) = session_preparation_error {
         return session_preparation_result(snippet, config, preparation_error);
@@ -661,6 +509,14 @@ fn validate_one(
         );
     }
 
+    // Last of the short-circuits, and deliberately so: a cache hit, a `skip` annotation, a
+    // side-effect rejection and a missing toolchain are all true regardless of what is built, and
+    // all of them cost nothing, so none of them may be displaced by this. Everything past this
+    // point spawns a process. ~keep
+    if let Some(skipped) = preflight.skipped_result(snippet, config, session, effective_level) {
+        return skipped;
+    }
+
     if let Some(reporter) = reporter {
         reporter.record_toolchain_start(snippet.language, config.timeout_secs);
     }
@@ -695,6 +551,12 @@ fn validate_one(
         },
         None => validation(&mut start),
     };
+    // A timeout keeps `SnippetStatus::Error` -- an unbounded toolchain is a real problem and must
+    // still fail the run -- but is flagged so the summary can tell "N snippets are broken" from "N
+    // snippets ran out of clock". The two were indistinguishable as `Errors`, which is how a
+    // reported `32 failed, 0 errors` and a `411 failed` both meant something other than what they
+    // read as. ~keep
+    let timed_out = matches!(validation_result, Err(crate::snippets::error::Error::Timeout { .. }));
     let (status, message) = match validation_result {
         Ok((status, message)) => (status, message),
         Err(err) => (SnippetStatus::Error, Some(err.to_string())),
@@ -711,6 +573,7 @@ fn validate_one(
             status,
             message,
             duration_ms,
+            timed_out,
         },
     )
 }
@@ -790,6 +653,7 @@ fn finalize_result(
         mut status,
         message,
         duration_ms,
+        timed_out,
     } = outcome;
     // A validator's toolchain can run to completion and still report a `Fail` whose message is a
     // missing import/package/symbol rather than a defect in the snippet — the shape every
@@ -879,6 +743,7 @@ fn finalize_result(
     result.capability_capped = classification.capability_capped;
     result.downgrade_reason = classification.downgrade_reason;
     result.unresolved_dependency = unresolved_dependency;
+    result.timed_out = timed_out;
     if let Some(cache) = config.cache_dir.clone().map(ValidationCache::new)
         && let Err(error) = cache.store(
             snippet,
@@ -951,6 +816,8 @@ pub(super) fn result(
         capability_capped: false,
         downgrade_reason: None,
         unresolved_dependency: false,
+        timed_out: false,
+        preflight_skipped: false,
     }
 }
 
@@ -990,3 +857,6 @@ mod session_activation_cache_tests;
 
 #[cfg(test)]
 mod parallelism_tests;
+
+#[cfg(test)]
+mod artifact_preflight_tests;

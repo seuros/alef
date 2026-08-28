@@ -476,6 +476,14 @@ impl SnippetValidator for TypeScriptValidator {
         ValidationLevel::Run
     }
 
+    fn missing_session_artifacts(
+        &self,
+        session: &ValidationSession,
+        _level: ValidationLevel,
+    ) -> Vec<std::path::PathBuf> {
+        crate::snippets::validators::session_artifacts::missing_typescript_declaration(session)
+    }
+
     // Only codes tsc emits when it could not *locate* a module, namespace, or declaration file
     // -- the shape that actually means "this run's environment lacks a dependency or build
     // artifact." Ordinary type errors (TS2322 not-assignable, TS2345 argument mismatch, TS2339

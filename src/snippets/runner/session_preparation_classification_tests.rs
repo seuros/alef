@@ -287,6 +287,7 @@ fn finalize_result_keeps_a_real_type_error_as_fail_with_the_compiler_message() {
         status: SnippetStatus::Fail,
         message: Some(diagnostic.to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
 
     let result = finalize_result(
@@ -330,6 +331,7 @@ fn finalize_result_still_flags_a_real_missing_module_as_unresolved_dependency() 
         status: SnippetStatus::Fail,
         message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
 
     let result = finalize_result(
@@ -373,6 +375,7 @@ fn finalize_result_with_no_session_names_the_no_session_cause_not_alef_build() {
         status: SnippetStatus::Fail,
         message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
 
     let result = finalize_result(
@@ -410,6 +413,7 @@ fn finalize_result_with_a_configured_session_keeps_the_ordering_message() {
         status: SnippetStatus::Fail,
         message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
     let session = crate::snippets::session::ValidationSession {
         language: crate::snippets::types::Language::TypeScript,
@@ -726,6 +730,7 @@ fn finalize_result_buckets_every_captured_go_linker_missing_library_form_as_unav
             status: SnippetStatus::Fail,
             message: Some((*raw_output).to_string()),
             duration_ms: 5,
+            timed_out: false,
         };
 
         let result = finalize_result(
@@ -776,6 +781,7 @@ fn finalize_result_keeps_a_real_go_compile_error_as_fail_not_unavailable() {
         status: SnippetStatus::Fail,
         message: Some(diagnostic.to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
 
     let result = finalize_result(

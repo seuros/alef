@@ -459,6 +459,32 @@ pub struct ValidationResult {
     /// standing in for the whole status. Set only by `runner::finalize_result`. ~keep
     #[serde(default)]
     pub unresolved_dependency: bool,
+    /// True when this result's toolchain invocation was killed at `timeout_secs` instead of
+    /// reporting a verdict on the snippet.
+    ///
+    /// A timeout is a stopwatch reading, not a judgement: the compiler never said anything about
+    /// the code. It still lands in `SnippetStatus::Error` and still fails the run -- an
+    /// unbounded toolchain is a real problem -- but a reader must be able to tell "N snippets are
+    /// broken" from "N snippets ran out of clock", and before this flag existed they rendered
+    /// identically as `Errors`. That mattered most in exactly the state this run is usually in
+    /// when it happens: a batch validating against artifacts that were never built spends its
+    /// whole budget getting nowhere, and the resulting count measured the budget, not the
+    /// corpus. Set by `runner::finalize_result` from `ValidationOutcome::timed_out`. ~keep
+    #[serde(default)]
+    pub timed_out: bool,
+    /// True when no validator process was ever spawned for this snippet because its session's
+    /// required build artifacts were already known to be absent -- see
+    /// `runner::artifact_preflight`.
+    ///
+    /// The status is `Unavailable` with `unresolved_dependency` set, identical to what the
+    /// per-snippet path produces when it discovers the same missing artifact the expensive way,
+    /// so every downstream verdict (`fully_verified`, `checked_nothing`, the strict-mode gates in
+    /// `docs::enforce_snippet_summary`, the per-language rollup in `snippets::output`) is
+    /// unchanged by detecting it early. This flag exists so the saving is *visible*: a skip that
+    /// disappears into an existing bucket is indistinguishable from a check that ran, which is
+    /// the failure mode this whole preflight has to avoid being. ~keep
+    #[serde(default)]
+    pub preflight_skipped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -503,6 +529,20 @@ pub struct RunSummary {
     /// left for a reader to reconstruct from the other counts. ~keep
     #[serde(default)]
     pub fully_verified: usize,
+    /// Results whose toolchain was killed at the timeout rather than reporting on the snippet --
+    /// see [`ValidationResult::timed_out`]. A subset of `errors`, never a separate bucket:
+    /// downgrading a timeout out of the failing counts would hide an unbounded toolchain, which
+    /// is the opposite of the problem. Reported alongside `errors` so "32 errors" can no longer
+    /// be read as "32 broken snippets" when it is really a stopwatch reading. ~keep
+    #[serde(default)]
+    pub timed_out: usize,
+    /// Results that never spawned a validator because the preflight already knew their session's
+    /// build artifacts were missing -- see [`ValidationResult::preflight_skipped`]. A subset of
+    /// `unresolved_dependency` (and so of `unavailable`), counted separately so the summary can
+    /// state how many snippets were skipped without being checked, rather than letting the saving
+    /// read as a pass. ~keep
+    #[serde(default)]
+    pub preflight_skipped: usize,
     pub results: Vec<ValidationResult>,
 }
 
@@ -522,10 +562,18 @@ impl RunSummary {
             declared_capped: 0,
             unresolved_dependency: 0,
             fully_verified: 0,
+            timed_out: 0,
+            preflight_skipped: 0,
             results,
         };
 
         for result in &summary.results {
+            if result.timed_out {
+                summary.timed_out += 1;
+            }
+            if result.preflight_skipped {
+                summary.preflight_skipped += 1;
+            }
             if result.capability_capped {
                 summary.capability_capped += 1;
             }
@@ -607,6 +655,8 @@ mod tests {
             capability_capped: false,
             downgrade_reason: None,
             unresolved_dependency,
+            timed_out: false,
+            preflight_skipped: false,
         }
     }
 

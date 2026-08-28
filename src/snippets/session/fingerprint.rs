@@ -391,6 +391,8 @@ mod tests {
             capability_capped: false,
             downgrade_reason: None,
             unresolved_dependency: false,
+            timed_out: false,
+            preflight_skipped: false,
         }
     }
 

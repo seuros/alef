@@ -275,6 +275,7 @@ fn finalize_result_sets_unresolved_dependency_on_the_returned_result() {
         status: SnippetStatus::Fail,
         message: Some("error TS2307: Cannot find module 'widgets'".to_string()),
         duration_ms: 5,
+        timed_out: false,
     };
 
     let result = finalize_result(&snippet, &validator, &config, None, ValidationLevel::Compile, outcome);

@@ -9,7 +9,7 @@ pub struct ZigValidator;
 mod batch;
 #[cfg(test)]
 mod cache_dirs_tests;
-mod manifest;
+pub(super) mod manifest;
 #[cfg(test)]
 mod session_command_tests;
 
@@ -53,6 +53,14 @@ impl SnippetValidator for ZigValidator {
 
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Compile
+    }
+
+    fn missing_session_artifacts(
+        &self,
+        session: &ValidationSession,
+        _level: ValidationLevel,
+    ) -> Vec<std::path::PathBuf> {
+        crate::snippets::validators::session_artifacts::missing_zig_ffi_library(session)
     }
 
     fn validate_in_session(

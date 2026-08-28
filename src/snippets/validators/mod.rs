@@ -26,7 +26,9 @@ use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use std::collections::HashMap;
 use std::io::Write;
 
+mod native_library;
 mod process;
+mod session_artifacts;
 
 pub use process::{CapturedStreams, run_command, run_command_streams};
 
@@ -138,6 +140,35 @@ pub trait SnippetValidator: Send + Sync {
 
     fn supports_batching(&self) -> bool {
         false
+    }
+
+    /// Build artifacts that must already be on disk before ANY snippet of this language can be
+    /// validated in `session` at `level` -- the files a `alef build` produces and a session's
+    /// manifest then points its toolchain at. A non-empty answer means every snippet claiming
+    /// this session is unsatisfiable *by construction*, so the runner reports them once and
+    /// spawns nothing (see `runner::artifact_preflight`).
+    ///
+    /// Three rules keep this from becoming the vacuous gate its predecessor was -- alef removed a
+    /// static `enforce_build_dependency` pre-flight that read only session *config* shape and
+    /// bailed for languages whose validator needed no build at all:
+    ///
+    /// - Every path returned must be one this session's own manifest names, resolved and probed on
+    ///   the filesystem. Never a guessed conventional location, never an inference from config
+    ///   shape, never "this language usually needs a build".
+    /// - The default is empty, i.e. satisfiable. A validator that builds its snippets purely from
+    ///   source, or one whose requirement cannot be read off the manifest, keeps validating
+    ///   exactly as before -- an unimplemented probe costs the old behaviour, never a false skip.
+    /// - `Syntax` never reaches here: it resolves nothing, so no artifact can be required for it.
+    ///
+    /// A false positive is far more expensive than a false negative here (it silently stops
+    /// checking a corpus that would have checked fine), so an implementation that cannot answer
+    /// with evidence must answer "nothing missing". ~keep
+    fn missing_session_artifacts(
+        &self,
+        _session: &ValidationSession,
+        _level: ValidationLevel,
+    ) -> Vec<std::path::PathBuf> {
+        Vec::new()
     }
 }
 
