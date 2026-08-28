@@ -240,15 +240,13 @@ fn primitive_rust_type(p: &PrimitiveType) -> &'static str {
 
 /// Resolve the Kotlin package string used when constructing JNI symbols.
 ///
-/// Prefers `[crates.kotlin_android] package`, then `[crates.kotlin] package`,
-/// then falls back to `config.kotlin_package()`.
+/// Delegates to [`crate::core::jni::jni_package`] — the canonical resolver both this backend and
+/// `alef-backend-kotlin`'s JNI-mode emitter must share, so this backend's own `service.rs` symbols
+/// (which call that function directly) can never fall back to a different package than the
+/// `lib.rs` symbols this function's callers emit. This used to be a second, hand-copied precedence
+/// chain here; see that function's doc comment for the drift that duplication caused. ~keep
 fn jni_kotlin_package(config: &ResolvedCrateConfig) -> String {
-    config
-        .kotlin_android
-        .as_ref()
-        .and_then(|a| a.package.clone())
-        .or_else(|| config.kotlin.as_ref().and_then(|k| k.package.clone()))
-        .unwrap_or_else(|| config.kotlin_package())
+    crate::core::jni::jni_package(config)
 }
 
 /// Resolve the fully-qualified error class name for `ERROR_CLASS`.

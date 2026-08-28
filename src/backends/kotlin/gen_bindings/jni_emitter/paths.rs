@@ -1,14 +1,12 @@
 /// Resolve the Kotlin package for JNI-mode output.
 ///
-/// Prefers `[crates.kotlin_android] package`, then `[crates.kotlin] package`,
-/// then falls back to `config.kotlin_package()`.
+/// Delegates to [`crate::core::jni::jni_package`] — the canonical resolver shared with
+/// `alef-backend-jni`'s own package resolution, so the Kotlin `external fun` declarations this
+/// crate emits and the Rust `Java_*` symbols the jni backend emits can never disagree about which
+/// package an unconfigured crate falls back to. This used to be a second, hand-copied precedence
+/// chain here; see that function's doc comment for the drift that duplication caused. ~keep
 pub(in crate::backends::kotlin) fn jni_kotlin_package(config: &ResolvedCrateConfig) -> String {
-    config
-        .kotlin_android
-        .as_ref()
-        .and_then(|a| a.package.clone())
-        .or_else(|| config.kotlin.as_ref().and_then(|k| k.package.clone()))
-        .unwrap_or_else(|| config.kotlin_package())
+    crate::core::jni::jni_package(config)
 }
 
 /// Resolve the output path for a JNI-mode Kotlin file.

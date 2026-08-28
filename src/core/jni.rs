@@ -14,16 +14,29 @@ use crate::core::ir::{ApiSurface, MethodDef, PrimitiveType, ReceiverKind, TypeDe
 
 /// Resolve the Kotlin package used for JNI symbols.
 ///
-/// Prefers `[crates.kotlin_android] package`, then `[crates.kotlin] package`,
-/// then derives a reverse-DNS package from the scaffold repository URL,
-/// and finally falls back to `com.example.{clean_name}` derived from the crate
-/// name (hyphens and underscores removed, lowercased) so generated JNI symbols
-/// are always valid Java identifiers even when no package is configured.
+/// Prefers `[crates.kotlin_android] package`, then `[crates.kotlin] package`, then
+/// [`ResolvedCrateConfig::kotlin_package`] (which itself derives a reverse-DNS package from the
+/// scaffold repository URL before falling back to the vendor-neutral `"unconfigured.alef"`
+/// placeholder).
+///
+/// This is the single implementation both `alef-backend-jni` (the main shim surface, via
+/// `emit_lib_rs`) and `alef-backend-kotlin`'s JNI-mode emitter (`ffi_style = "jni"`) call
+/// directly, rather than each keeping its own copy of this precedence chain. Before this fix
+/// each of the three call sites re-derived the same chain by hand, and this one's final fallback
+/// (`com.example.{clean_name}`) had silently drifted from the other two (`"unconfigured.alef"`,
+/// via `kotlin_package`) — so an unconfigured crate got a *different* package on the `service.rs`
+/// symbols this function fed than on every other symbol the same JNI crate exports. Routing every
+/// caller through one function makes that class of drift structurally impossible rather than
+/// merely re-synced for today. ~keep
 ///
 /// # Examples
-/// ```ignore
-/// let package = alef::core::jni::jni_package(&config);
-/// assert_eq!(package, "dev.sample_crate");
+/// ```
+/// # use alef::core::config::ResolvedCrateConfig;
+/// let config = ResolvedCrateConfig {
+///     name: "sample-crate".to_owned(),
+///     ..ResolvedCrateConfig::default()
+/// };
+/// assert_eq!(alef::core::jni::jni_package(&config), "unconfigured.alef");
 /// ```
 pub fn jni_package(config: &ResolvedCrateConfig) -> String {
     config
@@ -31,11 +44,7 @@ pub fn jni_package(config: &ResolvedCrateConfig) -> String {
         .as_ref()
         .and_then(|a| a.package.clone())
         .or_else(|| config.kotlin.as_ref().and_then(|k| k.package.clone()))
-        .or_else(|| config.try_kotlin_package().ok())
-        .unwrap_or_else(|| {
-            let clean = config.name.replace(['-', '_'], "").to_lowercase();
-            format!("com.example.{clean}")
-        })
+        .unwrap_or_else(|| config.kotlin_package())
 }
 
 /// `<PascalCrateName>Bridge` — Kotlin `object` containing all `external fun`s.
@@ -300,13 +309,54 @@ mod tests {
         assert_eq!(prefix, "Java_dev_sample_1crate_demo_DemoBridge");
     }
 
+    /// Regression coverage for the fallback-drift bug this function's doc comment describes:
+    /// with nothing configured, `jni_package` must agree with `ResolvedCrateConfig::kotlin_package`
+    /// (the vendor-neutral `"unconfigured.alef"` placeholder), not derive its own separate
+    /// `com.example.{name}` default. Before this fix this assertion failed —
+    /// `jni_package` returned `"com.example.testlib"` while `config.kotlin_package()` (and both
+    /// the jni and kotlin backends' own package resolvers) returned `"unconfigured.alef"`, so the
+    /// JNI service-API symbols alone carried a different package than every other symbol the same
+    /// crate exports.
     #[test]
-    fn jni_package_prefers_kotlin_android() {
+    fn jni_package_falls_back_to_kotlin_package_placeholder() {
         let config = ResolvedCrateConfig {
             name: "test-lib".to_owned(),
             ..ResolvedCrateConfig::default()
         };
 
-        assert_eq!(jni_package(&config), "com.example.testlib");
+        assert_eq!(jni_package(&config), config.kotlin_package());
+        assert_eq!(jni_package(&config), "unconfigured.alef");
+    }
+
+    #[test]
+    fn jni_package_prefers_kotlin_android_package_over_everything() {
+        let config = ResolvedCrateConfig {
+            name: "test-lib".to_owned(),
+            kotlin_android: Some(crate::core::config::KotlinAndroidConfig {
+                package: Some("dev.sample.android".to_owned()),
+                ..Default::default()
+            }),
+            kotlin: Some(crate::core::config::KotlinConfig {
+                package: Some("dev.sample.kotlin".to_owned()),
+                ..Default::default()
+            }),
+            ..ResolvedCrateConfig::default()
+        };
+
+        assert_eq!(jni_package(&config), "dev.sample.android");
+    }
+
+    #[test]
+    fn jni_package_prefers_kotlin_package_over_derived_default() {
+        let config = ResolvedCrateConfig {
+            name: "test-lib".to_owned(),
+            kotlin: Some(crate::core::config::KotlinConfig {
+                package: Some("dev.sample.kotlin".to_owned()),
+                ..Default::default()
+            }),
+            ..ResolvedCrateConfig::default()
+        };
+
+        assert_eq!(jni_package(&config), "dev.sample.kotlin");
     }
 }
