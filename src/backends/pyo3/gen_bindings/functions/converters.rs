@@ -668,12 +668,20 @@ pub(super) fn emit_converters(
                 .map(str::to_owned)
                 .unwrap_or(pyo3_param_name);
 
-            // If this field has a #[serde(default)] and is non-optional in the binding,
             let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
-            let is_named_type = matches!(field.ty, TypeRef::Named(_));
 
-            if defers_to_rust_default(field) && !is_optional && is_named_type && field_defaults.admits_none(field) {
-                // For Named fields with #[serde(default)] that are non-optional in the binding,
+            // Which `TypeRef` shape the field has is irrelevant to whether the omission is
+            // needed: the only facts that matter are that `options.py` defaults the field to
+            // `None` (`admits_none`) and that the native parameter is not an `Option`
+            // (`!is_optional`), so the `None` has to be withheld rather than passed. Gating this
+            // on `TypeRef::Named` additionally left every other shape passing that `None`
+            // straight through to a non-`Option` pyo3 parameter -- a `Vec<String>` field whose
+            // Rust default is a function call reached `_rust.T(field=None)` and failed extraction
+            // with `TypeError: 'None' is not an instance of 'Sequence'`, far from the dataclass
+            // that produced it. `admits_none` is the single fact both this branch and the
+            // `T | None` widening in `types.rs` are derived from; the gate made this branch
+            // disagree with that widening for exactly the non-`Named` shapes. ~keep
+            if defers_to_rust_default(field) && !is_optional && field_defaults.admits_none(field) {
                 let raw_field_accessor = field_access(&field.name);
                 out.push_str(&crate::backends::pyo3::template_env::render(
                     "field_kwarg_optional_default.jinja",

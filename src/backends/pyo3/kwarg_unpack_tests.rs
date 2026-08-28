@@ -300,3 +300,151 @@ fn should_keep_the_kwargs_unpack_when_options_defaults_the_field_to_none() {
          non-`Option` pyo3 parameter fails extraction:\n{facade}"
     );
 }
+
+/// `options.py` as the backend writes it, for the dataclass half of the same contract.
+fn render_options_py(api: &ApiSurface) -> String {
+    crate::backends::pyo3::Pyo3Backend
+        .generate_public_api(api, &python_config())
+        .expect("public API generation succeeds")
+        .into_iter()
+        .find(|file| file.path.ends_with("options.py"))
+        .expect("options.py is generated")
+        .content
+}
+
+/// A hand-written `impl Default` that fills one field from a zero-argument function call and the
+/// rest from literals -- the shape that folds to `FunctionCall` for that one field and to
+/// value-carrying variants for its siblings (`extract::extractor::defaults`).
+///
+/// `allowed_marks` is deliberately a non-`Option`, non-`Named` `Vec<String>`: the omission unpack
+/// used to be gated on `TypeRef::Named`, so exactly this shape had its `None` passed through.
+fn mixed_literal_and_function_default_fields() -> Vec<FieldDef> {
+    vec![
+        FieldDef {
+            name: "strict".to_string(),
+            ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+            typed_default: Some(DefaultValue::BoolLiteral(true)),
+            ..Default::default()
+        },
+        FieldDef {
+            name: "wrap_columns".to_string(),
+            ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Usize),
+            typed_default: Some(DefaultValue::IntLiteral(80)),
+            ..Default::default()
+        },
+        FieldDef {
+            name: "tags".to_string(),
+            ty: TypeRef::Vec(Box::new(TypeRef::String)),
+            typed_default: Some(DefaultValue::Empty),
+            ..Default::default()
+        },
+        FieldDef {
+            name: "allowed_marks".to_string(),
+            ty: TypeRef::Vec(Box::new(TypeRef::String)),
+            typed_default: Some(DefaultValue::FunctionCall(
+                "test_lib::default_allowed_marks".to_string(),
+            )),
+            ..Default::default()
+        },
+    ]
+}
+
+/// The same four fields with the function-call default replaced by a readable list literal, so
+/// every field carries a value alef actually read. Nothing here may be omitted.
+fn only_literal_default_fields() -> Vec<FieldDef> {
+    let mut fields = mixed_literal_and_function_default_fields();
+    fields[3].typed_default = Some(DefaultValue::ListLiteral(vec![
+        DefaultValue::StringLiteral("bold".to_string()),
+        DefaultValue::StringLiteral("italic".to_string()),
+    ]));
+    fields
+}
+
+/// REPRODUCTION: a non-`Option` `Vec<String>` whose Rust default is a function call. `options.py`
+/// has no Python literal for it and defaults it to `None`, so the converter must withhold the
+/// keyword and let the native constructor apply the Rust default. Passing the `None` through
+/// reaches a non-`Option` pyo3 parameter and fails extraction with
+/// `TypeError: 'None' is not an instance of 'Sequence'`, at a call site far from the dataclass.
+#[test]
+fn a_function_derived_default_on_a_non_named_field_is_omitted_not_passed_as_none() {
+    let api = surface(mixed_literal_and_function_default_fields(), Vec::new(), Vec::new());
+    let facade = render_facade_and_stub(&api).0;
+    let arguments = constructor_call_arguments(&facade);
+
+    assert_eq!(
+        arguments,
+        vec![
+            "strict=value.strict".to_string(),
+            "wrap_columns=value.wrap_columns".to_string(),
+            "tags=value.tags".to_string(),
+            r#"**({"allowed_marks": value.allowed_marks} if value.allowed_marks is not None else {})"#.to_string(),
+        ],
+        "only the function-derived field may be omitted, and it must be omitted rather than \
+         passed as `None`:\n{facade}"
+    );
+}
+
+/// CONTROL: the same four fields with every default readable. No field may be omitted here, so a
+/// fix that omitted every field -- or that widened the unpack to fields carrying a real value --
+/// fails this even while the reproduction above passes.
+#[test]
+fn literal_derived_defaults_are_all_passed_as_plain_keyword_arguments() {
+    let api = surface(only_literal_default_fields(), Vec::new(), Vec::new());
+    let facade = render_facade_and_stub(&api).0;
+    let arguments = constructor_call_arguments(&facade);
+
+    assert_eq!(
+        arguments,
+        vec![
+            "strict=value.strict".to_string(),
+            "wrap_columns=value.wrap_columns".to_string(),
+            "tags=value.tags".to_string(),
+            "allowed_marks=value.allowed_marks".to_string(),
+        ],
+        "a field whose default alef read is never absent, so it must be passed by keyword:\n{facade}"
+    );
+}
+
+/// The dataclass half of the contract: a field's declared type and its default are one fact, and
+/// `OptionsFieldDefaults::admits_none` is what both are derived from. The three literal-derived
+/// fields mirror their real Rust defaults; the function-derived one declares `| None` *because*
+/// it defaults to `None`. Declaring `list[str] = None` (the type without the widening) or
+/// `list[str] = field(default_factory=list)` (a `[]` the Rust source never specified) would each
+/// break exactly one half of that pair.
+#[test]
+fn the_options_dataclass_pairs_each_declared_type_with_the_default_it_actually_carries() {
+    let options = render_options_py(&surface(
+        mixed_literal_and_function_default_fields(),
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    for expected in [
+        "strict: bool = True",
+        "wrap_columns: int = 80",
+        "tags: list[str] = field(default_factory=list)",
+        "allowed_marks: list[str] | None = None",
+    ] {
+        assert!(
+            options.contains(expected),
+            "options.py must declare `{expected}`:\n{options}"
+        );
+    }
+}
+
+/// CONTROL for the dataclass assertions: with every default readable, no field is nullable and
+/// the list default is the real literal. A change that made every dataclass field `| None = None`
+/// would pass the test above and fail here.
+#[test]
+fn a_fully_literal_options_dataclass_declares_no_nullable_field() {
+    let options = render_options_py(&surface(only_literal_default_fields(), Vec::new(), Vec::new()));
+
+    assert!(
+        options.contains(r#"allowed_marks: list[str] = field(default_factory=lambda: ["bold", "italic"])"#),
+        "a readable list default must be rendered as itself, not widened to `| None`:\n{options}"
+    );
+    assert!(
+        !options.contains("| None"),
+        "no field of a fully literal-defaulted type may be declared nullable:\n{options}"
+    );
+}
