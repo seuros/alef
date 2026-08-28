@@ -280,6 +280,7 @@ mod tests {
 
     mod android_tests;
     mod client_factory_tests;
+    mod optional_dto_arg_tests;
     mod streaming_tests;
     mod typed_dto_tests;
 

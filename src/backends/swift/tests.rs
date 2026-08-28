@@ -1,2 +1,3 @@
 mod bridge_codegen_regressions;
+mod enum_declaration_parity;
 mod trait_box_swiftpm_compile;

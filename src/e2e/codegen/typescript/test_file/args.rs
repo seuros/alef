@@ -215,32 +215,25 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                             m
                         };
 
+                        // One traversal owns the whole value, at every depth and through arrays —
+                        // see `handle_values`. The three-way `Object`/`else` split this replaced
+                        // consulted the class map only for a directly nested object, so an object
+                        // inside a list fell to `json_to_js_camel` and stayed a bare literal that
+                        // wasm-bindgen rejects, even though the map already held the element's
+                        // class (`derive_nested_types_for_wasm` unwraps `Vec<Named>`). ~keep
+                        let context = HandleConfigContext {
+                            nested_types,
+                            effective_nested_types: &effective_nested,
+                            lang,
+                            enum_fields,
+                            bigint_fields,
+                            type_defs,
+                            enums,
+                            wasm_type_prefix,
+                        };
                         for (key, val) in obj {
                             let camel_key = snake_to_camel(key);
-                            let value_expr = if let serde_json::Value::Object(nested_obj) = val {
-                                if let Some(nested_type) = effective_nested.get(key.as_str()) {
-                                    // Use builder expression for nested class types
-                                    ts_builder_expression_inner(
-                                        nested_obj,
-                                        nested_type,
-                                        nested_types,
-                                        lang,
-                                        enum_fields,
-                                        bigint_fields,
-                                        type_defs,
-                                        enums,
-                                        wasm_type_prefix,
-                                        &[],
-                                        "",
-                                        0,
-                                        &mut *referenced_enums,
-                                    )
-                                } else {
-                                    json_to_js_camel(val)
-                                }
-                            } else {
-                                json_to_js_camel(val)
-                            };
+                            let value_expr = build_handle_config_value(key, val, &context, &mut *referenced_enums);
                             setup_lines.push(format!("{name}Config.{camel_key} = {value_expr};", name = arg.name));
                         }
                     }

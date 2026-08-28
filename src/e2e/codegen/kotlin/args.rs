@@ -15,14 +15,18 @@ use crate::e2e::fixture::Fixture;
 /// resolved backend's stub emitter is unimplemented) — see the `test_backend` branch
 /// below for why this must fail loudly rather than degrade to a placeholder. ~keep
 ///
-/// `kotlin_android_style = true` switches the optional-`json_object` default
-/// from `OptionsType.builder().build()` to `null`. The Java-facade-backed
-/// JVM target emits a Java-style builder for every `json_object` type, but
-/// the kotlin_android backend emits plain Kotlin data classes with no
-/// `.builder()` companion (every field is declared without a default), so a
-/// builder call would not compile. The Android facade signatures declare the
-/// optional argument as `T? = null`, making `null` the idiomatic positional
-/// default that matches the call arity.
+/// An optional `json_object` arg with no fixture value is filled from the *declared* parameter,
+/// not from the fixture's own `optional` flag. When the core IR says the parameter is
+/// `Option<T>`, both Kotlin emitters render it `name: T? = null`
+/// (`kotlin_android`'s `facade_param`, and `object_wrapper::methods` for the JVM wrapper), so
+/// `null` is emitted — the value the generated signature already defaults to.
+///
+/// Only when the target does not declare it optional (or no IR is in scope to ask) does this
+/// fall back to a constructor: `OptionsType()` for `kotlin_android_style = true`, whose backend
+/// emits plain Kotlin data classes with no `.builder()` companion, and
+/// `OptionsType.builder().build()` for the Java-facade-backed JVM target, whose DTOs are the
+/// Java records reached by typealias. Both of those forms assume a constructor this module
+/// cannot verify exists, which is why they are the fallback and not the rule. ~keep
 pub(super) struct KotlinArgsContext<'a> {
     pub(super) fixture: &'a Fixture,
     pub(super) class_name: &'a str,
@@ -238,16 +242,28 @@ pub(super) fn build_args_and_setup(
         };
         match val {
             None | Some(serde_json::Value::Null) if arg.optional => {
-                // Optional arg with no fixture value: emit positional default so the
-                // call has the right arity for the facade.
-                //
-                // For json_object optional args:
-                // - If options_type is set, use `OptionsType()` for kotlin_android (data class
-                //   constructor with defaults) or `OptionsType.builder().build()` for Java facade.
-                // - If no options_type, infer the type from arg.name and emit default constructor
-                //   (e.g., a configured default constructor for an options arg). This handles both Java facade
-                //   (which requires non-null) and kotlin_android (which also declares non-null).
-                if arg.arg_type == "json_object" {
+                let target_declares_optional = target_params.declares_param_optional(lang, &arg.name, index, type_defs);
+                if target_declares_optional == Some(true) {
+                    // The declared parameter is `Option<T>`, and BOTH Kotlin emitters render that
+                    // as `name: T? = null` — `facade_param`'s `is_dto_named` branch for
+                    // kotlin_android, and `object_wrapper::methods`' `if p.optional { " = null" }`
+                    // for the Kotlin/JVM wrapper. `null` is therefore the value the generated
+                    // signature itself defaults to, and the only omitted-argument spelling that is
+                    // guaranteed to compile.
+                    //
+                    // A constructor is NOT: `OptionsType()` compiles only for a type in
+                    // `backends::kotlin::default_constructible_type_names` (every emitted
+                    // constructor parameter carries a Kotlin default — see `c746610e2`, which
+                    // exists precisely because a Rust `Default` impl does not imply that), and
+                    // `OptionsType.builder().build()` only for a Java record
+                    // `backends::java::gen_bindings::types::builders::should_emit_builder` chose
+                    // to give a builder factory. Neither authority is reachable from here, and
+                    // guessing "yes" produced `No value passed for parameter 'x'` /
+                    // `unresolved reference: builder` in generated snippets. Asking the declared
+                    // optionality instead removes the need to guess: when the target says the
+                    // argument may be omitted, no constructor has to exist at all. ~keep
+                    parts.push("null".to_string());
+                } else if arg.arg_type == "json_object" {
                     let default_constructor = if let Some(opts_type) = options_type {
                         if kotlin_android_style {
                             format!("{}()", opts_type)
@@ -294,8 +310,7 @@ pub(super) fn build_args_and_setup(
                     // than the harmless placeholder it is in Java, whose boxed types accept
                     // `null` syntactically. Ask the same authority the signature generator
                     // used before trusting the fixture's claim. ~keep
-                    let target_requires_argument =
-                        target_params.declares_param_optional(lang, &arg.name, index, type_defs) == Some(false);
+                    let target_requires_argument = target_declares_optional == Some(false);
                     if target_requires_argument {
                         parts.push(typed_zero_default(&arg.arg_type));
                     } else {

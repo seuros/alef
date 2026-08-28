@@ -94,12 +94,44 @@ pub(super) fn emit_type(ty: &TypeDef, out: &mut String) {
     }
 }
 
+/// The variants this Dart enum may advertise: the ones the FFI crate's
+/// `{prefix}_{enum}_from_i32` / `_from_str` validators actually accept.
+///
+/// `codegen::conversions::enum_variant_declaration` is the authority
+/// `ffi::gen_bindings::types::declared_variant_indices` filters those validators with, so asking
+/// it here is what keeps this Dart declaration from advertising a case the linked native library
+/// rejects. A HOST-owned cfg-gated variant resolves to `Keep { cfg: Some(_) }`, which the FFI
+/// validator also treats as kept -- dropping it here instead (what `with_cfg_filtered_deep` does
+/// for go/java/kotlin/csharp/zig, which filter their own surface rather than mirror the
+/// validator's) would trade this over-exposure for an under-exposure. ~keep
+fn declared_variants<'a>(
+    en: &'a EnumDef,
+    host_crate_name: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> Vec<&'a crate::core::ir::EnumVariant> {
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(host_crate_name, &en.rust_path);
+    en.variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                crate::codegen::conversions::enum_variant_declaration(variant, is_host_enum, configured_features),
+                crate::codegen::conversions::VariantDeclaration::Drop
+            )
+        })
+        .collect()
+}
+
 /// Emit a Dart enum (unit variants only in FFI mode).
 ///
 /// Data variants (tagged unions) cannot be expressed ergonomically via
 /// `dart:ffi` since C has no stable tagged-union ABI. Non-unit variants
 /// emit an unsupported comment and are skipped.
-pub(super) fn emit_enum(en: &EnumDef, out: &mut String) {
+pub(super) fn emit_enum(
+    en: &EnumDef,
+    host_crate_name: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+    out: &mut String,
+) {
     if !en.doc.is_empty() {
         let doc_lines: Vec<String> = en.doc.lines().map(ToString::to_string).collect();
         out.push_str(&template_env::render(
@@ -111,6 +143,7 @@ pub(super) fn emit_enum(en: &EnumDef, out: &mut String) {
         ));
     }
 
+    let declared = declared_variants(en, host_crate_name, configured_features);
     let all_unit = en.variants.iter().all(|v| v.fields.is_empty());
     if all_unit {
         out.push_str(&template_env::render(
@@ -119,8 +152,8 @@ pub(super) fn emit_enum(en: &EnumDef, out: &mut String) {
                 name => en.name.as_str(),
             },
         ));
-        let count = en.variants.len();
-        for (idx, variant) in en.variants.iter().enumerate() {
+        let count = declared.len();
+        for (idx, variant) in declared.iter().enumerate() {
             if !variant.doc.is_empty() {
                 let doc_lines: Vec<String> = variant.doc.lines().map(ToString::to_string).collect();
                 out.push_str(&template_env::render(
@@ -155,8 +188,8 @@ pub(super) fn emit_enum(en: &EnumDef, out: &mut String) {
                 name => en.name.as_str(),
             },
         ));
-        let count = en.variants.len();
-        for (idx, variant) in en.variants.iter().enumerate() {
+        let count = declared.len();
+        for (idx, variant) in declared.iter().enumerate() {
             let vname = public_host_identifier(Language::Dart, PublicIdentifierKind::Field, &variant.name);
             let suffix = if idx + 1 == count { ";" } else { "," };
             out.push_str(&template_env::render(

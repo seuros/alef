@@ -179,6 +179,9 @@ impl Backend for SwiftBackend {
             gen_rust_crate::feature_gate::effective_swift_codegen_features(original_api, config, &core_crate_dir);
         let configured_features: std::collections::HashSet<&str> =
             effective_features.iter().map(String::as_str).collect();
+        // Deliberately NOT `effective_features`: see `enums::EnumDeclarationCfg`'s doc comment. ~keep
+        let configured_enum_features =
+            crate::codegen::cfg::enabled_features_for_language(config, crate::core::config::extras::Language::Swift);
 
         // Drop any type/enum/function whose `#[cfg(feature = "...")]` gate is not satisfied
         let cfg_filtered_api = original_api.with_cfg_filtered(&configured_features);
@@ -358,9 +361,11 @@ impl Backend for SwiftBackend {
             .filter_map(|b| b.result_type.as_deref().map(|s| s.to_string()))
             .collect();
 
+        // `gen_rust_crate::emit` derives its `source_crate` from this same `api.crate_name`. ~keep
+        let enum_declaration_cfg = enums::EnumDeclarationCfg::new(&api.crate_name, &configured_enum_features);
         for en in api.enums.iter().filter(|e| !exclude_types.contains(&e.name)) {
             if result_type_enums.contains(&en.name) {
-                enums::emit_enum_without_into_rust(en, &mut body, &mapper, &known_dto_names);
+                enums::emit_enum_without_into_rust(en, &mut body, &mapper, &known_dto_names, &enum_declaration_cfg);
             } else {
                 enums::emit_enum(
                     en,
@@ -368,6 +373,7 @@ impl Backend for SwiftBackend {
                     &mapper,
                     &known_dto_names,
                     &config.untagged_union_text_types,
+                    &enum_declaration_cfg,
                 );
             }
             body.push('\n');

@@ -10,6 +10,47 @@ use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::{EnumDef, EnumVariant};
 use std::collections::{HashMap, HashSet};
 
+/// The variants a Swift-facing surface for `en` may advertise.
+///
+/// The swift-bridge mirror enum below is self-contained -- unlike the `From`-impl match arms in
+/// [`emit_enum_wrapper`], its variant list never references the core type's path, so it compiles
+/// regardless of cfg. That is exactly why it could (before alef #547) unconditionally advertise a
+/// FOREIGN cfg-gated variant this binding's own configured feature set proves unreachable: a
+/// Swift caller could construct `.extra` even though the `From`-impl already drops that variant's
+/// arm unconditionally, so no conversion could ever produce it.
+///
+/// This is the SAME authority (`enum_variant_declaration`) napi's `gen_enum` consults for the
+/// identical decision. It is `pub(crate)` rather than inlined into [`emit_enum_wrapper`] because
+/// TWO surfaces must agree on this exact list, in two different modules: the mirror enum
+/// declaration plus its to-string match here (both reference `Self::{variant}` against the mirror
+/// type), and the public Swift `enum`'s `case` list emitted by
+/// `gen_bindings::enums::emit_enum`. A Swift `case` for a variant the mirror dropped is a case no
+/// conversion in either direction can ever produce or accept -- the facade advertises API that
+/// does not exist. Both callers ask this one function instead of each re-deriving the rule. ~keep
+///
+/// `en.rust_path` (not the `type_paths`-remapped source path) is the same fact
+/// `codegen::cfg::collect_cfg_gates` reads to decide whether a cfg is safe to forward as a Cargo
+/// feature; a variant's cfg is only safe to re-emit verbatim when this enum is owned by the host
+/// crate. See `is_host_owned_rust_path`'s doc for why both halves must agree. ~keep
+pub(crate) fn declared_variants<'a>(
+    en: &'a EnumDef,
+    source_crate: &str,
+    configured_features: Option<&[String]>,
+) -> Vec<&'a EnumVariant> {
+    let is_host_enum = is_host_owned_rust_path(source_crate, &en.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    en.variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn emit_enum_wrapper(
     en: &EnumDef,
     source_crate: &str,
@@ -18,34 +59,9 @@ pub(crate) fn emit_enum_wrapper(
 ) -> String {
     let mut out = String::new();
     let source_path = resolve_type_path(&en.name, source_crate, type_paths);
-    // `en.rust_path` (not `source_path`, which `type_paths` can remap) is the same fact
-    // `codegen::cfg::collect_cfg_gates` reads to decide whether a cfg is safe to forward as a
-    // Cargo feature; a variant's cfg is only safe to re-emit verbatim when this enum is owned
-    // by the host crate. See `is_host_owned_rust_path`'s doc for why both halves must agree. ~keep
     let is_host_enum = is_host_owned_rust_path(source_crate, &en.rust_path);
-    let configured_features_set: Option<HashSet<&str>> =
-        configured_features.map(|features| features.iter().map(String::as_str).collect());
 
-    // The swift-bridge mirror enum below is self-contained -- unlike the `From`-impl match arms
-    // further down, its variant list never references `source_path`, so it compiles regardless
-    // of cfg. That is exactly why it can (and, before this fix, did) unconditionally advertise a
-    // FOREIGN cfg-gated variant this binding's own configured feature set proves unreachable: a
-    // Swift caller could construct `.tier1` even though the `From`-impl below already drops that
-    // variant's arm unconditionally (see the loop below), so no conversion could ever produce it.
-    // `declared_variants` is the SAME authority (`enum_variant_declaration`) napi's `gen_enum`
-    // consults for the identical decision -- both the mirror declaration and the to-string match
-    // further below must agree on this exact list, since both reference `Self::{variant}` against
-    // this same mirror type. ~keep
-    let declared_variants: Vec<&EnumVariant> = en
-        .variants
-        .iter()
-        .filter(|variant| {
-            !matches!(
-                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
-                VariantDeclaration::Drop
-            )
-        })
-        .collect();
+    let declared_variants = declared_variants(en, source_crate, configured_features);
 
     out.push_str(&crate::backends::swift::template_env::render(
         "enum_unit_header.jinja",

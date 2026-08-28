@@ -17,6 +17,56 @@ pub(crate) fn render_env_setup(env: &std::collections::HashMap<String, String>) 
     out
 }
 
+/// Every binding class this fixture's handle-config value will construct.
+///
+/// Delegates to `collect_used_handle_config_types`, which is the emitting traversal itself with
+/// its output discarded — the import block therefore learns the class set from the code generator
+/// rather than from a parallel re-derivation that can fall out of step with it. ~keep
+fn handle_config_classes(
+    fixture: &Fixture,
+    call_config: &crate::core::config::e2e::CallConfig,
+    override_config: &crate::core::config::e2e::CallOverride,
+    handle_config_type: &str,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    wasm_type_prefix: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut used_types = std::collections::BTreeSet::new();
+    let effective_nested_types: std::collections::HashMap<String, String> = {
+        let mut derived = derive_nested_types_for_wasm(handle_config_type, type_defs, wasm_type_prefix);
+        for (key, value) in &override_config.nested_types {
+            derived.insert(key.clone(), value.clone());
+        }
+        derived
+    };
+    // Only the class map and the JSON shape decide which classes get constructed; `enum_fields`
+    // and `bigint_fields` steer scalar rendering, whose string this caller discards. ~keep
+    let bigint_fields: std::collections::BTreeSet<String> = override_config.bigint_fields.iter().cloned().collect();
+    let context = HandleConfigContext {
+        nested_types: &override_config.nested_types,
+        effective_nested_types: &effective_nested_types,
+        lang: "wasm",
+        enum_fields: &override_config.enum_fields,
+        bigint_fields: &bigint_fields,
+        type_defs,
+        enums,
+        wasm_type_prefix,
+    };
+    for arg in call_config.args.iter().filter(|arg| arg.arg_type == "handle") {
+        let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+        let Some(config_value) = fixture.input.get(field) else {
+            continue;
+        };
+        let Some(config_object) = config_value.as_object() else {
+            continue;
+        };
+        for (key, value) in config_object {
+            collect_used_handle_config_types(key, value, &context, &mut used_types);
+        }
+    }
+    used_types
+}
+
 /// Render a complete test file for the given category.
 ///
 /// `lang` is the language key used for per-fixture call override resolution
@@ -163,6 +213,15 @@ pub fn render_test_file(
                 && let Some(handle_type) = &o.handle_config_type
             {
                 all_options_types.insert(handle_type.clone());
+                // Ask the renderer which classes the handle config actually constructs rather
+                // than re-deriving the answer here. `collect_used_handle_config_types` runs the
+                // same traversal `build_handle_config_value` runs and throws the string away, so
+                // a class the body constructs cannot be one the import block never heard of —
+                // the two-independent-walks split that leaves a nested class emitted but
+                // undefined at run time. ~keep
+                for class in handle_config_classes(fixture, cc, o, handle_type, type_defs, enums, wasm_type_prefix) {
+                    all_nested_types.entry(class.clone()).or_insert(class);
+                }
             }
         }
         if lang == "wasm" {

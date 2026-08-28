@@ -6,6 +6,69 @@ use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 use heck::{AsSnakeCase, ToLowerCamelCase};
 
+/// What [`emit_enum`] needs to ask `gen_rust_crate::enums::declared_variants` which variants the
+/// swift-bridge mirror enum actually declares for this build.
+///
+/// `configured_features` MUST be `codegen::cfg::enabled_features_for_language(config,
+/// Language::Swift)` -- the same list `gen_rust_crate::emit` passes to `emit_enum_wrapper`, NOT
+/// the wider `feature_gate::effective_swift_codegen_features` set the facade uses elsewhere. That
+/// wider set is deliberately widened with every HOST-owned cfg feature name the surface mentions,
+/// which is the wrong question for a FOREIGN variant's reachability; feeding it here would make
+/// this facade's answer differ from the mirror's for exactly the variants this type exists to keep
+/// in lockstep. ~keep
+pub(super) struct EnumDeclarationCfg<'a> {
+    source_crate: String,
+    configured_features: &'a [String],
+}
+
+impl<'a> EnumDeclarationCfg<'a> {
+    pub(super) fn new(crate_name: &str, configured_features: &'a [String]) -> Self {
+        Self {
+            source_crate: crate_name.replace('-', "_"),
+            configured_features,
+        }
+    }
+}
+
+/// The `case` list for an all-unit Swift enum, restricted to the variants the swift-bridge mirror
+/// enum declares.
+///
+/// A `case` the mirror dropped is a case no conversion can produce (the mirror's `to_string` match
+/// is built from that same list) and none can accept (its `__alef_*_from_swift_string` arm was
+/// dropped too) -- the facade would advertise a value the binding cannot represent. Asking
+/// `gen_rust_crate::enums::declared_variants` rather than re-deriving the rule is what keeps the
+/// two emitted surfaces from drifting apart again. ~keep
+fn unit_enum_cases(en: &EnumDef, cfg: &EnumDeclarationCfg<'_>) -> String {
+    let declared = crate::backends::swift::gen_rust_crate::enums::declared_variants(
+        en,
+        &cfg.source_crate,
+        Some(cfg.configured_features),
+    );
+    let mut cases = String::new();
+    for variant in declared {
+        super::client::emit_doc_comment(&variant.doc, "    ", &mut cases);
+        let case_name = swift_case_ident(&variant.name.to_lower_camel_case());
+        let raw_value = unit_enum_wire_value(variant, en.serde_rename_all.as_deref());
+        if raw_value == case_name.trim_matches('`') {
+            cases.push_str(&crate::backends::swift::template_env::render(
+                "enum_case_unit.jinja",
+                minijinja::context! {
+                    case_name => &case_name,
+                },
+            ));
+        } else {
+            cases.push_str(&crate::backends::swift::template_env::render(
+                "enum_case_raw_value.swift.jinja",
+                minijinja::context! {
+                    case_name => &case_name,
+                    raw_value => &raw_value,
+                },
+            ));
+        }
+    }
+    cases
+}
+
 /// Render the custom `Codable` members an enum needs so its JSON matches serde's, or an empty
 /// string when serde's representation is already what Swift synthesises.
 ///
@@ -242,6 +305,7 @@ pub(super) fn emit_enum(
     mapper: &SwiftMapper,
     known_dto_names: &std::collections::HashSet<String>,
     text_types: &[String],
+    cfg: &EnumDeclarationCfg<'_>,
 ) {
     super::client::emit_doc_comment(&en.doc, "", out);
 
@@ -259,33 +323,11 @@ pub(super) fn emit_enum(
 
     if all_unit {
         let _ = mapper;
-        let mut cases = String::new();
-        for variant in &en.variants {
-            super::client::emit_doc_comment(&variant.doc, "    ", &mut cases);
-            let case_name = swift_case_ident(&variant.name.to_lower_camel_case());
-            let raw_value = unit_enum_wire_value(variant, en.serde_rename_all.as_deref());
-            if raw_value == case_name.trim_matches('`') {
-                cases.push_str(&crate::backends::swift::template_env::render(
-                    "enum_case_unit.jinja",
-                    minijinja::context! {
-                        case_name => &case_name,
-                    },
-                ));
-            } else {
-                cases.push_str(&crate::backends::swift::template_env::render(
-                    "enum_case_raw_value.swift.jinja",
-                    minijinja::context! {
-                        case_name => &case_name,
-                        raw_value => &raw_value,
-                    },
-                ));
-            }
-        }
         out.push_str(&crate::backends::swift::template_env::render(
             "swift_enum_raw_decl.swift.jinja",
             minijinja::context! {
                 name => &en.name,
-                cases => cases,
+                cases => unit_enum_cases(en, cfg),
             },
         ));
         emit_enum_into_rust_extension(&en.name, out);
@@ -449,6 +491,7 @@ pub(super) fn emit_enum_without_into_rust(
     out: &mut String,
     mapper: &SwiftMapper,
     known_dto_names: &std::collections::HashSet<String>,
+    cfg: &EnumDeclarationCfg<'_>,
 ) {
     super::client::emit_doc_comment(&en.doc, "", out);
 
@@ -466,33 +509,11 @@ pub(super) fn emit_enum_without_into_rust(
 
     if all_unit {
         let _ = mapper;
-        let mut cases = String::new();
-        for variant in &en.variants {
-            super::client::emit_doc_comment(&variant.doc, "    ", &mut cases);
-            let case_name = swift_case_ident(&variant.name.to_lower_camel_case());
-            let raw_value = unit_enum_wire_value(variant, en.serde_rename_all.as_deref());
-            if raw_value == case_name.trim_matches('`') {
-                cases.push_str(&crate::backends::swift::template_env::render(
-                    "enum_case_unit.jinja",
-                    minijinja::context! {
-                        case_name => &case_name,
-                    },
-                ));
-            } else {
-                cases.push_str(&crate::backends::swift::template_env::render(
-                    "enum_case_raw_value.swift.jinja",
-                    minijinja::context! {
-                        case_name => &case_name,
-                        raw_value => &raw_value,
-                    },
-                ));
-            }
-        }
         out.push_str(&crate::backends::swift::template_env::render(
             "swift_enum_raw_decl.swift.jinja",
             minijinja::context! {
                 name => &en.name,
-                cases => cases,
+                cases => unit_enum_cases(en, cfg),
             },
         ));
         return;

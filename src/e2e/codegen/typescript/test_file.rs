@@ -9,7 +9,7 @@ use crate::e2e::fixture::Fixture;
 use heck::ToUpperCamelCase;
 
 use super::assertions::render_assertion;
-use super::json::{json_to_js, json_to_js_camel, json_to_js_multiline, snake_to_camel};
+use super::json::{js_object_key, json_to_js, json_to_js_camel, json_to_js_multiline, snake_to_camel};
 use super::visitors::build_typescript_visitor;
 
 mod args;
@@ -18,6 +18,9 @@ mod bytes;
 mod cache;
 #[cfg(test)]
 mod call_arity_tests;
+mod handle_values;
+#[cfg(test)]
+mod handle_values_tests;
 mod helpers;
 mod http;
 #[cfg(test)]
@@ -56,6 +59,9 @@ pub(in crate::e2e::codegen::typescript::test_file) use builders::{
 pub(in crate::e2e::codegen::typescript::test_file) use bytes::ts_bytes_value_expression;
 pub(in crate::e2e::codegen::typescript::test_file) use cache::{
     detect_cache_isolation_needs, emit_cache_isolation_setup,
+};
+pub(in crate::e2e::codegen::typescript::test_file) use handle_values::{
+    HandleConfigContext, build_handle_config_value, collect_used_handle_config_types,
 };
 pub(super) use helpers::resolve_node_function_name;
 pub(in crate::e2e::codegen::typescript::test_file) use helpers::{

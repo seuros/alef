@@ -86,6 +86,18 @@ pub(super) fn json_to_js_multiline(value: &serde_json::Value, indent: usize) -> 
     }
 }
 
+/// Render `key` as an object-literal key, quoting it when it is not a bare JS identifier
+/// (hyphens, spaces, a leading digit).
+pub(super) fn js_object_key(key: &str) -> String {
+    if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        && !key.starts_with(|c: char| c.is_ascii_digit())
+    {
+        key.to_string()
+    } else {
+        format!("\"{}\"", escape_js(key))
+    }
+}
+
 /// Convert a `serde_json::Value` to a JavaScript literal string with camelCase object keys.
 ///
 /// NAPI-RS bindings use camelCase for JavaScript field names. This variant converts
@@ -97,17 +109,7 @@ pub(super) fn json_to_js_camel(value: &serde_json::Value) -> String {
             let entries: Vec<String> = map
                 .iter()
                 .map(|(k, v)| {
-                    let camel_key = snake_to_camel(k);
-                    // Quote keys that aren't valid JS identifiers.
-                    let key = if camel_key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-                        && !camel_key.starts_with(|c: char| c.is_ascii_digit())
-                    {
-                        camel_key.clone()
-                    } else {
-                        format!("\"{}\"", escape_js(&camel_key))
-                    };
+                    let key = js_object_key(&snake_to_camel(k));
                     format!("{key}: {}", json_to_js_camel(v))
                 })
                 .collect();
