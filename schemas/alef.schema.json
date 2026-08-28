@@ -4618,6 +4618,21 @@
       },
       "type": "object"
     },
+    "OwnershipConfig": {
+      "additionalProperties": false,
+      "description": "Consumer-declared ownership dispositions for generated paths.",
+      "properties": {
+        "user_owned": {
+          "default": [],
+          "description": "Repo-relative glob patterns naming paths this repository owns and maintains by hand,\neven though alef's generators emit them.\n\nFor every path one of these patterns matches, alef:\n\n1. **Never overwrites it.** The check runs before the create-once skip, before the\n   content comparison and before the provenance-marker ownership guard, so it holds\n   regardless of `generated_header`, regardless of the `overwrite` flag a given write\n   stage passes, and regardless of `--clobber-create-once-seeds`. This is strictly\n   stronger than `generated_header = false`, which only holds for stages that pass\n   `overwrite: false`.\n2. **Seeds it once when it is absent**, exactly as it would today but *without* a\n   provenance marker, and reports having done so. Suppressing the creation instead\n   would leave `alef verify`'s missing-generated-file check failing forever with no\n   remedy -- the same stable bad state this option exists to end.\n3. **Never adds a provenance marker and never records it** in `.alef-ownership.toml`.\n   Both are claims of alef authorship, and the declaration is a disclaimer of exactly\n   that. One residue, stated rather than hidden: a path that was already alef-owned\n   and marked BEFORE it was declared keeps that marker, and the post-format stamping\n   pass (`cli::pipeline::generate::write::finalize_hashes`) still refreshes its\n   `alef:hash:` line from the file's own bytes. That pass rewrites the hash line and\n   nothing else -- the body is untouched -- and `alef verify` no longer reads the\n   stamp for a declared path. To retire the marker entirely, delete the line by hand\n   once; nothing will put it back.\n4. **Never verifies its contents.** `alef verify` will not report it as stale, frozen,\n   or adoptable, and `--exit-code` never gates on it. It is still counted and named in\n   verify's coverage report, so a run that stopped checking 17 files says so.\n\nMatched with [`glob::Pattern`] against the path relative to `base_dir`, with the same\nsemantics as `[crates.verify] ignore_ephemeral`: `*` is not separator-aware, so\n`test_apps/*` matches `test_apps/swift/Package.swift`.\n\nA pattern that does not compile as a glob is a hard error, unlike\n[`super::VerifyConfig::ignore_ephemeral`], which drops one silently. The asymmetry is\ndeliberate and load-bearing: a dropped `ignore_ephemeral` pattern only widens a\nread-only report, while a dropped `user_owned` pattern lets alef overwrite a file the\nconsumer declared their own. Silence there costs work.\n\n```toml\n[workspace.ownership]\nuser_owned = [\n  \"e2e/*/package.json\",\n  \"test_apps/*/Package.swift\",\n  \"packages/*/src/test/**\",\n]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "PackageMetadataConfig": {
       "additionalProperties": false,
       "description": "Shared package metadata used by language package manifests.\n\nValues can be set at `[workspace.package_metadata]` and overridden per\n`[[crates]]` entry with `[crates.package_metadata]`.",
@@ -6836,6 +6851,11 @@
           },
           "type": "array"
         },
+        "mock_only": {
+          "default": false,
+          "description": "Declares that this project's sample corpus is mock-only: its fixtures' sample inputs are\nserved by the e2e mock harness or fetched from a private bucket and are not published at\nany public address at all.\n\nEvery other key in this group answers *what* a fixture's public address is. This one\nanswers whether the corpus has such addresses in the first place, which the other three\ncannot express: the reserved-domain warning asks a consumer to configure a sample host\nor acknowledge each fixture/language pair, and neither is actionable for a corpus whose\nURLs genuinely do not exist. Per-pair acknowledgement of hundreds of occurrences is not\na fix, it is bookkeeping.\n\nSnippets render byte-identically with and without this key -- the reserved documentation\ndomain still stands in as the illustrative address, because a snippet still has to show\n*some* URL. Only the diagnosis changes.\n\nDeliberately narrow, and specifically not a mute for the whole warning: it suppresses\n\"no public address exists for this fixture\" and never \"this fixture claimed a public\naddress and it did not resolve\". A fixture opts back in to a real address, and back in\nto the second warning with it, through `docs.sample_url` (see\n[`crate::e2e::fixture::FixtureDocs::sample_url`]); see\n`crate::e2e::snippets::sample_url_policy` for how the two classes stay separate.\n\nMutually exclusive with `sample_base_url`, `sample_url_template` and\n`sample_url_manifest` below -- each of those asserts a public address does exist for\nevery fixture, so pairing them states two contradictory facts about one corpus and fails\nthe run rather than letting whichever key the resolver reads first decide.",
+          "type": "boolean"
+        },
         "output": {
           "type": "string"
         },
@@ -8175,6 +8195,13 @@
           },
           "description": "Per-language output path templates with `{crate}` and `{lang}` placeholders.\nA per-crate explicit `[crates.output]` path always wins over the template."
         },
+        "ownership": {
+          "$ref": "#/$defs/OwnershipConfig",
+          "default": {
+            "user_owned": []
+          },
+          "description": "Consumer-declared ownership dispositions for generated paths -- currently just\n`user_owned`, the list of repo-relative globs naming paths this repository maintains by\nhand and alef must never write over. See [`OwnershipConfig`] for the full contract and\nfor why it is not `[crates.verify] ignore_ephemeral` or an `exclude_*` knob.\n\nWorkspace-level rather than per-crate, unlike `[crates.verify]`: the patterns are\nrepo-relative, and the write guards that consult them see a path and a `base_dir` with\nno notion of which crate emitted it. Keying the declaration per crate would require\nevery writer to re-derive that attribution, which is the \"one fact, two derivations\"\nshape this repository's guards exist to avoid. ~keep"
+        },
         "package_metadata": {
           "anyOf": [
             {
@@ -8527,6 +8554,9 @@
           "swift": null,
           "wasm": null,
           "zig": null
+        },
+        "ownership": {
+          "user_owned": []
         },
         "package_metadata": null,
         "php": null,

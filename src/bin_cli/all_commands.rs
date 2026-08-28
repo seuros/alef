@@ -308,7 +308,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let single = vec![(*lang, lang_files.clone())];
                     let report = pipeline::write_files_report(&single, &base_dir)?;
-                    refusals.absorb_refusals(&report);
+                    refusals.absorb_unwritten(&report);
                     binding_count += report.changed_count();
                     if report.changed_count() > 0 {
                         any_output_changed = true;
@@ -339,7 +339,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 .extend(files.iter().map(|file| base_dir.join(&file.path)));
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
-                        refusals.absorb_refusals(&report);
+                        refusals.absorb_unwritten(&report);
                         let svc_count = report.changed_count();
                         tracing::info!("Generated {svc_count} service API files");
                         if svc_count > 0 {
@@ -364,7 +364,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // that question. ~keep
                 let scaffold_report =
                     pipeline::write_scaffold_files_report(&scaffold_files, &base_dir, overwrite_create_once)?;
-                refusals.absorb_refusals(&scaffold_report);
+                refusals.absorb_unwritten(&scaffold_report);
                 let scaffold_count = scaffold_report.changed_count();
                 if scaffold_count > 0 {
                     any_output_changed = true;
@@ -448,7 +448,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_count = if !stubs_match || clean {
                     let report = pipeline::write_files_report(&stubs, &base_dir)?;
-                    refusals.absorb_refusals(&report);
+                    refusals.absorb_unwritten(&report);
                     let count = report.changed_count();
                     let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
                     if count > 0 {
@@ -514,7 +514,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         if !api_match || clean {
                             let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
-                            refusals.absorb_refusals(&report);
+                            refusals.absorb_unwritten(&report);
                             api_count = report.changed_count();
                             tracing::info!("Generated {api_count} public API files");
                             if api_count > 0 {
@@ -574,7 +574,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
                     let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
                     let readme_report = pipeline::write_scaffold_files_report(&readme_files, &base_dir, true)?;
-                    refusals.absorb_refusals(&readme_report);
+                    refusals.absorb_unwritten(&readme_report);
                     current_gen_paths.extend(pipeline::stampable_output_paths(&readme_files, &base_dir));
                     Ok(readme_report.changed_count())
                 })();
@@ -621,7 +621,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // stage rather than a bare `true` means the day a docs page is emitted as a
                 // seed, it is protected by default instead of silently clobbered. ~keep
                 let doc_report = pipeline::write_scaffold_files_report(&doc_files, &base_dir, overwrite_create_once)?;
-                refusals.absorb_refusals(&doc_report);
+                refusals.absorb_unwritten(&doc_report);
                 let doc_count = doc_report.changed_count();
                 if doc_count > 0 {
                     any_output_changed = true;
@@ -684,6 +684,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             refused_snippet_dir_paths(&refusals.refused_paths, resolved_cfg, &base_dir);
                         let error = if !snippet_refusals.is_empty() {
                             pipeline::report_refused_writes(&refusals);
+                            pipeline::report_user_owned_skips(&refusals);
                             error.context(format!(
                                 "{} file write(s) inside this crate's docs.snippets root(s) were refused by \
                                  the ownership guard this run (see the refusal report above). \
@@ -803,6 +804,21 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // unreachable: these steps resolve the very version the run produces. ~keep
                 report_deferred_formatting(&resolved_cfg.name, &deferred_formatting);
 
+                // Generation for this crate is complete and every manifest it owns is on disk in
+                // its final form, so this is the first point at which "does the committed lock
+                // beside a manifest alef vouches for still resolve" is a well-formed question.
+                // Recorded rather than returned: the answer is about a file alef does not author,
+                // so it must not deny the remaining crates their regeneration -- the run simply
+                // must not keep exiting 0 over a lock cargo would reject. See
+                // `cli::pipeline::lock_freshness` for why the pre-existing relock hook cannot
+                // observe this. ~keep
+                if let Some(error) = pipeline::check_generated_lock_freshness(&current_gen_paths) {
+                    stage_failures.record(
+                        &format!("[{}] generated Cargo.lock freshness", resolved_cfg.name),
+                        error,
+                    );
+                }
+
                 grand_binding_count += binding_count;
                 grand_stub_count += stub_count;
                 grand_api_count += api_count;
@@ -815,6 +831,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             pipeline::install_poly_hooks(&base_dir);
 
             pipeline::report_refused_writes(&refusals);
+            pipeline::report_user_owned_skips(&refusals);
             tracing::info!(
                 "Done: {grand_binding_count} binding files, {grand_stub_count} stub files, {grand_api_count} API files, {grand_scaffold_count} scaffold files, {grand_readme_count} readme files, {grand_e2e_count} e2e files, {grand_doc_count} doc files"
             );

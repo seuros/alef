@@ -170,7 +170,7 @@ pub(crate) fn handle_generate(
 
             let single = vec![(*lang, lang_files.clone())];
             let report = pipeline::write_files_report(&single, &base_dir)?;
-            refusals.absorb_refusals(&report);
+            refusals.absorb_unwritten(&report);
             written_count += report.changed_count();
             if report.changed_count() > 0 {
                 any_written = true;
@@ -198,7 +198,7 @@ pub(crate) fn handle_generate(
                     );
                 }
                 let report = pipeline::write_files_report(&svc_files, &base_dir)?;
-                refusals.absorb_refusals(&report);
+                refusals.absorb_unwritten(&report);
                 let svc_count = report.changed_count();
                 written_count += svc_count;
                 tracing::info!("Generated {svc_count} service API files");
@@ -253,7 +253,7 @@ pub(crate) fn handle_generate(
 
                 if !api_match || clean {
                     let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
-                    refusals.absorb_refusals(&report);
+                    refusals.absorb_unwritten(&report);
                     let api_count = report.changed_count();
                     written_count += api_count;
                     tracing::info!("Generated {api_count} public API files");
@@ -310,7 +310,7 @@ pub(crate) fn handle_generate(
 
             if !stubs_match || clean {
                 let report = pipeline::write_files_report(&stub_files, &base_dir)?;
-                refusals.absorb_refusals(&report);
+                refusals.absorb_unwritten(&report);
                 let stub_count = report.changed_count();
                 written_count += stub_count;
                 tracing::info!("Generated {stub_count} type stub files");
@@ -510,6 +510,19 @@ pub(crate) fn handle_generate(
         // indistinguishable from a crate that was never interrupted at all. ~keep
         cache::generation_record::clear_generation_in_progress(&base_dir, &resolved_cfg.name)?;
 
+        // Same check, same shared function and same deferral rationale as `all_commands.rs`'s
+        // call site: `alef generate` writes the nested native-extension manifests too, so it can
+        // leave exactly the same committed lock unresolvable and must stop exiting 0 over it.
+        // Calling the one function rather than restating the rule is deliberate -- two sites
+        // deriving "is this lock stale" independently is how the relock hook and the validator
+        // came to disagree in the first place. ~keep
+        if let Some(error) = pipeline::check_generated_lock_freshness(&current_gen_paths) {
+            stage_failures.record(
+                &format!("[{}] generated Cargo.lock freshness", resolved_cfg.name),
+                error,
+            );
+        }
+
         let previous_generation_owned: std::collections::HashMap<_, _> = languages
             .iter()
             .map(|language| {
@@ -569,6 +582,7 @@ pub(crate) fn handle_generate(
         grand_total_generated += written_count;
     }
     pipeline::report_refused_writes(&refusals);
+    pipeline::report_user_owned_skips(&refusals);
     tracing::info!("Generated {grand_total_generated} files");
     // Every crate's write, format and finalize-hash phases already ran and already wrote their
     // output by the time we reach here, deferred post-build failures included -- see
