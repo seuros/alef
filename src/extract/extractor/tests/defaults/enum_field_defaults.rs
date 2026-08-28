@@ -233,3 +233,98 @@ fn bare_serde_default_field_resolves_to_the_manual_impls_direct_variant_path() {
          not stay `Empty` or default to the first-declared variant"
     );
 }
+
+/// (i) Security control for the shape task #558 was filed against: an `Option<Enum>` field with
+/// no explicit default (no `#[serde(default = "...")]`, no field initializer in the owning
+/// struct's `impl`/derived `Default`) must resolve to absence, never to a materialized variant.
+///
+/// `extract::extractor::helpers::fields::unwrap_optional` collapses `Option<DetectionPolicy>` to
+/// `field.ty = TypeRef::Named("DetectionPolicy")` with `field.optional = true` before this pass
+/// runs, so `resolve_enum_field_defaults` sees the same `Named` shape as the required-field case
+/// in test (a) above and must not treat them alike: for the required field `Empty` really is
+/// "the enum's own zero"; for this optional field `Empty` is "the field's own type's zero" —
+/// `Option<DetectionPolicy>::default()`, which is `None` — and narrowing it to a variant would
+/// fabricate a value the source crate never specified. A generated binding that forwards that
+/// fabricated variant as a non-null value is indistinguishable from a caller's explicit choice,
+/// and can silently override a stricter caller-supplied policy elsewhere in the same call.
+#[test]
+fn optional_enum_field_default_stays_empty_never_a_materialized_variant() {
+    let source = r#"
+        #[derive(Default, Clone, Copy)]
+        pub enum DetectionPolicy {
+            #[default]
+            PreferContent,
+            ContentOnly,
+            TrustExtension,
+        }
+
+        #[derive(Default)]
+        pub struct FileConfig {
+            pub detection_policy: Option<DetectionPolicy>,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "FileConfig").unwrap();
+    let policy_field = config
+        .fields
+        .iter()
+        .find(|field| field.name == "detection_policy")
+        .unwrap();
+
+    assert!(
+        policy_field.optional,
+        "Option<DetectionPolicy> must unwrap to optional=true"
+    );
+    assert_eq!(
+        policy_field.typed_default,
+        Some(DefaultValue::Empty),
+        "an `Option<Enum>` field absent from an explicit default must stay `Empty` (renders as \
+         None/null downstream), never be narrowed to the enum's own default variant"
+    );
+}
+
+/// (j) Negative control for (i): when the same optional field genuinely does have an explicit
+/// default naming a concrete variant (`Some(DetectionPolicy::ContentOnly)`, not omitted from the
+/// literal), that real default must still be preserved. A fix that strips every optional-field
+/// default rather than only the fabricated-from-`Empty` case would pass (i) and silently break
+/// this legitimate one.
+#[test]
+fn optional_enum_field_with_explicit_default_still_resolves_to_the_named_variant() {
+    let source = r#"
+        #[derive(Clone, Copy)]
+        pub enum DetectionPolicy {
+            PreferContent,
+            ContentOnly,
+            TrustExtension,
+        }
+
+        pub struct FileConfig {
+            pub detection_policy: Option<DetectionPolicy>,
+        }
+
+        impl Default for FileConfig {
+            fn default() -> Self {
+                Self { detection_policy: Some(DetectionPolicy::ContentOnly) }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "FileConfig").unwrap();
+    let policy_field = config
+        .fields
+        .iter()
+        .find(|field| field.name == "detection_policy")
+        .unwrap();
+
+    assert!(
+        policy_field.optional,
+        "Option<DetectionPolicy> must unwrap to optional=true"
+    );
+    assert_eq!(
+        policy_field.typed_default,
+        Some(DefaultValue::EnumVariant("ContentOnly".to_string())),
+        "an explicit `Some(Variant)` default must still be preserved for an optional field"
+    );
+}

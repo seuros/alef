@@ -1,5 +1,5 @@
-use super::{EmitContext, python_field_type, type_has_from_json, typed_default_to_python};
-use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use super::{EmitContext, OptionsFieldDefaults, python_field_type, type_has_from_json, typed_default_to_python};
+use crate::core::ir::{ApiSurface, DefaultValue, EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 
 /// Build the three name-sets `python_field_type` consults: plain enums, data enums, and the
@@ -376,4 +376,118 @@ fn empty_default_still_renders_the_type_zero() {
         let rendered = typed_default_to_python(&DefaultValue::Empty, &ty, &enum_defaults, &data_enum_names);
         assert_eq!(rendered, expected, "`Empty` must still render the type zero for {ty:?}");
     }
+}
+
+fn detection_policy_enum() -> EnumDef {
+    EnumDef {
+        name: "DetectionPolicy".to_string(),
+        has_default: true,
+        variants: vec![
+            EnumVariant {
+                name: "PreferContent".to_string(),
+                is_default: true,
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "ContentOnly".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "TrustExtension".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// Security control (task #558): `OptionsFieldDefaults::literal` is what `options.py` actually
+/// calls to render a field's default expression. An `Option<Enum>` field with no explicit
+/// default resolves to `typed_default = Some(DefaultValue::Empty)` after extraction (see
+/// `extract::extractor::postprocess::resolve_enum_field_defaults`), and the emitted Python
+/// default must stay `None` — never the enum's own `#[default]` variant. Forwarding a
+/// materialized variant here is indistinguishable from a caller's explicit choice once it
+/// crosses into the native constructor, and can silently override a stricter policy the caller
+/// set elsewhere (e.g. a global content-only mode).
+#[test]
+fn optional_enum_field_with_no_explicit_default_renders_none_not_the_variant() {
+    let api = ApiSurface {
+        enums: vec![detection_policy_enum()],
+        ..Default::default()
+    };
+    let field = FieldDef {
+        name: "detection_policy".to_string(),
+        ty: TypeRef::Named("DetectionPolicy".to_string()),
+        optional: true,
+        typed_default: Some(DefaultValue::Empty),
+        ..Default::default()
+    };
+
+    let defaults = OptionsFieldDefaults::new(&api);
+    let rendered = defaults.literal(&field);
+
+    assert_eq!(
+        rendered, "None",
+        "an Option<Enum> field with no explicit default must render `None`, not a materialized \
+         variant like `\"prefer_content\"`; got `{rendered}`"
+    );
+    assert!(
+        defaults.admits_none(&field),
+        "a field rendering `None` must also report `admits_none`, since callers use that to \
+         decide whether omitting the keyword argument is meaningful"
+    );
+}
+
+/// Negative control for the test above: a *required* (non-optional) `Enum` field with the same
+/// `Empty` typed default legitimately does resolve to the enum's own default variant. A fix that
+/// suppressed every `Empty`-on-`Named` default (rather than only the optional-field case) would
+/// pass the positive test above while silently breaking this legitimate one.
+#[test]
+fn required_enum_field_with_empty_default_still_renders_the_default_variant() {
+    let api = ApiSurface {
+        enums: vec![detection_policy_enum()],
+        ..Default::default()
+    };
+    let field = FieldDef {
+        name: "detection_policy".to_string(),
+        ty: TypeRef::Named("DetectionPolicy".to_string()),
+        optional: false,
+        typed_default: Some(DefaultValue::Empty),
+        ..Default::default()
+    };
+
+    let rendered = OptionsFieldDefaults::new(&api).literal(&field);
+
+    assert_eq!(
+        rendered, "\"prefer_content\"",
+        "a required enum field must still render its own `#[default]` variant"
+    );
+}
+
+/// Negative control: an `Option<Enum>` field that genuinely does have an explicit default naming
+/// a concrete variant (`typed_default = Some(EnumVariant(..))`, not narrowed from `Empty`) must
+/// still render that real value. This is the case
+/// `optional_enum_field_default_stays_empty_never_a_materialized_variant`'s sibling
+/// (`extract::extractor::tests::defaults::enum_field_defaults::
+/// optional_enum_field_with_explicit_default_still_resolves_to_the_named_variant`) feeds.
+#[test]
+fn optional_enum_field_with_explicit_variant_default_still_renders_it() {
+    let api = ApiSurface {
+        enums: vec![detection_policy_enum()],
+        ..Default::default()
+    };
+    let field = FieldDef {
+        name: "detection_policy".to_string(),
+        ty: TypeRef::Named("DetectionPolicy".to_string()),
+        optional: true,
+        typed_default: Some(DefaultValue::EnumVariant("ContentOnly".to_string())),
+        ..Default::default()
+    };
+
+    let rendered = OptionsFieldDefaults::new(&api).literal(&field);
+
+    assert_eq!(
+        rendered, "\"content_only\"",
+        "an explicit variant default on an optional field must still be rendered"
+    );
 }

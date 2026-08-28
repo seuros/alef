@@ -61,6 +61,7 @@ mod java_exception_agreement;
 mod language_pages;
 mod markdown_quality;
 mod mut_param_writeback;
+mod optional_enum_default;
 mod rust_reference;
 mod rustdoc_fence_attributes;
 mod shared_docs;

@@ -17,6 +17,11 @@ mod types;
 #[cfg(test)]
 mod mut_writeback_tests;
 
+// Same reason as `mut_writeback_tests` above: task #558's optional-enum-default security fix
+// gets its own module instead of growing the already-over-cap `tests.rs`.
+#[cfg(test)]
+mod optional_enum_default_tests;
+
 pub(crate) use dto::emit_type_with_imports;
 pub(crate) use enums::emit_enum;
 pub(crate) use errors::emit_error_type_with_imports;

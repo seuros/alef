@@ -235,7 +235,24 @@ fn default_expression_for_field(
     enums: &[EnumDef],
 ) -> Option<String> {
     if let Some(default) = &field.typed_default {
+        // `field.ty` is already unwrapped from `Option<T>` (see
+        // `extract::extractor::helpers::fields::unwrap_optional`), so `zero_value_for_type`
+        // below cannot tell "the field's own type, `Option<Enum>`, is at its zero" (`None`) from
+        // "the wrapped `Enum` is at its zero" (its own default variant). `Empty` on an optional
+        // field means the former; rendering the latter would synthesize a concrete enum variant
+        // for a value the Rust source left absent, and that materialized value would then be
+        // passed to Rust as this `config` parameter's default, indistinguishable from a caller's
+        // explicit choice. `DefaultValue::None` on an optional field already answers `null`
+        // further down in `render_default_value`; only `Empty` needs the same answer written
+        // explicitly here because its type-driven fallback (`zero_value_for_type`) does not know
+        // about `field.optional`. ~keep
+        if field.optional && matches!(default, DefaultValue::Empty) {
+            return Some("null".to_string());
+        }
         return render_default_value(&field.ty, default, type_defs, enums);
+    }
+    if field.optional {
+        return Some("null".to_string());
     }
     zero_value_for_type(&field.ty, type_defs, enums)
 }
@@ -418,6 +435,110 @@ mod tests {
         assert_eq!(
             zero_value_for_type(&TypeRef::Bytes, &[], &[]),
             Some("Uint8List(0)".to_string())
+        );
+    }
+
+    fn detection_policy_enum() -> EnumDef {
+        EnumDef {
+            name: "DetectionPolicy".to_string(),
+            has_default: true,
+            variants: vec![
+                crate::core::ir::EnumVariant {
+                    name: "PreferContent".to_string(),
+                    is_default: true,
+                    ..Default::default()
+                },
+                crate::core::ir::EnumVariant {
+                    name: "ContentOnly".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// Security control (task #558): `default_expression_for_field` is what synthesizes the
+    /// literal `config`-parameter default (`Type(field: value, …)`) a caller gets when they omit
+    /// a `config` argument entirely. An `Option<Enum>` field with no explicit default resolves to
+    /// `typed_default = Some(DefaultValue::Empty)` after extraction, and the emitted Dart
+    /// expression for that field must stay `null` — never the enum's own `#[default]` variant.
+    /// `zero_value_for_type` cannot make this distinction on its own: `field.ty` is already
+    /// unwrapped from `Option<T>` by the extractor, so it only ever sees the bare enum and has no
+    /// way to know the field itself was optional. Forwarding a materialized variant here is
+    /// indistinguishable from a caller's explicit choice once it reaches the Rust core, and can
+    /// silently override a stricter policy the caller set elsewhere (e.g. a global
+    /// content-only mode).
+    #[test]
+    fn optional_enum_field_with_no_explicit_default_renders_null_not_the_variant() {
+        use crate::core::ir::FieldDef;
+
+        let enums = [detection_policy_enum()];
+        let field = FieldDef {
+            name: "detection_policy".to_string(),
+            ty: TypeRef::Named("DetectionPolicy".to_string()),
+            optional: true,
+            typed_default: Some(DefaultValue::Empty),
+            ..Default::default()
+        };
+
+        let rendered = default_expression_for_field(&field, &[], &enums);
+
+        assert_eq!(
+            rendered,
+            Some("null".to_string()),
+            "an Option<Enum> field with no explicit default must render `null`, not a \
+             materialized variant like `DetectionPolicy.preferContent`"
+        );
+    }
+
+    /// Negative control: a *required* (non-optional) `Enum` field with the same `Empty` typed
+    /// default legitimately does resolve to the enum's own default variant. A fix that
+    /// suppressed every `Empty`-on-`Named` default (rather than only the optional-field case)
+    /// would pass the positive test above while silently breaking this legitimate one.
+    #[test]
+    fn required_enum_field_with_empty_default_still_renders_the_default_variant() {
+        use crate::core::ir::FieldDef;
+
+        let enums = [detection_policy_enum()];
+        let field = FieldDef {
+            name: "detection_policy".to_string(),
+            ty: TypeRef::Named("DetectionPolicy".to_string()),
+            optional: false,
+            typed_default: Some(DefaultValue::Empty),
+            ..Default::default()
+        };
+
+        let rendered = default_expression_for_field(&field, &[], &enums);
+
+        assert_eq!(
+            rendered,
+            Some("DetectionPolicy.preferContent".to_string()),
+            "a required enum field must still render its own `#[default]` variant"
+        );
+    }
+
+    /// Negative control: an `Option<Enum>` field that genuinely does have an explicit default
+    /// naming a concrete variant (`typed_default = Some(EnumVariant(..))`, not narrowed from
+    /// `Empty`) must still render that real value.
+    #[test]
+    fn optional_enum_field_with_explicit_variant_default_still_renders_it() {
+        use crate::core::ir::FieldDef;
+
+        let enums = [detection_policy_enum()];
+        let field = FieldDef {
+            name: "detection_policy".to_string(),
+            ty: TypeRef::Named("DetectionPolicy".to_string()),
+            optional: true,
+            typed_default: Some(DefaultValue::EnumVariant("ContentOnly".to_string())),
+            ..Default::default()
+        };
+
+        let rendered = default_expression_for_field(&field, &[], &enums);
+
+        assert_eq!(
+            rendered,
+            Some("DetectionPolicy.contentOnly".to_string()),
+            "an explicit variant default on an optional field must still be rendered"
         );
     }
 }

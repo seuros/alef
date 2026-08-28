@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- fix(extract): never materialize a default for an optional enum field. `unwrap_optional` strips `Option<T>` to bare `T` before `resolve_enum_field_defaults` runs, so an `Option<Enum>` field arrived indistinguishable from a required one and its `Empty` marker -- which means `None` -- was narrowed into a concrete enum variant. Generated Python, Kotlin and the API reference all then advertised a default the Rust type does not have, and because the converters forward non-null values, that invented default silently overrode a caller's stricter global policy. Dart carried the same defect independently through `zero_value_for_type`.
 
 - fix(codegen): count the core crate's own `default` features as enabled. `expand_configured_features` took `core_feature_closure(..).0` and discarded `.1`, while no binding's base Cargo dependency edge on the core crate emits `default-features = false` (only per-target overrides can, and R alone has a base toggle). A foreign cfg-gated enum variant reachable only through a core `default` feature was therefore "proven" unreachable, its match arm was dropped, and the catch-all with it -- a non-exhaustive match, `error[E0004]`, in generated binding crates. Adds `core_default_features_active`/`enabled_features_for_language`/`enabled_features_from` and routes every backend call site through them; R still honours a genuine `default_features = false` with a non-empty replacement list.
 

@@ -79,7 +79,20 @@ pub(super) fn resolve_public_default_functions(surface: &mut ApiSurface) {
 /// downstream backends already treat `Empty` on a `Named` field as "unknown" and fall back to
 /// their own honest per-language guard (e.g. C#'s `required`). This pass only narrows what was
 /// already unresolved into what most backends can render directly; it never turns a resolvable
-/// value into a guess. ~keep
+/// value into a guess.
+///
+/// `field.optional` fields are skipped entirely, and the skip is the security-relevant half of
+/// this pass. `extract::extractor::types::extract_struct` unwraps `Option<T>` before this runs,
+/// so an `Option<Enum>` field reaches here with `field.ty` already collapsed to the bare `Enum`
+/// and `field.optional == true` — the same shape as a genuinely required `Enum` field, apart
+/// from that flag. `Empty` on such a field means "the field's own type, `Option<Enum>`, is at
+/// its zero" — `None` — never "the wrapped `Enum`'s own zero". Narrowing it to `EnumVariant`
+/// would materialize a concrete variant for a value the Rust source left deliberately absent;
+/// every per-field-literal backend (Python, Kotlin, …) forwards a materialized `Some(variant)`
+/// exactly like an explicit caller choice, so a per-file default silently overrides a stricter
+/// global policy the caller never meant to relax. Leaving `Empty` in place keeps every
+/// downstream consumer on the branch that already renders `None`/`null` for
+/// `optional && Empty`. ~keep
 pub(super) fn resolve_enum_field_defaults(surface: &mut ApiSurface) {
     let enum_default_variants = enum_default_variant_names(&surface.enums);
 
@@ -89,6 +102,9 @@ pub(super) fn resolve_enum_field_defaults(surface: &mut ApiSurface) {
 
     for typ in &mut surface.types {
         for field in &mut typ.fields {
+            if field.optional {
+                continue;
+            }
             if !matches!(&field.typed_default, Some(DefaultValue::Empty)) {
                 continue;
             }
