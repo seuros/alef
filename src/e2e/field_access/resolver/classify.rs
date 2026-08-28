@@ -1,3 +1,5 @@
+mod swift_leaf;
+
 use super::super::ir_collection::{element_type_at_path, is_collection_path};
 use super::super::ir_enum::{enum_type_at_path, is_enum_path};
 use super::super::leaf_anchor::LeafAnchor;
@@ -44,25 +46,6 @@ impl FieldResolver {
         let leaf = field.split('.').next_back().unwrap_or(field);
         let leaf = leaf.split('[').next().unwrap_or(leaf);
         self.swift_first_class_map.is_vec_field_name(leaf)
-    }
-
-    /// True when the leaf segment of `field` is a JSON-bridged Swift leaf on any IR type — the
-    /// binding generator collapsed it to a single `RustString` holding the whole field
-    /// JSON-encoded, per `SwiftFirstClassMap::json_bridged_field_names`.
-    ///
-    /// ~keep A POSITIVE fact, not the complement of [`Self::leaf_is_vec_via_swift_map`]: that
-    /// complement also contains every genuine scalar and every field the map has no data for at
-    /// all (an empty/never-scanned `SwiftFirstClassMap`), and neither of those is a JSON bridge.
-    /// `swift_count_target` used to treat "not a recorded vec field name" as "must be a bridged
-    /// scalar, wrap `.toString()`", which is exactly the confusion `json_bridged_field_names`'s
-    /// own doc comment warns against — a field the IR proves is a genuine `Vec<T>` but the Swift
-    /// map simply never recorded (an empty map, or a field reached only through an opaque owner
-    /// type the map never scanned) got the same `.toString()` treatment as an actually-bridged
-    /// scalar, silently counting the CHARACTERS of a debug string instead of the Vec's elements.
-    pub fn leaf_is_json_bridged_via_swift_map(&self, field: &str) -> bool {
-        let leaf = field.split('.').next_back().unwrap_or(field);
-        let leaf = leaf.split('[').next().unwrap_or(leaf);
-        self.swift_first_class_map.is_json_bridged_field_name(leaf)
     }
 
     /// The prefix of `field` that names a JSON-bridged Swift leaf which the path then steps
@@ -127,40 +110,6 @@ impl FieldResolver {
             if steps_past && self.swift_first_class_map.is_json_bridged_field_name(bare) {
                 return Some(prefix.join("."));
             }
-        }
-        None
-    }
-
-    /// Whether the swift-bridge getter for `field`'s LAST segment returns `Option<..>`, so that a
-    /// caller chaining onto the rendered accessor must write `?.` rather than `.`.
-    ///
-    /// ~keep Distinct from [`Self::is_optional`], which answers the broader "is this path
-    /// possibly-absent" from config plus IR and is keyed by bare path. This walks the Swift type
-    /// cursor to the leaf's actual owner and reports what that one getter's declared return type
-    /// is. `None` means the IR did not describe the leaf, in which case callers must keep their
-    /// existing behaviour rather than assume either answer.
-    pub fn swift_leaf_getter_is_optional(&self, field: &str) -> Option<bool> {
-        let map = &self.swift_first_class_map;
-        let resolved = self.resolve(field);
-        let segments: Vec<&str> = resolved.split('.').filter(|s| !s.is_empty()).collect();
-        let last = segments.len().checked_sub(1)?;
-        // ~keep Seeded from `ir_collection_map`'s root, not the Swift map's own: the latter is the
-        // `result_type` override / `result_fields` heuristic, which is `None` whenever a consumer's
-        // config never named the type, while `ir_collection_map.root_type` is
-        // `resolve_declared_result_type`'s answer from the call's own signature and is the anchor
-        // the enum and collection maps already share.
-        let mut current = self
-            .ir_collection_map
-            .root_type
-            .clone()
-            .or_else(|| self.ir_enum_map.root_type.clone())
-            .or_else(|| map.root_type.clone())?;
-        for (index, segment) in segments.iter().enumerate() {
-            let bare = segment.split('[').next().unwrap_or(segment);
-            if index == last && !segment.contains('[') {
-                return map.getter_is_optional(&current, bare);
-            }
-            current = map.advance(Some(&current), bare)?;
         }
         None
     }
@@ -317,6 +266,22 @@ impl FieldResolver {
             return false;
         }
         self.result_fields.contains(field_name)
+    }
+
+    /// Whether the call's result is a fieldless value — a raw byte payload — so that no member
+    /// path can name anything on it at all.
+    ///
+    /// ~keep The same stored fact [`Self::is_valid_for_result`] and
+    /// [`Self::result_field_oracle_knows`] already refuse every non-empty path on, exposed as its
+    /// own question for the callers that need to know *why* a path is unavailable rather than
+    /// only *that* it is. A backend whose renderer reinterprets a field-bearing assertion as an
+    /// assertion on the whole result (`result_is_simple`) deliberately does not let the
+    /// availability oracle veto the path — but it must still not emit a member access, and this
+    /// is the one fact that distinguishes the two cases. Asking here rather than re-deriving
+    /// "does the return type have fields" per backend is what keeps a second answer from drifting
+    /// away from the oracle's.
+    pub fn result_has_no_fields(&self) -> bool {
+        self.result_is_byte_payload
     }
 
     /// Check whether a fixture field path is valid for the configured result type.

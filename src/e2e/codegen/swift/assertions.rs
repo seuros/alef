@@ -18,7 +18,7 @@ use super::values::{escape_swift, json_to_swift, swift_numeric_literal_cast};
 /// assertion). Every registered wording quotes a token, and a marker that quotes nothing matches
 /// no shape — which is how `// skipped: field is a scalar String without meaningful .count` stayed
 /// invisible to both funnels and to a grep census.
-const BARE_RESULT_TOKEN: &str = "<bare result>";
+pub(super) const BARE_RESULT_TOKEN: &str = "<bare result>";
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_assertion(
@@ -223,6 +223,10 @@ pub(super) fn render_assertion(
                 || field_resolver.is_collection_root(f)
                 || field_resolver.is_collection_root(resolved))
     });
+    // ~keep The refusal that keeps the guard above from turning a discriminating assertion into
+    // one that cannot fail. See `leaf_shape::unspellable_collection_emptiness_skip`.
+    let collection_emptiness_skip =
+        super::leaf_shape::unspellable_collection_emptiness_skip(field_resolver, assertion.field.as_deref());
 
     let field_expr_raw = if result_is_simple {
         result_var.to_string()
@@ -552,6 +556,8 @@ pub(super) fn render_assertion(
                     out,
                     "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
                 );
+            } else if let Some(line) = &collection_emptiness_skip {
+                out.push_str(line);
             } else if field_is_array && field_is_optional {
                 out.push_str(&crate::e2e::template_env::render(
                     "swift/not_empty_assertion.swift.jinja",
@@ -601,18 +607,17 @@ pub(super) fn render_assertion(
                         "        XCTAssertGreaterThan({len_expr}, 0, \"expected non-empty value\")"
                     );
                 } else {
-                    let _ = writeln!(
-                        out,
-                        "        // skipped: {}",
-                        FieldSkip::CountOnJsonBridgedLeafInSwift
-                            .message(assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN))
-                    );
+                    out.push_str(&super::leaf_shape::non_countable_leaf_skip_line(
+                        assertion.field.as_deref(),
+                    ));
                 }
             }
         }
         "is_empty" => {
             if bare_result_is_option {
                 let _ = writeln!(out, "        XCTAssertNil({result_var}, \"expected nil value\")");
+            } else if let Some(line) = &collection_emptiness_skip {
+                out.push_str(line);
             } else if field_is_optional {
                 let _ = writeln!(out, "        XCTAssertNil({field_expr}, \"expected nil value\")");
             } else if field_is_array {
@@ -631,12 +636,9 @@ pub(super) fn render_assertion(
                     };
                     let _ = writeln!(out, "        XCTAssertEqual({len_expr}, 0, \"expected empty value\")");
                 } else {
-                    let _ = writeln!(
-                        out,
-                        "        // skipped: {}",
-                        FieldSkip::CountOnJsonBridgedLeafInSwift
-                            .message(assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN))
-                    );
+                    out.push_str(&super::leaf_shape::non_countable_leaf_skip_line(
+                        assertion.field.as_deref(),
+                    ));
                 }
             }
         }
@@ -783,14 +785,9 @@ pub(super) fn render_assertion(
                 ) {
                     let _ = writeln!(out, "        XCTAssertGreaterThanOrEqual({count_expr}, {n})");
                 } else {
-                    // swift_array_count_expr returns None when the field is a scalar String
-                    // marked (incorrectly) as an array in fields_array. Such fields don't
-                    // support .count and would produce invalid code.
-                    let f = assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN);
-                    let _ = writeln!(
-                        out,
-                        "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                    );
+                    out.push_str(&super::leaf_shape::non_countable_leaf_skip_line(
+                        assertion.field.as_deref(),
+                    ));
                 }
             }
         }
@@ -806,14 +803,9 @@ pub(super) fn render_assertion(
                 ) {
                     let _ = writeln!(out, "        XCTAssertEqual({count_expr}, {n})");
                 } else {
-                    // swift_array_count_expr returns None when the field is a scalar String
-                    // marked (incorrectly) as an array in fields_array. Such fields don't
-                    // support .count and would produce invalid code.
-                    let f = assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN);
-                    let _ = writeln!(
-                        out,
-                        "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                    );
+                    out.push_str(&super::leaf_shape::non_countable_leaf_skip_line(
+                        assertion.field.as_deref(),
+                    ));
                 }
             }
         }

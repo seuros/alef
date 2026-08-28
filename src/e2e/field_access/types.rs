@@ -332,6 +332,24 @@ pub struct SwiftFirstClassMap {
     /// `vec_field_names`, because that complement also contains every genuine scalar and every
     /// field the IR never described — those must not be mistaken for a JSON bridge.
     pub json_bridged_field_names: HashSet<String>,
+    /// `json_bridged_by_type[type_name][field_name]` — the same fact as
+    /// [`Self::json_bridged_field_names`], but keyed by the field's OWNER type.
+    ///
+    /// ~keep The flat set above is a bare-leaf-name index over every `TypeDef` in the crate, so
+    /// one type declaring `items: Option<Vec<T>>` (which swift-bridge JSON-bridges) marks the
+    /// name `items` bridged for every other type too — including a type whose `items: Vec<T>` is
+    /// a genuine `RustVec`. That is the exact confusion `ir_enum`'s module doc rules out for enum
+    /// classification, and it silently downgrades a real collection's emptiness assertion. This
+    /// map lets a caller that can anchor a path walk to the leaf's real owner and get a
+    /// type-specific answer; absence of an entry means the IR never described that field on that
+    /// type, which must not be read as "not bridged".
+    ///
+    /// Keyed field-by-field (like [`Self::getter_optionality`]) rather than as a per-type set of
+    /// bridged names, so *presence* of an entry is the separate fact from the boolean: a type
+    /// whose fields are all plain would otherwise be indistinguishable from a type the scan never
+    /// saw, and every caller would fall back to the poisoned flat set for exactly the types the
+    /// map can answer for. ~keep
+    pub json_bridged_by_type: HashMap<String, HashMap<String, bool>>,
     /// `getter_optionality[type_name][field_name]` — whether that field's swift-bridge getter on
     /// that type returns `Option<..>` rather than a bare value.
     ///
@@ -396,6 +414,13 @@ impl SwiftFirstClassMap {
     /// never described that field on that type.
     pub fn getter_is_optional(&self, type_name: &str, field_name: &str) -> Option<bool> {
         self.getter_optionality.get(type_name)?.get(field_name).copied()
+    }
+
+    /// Whether `field_name`'s getter on `type_name` is JSON-bridged to one `RustString`. `None`
+    /// when the IR never described that field on that type — see [`Self::json_bridged_by_type`]
+    /// for why silence must not be read as either answer.
+    pub fn json_bridged_getter(&self, type_name: &str, field_name: &str) -> Option<bool> {
+        self.json_bridged_by_type.get(type_name)?.get(field_name).copied()
     }
 
     /// True when no per-type information is recorded.

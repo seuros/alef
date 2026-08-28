@@ -449,9 +449,12 @@ pub(super) fn swift_array_count_expr(
 /// value depends on the field's IR kind:
 ///
 /// - `Vec<T>` ⇒ `RustVec<T>`, which exposes `.count` directly. No wrap.
-/// - `String` ⇒ `RustString`, which does NOT expose `.count`. Since wrapping
-///   with `.toString()` loses the collection semantics, return None to signal
-///   that count assertions cannot be generated for scalar string fields.
+/// - `String` ⇒ `RustString`, which does NOT expose `.count`; wrap with
+///   `.toString()` so the caller's `.count` lands on a Swift `String`, whose
+///   character count is the meaningful reading for a scalar.
+/// - A JSON-bridged leaf ⇒ `None`. It is a collection or map whose getter is
+///   one `RustString`, so neither reading is available: the elements are gone
+///   and the character count of the JSON text answers a different question.
 ///
 /// First-class property accessors (no trailing parens) return Swift values
 /// that already support `.count` directly.
@@ -486,8 +489,16 @@ pub(super) fn swift_count_target(
     }
     if let Some(f) = field {
         let resolved = field_resolver.resolve(f);
+        // ~keep Every collection shape `field_needs_json_bridge` fires for -- `Option<Vec<T>>`,
+        // `Vec<Vec<_>>`, map getters -- reaches Swift as one `RustString` of JSON, so the element
+        // count the caller is asking for does not exist on the leaf at all. Returning
+        // `Some("{expr}.toString()")` handed the caller the JSON TEXT's character count instead:
+        // `count_min` on an empty `Option<Vec<T>>` compared `"[]".count >= 1` and passed, and
+        // `not_empty` compared `"null".count > 0` and could not fail. `None` is the honest answer
+        // and routes every caller into the `CountOnJsonBridgedLeafInSwift` skip they already
+        // spell -- a branch that was unreachable while this returned `Some` on every path.
         if field_resolver.leaf_is_json_bridged_via_swift_map(resolved) {
-            return Some(format!("{field_expr}.toString()"));
+            return None;
         }
         if field_resolver.leaf_is_vec_via_swift_map(resolved)
             || field_resolver.is_array(resolved)

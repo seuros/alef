@@ -523,15 +523,31 @@ type = "string"
 /// on a native handle. `count_min` must therefore treat an optional `Vec<Named(struct)>` field as
 /// JSON-bridged regardless of the parent's opacity — the two shapes below (opaque and first-class
 /// parent) must render identically. ~keep
+///
+/// ~keep What changed, and why these tests now pin a SKIP rather than `.toString().count`: the
+/// analysis above is right about the getter's TYPE and wrong about the assertion's MEANING.
+/// `.toString().count` is type-correct Swift, which is why it compiled and why this file pinned
+/// it -- but it counts the characters of the JSON text, not the collection's elements. A
+/// `count_min: 1` against an empty collection renders `"[]".count >= 1`, which is `2 >= 1`: a
+/// PASS on exactly the input the assertion exists to reject. A consumer found the live instance,
+/// a `count_equals: 2` reading `toolCalls().toString().count == 2`. The elements genuinely are
+/// not reachable through a `-> String` getter, so there is no correct count to emit and the
+/// honest answer is the recorded skip, not a comparison that cannot mean what it says. The
+/// negative assertion against `elements()?.count` is kept: a native `RustVec` handle is still not
+/// what this getter returns, so that shape would not compile either.
 #[test]
 fn count_min_on_optional_vec_of_named_struct_is_json_bridged_on_opaque_parent() {
     let rendered = render_optional_vec_of_named_count_min(true);
 
     assert!(
-        rendered.contains("result.elements().toString().count"),
-        "count_min on an opaque parent's Option<Vec<Named(struct)>> field must use the \
-         JSON-bridged `.toString().count` shape — the getter returns `-> String`, never \
-         `Optional<RustVec<T>>`. Rendered:\n{rendered}"
+        rendered.contains("// skipped: field 'elements' has no countable Swift leaf"),
+        "count_min on an opaque parent's Option<Vec<Named(struct)>> field must render the \
+         registered skip: the getter returns `-> String`, so there is no element count to \
+         emit at all. Rendered:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(".toString().count"),
+        "must not count the CHARACTERS of the JSON text as if they were elements. Rendered:\n{rendered}"
     );
     assert!(
         !rendered.contains("elements()?.count"),
@@ -551,9 +567,13 @@ fn count_min_on_optional_vec_of_named_struct_is_json_bridged_on_first_class_pare
     let rendered = render_optional_vec_of_named_count_min(false);
 
     assert!(
-        rendered.contains("result.elements().toString().count"),
-        "count_min on a first-class parent's Option<Vec<Named(struct)>> field must use the \
-         JSON-bridged `.toString().count` shape. Rendered:\n{rendered}"
+        rendered.contains("// skipped: field 'elements' has no countable Swift leaf"),
+        "count_min on a first-class parent's Option<Vec<Named(struct)>> field must render the \
+         same registered skip the opaque-parent case does. Rendered:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(".toString().count"),
+        "must not count the CHARACTERS of the JSON text as if they were elements. Rendered:\n{rendered}"
     );
     assert!(
         !rendered.contains("elements()?.count"),

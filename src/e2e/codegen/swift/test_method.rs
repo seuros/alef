@@ -449,6 +449,15 @@ pub(super) fn render_test_method(
     // IR type names that any backend can use to anchor field-access dispatch).
     let fixture_root_type: Option<String> = swift_call_result_type(call_config);
     let fixture_resolver = field_resolver.with_swift_root_type(fixture_root_type);
+    // ~keep The anchor the EXCLUSION walk uses, kept separate from the resolver's.
+    // `with_swift_root_type` assigns unconditionally, so a fixture with no explicit `result_type`
+    // override leaves `fixture_resolver` with no Swift root at all -- and
+    // `is_assertion_field_swift_excluded` then cannot reach a single segment, falling through to
+    // the type-blind name fallback for every path. Recovering `build_swift_first_class_map`'s own
+    // `result_fields` answer here rather than on the resolver is deliberate: the resolver's root
+    // also decides first-class-property versus getter-call rendering, so widening it there
+    // rewrites accessors for every fixture that omits the override.
+    let exclusion_root_type = swift_call_result_type(call_config).or_else(|| swift_first_class_map.root_type.clone());
 
     // Build per-type exclusion maps from the Swift language config so that
     // assertions referencing fields or types excluded from the Swift binding
@@ -535,7 +544,7 @@ pub(super) fn render_test_method(
             let resolved_f = fixture_resolver.resolve(f);
             if is_assertion_field_swift_excluded(
                 resolved_f,
-                fixture_resolver.swift_root_type().map(String::as_str),
+                exclusion_root_type.as_deref(),
                 &swift_first_class_map.field_types,
                 &swift_excluded_fields_by_type,
                 &swift_excluded_types,
@@ -680,73 +689,8 @@ fn render_swift_refusal(markers: &str, refusal: &InertExample) -> String {
     inert_example::refusal_body(markers, &statement)
 }
 
-/// Returns `true` when the assertion `field_path` traverses a field or resolves to a
-/// type that is excluded from the Swift binding.
-///
-/// Walks the dot/bracket-separated path segments through `field_types` (a map from owner
-/// type → field name → inner named type, populated in `build_swift_first_class_map`),
-/// starting from `root_type`.  At each segment it checks:
-///
-/// 1. Whether `(current_type, segment)` appears in `excluded_fields_by_type` (built
-///    from `[languages.swift].exclude_fields` entries of the form `"TypeName.field_name"`).
-/// 2. Whether the named type the segment advances into appears in `excluded_types` (built
-///    from `[languages.swift].exclude_types`).
-///
-/// As a fallback (used when `root_type` cannot be resolved — `swift_call_result_type`
-/// only returns a type when the call has an explicit `result_type` override), any path
-/// segment whose name matches the field part of *any* `exclude_fields` entry is also
-/// treated as excluded. The excluded leaf names in this binding (`extracted_keywords`,
-/// `internal_document`, `ocr_internal_document`, …) are unique to `ExtractedDocument`,
-/// so this name-based check does not over-skip in practice.
-///
-/// Returns `false` only when both exclusion maps are empty.
-fn is_assertion_field_swift_excluded(
-    field_path: &str,
-    root_type: Option<&str>,
-    field_types: &HashMap<String, HashMap<String, String>>,
-    excluded_fields_by_type: &HashMap<String, HashSet<String>>,
-    excluded_types: &HashSet<String>,
-) -> bool {
-    if excluded_fields_by_type.is_empty() && excluded_types.is_empty() {
-        return false;
-    }
-    // Split the field path on '.', '[', ']', discarding empty tokens and tokens
-    // that are pure numeric indices (e.g. "0" from "results[0].extracted_keywords").
-    let segments: Vec<&str> = field_path
-        .split(['.', '[', ']'])
-        .filter(|s| !s.is_empty() && !s.chars().all(|c: char| c.is_ascii_digit()))
-        .collect();
-    // Name-based fallback: any segment matching an excluded field leaf name.
-    for segment in &segments {
-        if excluded_fields_by_type.values().any(|fields| fields.contains(*segment)) {
-            return true;
-        }
-    }
-    // Type-aware walk (precise when `root_type` is known).
-    let mut current_type: Option<String> = root_type.map(|s| s.to_string());
-    for segment in segments {
-        let Some(owner_str) = current_type.as_deref() else {
-            break;
-        };
-        // 1. Explicitly excluded (owner_type, field_name) pair.
-        if excluded_fields_by_type
-            .get(owner_str)
-            .is_some_and(|fields| fields.contains(segment))
-        {
-            return true;
-        }
-        // Advance the type cursor to the named type that `segment` leads into.
-        let next: Option<String> = field_types.get(owner_str).and_then(|m| m.get(segment).cloned());
-        // 2. The resolved target type is excluded from the Swift binding.
-        if let Some(ref next_type) = next
-            && excluded_types.contains(next_type.as_str())
-        {
-            return true;
-        }
-        current_type = next;
-    }
-    false
-}
+mod field_exclusion;
+use field_exclusion::is_assertion_field_swift_excluded;
 
 #[cfg(test)]
 mod error_catch_block_tests {

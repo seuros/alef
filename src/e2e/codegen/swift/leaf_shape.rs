@@ -49,6 +49,55 @@ pub(super) fn non_countable_leaf_count_skip(field_resolver: &FieldResolver, fiel
     Some(skip_line(field))
 }
 
+/// Render the skip line for an emptiness assertion whose field every collection oracle calls a
+/// collection, but whose Swift leaf is a JSON-bridged `RustString`.
+///
+/// ~keep This is the guard that makes `not_empty`/`is_empty`'s degraded branch impossible to ship
+/// silently. `field_is_array` is correctly `false` for such a leaf (the Swift surface really is a
+/// string, so `.isEmpty` on it does not compile), which used to drop the assertion into the plain
+/// `field_is_optional` arm and emit `XCTAssertTrue(<expr> != nil, "expected non-empty value")`.
+/// The bridged getter is declared non-optional, so that comparison is a tautology Swift only
+/// warns about — a check that cannot fail, wearing a message claiming it can, which is strictly
+/// worse than no check at all because it reads as coverage. There is no correct assertion to emit
+/// instead: the bridged JSON text is non-empty (`"[]"`, `"null"`) for exactly the empty
+/// collections the fixture is trying to rule out. Refusing loudly through the registered
+/// [`FieldSkip`] funnel is the only honest option, and it is a limitation of the swift-bridge ABI
+/// rather than anything a fixture or `alef.toml` edit can repair.
+pub(super) fn unspellable_collection_emptiness_skip(
+    field_resolver: &FieldResolver,
+    field: Option<&str>,
+) -> Option<String> {
+    let field = field.filter(|f| !f.is_empty())?;
+    let resolved = field_resolver.resolve(field);
+    let is_collection = field_resolver.is_array(field)
+        || field_resolver.is_array(resolved)
+        || field_resolver.is_collection_root(field)
+        || field_resolver.is_collection_root(resolved);
+    if !is_collection || !field_resolver.leaf_is_json_bridged_via_swift_map(resolved) {
+        return None;
+    }
+    Some(skip_line(field))
+}
+
+/// The skip line a count/emptiness arm renders when [`super::accessors::swift_count_target`]
+/// refuses to name a countable target.
+///
+/// ~keep `count_min`/`count_equals` each wrote their own prose here ("is a scalar String without
+/// meaningful .count", registered as `AssertionTypeSkip::ScalarWithoutMeaningfulCountInSwift`),
+/// which names the wrong cause and files the skip under the wrong axis: the leaf is not a scalar
+/// String misconfigured as an array, it is a real collection whose swift-bridge getter is one
+/// JSON `RustString`, which is a property of the FIELD's shape, not of the assertion type. All
+/// four arms now render one wording that states the actual fact. Every one of them was dead code
+/// while `swift_count_target` returned `Some` on every path, so making it refuse is what makes
+/// this line load-bearing at all.
+pub(super) fn non_countable_leaf_skip_line(field: Option<&str>) -> String {
+    skip_line(
+        field
+            .filter(|f| !f.is_empty())
+            .unwrap_or(super::assertions::BARE_RESULT_TOKEN),
+    )
+}
+
 /// Whether the leaf's own getter returns `Option<..>`, so a caller chaining onto the rendered
 /// accessor must write `?.` rather than `.`.
 ///

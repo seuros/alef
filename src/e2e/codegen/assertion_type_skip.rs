@@ -88,9 +88,10 @@ assertion_type_skip_variants! {
         "assertion type ",
         " on field '",
     ),
-    /// ~keep Emitted by `swift/assertions.rs` for `not_empty`/`is_empty`/`count_equals` against a
-    /// field marked as an array in config but which is actually a scalar `String` — `.count` has
-    /// no meaningful reading there. A property of the field's real Swift type, not alef's debt.
+    /// ~keep No longer emitted: `swift/assertions.rs`'s count arms now render
+    /// `FieldSkip::CountOnJsonBridgedLeafInSwift`, which names the real cause (a JSON-bridged
+    /// getter) and files it under the field axis where it belongs. Kept so the recognition set
+    /// still matches suites generated before that change; do not add new emitters.
     ScalarWithoutMeaningfulCountInSwift: LanguageLimitation => (
         "field ",
         " is a scalar String without meaningful .count",

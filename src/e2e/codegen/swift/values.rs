@@ -317,10 +317,12 @@ pub(super) fn build_swift_first_class_map(
     };
     let mut stringy_fields_by_type: HashMap<String, Vec<StringyField>> = HashMap::new();
     let mut getter_optionality: HashMap<String, HashMap<String, bool>> = HashMap::new();
+    let mut json_bridged_by_type: HashMap<String, HashMap<String, bool>> = HashMap::new();
     for td in type_defs {
         let mut td_field_types: HashMap<String, String> = HashMap::new();
         let mut td_stringy: Vec<StringyField> = Vec::new();
         let mut td_getter_optionality: HashMap<String, bool> = HashMap::new();
+        let mut td_json_bridged: HashMap<String, bool> = HashMap::new();
         for f in &td.fields {
             if let Some(named) = inner_named(&f.ty) {
                 td_field_types.insert(f.name.clone(), named);
@@ -338,6 +340,10 @@ pub(super) fn build_swift_first_class_map(
             if getter_is_json_bridged_string {
                 json_bridged_field_names.insert(f.name.clone());
             }
+            // ~keep Recorded for every field, bridged or not: an absent entry has to keep meaning
+            // "the scan never saw this field on this type" so a caller can tell that apart from a
+            // negative answer. See `SwiftFirstClassMap::json_bridged_by_type`.
+            td_json_bridged.insert(f.name.clone(), getter_is_json_bridged_string);
             if is_vec_ty(&f.ty) && !getter_is_json_bridged_string {
                 vec_field_names.insert(f.name.clone());
             }
@@ -363,6 +369,9 @@ pub(super) fn build_swift_first_class_map(
         }
         if !td_getter_optionality.is_empty() {
             getter_optionality.insert(td.name.clone(), td_getter_optionality);
+        }
+        if !td_json_bridged.is_empty() {
+            json_bridged_by_type.insert(td.name.clone(), td_json_bridged);
         }
     }
     // Root-type detection: first check for an explicit `result_type` override
@@ -391,6 +400,7 @@ pub(super) fn build_swift_first_class_map(
         field_types,
         vec_field_names,
         json_bridged_field_names,
+        json_bridged_by_type,
         getter_optionality,
         root_type,
         stringy_fields_by_type,

@@ -34,9 +34,16 @@
 //! (`swift/assertions.rs`) used to trust the IR's `is_array`/`is_collection_root` alone and emit
 //! `{field_expr}?.isEmpty == false` directly against the bridged leaf — `.isEmpty` does not exist
 //! on `RustString` (`value of type 'RustString' has no member 'isEmpty'`, the exact reported
-//! error). Fixed by excluding a positively JSON-bridged field from `field_is_array` outright, so
-//! the assertion falls through to the plain `field_is_optional` arm (`!= nil`, a presence check
-//! that compiles against either a `RustVec` or a bridged `RustString`).
+//! error). Fixed by excluding a positively JSON-bridged field from `field_is_array` outright.
+//!
+//! ~keep That exclusion was originally allowed to fall through to the plain `field_is_optional`
+//! arm, which emits `XCTAssertTrue(<expr> != nil, "expected non-empty value")`. It compiles, and
+//! that was mistaken for correctness: a JSON-bridged getter is declared NON-optional, so the
+//! comparison is a tautology Swift only warns about — a `not_empty` assertion that passes for an
+//! empty collection, wearing a message claiming it checked. `leaf_shape::
+//! unspellable_collection_emptiness_skip` now refuses that arm outright for a leaf every
+//! collection oracle calls a collection, and the test below pins the refusal rather than the
+//! tautology.
 //!
 //! Both bugs are the same root: two independent "is this a Vec" oracles that can each be
 //! consulted alone, instead of a positive JSON-bridge fact winning over the IR fact, and the IR
@@ -169,22 +176,20 @@ fn count_min_on_ir_only_optional_collection_leaf_counts_the_vec_not_a_debug_stri
 /// recorded by the swift-bridge scan as JSON-bridged (`json_bridged_field_names`) — a real
 /// `RustString` at the Swift surface regardless of what the IR says about its Rust-level shape.
 ///
-/// `not_empty`'s `field_is_array && field_is_optional` arm (`swift/assertions.rs`) is the ONLY
-/// one of the four `not_empty`/`is_empty` arms that used to call `.isEmpty` on an
-/// IR-classified-array field without going through `swift_count_target` at all — the other three
-/// either check presence only (`!= nil`/`XCTAssertNil`) or already route through
-/// `swift_count_target`. With the JSON-bridge guard, `field_is_array` is now correctly `false`
-/// here, so the assertion falls through to the plain `field_is_optional` arm: a presence-only
-/// `!= nil` check, which compiles regardless of whether the leaf is a `RustVec` or a bridged
-/// `RustString`.
+/// `field_is_array` is correctly `false` for such a leaf (the Swift surface really is a string,
+/// so `.isEmpty` on it does not compile) — but the presence-only `!= nil` fallthrough this used
+/// to pin is a check that CANNOT FAIL: a JSON-bridged getter is non-optional, and the bridged
+/// text is `"[]"`/`"null"` for exactly the empty collections `not_empty` exists to rule out.
+/// There is no correct assertion to emit, so the only honest output is the registered
+/// `CountOnJsonBridgedLeafInSwift` skip.
 ///
-/// Revert symptom: reverting the `field_is_array` JSON-bridge guard in `swift/assertions.rs`
-/// makes this fail — `field_is_array` goes back to trusting the IR alone, `field_is_array &&
-/// field_is_optional` fires, and the output contains `.chunks()?.isEmpty == false` called
-/// directly on the bridged leaf — the literal `value of type 'RustString' has no member
-/// 'isEmpty'` compile failure from the original CI report.
+/// Revert symptom, two directions. Reverting `field_is_array`'s JSON-bridge guard in
+/// `swift/assertions.rs` puts `.chunks()?.isEmpty == false` back — the literal `value of type
+/// 'RustString' has no member 'isEmpty'` compile failure from the original CI report. Reverting
+/// `leaf_shape::unspellable_collection_emptiness_skip` puts `.chunks() != nil` back — the
+/// unfailable green assertion that replaced it.
 #[test]
-fn not_empty_on_optional_json_bridged_collection_leaf_checks_presence_not_is_empty() {
+fn not_empty_on_optional_json_bridged_collection_leaf_is_refused_not_faked() {
     let swift_first_class_map = SwiftFirstClassMap {
         json_bridged_field_names: HashSet::from(["chunks".to_string()]),
         ..SwiftFirstClassMap::default()
@@ -200,8 +205,13 @@ fn not_empty_on_optional_json_bridged_collection_leaf_checks_presence_not_is_emp
     );
 
     assert!(
-        out.contains(".chunks() != nil"),
-        "a JSON-bridged optional leaf must fall through to a presence-only check; got:\n{out}"
+        out.contains("// skipped: field 'results[0].chunks' has no countable Swift leaf"),
+        "a JSON-bridged collection leaf must be refused with the registered skip; got:\n{out}"
+    );
+    assert!(
+        !out.contains("!= nil"),
+        "must never emit a non-nil check against a non-optional bridged getter: it cannot fail, \
+         and it wears the \"expected non-empty value\" message; got:\n{out}"
     );
     assert!(
         !out.contains(".isEmpty"),
