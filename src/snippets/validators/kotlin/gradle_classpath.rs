@@ -101,6 +101,14 @@ fn run_gradle_class_path(
     let mut command = std::process::Command::new(wrapper);
     command
         .current_dir(root)
+        // A closed stdin, not an inherited terminal, is what keeps this child from ever being able
+        // to trigger a job-control stop: `run_command` puts it in its own background process
+        // group, and a background-group process that reads its controlling terminal is stopped by
+        // `SIGTTIN` rather than erroring -- observed in practice as the Gradle wrapper's JVM
+        // sitting in kernel state `T` forever, immune to `SIGCONT` because it re-attempts the same
+        // read the instant it resumes. Nothing this classpath resolution does legitimately needs
+        // to read stdin. ~keep
+        .stdin(std::process::Stdio::null())
         .args(["--init-script", &script.to_string_lossy(), CLASS_PATH_TASK, "-q"]);
     let (success, output) = run_command(&mut command, timeout_secs)?;
     let entries: Vec<PathBuf> = output

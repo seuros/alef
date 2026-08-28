@@ -325,29 +325,32 @@ impl KotlinValidator {
         })
     }
 
+    /// Directory-probing fallback used when the manifest names no Gradle wrapper, or when a
+    /// Gradle-task-based resolution (`gradle_classpath::resolve_class_path`) fails or times out.
+    ///
+    /// Every subdirectory name below is discovered rather than assumed. AGP's own output layout
+    /// has moved twice already -- `build/tmp/kotlin-classes/<variant>`, then
+    /// `build/intermediates/javac/<variant>/classes`, then
+    /// `build/intermediates/built_in_kotlinc/<variant>/compile<Variant>Kotlin/classes` in AGP 9 --
+    /// and a probe hardcoded to one variant name (`main`, `debug`) silently stops matching the
+    /// moment a project uses any other flavor or build type, or a newer AGP relocates its output
+    /// again. Globbing the variant segment instead of naming it is what keeps this fallback
+    /// finding a project's own generated classes across that churn, not any particular consumer's
+    /// project shape. ~keep
     fn class_path(manifest: &std::path::Path) -> Result<std::ffi::OsString> {
         if manifest.is_dir() || manifest.extension().is_some_and(|extension| extension == "jar") {
             return Ok(manifest.as_os_str().to_owned());
         }
         let root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
         let build = root.join("build");
-        let mut entries = [
-            build.join("classes/kotlin/main"),
-            build.join("classes/java/main"),
-            build.join("intermediates/javac/debug/classes"),
-        ]
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect::<Vec<_>>();
-        let libraries = build.join("libs");
-        if libraries.is_dir() {
-            entries.extend(
-                std::fs::read_dir(libraries)?
-                    .filter_map(std::result::Result::ok)
-                    .map(|entry| entry.path())
-                    .filter(|path| path.extension().is_some_and(|extension| extension == "jar")),
-            );
-        }
+        let mut entries = Self::compiled_output_candidates(&build);
+        entries.extend(Self::jar_candidates(&build.join("libs")));
+        // A project's own `libs/` directory -- not `build/libs` -- is the conventional home for
+        // vendored third-party jars referenced via `implementation files('libs/foo.jar')`. It is
+        // source, not build output, so `build/` probing alone never sees it; that is what left
+        // every external artifact off a fallback-resolved classpath even when the project's own
+        // generated classes were found. ~keep
+        entries.extend(Self::jar_candidates(&root.join("libs")));
         if entries.is_empty() {
             entries.push(root.to_path_buf());
         }
@@ -357,6 +360,59 @@ impl KotlinValidator {
                 manifest.display()
             ))
         })
+    }
+
+    /// This module's own compiled Kotlin/Java class output, wherever the installed AGP version (or
+    /// no AGP at all) happens to have put it for whichever variant was last built.
+    fn compiled_output_candidates(build: &Path) -> Vec<PathBuf> {
+        let mut entries = Self::subdirectories(&build.join("classes/kotlin"));
+        entries.extend(Self::subdirectories(&build.join("classes/java")));
+        for variant in Self::subdirectories(&build.join("intermediates/javac")) {
+            let classes = variant.join("classes");
+            if classes.is_dir() {
+                entries.push(classes);
+            }
+        }
+        for variant in Self::subdirectories(&build.join("intermediates/built_in_kotlinc")) {
+            for task in Self::subdirectories(&variant) {
+                let classes = task.join("classes");
+                if classes.is_dir() {
+                    entries.push(classes);
+                }
+            }
+        }
+        entries.extend(Self::subdirectories(&build.join("tmp/kotlin-classes")));
+        entries
+    }
+
+    /// Every existing immediate subdirectory of `parent`, in a stable order. A missing `parent` is
+    /// not an error here -- most of these candidate roots only exist for the AGP layout and
+    /// variant actually in use, and a fallback probe has to try all of them.
+    fn subdirectories(parent: &Path) -> Vec<PathBuf> {
+        let Ok(read_dir) = std::fs::read_dir(parent) else {
+            return Vec::new();
+        };
+        let mut directories: Vec<PathBuf> = read_dir
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        directories.sort();
+        directories
+    }
+
+    /// Every `.jar` file directly inside `directory`, in a stable order.
+    fn jar_candidates(directory: &Path) -> Vec<PathBuf> {
+        let Ok(read_dir) = std::fs::read_dir(directory) else {
+            return Vec::new();
+        };
+        let mut jars: Vec<PathBuf> = read_dir
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jar"))
+            .collect();
+        jars.sort();
+        jars
     }
 }
 
@@ -480,6 +536,42 @@ mod tests {
 
         let class_path = KotlinValidator::class_path(&manifest).expect("classpath");
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
+    }
+
+    /// The defect this fallback exists to close: a probe hardcoded to one AGP layout and one
+    /// variant name found only whichever intermediate directory happened to match and silently
+    /// dropped everything else, including the module's own newest-layout generated output and any
+    /// vendored dependency jar -- a real run then classified every snippet that referenced either
+    /// as an unresolved dependency, without ever having looked at a real classpath. Both a modern
+    /// (AGP 9-shaped) generated-output directory and a vendored jar are asserted present, not
+    /// merely that resolution returned *something*: a classpath containing only the stale
+    /// `build/classes/kotlin/main` guess would satisfy a weaker assertion while still missing both.
+    /// ~keep
+    #[test]
+    fn the_fallback_finds_a_modern_agp_output_directory_and_a_vendored_jar_together() {
+        let project = tempfile::tempdir().expect("project directory");
+        let generated_classes = project
+            .path()
+            .join("build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes");
+        std::fs::create_dir_all(&generated_classes).expect("generated classes directory");
+        let vendored_directory = project.path().join("libs");
+        std::fs::create_dir_all(&vendored_directory).expect("vendored libs directory");
+        let vendored_jar = vendored_directory.join("external-artifact.jar");
+        std::fs::write(&vendored_jar, b"").expect("vendored jar");
+        let manifest = project.path().join("build.gradle.kts");
+        std::fs::write(&manifest, "plugins {}").expect("manifest");
+
+        let class_path = KotlinValidator::class_path(&manifest).expect("classpath");
+
+        let resolved: Vec<_> = std::env::split_paths(&class_path).collect();
+        assert!(
+            resolved.contains(&generated_classes),
+            "the module's own generated output must be on the classpath: {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&vendored_jar),
+            "a vendored external artifact must be on the classpath: {resolved:?}"
+        );
     }
 
     /// Attribution is asserted without a toolchain so the mapping itself is pinned rather than

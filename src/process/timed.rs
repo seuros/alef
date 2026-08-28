@@ -56,13 +56,34 @@ impl GroupChild {
     ///
     /// Safe to call on a child that has already exited: the group kill fails, the fallback
     /// `Child::kill` fails, and the reap returns the status already collected.
+    ///
+    /// The reap itself is bounded by [`crate::process::KILL_REAP_LIMIT`] rather than a plain
+    /// `Child::wait`. A `SIGKILL` that failed to reach its target for any reason must not turn
+    /// "the tree is being torn down" into a second, unconditional hang directly behind the first
+    /// -- see the constant's own doc comment. ~keep
     pub(crate) fn kill_tree(&mut self) {
         kill_process_tree(&mut self.child, &self.tracked);
-        let _ = self.child.wait();
+        match self.child.wait_timeout(crate::process::KILL_REAP_LIMIT) {
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => {
+                tracing::error!(
+                    pid = self.child.id(),
+                    reap_limit_secs = crate::process::KILL_REAP_LIMIT.as_secs(),
+                    "child was not reaped within the kill limit after being signalled; abandoning \
+                     the wait instead of hanging"
+                );
+            }
+        }
     }
 
     /// Waits up to `budget` for the child to exit, tearing its whole tree down when the budget
-    /// runs out first.
+    /// runs out first -- or as soon as the child is found sitting in the kernel's stopped state
+    /// for [`crate::process::STOPPED_PROCESS_GRACE`], whichever comes first.
+    ///
+    /// A stopped child can never exit on its own, so treating it identically to a merely slow one
+    /// -- waiting out the same `budget` before acting -- turns a detectable condition into a wait
+    /// bounded only by whatever timeout the caller happened to pass. See
+    /// [`crate::process::is_process_stopped`]. ~keep
     ///
     /// `command` names the command in the timeout warning and is only formatted when the deadline
     /// is actually missed.
@@ -76,20 +97,41 @@ impl GroupChild {
         budget: std::time::Duration,
         command: &impl std::fmt::Debug,
     ) -> std::io::Result<Deadline> {
-        match self.child.wait_timeout(budget) {
-            Ok(Some(status)) => Ok(Deadline::Exited(status)),
-            Ok(None) => {
+        let deadline = std::time::Instant::now() + budget;
+        let mut stopped_since: Option<std::time::Instant> = None;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
                 tracing::warn!(
                     command = ?command,
                     budget_seconds = budget.as_secs(),
                     "command exceeded its timeout; killing its process group"
                 );
                 self.kill_tree();
-                Ok(Deadline::Expired)
+                return Ok(Deadline::Expired);
             }
-            Err(error) => {
-                self.kill_tree();
-                Err(error)
+            let chunk = remaining.min(crate::process::STOPPED_PROCESS_POLL_INTERVAL);
+            match self.child.wait_timeout(chunk) {
+                Ok(Some(status)) => return Ok(Deadline::Exited(status)),
+                Ok(None) => {}
+                Err(error) => {
+                    self.kill_tree();
+                    return Err(error);
+                }
+            }
+            if crate::process::is_process_stopped(self.child.id()) {
+                let since = *stopped_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() >= crate::process::STOPPED_PROCESS_GRACE {
+                    tracing::warn!(
+                        command = ?command,
+                        "child process is stopped rather than running; killing its process group \
+                         instead of waiting out the rest of its timeout budget"
+                    );
+                    self.kill_tree();
+                    return Ok(Deadline::Expired);
+                }
+            } else {
+                stopped_since = None;
             }
         }
     }
@@ -326,5 +368,54 @@ mod tests {
             Deadline::Exited(status) => assert_eq!(status.code(), Some(7)),
             Deadline::Expired => panic!("a command that exits immediately must not report expiry"),
         }
+    }
+
+    /// The regression this whole change exists for: a child stuck in the kernel's stopped state
+    /// (macOS/Linux `STAT=T`, e.g. from a job-control `SIGTTIN`/`SIGTTOU` after being placed in a
+    /// background process group) never makes progress on its own, so a wait that treats it like an
+    /// ordinary slow command waits out the *entire* budget before doing anything about it. A large
+    /// enough budget -- the shape a real toolchain timeout takes -- turns that into an effectively
+    /// unbounded hang.
+    ///
+    /// The budget passed here is deliberately far larger than
+    /// [`crate::process::STOPPED_PROCESS_GRACE`], so a regression that fell back to waiting out the
+    /// whole budget would still be caught by the `elapsed` assertion -- fast, not by hanging the
+    /// suite for the full budget either, since the budget itself is bounded. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_child_is_detected_and_killed_well_before_the_timeout_budget() {
+        let mut child = GroupChild::spawn(&mut long_lived_command()).expect("spawn the process group");
+        let pid = child.child.id();
+
+        // SAFETY: signalling one pid this test just spawned and owns.
+        unsafe {
+            libc::kill(pid.cast_signed(), libc::SIGSTOP);
+        }
+        let stop_confirmed_by = std::time::Instant::now() + SETTLE_LIMIT;
+        while !crate::process::is_process_stopped(pid) {
+            assert!(
+                std::time::Instant::now() < stop_confirmed_by,
+                "the fixture child never reached the kernel's stopped state"
+            );
+            std::thread::sleep(SETTLE_POLL);
+        }
+
+        let budget = Duration::from_secs(30);
+        let started = std::time::Instant::now();
+        let outcome = child
+            .wait_within(budget, &"stopped-fixture")
+            .expect("waiting on a stopped child is not an error");
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(outcome, Deadline::Expired),
+            "a stopped child can never exit on its own and must report as expired"
+        );
+        assert!(
+            elapsed < budget / 2,
+            "a stopped child must be detected and killed well inside its timeout budget, not after \
+             waiting it out: took {elapsed:?} against a {budget:?} budget"
+        );
+        assert!(wait_until_gone(pid), "stopped child {pid} survived its own detection");
     }
 }
