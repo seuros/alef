@@ -14,7 +14,7 @@ buildscript {
 }
 
 plugins {
-    id("com.android.library") version "9.2.1"
+    id("com.android.library") version "9.3.2"
     id("com.vanniktech.maven.publish") version "0.37.0"
     id("com.github.ben-manes.versions") version "0.54.0"
 }
@@ -70,7 +70,7 @@ dependencies {
 // and stages it into src/test/resources/host-jni/<platform>/ for the test loader.
 // Set alef.skipHostJni=true to disable this (e.g., in publish-only builds).
 tasks.register("buildHostJni", Exec::class) {
-    if (project.properties["alef.skipHostJni"] != "true") {
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {
         val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
         val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) { it.parentFile }
             .map { it.resolve("crates/demo-jni/Cargo.toml") }
@@ -89,7 +89,7 @@ tasks.register("buildHostJni", Exec::class) {
 }
 
 tasks.register("copyHostJni", Copy::class) {
-    if (project.properties["alef.skipHostJni"] != "true") {
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {
         description = "Copy host JNI library to test resources"
         dependsOn("buildHostJni")
 
@@ -122,7 +122,7 @@ tasks.register("copyHostJni", Copy::class) {
 }
 
 tasks.withType<Test> {
-    if (project.properties["alef.skipHostJni"] != "true") {
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true") {
         val hostPlatform = when {
             System.getProperty("os.name").lowercase().contains("mac") -> "darwin"
             System.getProperty("os.name").lowercase().contains("win") -> "windows"
@@ -141,7 +141,7 @@ tasks.withType<Test> {
 // the dylib emitted by `copyHostJni`, so AGP 8.10+ requires an explicit
 // dependency declaration to satisfy Gradle's task-output validation.
 tasks.matching { it.name.startsWith("processDebug") || it.name.startsWith("processRelease") }.configureEach {
-    if (project.properties["alef.skipHostJni"] != "true" && name.contains("UnitTestJavaRes")) {
+    if (project.providers.gradleProperty("alef.skipHostJni").orNull != "true" && name.contains("UnitTestJavaRes")) {
         dependsOn("copyHostJni")
     }
 }
@@ -215,7 +215,7 @@ tasks.register("buildAndroidJniLibs", Exec::class) {
     val androidAbis = listOf("arm64-v8a", "x86_64")
     val jniLibsRoot = layout.projectDirectory.dir("src/main/jniLibs").asFile
     val expectedJniLib = "libdemo_jni.so"
-    if (project.properties["alef.skipAndroidJni"] != "true") {
+    if (project.providers.gradleProperty("alef.skipAndroidJni").orNull != "true") {
         val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
         val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) { it.parentFile }
             .map { it.resolve("crates/demo-jni/Cargo.toml") }

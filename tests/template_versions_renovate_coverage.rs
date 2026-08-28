@@ -14,14 +14,19 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-/// `depName`s the `customManager` deliberately does not reach, because their constants
-/// carry a multi-line rationale between the marker and the `pub const`.
+/// `depName`s the `customManager` deliberately does not reach.
 ///
-/// Both are compound `||` constraints spanning several majors on purpose (see their
-/// rationales in `template_versions.rs`), and an auto-bump would collapse the span that is
-/// the whole point of them. They are listed rather than fixed so that a *new* unreachable
-/// marker still fails this test.
-const DELIBERATELY_UNREACHABLE: [&str; 2] = ["phpunit/phpunit", "guzzlehttp/guzzle"];
+/// Empty as of the `widen` range strategy. `phpunit/phpunit` and `guzzlehttp/guzzle` used to
+/// live here: both are compound `||` constraints spanning several majors on purpose, and under
+/// the default `replace` strategy an auto-bump rewrites such a chain to its LAST clause alone,
+/// collapsing the span that is the whole point of them. Keeping the marker unreachable was the
+/// cheap defence. `renovate.json` now scopes `rangeStrategy: "widen"` to exactly those depNames,
+/// which appends a clause instead of replacing the chain, so the marker is safe to reach and the
+/// prose that used to sit between marker and `pub const` has moved above the marker.
+///
+/// Anything appearing here again means a constant went silently un-bumpable. The entry is a list
+/// rather than a fix so a *new* unreachable marker still fails the test below. ~keep
+const DELIBERATELY_UNREACHABLE: [&str; 0] = [];
 
 /// Floor on how many markers the manager must reach, well under the real count so routine
 /// additions do not churn it, and well over zero so a regex that matched nothing could not
