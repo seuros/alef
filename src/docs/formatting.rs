@@ -1,9 +1,9 @@
 use crate::core::config::Language;
 use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, PrimitiveType, TypeRef};
-use crate::docs::naming::{enum_variant_name, type_name};
+use crate::docs::enum_variant_ref::format_enum_variant_ref;
 use crate::docs::type_mapping::doc_type;
 use crate::docs::type_mapping::java_boxed_type;
-use heck::{ToPascalCase, ToShoutySnakeCase};
+use heck::ToPascalCase;
 
 /// Escape literal pipe characters and square brackets outside code spans so a value can be
 /// embedded inside a Markdown table cell without being misinterpreted.
@@ -114,11 +114,7 @@ fn enum_variant_doc_label(variant: &str, field_ty: &TypeRef, lang: Language, ffi
         _ => None,
     };
     match enum_type_name_str {
-        Some(type_str) => {
-            let etype = type_name(type_str, lang, ffi_prefix);
-            let vname = enum_variant_name(variant, lang, ffi_prefix);
-            format_enum_variant_ref(&etype, &vname, lang, ffi_prefix)
-        }
+        Some(type_str) => format_enum_variant_ref(type_str, variant, lang, ffi_prefix),
         None => variant.to_string(),
     }
 }
@@ -166,9 +162,7 @@ pub(crate) fn format_typed_default(
         DefaultValue::EnumVariant(v) => {
             let parts: Vec<&str> = v.splitn(2, "::").collect();
             if parts.len() == 2 {
-                let enum_type = type_name(parts[0], lang, ffi_prefix);
-                let variant = enum_variant_name(parts[1], lang, ffi_prefix);
-                format!("`{}`", format_enum_variant_ref(&enum_type, &variant, lang, ffi_prefix))
+                format!("`{}`", format_enum_variant_ref(parts[0], parts[1], lang, ffi_prefix))
             } else {
                 let enum_type_name_str = match field_ty {
                     TypeRef::Named(n) => Some(n.as_str()),
@@ -182,9 +176,7 @@ pub(crate) fn format_typed_default(
                     _ => None,
                 };
                 if let Some(type_str) = enum_type_name_str {
-                    let etype = type_name(type_str, lang, ffi_prefix);
-                    let variant = enum_variant_name(v, lang, ffi_prefix);
-                    format!("`{}`", format_enum_variant_ref(&etype, &variant, lang, ffi_prefix))
+                    format!("`{}`", format_enum_variant_ref(type_str, v, lang, ffi_prefix))
                 } else {
                     format!("`{v}`")
                 }
@@ -250,9 +242,10 @@ pub(crate) fn format_typed_default(
                     .find(|v| v.is_default)
                     .or_else(|| enum_def.variants.first());
                 if let Some(v) = variant {
-                    let etype = type_name(type_name_str, lang, ffi_prefix);
-                    let vname = enum_variant_name(&v.name, lang, ffi_prefix);
-                    return format!("`{}`", format_enum_variant_ref(&etype, &vname, lang, ffi_prefix));
+                    return format!(
+                        "`{}`",
+                        format_enum_variant_ref(type_name_str, &v.name, lang, ffi_prefix)
+                    );
                 }
             }
             let inner_ty = match field_ty {
@@ -361,35 +354,6 @@ pub(crate) fn format_typed_default(
             }
         }
         DefaultValue::FunctionCall(path) | DefaultValue::PublicFunctionCall(path) => format!("`{path}()`"),
-    }
-}
-
-/// Format an enum variant reference: `TypeName.VARIANT` or `:atom` style per language.
-pub(crate) fn format_enum_variant_ref(enum_type: &str, variant: &str, lang: Language, ffi_prefix: &str) -> String {
-    match lang {
-        Language::Python => format!("{enum_type}.{variant}"),
-        Language::Node | Language::Wasm => format!("{enum_type}.{variant}"),
-        Language::Go => format!("{enum_type}.{variant}"),
-        Language::Java => format!("{enum_type}.{variant}"),
-        Language::Csharp => format!("{enum_type}.{variant}"),
-        Language::Ruby => format!(":{variant}"),
-        Language::Php => format!("{enum_type}::{variant}"),
-        Language::Elixir => format!(":{variant}"),
-        Language::R => format!("\"{variant}\""),
-        Language::Rust => format!("{enum_type}::{variant}"),
-        Language::Ffi | Language::C | Language::Jni => format!(
-            "{}_{}",
-            ffi_prefix.to_shouty_snake_case(),
-            variant.to_shouty_snake_case()
-        ),
-        Language::Kotlin
-        | Language::KotlinAndroid
-        | Language::Swift
-        | Language::Dart
-        | Language::Gleam
-        | Language::Zig => {
-            format!("{enum_type}.{variant}")
-        }
     }
 }
 
@@ -2012,17 +1976,22 @@ mod tests {
             format_field_default(&field, Language::Rust, &api, TEST_PREFIX),
             "`HeadingStyle::Atx`"
         );
+        // Java declares the enum constant as the raw, untransformed variant identifier
+        // (`backends/java/gen_bindings/types/enums.rs`'s `simple_enum_class.jinja` pushes
+        // `variant.name` verbatim) — never shouty-snake-case. ~keep
         assert_eq!(
             format_field_default(&field, Language::Java, &api, TEST_PREFIX),
-            "`HeadingStyle.ATX`"
+            "`HeadingStyle.Atx`"
         );
         assert_eq!(
             format_field_default(&field, Language::Ruby, &api, TEST_PREFIX),
             "`:atx`"
         );
+        // PHP's class constant uppercases the whole variant name with no underscores inserted
+        // (`backends/php/gen_bindings/types/enums.rs::enum_constant_entries`). ~keep
         assert_eq!(
             format_field_default(&field, Language::Php, &api, TEST_PREFIX),
-            "`HeadingStyle::Atx`"
+            "`HeadingStyle::ATX`"
         );
     }
 

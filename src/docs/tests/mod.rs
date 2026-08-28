@@ -53,6 +53,7 @@ fn doc_content<'a>(files: &'a [crate::core::backend::GeneratedFile], slug: &str)
         .unwrap_or_else(|| panic!("missing generated doc file for {slug}"))
 }
 
+mod enum_default_syntax;
 mod function_dedup;
 mod generate_docs;
 mod generated_stage;

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 mod context;
 mod descriptions;
 pub mod doc_cleaning;
+mod enum_variant_ref;
 mod examples;
 mod formatting;
 pub(crate) mod language_pages;
