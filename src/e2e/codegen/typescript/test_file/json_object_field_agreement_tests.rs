@@ -10,9 +10,11 @@
 //! (TS2353) only in the published snippet for the identical input.
 //!
 //! The fix filters the object literal's keys against the type's declared fields at the one site
-//! both callers share (see the `~keep` comment in `builders/mod.rs`), refusing (panicking
-//! generation) rather than silently dropping an undeclared key. These tests pin both directions
-//! at both call sites so the two renderers cannot drift apart again.
+//! both callers share (see the `~keep` comment in `builders/mod.rs`), refusing rather than
+//! silently dropping an undeclared key. The refusal is recorded on `fixture_refusal`'s ledger
+//! and becomes the backend's own `Err` at `E2eCodegen::generate_gated`; it deliberately does not
+//! unwind, so these tests read the ledger rather than catching a panic. These tests pin both
+//! directions at both call sites so the two renderers cannot drift apart again.
 
 use super::snippet::{SnippetContext, render_snippet_body};
 use super::test_case::render_test_case;
@@ -116,6 +118,20 @@ fn a_declared_key_survives_identically_in_both_renderings() {
         e2e.contains(r#"content: "hello""#),
         "e2e test must build the declared field:\n{e2e}"
     );
+    // ~keep Proves the guard is not refusing everything: a check that fired on correct input
+    // would make every assertion above pass for the wrong reason.
+    assert_eq!(
+        crate::e2e::codegen::fixture_refusal::take().len(),
+        0,
+        "a fully declared fixture must record no refusal"
+    );
+}
+
+/// Drain the refusal ledger and return the composed diagnostic, or `None` when nothing was
+/// refused. Both renderers below attribute their own refusals before returning, so this reads
+/// whatever the render just recorded.
+fn refusal() -> Option<String> {
+    crate::e2e::codegen::fixture_refusal::take_error("node").map(|error| format!("{error:#}"))
 }
 
 #[test]
@@ -123,18 +139,39 @@ fn an_undeclared_key_is_refused_identically_in_both_renderings() {
     // `SampleOptions` never declares `bogus` — a fixture typo, or a field the IR dropped.
     let fixture = fixture_with(serde_json::json!({"options": {"content": "hello", "bogus": "oops"}}));
 
-    let snippet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_snippet(&fixture)));
-    assert!(
-        snippet_result.is_err(),
-        "snippet rendering must refuse an undeclared field instead of silently emitting it"
-    );
+    render_snippet(&fixture);
+    let snippet_refusal =
+        refusal().expect("snippet rendering must refuse an undeclared field instead of silently emitting it");
+    assert!(snippet_refusal.contains("bogus"), "got: {snippet_refusal}");
 
-    let e2e_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_e2e(&fixture)));
-    assert!(
-        e2e_result.is_err(),
+    render_e2e(&fixture);
+    let e2e_refusal = refusal().expect(
         "e2e rendering must refuse the SAME undeclared field the snippet path refuses — a silent \
          drop here (while the snippet still refuses) is exactly the two-generators-disagree shape \
-         #322 fixed"
+         #322 fixed",
+    );
+    assert!(e2e_refusal.contains("bogus"), "got: {e2e_refusal}");
+}
+
+/// The refusal both renderers raise must name the fixture, the language and the `options_type`
+/// lever -- the message's whole job. Naming only the type and the key sent an operator to "fix
+/// the fixture or the Rust struct" in an incident where both were already correct. ~keep
+#[test]
+fn the_refusal_names_the_call_the_language_and_the_options_type_lever() {
+    let fixture = fixture_with(serde_json::json!({"options": {"content": "hello", "bogus": "oops"}}));
+
+    render_e2e(&fixture);
+    let message = refusal().expect("an undeclared key must be refused");
+
+    assert!(message.contains("fixture `process_thing`"), "got: {message}");
+    assert!(message.contains("language `node`"), "got: {message}");
+    assert!(
+        message.contains("options_type"),
+        "the message must point at the per-language `options_type` override as a lever: {message}"
+    );
+    assert!(
+        message.contains("`[e2e.call.overrides.node]`"),
+        "the message must name the override table to edit: {message}"
     );
 }
 
@@ -225,17 +262,19 @@ fn a_nested_undeclared_key_is_refused_identically_in_both_renderings() {
     let fixture =
         fixture_with(serde_json::json!({"options": {"content": "hello", "inner": {"known": "x", "bogus": "y"}}}));
 
-    let snippet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_snippet_nested(&fixture)));
+    render_snippet_nested(&fixture);
+    let snippet_refusal =
+        refusal().expect("snippet rendering must refuse an undeclared nested field instead of silently emitting it");
     assert!(
-        snippet_result.is_err(),
-        "snippet rendering must refuse an undeclared nested field instead of silently emitting it"
+        snippet_refusal.contains("reached through field `inner`"),
+        "a nested refusal must say where it sat: {snippet_refusal}"
     );
 
-    let e2e_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_e2e_nested(&fixture)));
-    assert!(
-        e2e_result.is_err(),
+    render_e2e_nested(&fixture);
+    let e2e_refusal = refusal().expect(
         "e2e rendering must refuse the SAME undeclared nested field the snippet path refuses — a \
          silent drop here (while the snippet still refuses) reproduces the two-generators-disagree \
-         shape one level deeper than the top-level fix covers"
+         shape one level deeper than the top-level fix covers",
     );
+    assert!(e2e_refusal.contains("bogus"), "got: {e2e_refusal}");
 }

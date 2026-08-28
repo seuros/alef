@@ -189,6 +189,11 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         referenced_enums,
         crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
     );
+    // The builders above recognise an undeclared fixture key many frames down, where nothing
+    // knows which call or language is being served. This is the frame that does, and the only
+    // one that can tell a per-call `options_type` from a file-level default this call merely
+    // inherited -- the distinction that decides where the fix belongs. ~keep
+    attribute_key_refusals(lang, fixture, e2e_config, call_config, per_call_override, options_type);
 
     if !extra_args.is_empty() {
         let extra_str = extra_args.join(", ");
@@ -892,4 +897,28 @@ mod ir_async_tests {
             "an explicit per-language async override must win over a sync IR signature, got:\n{out}"
         );
     }
+}
+
+/// Attach this fixture's call context to every refusal the argument builders just recorded.
+///
+/// `options_type` is the file-level `[e2e.call.overrides.<lang>].options_type` the caller
+/// resolved once for the whole file; `per_call_override` is this call's own table. Which of the
+/// two supplied the type is the actionable half of the diagnostic: a file-level default silently
+/// applies to every call that does not override it, so "add a per-call override" and "change the
+/// default" are opposite fixes and only one of them is right. ~keep
+fn attribute_key_refusals(
+    lang: &str,
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    call_config: &crate::core::config::e2e::CallConfig,
+    per_call_override: Option<&crate::core::config::e2e::CallOverride>,
+    options_type: Option<&str>,
+) {
+    use crate::e2e::codegen::fixture_refusal::{attribute, language_default_source, resolved_call_key};
+
+    let source = language_default_source(
+        per_call_override.and_then(|value| value.options_type.as_deref()),
+        options_type,
+    );
+    attribute(lang, &fixture.id, resolved_call_key(e2e_config, call_config), source);
 }

@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::e2e::codegen::fixture_refusal::RefusalSite;
+
 /// Build a TypeScript expression to construct an options object.
 ///
 /// Node: configured options types can be TypeScript interfaces — return a plain object literal
@@ -277,7 +279,7 @@ fn node_field_public_key(owner_type: Option<&TypeDef>, key: &str) -> String {
         .unwrap_or_else(|| snake_to_camel(key))
 }
 
-/// Panics if `obj` contains a key that `type_name`'s declared fields (in `type_defs`) don't
+/// Refuses `obj` if it contains a key that `type_name`'s declared fields (in `type_defs`) don't
 /// cover — the single check shared by every node-lang JSON-object-literal builder in this
 /// module, so the snippet path (which binds the literal to a typed `const`, see
 /// `typed_binding.jinja`, and so IS excess-property-checked by `tsc`) and the e2e test path
@@ -293,17 +295,28 @@ fn node_field_public_key(owner_type: Option<&TypeDef>, key: &str) -> String {
 /// (an external/opaque type) is likewise skipped — there is no declared field set to check
 /// against.
 ///
-/// ~keep An undeclared key is REFUSED (panics generation), not silently dropped: this runs at
-/// generation time over a fixture the maintainer wrote, so the only plausible causes are a
-/// fixture typo/stale field name or a genuinely missing IR field — both are bugs to fix, not
-/// values to discard. A silent drop would still produce a compiling snippet/test that LOOKS like
-/// it exercises the field the fixture named, which is the same "check that cannot fail" shape as
+/// ~keep An undeclared key is REFUSED, not silently dropped: this runs at generation time over a
+/// fixture the maintainer wrote, so the only plausible causes are a fixture typo/stale field name,
+/// a genuinely missing IR field, or (the case that actually shipped) an `options_type` that
+/// resolves this argument to the wrong struct entirely — all three are bugs to fix, not values to
+/// discard. A silent drop would still produce a compiling snippet/test that LOOKS like it
+/// exercises the field the fixture named, which is the same "check that cannot fail" shape as
 /// every other vacuous-assertion fix in this generator (see `apply_vacuous_assertion_fallback`,
 /// `inert_example`) — the bug would hide instead of surfacing.
+///
+/// ~keep The refusal is RECORDED, not panicked. A `panic!` here aborted the entire `alef all`
+/// process at exit 101 over one consumer misconfiguration, so every other backend, every later
+/// crate and every later stage (README, docs, snippet validation) never ran. `fixture_refusal`
+/// carries it to `E2eCodegen::generate_gated`, which turns it into this backend's own `Err` —
+/// the failure mode `run_generators` already isolates, and `alef all`'s `StageFailures` already
+/// reports as "continuing with the remaining stages". Generation continues to the end of this
+/// backend and its output is then discarded wholesale by `run_generators`, so no refused literal
+/// ever reaches disk.
 fn refuse_undeclared_json_keys(
     obj: &serde_json::Map<String, serde_json::Value>,
     type_name: &str,
     type_defs: &[TypeDef],
+    site: RefusalSite,
 ) {
     let Some(definition) = type_defs.iter().find(|definition| definition.name == type_name) else {
         return;
@@ -325,10 +338,11 @@ fn refuse_undeclared_json_keys(
             definition.serde_rename_all.as_deref(),
         ));
     }
-    if let Some(undeclared) = obj.keys().find(|key| !declared.contains(key.as_str())) {
-        panic!(
-            "typescript e2e generator: fixture input for `{type_name}` includes key `{undeclared}`, which `{type_name}` does not declare as a field. Fix the fixture (remove or rename the key) or the Rust struct (add the missing field)."
-        );
+    // Every undeclared key, not just the first: one wrong `options_type` typically refuses
+    // several keys at once, and reporting them one per regeneration is a serial debugging loop
+    // against a build that takes minutes. ~keep
+    for key in obj.keys().filter(|key| !declared.contains(key.as_str())) {
+        crate::e2e::codegen::fixture_refusal::record(type_name, key, site.clone());
     }
 }
 
@@ -397,7 +411,16 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         // belong on `type_name` — see `refuse_undeclared_json_keys` for why this is refused
         // rather than silently dropped, and why both the snippet and e2e paths must share this
         // one check.
-        refuse_undeclared_json_keys(obj, type_name, type_defs);
+        // `depth == 0` is the argument value itself; anything deeper is an object the fixture
+        // nested inside it, and only the JSON pointer identifies which one. ~keep
+        let site = if depth == 0 {
+            RefusalSite::Argument
+        } else {
+            RefusalSite::Nested {
+                via: format!("the fixture value at JSON pointer `{pointer}`"),
+            }
+        };
+        refuse_undeclared_json_keys(obj, type_name, type_defs, site);
         for (key, val) in obj {
             let field_pointer = json_pointer_child(pointer, key);
             // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
@@ -683,7 +706,11 @@ fn node_value_expression(
             // rather than through `ts_builder_expression_inner` directly) go through the same
             // undeclared-key guard as the top-level object — see `refuse_undeclared_json_keys`.
             if let Some(definition) = nested_type {
-                refuse_undeclared_json_keys(object, &definition.name, type_defs);
+                let via = match owner_type {
+                    Some(owner) => format!("field `{field}` of `{owner}`"),
+                    None => format!("field `{field}`"),
+                };
+                refuse_undeclared_json_keys(object, &definition.name, type_defs, RefusalSite::Nested { via });
             }
             let fields = object
                 .iter()

@@ -466,8 +466,14 @@ fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
 /// filter in `mod.rs` for why this is a refusal and not a drop, and
 /// `json_object_field_agreement_tests.rs` for the snippet/e2e cross-generator coverage this
 /// unit test underpins.
+///
+/// ~keep The refusal must NOT unwind. It used to `panic!` here, which aborted the whole
+/// `alef all` process at exit 101 over one consumer misconfiguration and skipped every later
+/// backend and stage; it now lands on `fixture_refusal`'s ledger, which
+/// `E2eCodegen::generate_gated` turns into this backend's own `Err`. The `catch_unwind` below
+/// is what proves the change: it must come back `Ok`.
 #[test]
-fn undeclared_key_panics_instead_of_reaching_the_literal() {
+fn undeclared_key_is_refused_without_unwinding() {
     let type_defs = [TypeDef {
         name: "SampleOptions".into(),
         fields: vec![crate::core::ir::FieldDef {
@@ -494,19 +500,20 @@ fn undeclared_key_panics_instead_of_reaching_the_literal() {
             &mut Default::default(),
         )
     }));
-    let error = result.expect_err("an undeclared key must panic generation, not render silently");
-    let message = error
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| error.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default();
+    assert!(
+        result.is_ok(),
+        "an undeclared key must be recorded as a refusal, never unwind the generator"
+    );
+    let error = crate::e2e::codegen::fixture_refusal::take_error("node")
+        .expect("an undeclared key must be refused, not rendered silently");
+    let message = format!("{error:#}");
     assert!(
         message.contains("bogus"),
-        "panic message must name the offending key: {message}"
+        "the refusal must name the offending key: {message}"
     );
     assert!(
         message.contains("SampleOptions"),
-        "panic message must name the type: {message}"
+        "the refusal must name the type: {message}"
     );
 }
 

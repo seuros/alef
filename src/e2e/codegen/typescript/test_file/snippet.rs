@@ -130,6 +130,17 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         &mut Default::default(),
         recipe.target_params(lang),
     );
+    // Same attribution the e2e test-file path does, with the fallback key this path actually
+    // reads -- see `fixture_refusal::call_level_source`. ~keep
+    crate::e2e::codegen::fixture_refusal::attribute(
+        lang,
+        &fixture.id,
+        crate::e2e::codegen::fixture_refusal::resolved_call_key(e2e_config, call),
+        crate::e2e::codegen::fixture_refusal::call_level_source(
+            override_config.and_then(|value| value.options_type.as_deref()),
+            call.options_type.as_deref(),
+        ),
+    );
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");
         args = if args.is_empty() {

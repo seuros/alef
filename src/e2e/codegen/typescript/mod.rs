@@ -12,6 +12,8 @@ mod not_error_sibling_assertion_tests;
 #[cfg(test)]
 mod npmrc_marker_tests;
 pub(crate) mod test_file;
+#[cfg(test)]
+mod undeclared_key_refusal_tests;
 mod visitors;
 #[cfg(test)]
 mod wasm_trait_bridge_stub_tests;

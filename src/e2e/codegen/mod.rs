@@ -39,6 +39,7 @@ pub mod elixir;
 pub(crate) mod error_path_assertions;
 mod field_resolution;
 pub(crate) mod field_skip;
+pub(crate) mod fixture_refusal;
 pub mod gleam;
 pub mod go;
 pub mod homebrew;
@@ -678,7 +679,17 @@ pub trait E2eCodegen: Send + Sync {
             self.language_name(),
             &self.supported_assertion_types(),
         )?;
-        self.generate(groups, e2e_config, config, type_defs, enums, functions, errors)
+        let generated = self.generate(groups, e2e_config, config, type_defs, enums, functions, errors);
+        // Drained unconditionally, on both the `Ok` and the `Err` path: a refusal recorded by an
+        // expression builder too deep to return a `Result` (see `fixture_refusal`) must become
+        // THIS backend's `Err` so `run_generators` isolates it, and must never survive into the
+        // next backend's drain and be reported against a language that did not produce it. ~keep
+        match (generated, fixture_refusal::take_error(self.language_name())) {
+            (Ok(files), None) => Ok(files),
+            (Ok(_), Some(refusal)) => Err(refusal),
+            (Err(error), None) => Err(error),
+            (Err(error), Some(refusal)) => Err(error.context(format!("{refusal:#}"))),
+        }
     }
 
     /// Render the target-language source inside a generated documentation snippet.
