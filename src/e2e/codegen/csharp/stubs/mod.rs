@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod class_scope_tests;
 #[cfg(test)]
+mod named_return_tests;
+#[cfg(test)]
 mod nullable_return_tests;
 
 use crate::backends::csharp::trait_bridge::csharp_type_visible_pub;
@@ -64,7 +66,13 @@ fn emit_csharp_stub_default(
             "\"\"".to_string()
         }
     } else if matches!(original_type, TypeRef::Named(_)) {
-        format!("default({visible_type})")
+        // `visible_type` is the C#-cased name (via `csharp_type_name`), which can differ from
+        // `original_type`'s raw Rust name that `defaults.emit_default` would otherwise use --
+        // that's why this branch exists instead of falling through. `default(T)` for a Named
+        // type is wrong: every visible Named type here binds to a C# class, so `default(T)` is
+        // `null`, not a value -- CS8603 on a non-nullable return. Match the same `new T()`
+        // convention `CSharpDefaults::emit_default` already uses for `TypeRef::Named`. ~keep
+        format!("new {visible_type}()")
     } else {
         // Visible type, use the default logic
         defaults.emit_default(original_type)
