@@ -22,6 +22,9 @@ mod assertion_synthetic;
 mod assertion_wildcard_element_tests;
 #[cfg(test)]
 mod collection_field_classification_tests;
+mod fieldless_result;
+#[cfg(test)]
+mod fieldless_result_tests;
 #[cfg(test)]
 mod iterate_display_safety_tests;
 #[cfg(test)]

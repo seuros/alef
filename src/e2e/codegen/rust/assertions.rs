@@ -287,15 +287,10 @@ pub fn render_assertion_with_streaming(
             );
             return;
         }
-        // When result_is_simple the function returns a plain scalar/string type —
-        // `field_access` uses `effective_result_var` directly regardless of the
-        // field name, so the skip guard must not fire for these calls.
-        if !f.starts_with("error.") && !result_is_simple && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(
-                out,
-                "    // skipped: {}",
-                FieldSkip::NotAvailableOnResultType.message(f)
-            );
+        if let Some(reason) =
+            super::fieldless_result::unrenderable_field_skip(f, result_var, result_is_simple, field_resolver)
+        {
+            let _ = writeln!(out, "    // skipped: {reason}");
             return;
         }
     }

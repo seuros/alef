@@ -529,6 +529,21 @@ pub fn render_test_function(
                 if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
                     return true;
                 }
+                // ~keep The renderer's own answer, not a second derivation of it: an assertion
+                // `render_assertion` will replace with a skip marker uses no result variable, and
+                // a `result_is_simple` call whose result is fieldless is exactly the case the
+                // blanket `return true` below gets wrong -- binding `result` for assertions that
+                // all skip leaves it unused, which the generated crate denies.
+                if crate::e2e::codegen::rust::fieldless_result::unrenderable_field_skip(
+                    f,
+                    result_var,
+                    result_is_simple,
+                    field_resolver,
+                )
+                .is_some()
+                {
+                    return false;
+                }
                 // When the call returns a plain type (result_is_simple) or a Tree, the
                 // assertion renderer resolves field-bearing assertions against the result
                 // variable itself (`render_count_equals_assertion` emits `result.len()`,
@@ -649,7 +664,11 @@ pub fn render_test_function(
         "matches_regex",
     ];
     let mut unwrapped_fields: Vec<(String, String)> = Vec::new(); // (fixture_field, local_var)
-    if !result_is_vec && !is_streaming {
+    // ~keep A fieldless result (a raw byte payload) has no member to bind, so every binding this
+    // loop could emit would be `let <local> = result.<field>...` -- the same `E0609` the assertion
+    // guard now refuses, reached through a different door. The assertions these bindings exist for
+    // are skipped in that case, so suppressing the binding drops nothing.
+    if !result_is_vec && !is_streaming && !field_resolver.result_has_no_fields() {
         for assertion in &fixture.assertions {
             if let Some(f) = &assertion.field
                 && !f.is_empty()

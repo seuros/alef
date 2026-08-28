@@ -123,7 +123,14 @@ pub(super) fn render_not_empty_assertion(
 ) {
     if let Some(f) = &assertion.field {
         let resolved = field_resolver.resolve(f);
-        let is_opt = !is_unwrapped && field_resolver.is_optional(resolved);
+        // ~keep `field_access` is the caller's decision about what this assertion targets. When it
+        // is the bare result variable -- a `result_is_simple` call, or the `field == result_var`
+        // sentinel -- the field names no member here, and the two branches below would discard
+        // that decision by re-deriving `accessor(f, ..)`, emitting `result.<field>` against a
+        // value that has no such field (`E0609` in the generated test). This is the only assertion
+        // renderer that rebuilds its own accessor instead of using the one it was handed.
+        let targets_whole_result = field_access == result_var;
+        let is_opt = !is_unwrapped && !targets_whole_result && field_resolver.is_optional(resolved);
         let is_arr = field_resolver.is_array(resolved);
         if is_opt && is_arr {
             // Option<Vec<T>>: must be Some AND inner non-empty.
