@@ -29,7 +29,34 @@ impl FieldResolver {
     /// not, and the generated Go package stopped compiling.
     pub fn accessor(&self, fixture_field: &str, language: &str, result_var: &str) -> String {
         let effective = self.result_relative_path(fixture_field);
-        let segments = parse_path(&effective);
+        self.render_relative_to(&effective, language, result_var)
+    }
+
+    /// Generate a language-specific accessor for a path that is ALREADY relative to a bound
+    /// collection element — the closure/loop variable a wildcard (`foo[].bar`) fixture path
+    /// expands to — rather than to the call's result variable.
+    ///
+    /// ~keep The only difference from [`Self::accessor`] is the anchor, so it renders through the
+    /// same private `render_relative_to` rather than mirroring the language match. Anchoring is
+    /// exactly the fact that must differ: [`Self::result_relative_path`] re-anchors a path against
+    /// the call's RESULT type, via `envelope_projected_path` (which prefixes a leaf the root does
+    /// not declare with the `result_fields` entry that reaches it) and `namespace_stripped_path`.
+    /// Both are correct for a result-anchored path and both are wrong for an element-anchored one:
+    /// given `structure[].kind`, the element half `kind` is not declared on the root, so the
+    /// envelope rescue prefixed it back to `structure[0].kind` and the closure body came out as
+    /// `e.structure[0].kind` — the container path applied a second time against a binding that is
+    /// already an element, which is `E0609: no field 'structure'` on the element type. An element
+    /// path is taken literally; only the alias map still applies.
+    pub fn element_accessor(&self, element_path: &str, language: &str, element_var: &str) -> String {
+        let effective = self.resolve(element_path);
+        self.render_relative_to(effective, language, element_var)
+    }
+
+    /// Render an already-anchored path as a language-specific accessor rooted at `result_var`,
+    /// which is the result variable for [`Self::accessor`] and the element binding for
+    /// [`Self::element_accessor`].
+    fn render_relative_to(&self, effective: &str, language: &str, result_var: &str) -> String {
+        let segments = parse_path(effective);
         let segments = self.inject_array_indexing(segments);
         match language {
             // `node` and `wasm` are one language and must answer "does this link need `?.`"

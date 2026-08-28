@@ -670,12 +670,12 @@ fn render_rust_wildcard_assertion(
     } else {
         field_resolver.accessor(array_part, "rust", result_var)
     };
-    // Passing the closure parameter as the "result var" is what makes nested element
-    // sub-paths (`links[].meta.kind`) resolve against the loop variable. ~keep
+    // `element_accessor`, not `accessor`: the path is already element-relative, so the
+    // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
     let elem_accessor = if elem_part.is_empty() {
         "e".to_string()
     } else {
-        field_resolver.accessor(elem_part, "rust", "e")
+        field_resolver.element_accessor(elem_part, "rust", "e")
     };
     let array_is_optional = !array_part.is_empty() && field_resolver.is_optional(array_part);
     let escaped_field = escape_rust(field);
