@@ -37,6 +37,21 @@ fn format_toml_array_with_prefix(entries: &[String], prefix_len: usize) -> Strin
     format!("[\n{inner}\n]")
 }
 
+/// The `[tool.maturin] features` array, rendered from the same constant the binding crate's own
+/// `[features]` table and the build command's `--features` flag are derived from.
+///
+/// maturin reads this array only when it resolves this `pyproject.toml` at all — which it does
+/// for a wheel build rooted at the Python package directory, but not for the
+/// `maturin develop --manifest-path crates/<crate>-py/Cargo.toml` alef runs from the repo root.
+/// That is why the build path has to pass `--features` itself instead of relying on this. ~keep
+fn maturin_extension_module_features() -> String {
+    let entries: Vec<String> = crate::core::config::python_build::PYO3_EXTENSION_MODULE_PYO3_FEATURES
+        .iter()
+        .map(|feature| format!("\"{feature}\""))
+        .collect();
+    format_toml_array_with_prefix(&entries, "features = ".len())
+}
+
 /// Canonicalize a PEP 440 version specifier to `pyproject-fmt`'s normalized form.
 ///
 /// `pyproject-fmt` strips redundant trailing `.0` release segments from each
@@ -233,11 +248,12 @@ name = "{module_name}"
 crate-type = ["cdylib"]
 
 [features]
-extension-module = ["pyo3/extension-module", "pyo3/abi3-py310"]
+{extension_module_feature}
 {cfg_forwarding}
 [dependencies]
 {dep_block}
 {core_target_blocks_section}{lints_section}"#,
+        extension_module_feature = crate::core::config::python_build::extension_module_feature_line(),
         pkg_header = pkg_header,
         lints_section = lints_section,
         module_name = module_name,
@@ -368,7 +384,7 @@ module-name = "{python_package}.{module_name}"
 manifest-path = "../../crates/{crate_dir}-py/Cargo.toml"
 # abi3-py310 produces a single wheel per platform that loads on Python 3.10+,
 # avoiding a per-Python-version build matrix.
-features = [ "pyo3/extension-module", "pyo3/abi3-py310" ]
+features = {maturin_features}
 python-packages = [ "{python_package}" ]
 {sdist_include}
 [tool.pyrefly]
@@ -420,6 +436,7 @@ missing-attribute = false
         module_name = module_name,
         crate_dir = core_crate_dir,
         maturin_build_requires = canonicalize_pep440_specifier(tv::pypi::MATURIN_BUILD_REQUIRES),
+        maturin_features = maturin_extension_module_features(),
         dev_group = dev_group_array,
         pyrefly_extra = pyrefly_extra,
     );
@@ -464,6 +481,75 @@ mod tests {
         assert_eq!(canonicalize_pep440_specifier(">=0.14.8"), ">=0.14.8");
         assert_eq!(canonicalize_pep440_specifier("==1.0"), "==1");
         assert_eq!(canonicalize_pep440_specifier(">=1.0, <2.0"), ">=1,<2");
+    }
+}
+
+/// The scaffold declares the extension-module feature; the build activates it. Nothing proved
+/// the two named the same thing, and for one release they did not: the build named nothing at
+/// all. This checks the agreement the only way that cannot go stale -- by running the build's own
+/// probe against the manifest the scaffold just wrote. ~keep
+#[cfg(test)]
+mod extension_module_agreement_tests {
+    use super::{maturin_extension_module_features, scaffold_python, scaffold_python_cargo};
+    use crate::core::config::NewAlefConfig;
+    use crate::core::config::python_build::{PYO3_EXTENSION_MODULE_FEATURE, declared_extension_module_feature};
+    use crate::core::ir::ApiSurface;
+
+    fn resolved() -> crate::core::config::ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "sample-lib"
+sources = []
+"#,
+        )
+        .expect("valid config");
+        cfg.resolve().expect("resolve").remove(0)
+    }
+
+    fn api() -> ApiSurface {
+        ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_build_probe_finds_the_feature_the_scaffolded_manifest_declares() {
+        let files = scaffold_python_cargo(&api(), &resolved()).expect("scaffold_python_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest, cargo_toml).expect("write manifest");
+
+        assert_eq!(
+            declared_extension_module_feature(&manifest),
+            Some(PYO3_EXTENSION_MODULE_FEATURE),
+            "the feature the build passes must be one this manifest declares:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn the_pyproject_requests_the_pyo3_features_the_crate_feature_turns_on() {
+        let files = scaffold_python(&api(), &resolved()).expect("scaffold_python ok");
+        let pyproject = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("pyproject.toml"))
+            .expect("pyproject.toml emitted")
+            .content;
+
+        assert!(
+            pyproject.contains(&format!("features = {}", maturin_extension_module_features())),
+            "the maturin feature list must stay derived from the same constant:\n{pyproject}"
+        );
     }
 }
 

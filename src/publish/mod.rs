@@ -260,7 +260,20 @@ fn build_command_for_lang(
     match lang {
         Language::Python => {
             let pkg = crate_name_from_output(config, Language::Python).unwrap_or_else(|| format!("{crate_name}-py"));
-            format!("maturin build --release --manifest-path crates/{pkg}/Cargo.toml{target_flag}")
+            // The published wheel is where omitting the extension-module feature costs the most:
+            // without it pyo3 links libpython and drops abi3, so the wheel gets a
+            // version-specific tag and an interpreter-specific link instead of the one abi3
+            // wheel per platform the generated `pyproject.toml` promises. maturin does not read
+            // that `pyproject.toml` here — it is not beside the manifest this command names — so
+            // the feature has to be passed explicitly, derived from the manifest that declares
+            // it. ~keep
+            let manifest = format!("crates/{pkg}/Cargo.toml");
+            let features_flag =
+                crate::core::config::python_build::extension_module_feature_flag(std::path::Path::new(&manifest));
+            crate::core::config::python_build::run_through_python_package_manager(
+                format!("maturin build --release --manifest-path {manifest}{features_flag}{target_flag}"),
+                &config.tools,
+            )
         }
         Language::Node => {
             let pkg = crate_name_from_output(config, Language::Node).unwrap_or_else(|| format!("{crate_name}-node"));

@@ -30,6 +30,8 @@ mod napi_js_ownership_tests;
 #[cfg(all(test, unix))]
 mod napi_package_json_path_tests;
 #[cfg(test)]
+mod python_maturin_tests;
+#[cfg(test)]
 mod readiness_tests;
 #[cfg(test)]
 mod record_post_build_outcome_tests;

@@ -54,7 +54,34 @@ pub(super) fn build_command_for(
 
     match bc.tool {
         "maturin" => {
-            format!("maturin develop --manifest-path {crate_dir}/Cargo.toml{release_flag}")
+            // `crate_dir` is empty whenever `[crates.output] python` is not set explicitly (the
+            // common case) — the same dangling `--manifest-path /Cargo.toml` the `napi` arm below
+            // was fixed for. Resolving it is load-bearing here and not merely tidy: the
+            // `--features` flag is derived by reading the manifest, so an unresolvable path would
+            // make the feature check examine nothing and silently emit no flag at all. ~keep
+            let py_crate_dir = if crate_dir.is_empty() {
+                // `core_crate_dir`, not `config.name`: it is the directory name
+                // `scaffold::languages::python` derives the manifest path from, and the two must
+                // name one file for the feature probe below to read the manifest that exists.
+                let core_crate_dir = config.core_crate_dir();
+                crate::core::config::resolve_helpers::default_binding_crate_root(&core_crate_dir, "python")
+                    .unwrap_or_else(|| format!("crates/{core_crate_dir}-py"))
+            } else {
+                crate_dir.to_string()
+            };
+            // The generated crate declares `extension-module` outside its default features, and
+            // the generated `pyproject.toml` requests the pyo3 features it turns on — but maturin
+            // reads that `pyproject.toml` only when it sits beside the manifest, which it never
+            // does here (it lives in the Python package directory). Without an explicit
+            // `--features`, pyo3 falls back to linking libpython and drops abi3 on every
+            // platform; on Darwin that still links and loads, so a green build proves nothing
+            // about the extension surface it produced. Asks the manifest which feature it
+            // declares rather than restating the name. ~keep
+            let manifest = Path::new(&py_crate_dir).join("Cargo.toml");
+            let features_flag = crate::core::config::python_build::extension_module_feature_flag(&manifest);
+            let command =
+                format!("maturin develop --manifest-path {py_crate_dir}/Cargo.toml{features_flag}{release_flag}");
+            crate::core::config::python_build::run_through_python_package_manager(command, &config.tools)
         }
         "napi" => {
             // `crate_dir` is empty whenever `[crates.output] node` is not set explicitly (the

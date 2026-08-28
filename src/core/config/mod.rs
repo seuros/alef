@@ -18,6 +18,7 @@ pub mod ownership;
 pub mod package_metadata;
 pub mod poly;
 pub mod publish;
+pub mod python_build;
 pub mod raw_crate;
 pub mod registry;
 pub mod resolve_helpers;

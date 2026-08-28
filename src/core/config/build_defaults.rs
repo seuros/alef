@@ -1,5 +1,6 @@
 use super::extras::Language;
 use super::output::{BuildCommandConfig, StringOrVec};
+use super::python_build;
 use super::tools::{LangContext, require_tool, wrap_command as wrap};
 use crate::core::template_versions as tv;
 
@@ -83,19 +84,30 @@ pub(crate) fn default_build_config(
             build_release: Some(StringOrVec::Single("cargo build --release --workspace".to_string())),
             timeout_seconds: None,
         },
-        Language::Python => BuildCommandConfig {
-            precondition: Some(require_tool("maturin")),
-            dependency_precondition: Some(PYTHON_ENVIRONMENT_CHECK.to_string()),
-            dependency_remediation: Some(python_environment_remediation(ctx.tools.python_pm())),
-            before: None,
-            build: Some(StringOrVec::Single(format!(
-                "maturin develop --manifest-path crates/{crate_name}-py/Cargo.toml"
-            ))),
-            build_release: Some(StringOrVec::Single(format!(
-                "maturin develop --manifest-path crates/{crate_name}-py/Cargo.toml --release"
-            ))),
-            timeout_seconds: None,
-        },
+        Language::Python => {
+            // Both the develop and the release command are composed here rather than written
+            // out twice: the package-manager prefix and the `--features` flag are one fact each,
+            // and `build_release` used to restate the whole invocation and so inherited every
+            // gap `build` had. ~keep
+            let feature = python_build::PYO3_EXTENSION_MODULE_FEATURE;
+            let maturin = |release: bool| {
+                let release_flag = if release { " --release" } else { "" };
+                let command = format!(
+                    "maturin develop --manifest-path crates/{crate_name}-py/Cargo.toml \
+                     --features {feature}{release_flag}"
+                );
+                python_build::run_through_python_package_manager(command, ctx.tools)
+            };
+            BuildCommandConfig {
+                precondition: Some(require_tool(python_build::python_build_precondition_tool(ctx.tools))),
+                dependency_precondition: Some(PYTHON_ENVIRONMENT_CHECK.to_string()),
+                dependency_remediation: Some(python_environment_remediation(ctx.tools.python_pm())),
+                before: None,
+                build: Some(StringOrVec::Single(maturin(false))),
+                build_release: Some(StringOrVec::Single(maturin(true))),
+                timeout_seconds: None,
+            }
+        }
         Language::Node => BuildCommandConfig {
             precondition: Some(require_tool("npm")),
             dependency_precondition: None,

@@ -4,6 +4,12 @@
 //! package managers and dev-tool sets used by the default pipeline commands
 //! (lint, test, build, setup, update, clean). Each field has a sensible default
 //! so the section is fully optional; users only override what they need.
+//!
+//! One exception to "each field has a default": an explicitly set `python_package_manager` also
+//! redirects the Python *build* through that manager's locked environment, while an unset one
+//! leaves the build resolving maturin off `PATH`. [`super::python_build::python_tool_runner`]
+//! therefore reads the raw field rather than [`ToolsConfig::python_pm`] — inventing a package
+//! manager a repo never asked for would hand it an unrunnable build command. ~keep
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
