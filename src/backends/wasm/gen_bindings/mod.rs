@@ -16,7 +16,7 @@ mod trait_bridge_docs;
 
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
-use crate::codegen::{cfg::expand_configured_features, generators, shared};
+use crate::codegen::{cfg::enabled_features_for_language, generators, shared};
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
@@ -71,7 +71,7 @@ impl Backend for WasmBackend {
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // Must run before dedup -- see `cfg::drop_cfg_disabled_functions`. ~keep
-        let enabled_features = expand_configured_features(config, config.features_for_language(Language::Wasm));
+        let enabled_features = enabled_features_for_language(config, Language::Wasm);
         let sorted = crate::backends::ir_order::with_sorted_items(api);
         let api = &cfg::drop_cfg_disabled_functions(sorted, &enabled_features).with_deduped_functions();
 

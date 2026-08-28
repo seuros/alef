@@ -75,8 +75,7 @@ impl Backend for GoBackend {
         // merges `#cgo` directives across every file of a package, which is what already lets
         // `service_file_preamble.jinja` include the header with no `-I` of its own. ~keep
         let feature_cflags = crate::backends::go::cgo_features::cgo_feature_cflags(api, config);
-        let go_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Go));
+        let go_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Go);
         let enabled_features: HashSet<&str> = go_features.iter().map(String::as_str).collect();
         // cgo's `import "C"` binds directly to the symbols the C header declares — an item
         // dropped under `#[cfg(feature = "X")]` from the built FFI library is a link-time
@@ -387,8 +386,7 @@ impl Backend for GoBackend {
         let pkg_name = config.go_package_name();
         let ffi_prefix = config.ffi_prefix();
 
-        let go_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Go));
+        let go_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Go);
         let enabled_features: HashSet<&str> = go_features.iter().map(String::as_str).collect();
         let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
 

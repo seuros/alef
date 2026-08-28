@@ -228,8 +228,7 @@ impl Backend for CsharpBackend {
         };
         let deduped_api = api.with_deduped_functions();
         crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Csharp);
-        let csharp_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Csharp));
+        let csharp_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Csharp);
         let enabled_features: HashSet<&str> = csharp_features.iter().map(String::as_str).collect();
         // `DllImport` resolves lazily (only when the P/Invoke stub is first called), so an
         // unconditionally-declared method for a symbol the FFI library dropped under
@@ -669,8 +668,7 @@ impl Backend for CsharpBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        let csharp_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Csharp));
+        let csharp_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Csharp);
         let enabled_features: HashSet<&str> = csharp_features.iter().map(String::as_str).collect();
         let filtered_api = crate::backends::ir_order::with_sorted_items(api).with_cfg_filtered_deep(&enabled_features);
         service_api::generate(&filtered_api, config)

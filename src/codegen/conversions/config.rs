@@ -166,8 +166,9 @@ pub struct ConversionConfig<'a> {
     /// representation predicate — currently Magnus (Ruby). Other data-bearing backends
     /// (Rustler, NAPI, PyO3, …) keep struct form, so this flag must stay false.
     pub binding_tuple_form_for_variants: bool,
-    /// This binding's own configured feature set, already expanded via
-    /// `codegen::cfg::expand_configured_features(config, config.features_for_language(lang))`.
+    /// This binding's own configured feature set, already expanded (and unioned with the core
+    /// crate's own declared defaults where active) via
+    /// `codegen::cfg::enabled_features_for_language(config, lang)`.
     ///
     /// Used only to decide whether a FOREIGN-owned cfg-gated enum variant (one whose defining
     /// crate is not this binding's core crate, so this crate cannot declare the dependency's own

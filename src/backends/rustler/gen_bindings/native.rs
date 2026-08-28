@@ -35,8 +35,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
     // provably unreachable for this binding -- see
     // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
-    let enabled_features =
-        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Elixir));
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Elixir);
 
     let elixir_config = config.elixir.as_ref();
     let exclude_functions: AHashSet<String> = elixir_config

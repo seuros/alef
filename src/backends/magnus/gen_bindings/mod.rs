@@ -115,8 +115,7 @@ impl Backend for MagnusBackend {
         // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
         // provably unreachable for this binding -- see
         // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
-        let enabled_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Ruby));
+        let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Ruby);
 
         let exclude_functions: std::collections::HashSet<&str> = config
             .ruby

@@ -116,8 +116,7 @@ impl Backend for NapiBackend {
         // This binding's own configured feature set (already expanded through the core crate's
         // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
         // provably unreachable for this binding -- see `codegen::conversions::enum_variant_declaration`.
-        let enabled_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Node));
+        let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Node);
         let configured_features_set: std::collections::HashSet<&str> =
             enabled_features.iter().map(String::as_str).collect();
 

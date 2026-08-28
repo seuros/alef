@@ -213,8 +213,7 @@ fn emit_lib_rs(
     // which host-owned cfg-gated methods this bridge crate can expose unconditionally -- the
     // wrong question for a FOREIGN variant's reachability, which needs the real configured
     // feature list instead. ~keep
-    let configured_enum_features =
-        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Swift));
+    let configured_enum_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Swift);
 
     let type_paths = build_type_path_lookup(api);
 

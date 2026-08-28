@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(codegen): count the core crate's own `default` features as enabled. `expand_configured_features` took `core_feature_closure(..).0` and discarded `.1`, while no binding's base Cargo dependency edge on the core crate emits `default-features = false` (only per-target overrides can, and R alone has a base toggle). A foreign cfg-gated enum variant reachable only through a core `default` feature was therefore "proven" unreachable, its match arm was dropped, and the catch-all with it -- a non-exhaustive match, `error[E0004]`, in generated binding crates. Adds `core_default_features_active`/`enabled_features_for_language`/`enabled_features_from` and routes every backend call site through them; R still honours a genuine `default_features = false` with a non-empty replacement list.
+
 ## [0.72.0] - 2026-08-28
 
 ### Changed (BREAKING)

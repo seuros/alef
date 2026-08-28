@@ -88,8 +88,7 @@ impl Backend for Pyo3Backend {
         // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
         // provably unreachable for this binding -- see
         // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
-        let enabled_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Python));
+        let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Python);
 
         let output_dir = resolve_output_dir(config.output_paths.get("python"), &config.name, "crates/{name}-py/src/");
         let has_serde = crate_has_serde(config);

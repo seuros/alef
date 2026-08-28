@@ -3,6 +3,7 @@ use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
 use tracing_test::traced_test;
 
 mod drift;
+mod enabled_features;
 mod feature_forwarding;
 
 #[test]

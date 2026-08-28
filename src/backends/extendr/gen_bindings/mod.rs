@@ -61,8 +61,7 @@ impl Backend for ExtendrBackend {
         // host-owned cfg-gated functions/fields `extendr_module!` can expose unconditionally --
         // the wrong question for a FOREIGN variant's reachability, which needs the real
         // configured feature list instead. ~keep
-        let configured_enum_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::R));
+        let configured_enum_features = crate::codegen::cfg::enabled_features_for_language(config, Language::R);
         let core_import = config.core_import_name();
         let type_paths = build_type_path_lookup(api);
         // Sorted by name: `api.enums`' incoming order reflects source-extraction order, which is

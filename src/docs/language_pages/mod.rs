@@ -148,7 +148,7 @@ pub(super) fn generate_lang_doc(
 ///   features that are implicitly enabled.
 /// - Every other language uses its configured feature list, resolved through the
 ///   core crate's own `[features]` table by
-///   [`crate::codegen::cfg::expand_configured_features`]. A configured umbrella
+///   [`crate::codegen::cfg::enabled_features_for_language`]. A configured umbrella
 ///   such as `wasm-target` is a real, documented shape here, and only `full` is
 ///   a hard-coded universal satisfier in `cfg_feature_satisfied` — so matching
 ///   the umbrella literally would document away every `#[cfg(feature =
@@ -157,10 +157,9 @@ pub(super) fn generate_lang_doc(
 ///   must use the identical derivation or the reference pages contradict the
 ///   binding they describe. ~keep
 pub(crate) fn effective_docs_features(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Language) -> Vec<String> {
-    let mut features: HashSet<String> =
-        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(lang))
-            .into_iter()
-            .collect();
+    let mut features: HashSet<String> = crate::codegen::cfg::enabled_features_for_language(config, lang)
+        .into_iter()
+        .collect();
 
     let excluded_default: Option<&[String]> = match lang {
         Language::Swift => config.swift.as_ref().map(|c| c.excluded_default_features.as_slice()),

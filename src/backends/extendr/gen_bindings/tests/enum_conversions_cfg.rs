@@ -38,6 +38,44 @@ fn make_config_with_feature(configured_feature: &str) -> ResolvedCrateConfig {
     cfg.resolve().unwrap().remove(0)
 }
 
+/// Like [`make_config_with_feature`], but backed by a REAL core-crate `Cargo.toml` on disk whose
+/// `[features]` body is given verbatim, with `[crates.r]` configuring NO explicit `features` at
+/// all -- the exact shape of alef-task #557's regression: a core crate whose `default = [...]`
+/// enables the gating feature, and a binding `alef.toml` that never names it. `make_config`/
+/// `make_config_with_feature` set no `workspace_root`, so `core_feature_closure` has no manifest
+/// to read and this scenario is unreachable through them; a real on-disk manifest is required to
+/// exercise `core_default_features_active`/`enabled_features_for_language`'s union of the core
+/// crate's own declared defaults. ~keep
+fn make_config_with_core_default(dir: &std::path::Path, core_features_body: &str) -> ResolvedCrateConfig {
+    let core_dir = dir.join("crates").join("test-lib");
+    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+    std::fs::write(
+        core_dir.join("Cargo.toml"),
+        format!("[package]\nname = \"test-lib\"\n\n[features]\n{core_features_body}"),
+    )
+    .expect("write core Cargo.toml");
+
+    ResolvedCrateConfig {
+        workspace_root: Some(dir.to_path_buf()),
+        name: "test-lib".to_string(),
+        sources: vec![std::path::PathBuf::from("crates/test-lib/src/lib.rs")],
+        r: Some(crate::core::config::RConfig {
+            package_name: Some("testlib".to_string()),
+            features: None,
+            default_features: None,
+            serde_rename_all: None,
+            exclude_functions: Vec::new(),
+            exclude_types: Vec::new(),
+            rename_fields: std::collections::HashMap::new(),
+            run_wrapper: None,
+            extra_lint_paths: Vec::new(),
+            extra_makevars_prelude: Vec::new(),
+            extra_pkg_libs: Vec::new(),
+        }),
+        ..Default::default()
+    }
+}
+
 fn returning_function(name: &str, enum_name: &str) -> FunctionDef {
     FunctionDef {
         name: name.to_string(),
@@ -209,6 +247,46 @@ fn foreign_owned_cfg_gated_variant_not_proven_unreachable_keeps_catch_all() {
         out.contains("_ => Self::default(),"),
         "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
          match stays exhaustive, got:\n{out}"
+    );
+}
+
+/// THE E0004 REGRESSION (alef-task #557): the gating feature is never named in `[crates.r]` at
+/// all -- it reaches this binding purely through the core crate's own `[features] default =
+/// [...]`. Before `enabled_features_for_language` folded the core crate's declared defaults in,
+/// `expand_configured_features` was handed only `features_for_language(Language::R)` (empty
+/// here), so this foreign variant was wrongly "proven unreachable," its catch-all dropped -- and
+/// because the arm itself is unconditionally dropped regardless of ownership, the generated match
+/// was left non-exhaustive (`error[E0004]`) the moment cargo, which really does enable `backoff`
+/// via the core crate's own default, compiled the real variant in. ~keep
+#[test]
+fn foreign_owned_cfg_gated_variant_reachable_only_through_core_default_keeps_catch_all() {
+    let api = ApiSurface {
+        enums: vec![EnumDef {
+            name: "RetryPolicy".to_string(),
+            rust_path: "foreign_crate::RetryPolicy".to_string(),
+            variants: vec![
+                gated_variant("Standard", None),
+                gated_variant("Backoff", Some(r#"feature = "backoff""#)),
+            ],
+            ..Default::default()
+        }],
+        functions: vec![returning_function("get_retry_policy", "RetryPolicy")],
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = make_config_with_core_default(dir.path(), "default = [\"backoff\"]\nbackoff = []\n");
+
+    let out = generate_r_with_config(&api, &config);
+
+    assert!(
+        !out.contains("RetryPolicy::Backoff"),
+        "a foreign crate's cfg-gated variant must not be named anywhere in the conversion output:\n{out}"
+    );
+    assert!(
+        out.contains("_ => Self::default(),"),
+        "a foreign cfg-gated variant reachable only through the core crate's own `default = [...]` \
+         (never named in this binding's own `alef.toml`) must still keep the catch-all so the \
+         generated match stays exhaustive, got:\n{out}"
     );
 }
 

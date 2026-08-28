@@ -441,6 +441,65 @@ pub fn expand_configured_features(config: &ResolvedCrateConfig, requested: &[Str
         .collect()
 }
 
+/// Whether the core crate's own `[features] default = [...]` list ([`core_feature_closure`]'s
+/// second element) is active on `lang`'s BASE Cargo dependency edge to the core crate -- the
+/// single line every scaffolded binding crate emits before any `target_dep_overrides` branch is
+/// considered. A per-target `default_features = false` override (Dart, Swift, FFI, and JNI each
+/// support one) only ever narrows *that* cfg target's dependency edge -- see
+/// `scaffold::render_core_dep_with_overrides`, `scaffold::languages::ffi::render_core_dep`, and
+/// `scaffold::languages::jni`'s mirror of the same shape -- the base branch every other target
+/// compiles against always omits `default-features = false` entirely, so Cargo's own default
+/// (`default-features` omitted means `true`) applies and the core crate's declared `default`
+/// features are active.
+///
+/// R is the one language with a base-line (not per-target) knob: `[crates.r] default_features =
+/// false` can suppress defaults on its single core dependency line -- but only when there is a
+/// configured feature list to put in their place. `scaffold_r_cargo` keeps the plain,
+/// defaults-active line whenever `features_for_language(Language::R)` is empty, regardless of the
+/// flag, so this mirrors that same short-circuit rather than trusting the flag alone in isolation. ~keep
+#[must_use]
+pub fn core_default_features_active(config: &ResolvedCrateConfig, lang: Language) -> bool {
+    if lang != Language::R {
+        return true;
+    }
+    let core_default_features_configured = config.r.as_ref().and_then(|r| r.default_features).unwrap_or(true);
+    core_default_features_configured || config.features_for_language(Language::R).is_empty()
+}
+
+/// The feature set actually active on `lang`'s generated Rust source: `lang`'s own configured
+/// feature list ([`ResolvedCrateConfig::features_for_language`]), plus -- when
+/// [`core_default_features_active`] confirms `lang`'s base Cargo dependency edge keeps the core
+/// crate's own defaults active -- the core crate's declared `default = [...]` list, all expanded
+/// through the core crate's `[features]` aggregate graph via [`expand_configured_features`].
+///
+/// [`expand_configured_features`] alone only expands exactly the list a caller hands it: a caller
+/// that passes just `features_for_language(lang)` silently drops every `#[cfg(feature = "X")]`
+/// item whose `X` reaches this binding purely through the core crate's OWN `default = [...]`,
+/// never named in the binding's `alef.toml` at all. For a FOREIGN-owned cfg-gated enum variant
+/// that gap is not merely a missing item: the variant's match arm is unconditionally dropped
+/// regardless (a binding crate can never declare a Cargo feature it does not own -- see
+/// `codegen::conversions::enums::emit_cfg_gated_arm`), so the catch-all that would otherwise keep
+/// the match exhaustive is the only thing standing between "compiles" and `error[E0004]:
+/// non-exhaustive patterns`. `enum_conversion_needs_catch_all_for_features` drops that catch-all
+/// the moment this feature set fails to prove the variant reachable, so under-counting here turns
+/// directly into a build break in generated output, not merely a warning. ~keep
+#[must_use]
+pub fn enabled_features_for_language(config: &ResolvedCrateConfig, lang: Language) -> Vec<String> {
+    enabled_features_from(config, lang, config.features_for_language(lang))
+}
+
+/// Like [`enabled_features_for_language`], for a caller that has already assembled its own
+/// requested feature list (e.g. [`effective_ffi_default_features`], which is not
+/// `features_for_language` verbatim) rather than reading it straight off `alef.toml`.
+#[must_use]
+pub fn enabled_features_from(config: &ResolvedCrateConfig, lang: Language, requested: &[String]) -> Vec<String> {
+    let mut combined = requested.to_vec();
+    if core_default_features_active(config, lang) {
+        combined.extend(crate::scaffold::core_feature_closure(config, &[]).1);
+    }
+    expand_configured_features(config, &combined)
+}
+
 /// Render a Cargo `[features]` table body forwarding every name in `features` into
 /// `core_crate_name` -- one `default = [...]` line listing every name not in
 /// `excluded_default_features`, followed by one `<feature> = ["<core_crate_name>/<feature>"]`
@@ -694,7 +753,9 @@ pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Langu
 ///   configured list that satisfies no gate produces, and the one worth naming precisely. ~keep
 ///
 /// Both sides are expanded through the core crate's `[features]` table (via
-/// [`expand_configured_features`]) before any gate is evaluated. This is not optional symmetry:
+/// [`enabled_features_for_language`]/[`enabled_features_from`], which additionally fold in the
+/// core crate's own declared defaults per [`core_default_features_active`]) before any gate is
+/// evaluated. This is not optional symmetry:
 /// `backends::go`/`java`/`csharp`/`kotlin`/`zig`/`wasm` all resolve their OWN `enabled_features`
 /// through [`expand_configured_features`] before calling `with_cfg_filtered_deep` (see
 /// `fix(backends): expand configured aggregate features before cfg filtering`). A binding
@@ -723,9 +784,9 @@ pub fn warn_on_ffi_feature_drift(api: &ApiSurface, config: &ResolvedCrateConfig,
     if lang == Language::Ffi {
         return;
     }
-    let binding_owned = expand_configured_features(config, config.features_for_language(lang));
+    let binding_owned = enabled_features_for_language(config, lang);
     let binding_enabled: HashSet<&str> = binding_owned.iter().map(String::as_str).collect();
-    let ffi_owned = expand_configured_features(config, &effective_ffi_default_features(api, config));
+    let ffi_owned = enabled_features_from(config, Language::Ffi, &effective_ffi_default_features(api, config));
     let cdylib_enabled: HashSet<&str> = ffi_owned.iter().map(String::as_str).collect();
 
     let mut unsafe_gates: BTreeSet<String> = BTreeSet::new();

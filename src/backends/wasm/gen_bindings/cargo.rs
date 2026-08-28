@@ -88,8 +88,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
         // gated items out of the wasm crate even though the core dep line turns their core-side
         // features on. The codegen filter in `mod.rs` expands the same list, so both derivations
         // must read from the expansion or the manifest and the emitted source disagree. ~keep
-        let expanded_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Wasm));
+        let expanded_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Wasm);
         let enabled_binding_features: Vec<&str> = expanded_features
             .iter()
             .map(String::as_str)

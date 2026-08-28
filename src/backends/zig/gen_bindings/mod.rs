@@ -162,8 +162,7 @@ impl Backend for ZigBackend {
         }
         let api = api.with_deduped_functions();
         crate::codegen::cfg::warn_on_ffi_feature_drift(&api, config, Language::Zig);
-        let zig_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Zig));
+        let zig_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Zig);
         let enabled_features: std::collections::HashSet<&str> = zig_features.iter().map(String::as_str).collect();
         // `@cImport` compiles the C header verbatim and Zig resolves declared externs at
         // comptime/link time — same failure mode as Go's cgo: a function/type/enum the FFI
@@ -425,8 +424,7 @@ impl Backend for ZigBackend {
     /// differs from the ordinary wrapper's. ~keep
     fn public_function_signatures(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<EmittedSignature> {
         let api = api.with_deduped_functions();
-        let zig_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Zig));
+        let zig_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Zig);
         let enabled_features: std::collections::HashSet<&str> = zig_features.iter().map(String::as_str).collect();
         let api = api.with_cfg_filtered_deep(&enabled_features);
 
@@ -470,8 +468,7 @@ impl Backend for ZigBackend {
         // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
         let sorted_api = crate::backends::ir_order::with_sorted_items(api);
         let api = &sorted_api;
-        let zig_features =
-            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Zig));
+        let zig_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Zig);
         let enabled_features: std::collections::HashSet<&str> = zig_features.iter().map(String::as_str).collect();
         let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
         service_api::generate(&filtered_api, config)

@@ -272,16 +272,15 @@ fn android_project_file(root: &Path, relative_path: &str, content: String) -> Ge
 /// The cfg-visible API surface for this backend, filtered by the features the Android artifact
 /// is actually built with.
 ///
-/// The configured list is expanded through
-/// [`crate::codegen::cfg::expand_configured_features`] before it is used as the enabled-feature
-/// set. `with_cfg_filtered_deep` matches a `#[cfg(feature = "X")]` gate against that set
+/// The configured list is expanded, and unioned with the core crate's own declared defaults where
+/// active, through [`crate::codegen::cfg::enabled_features_for_language`] before it is used as the
+/// enabled-feature set. `with_cfg_filtered_deep` matches a `#[cfg(feature = "X")]` gate against that set
 /// LITERALLY, so a consumer who names a core-crate aggregate (the `android-target` shape) under
 /// `[crates.kotlin_android].features` would otherwise have every `#[cfg(feature = "<member>")]`
 /// item dropped from the Android surface even though cargo compiles them — silent underexposure
 /// with no diagnostic, and disagreement with the JNI shim gate, which already expands. ~keep
 fn effective_codegen_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
-    let expanded =
-        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::KotlinAndroid));
+    let expanded = crate::codegen::cfg::enabled_features_for_language(config, Language::KotlinAndroid);
     let enabled_features: std::collections::HashSet<&str> = expanded.iter().map(String::as_str).collect();
     let mut api = api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions();
     if let Some(android) = &config.kotlin_android {

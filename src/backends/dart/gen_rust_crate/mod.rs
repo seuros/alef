@@ -138,8 +138,7 @@ fn emit_lib_rs(
     // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
     // provably unreachable for this binding -- see
     // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
-    let configured_features =
-        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Dart));
+    let configured_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Dart);
 
     let mut content = String::new();
     // BEFORE the #![allow] attrs (which would make those attrs invalid per E0753).

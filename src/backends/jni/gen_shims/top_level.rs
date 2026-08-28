@@ -74,11 +74,11 @@ fn emit_jni_type_shims(
 /// `scaffold::languages::jni` emits the default branch's core dep through `render_core_dep` with
 /// no `default-features = false` suffix (unlike each `target_dep_overrides` branch, which gets one
 /// unless the override opts back in), so the core crate's own `default = [...]` list is always
-/// active on this branch and belongs in the enabled set. ~keep
+/// active on this branch and belongs in the enabled set -- exactly what
+/// [`crate::codegen::cfg::enabled_features_for_language`] computes generically for every language;
+/// delegating here keeps this backend from re-deriving the same union/expand pair by hand. ~keep
 fn jni_default_features(config: &ResolvedCrateConfig) -> Vec<String> {
-    let mut requested = config.features_for_language(Language::KotlinAndroid).to_vec();
-    requested.extend(core_default_features(config));
-    crate::codegen::cfg::expand_configured_features(config, &requested)
+    crate::codegen::cfg::enabled_features_for_language(config, Language::KotlinAndroid)
 }
 
 /// The core crate's own `[features] default = [...]` list, unexpanded.

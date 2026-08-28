@@ -4,7 +4,7 @@
 //! these depend on `WasmBackend` or `generate_bindings`'s own locals -- they were free functions
 //! sitting above the `impl Backend for WasmBackend` block, so the split is purely mechanical.
 
-use crate::codegen::cfg::expand_configured_features;
+use crate::codegen::cfg::enabled_features_for_language;
 use crate::codegen::shared;
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_layout};
 use crate::core::ir::{ApiSurface, ReceiverKind};
@@ -148,7 +148,7 @@ pub(super) fn function_is_exported(
     if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(function_name, &config.trait_bridges) {
         return false;
     }
-    let enabled_features = &expand_configured_features(config, config.features_for_language(Language::Wasm));
+    let enabled_features = &enabled_features_for_language(config, Language::Wasm);
     let core_import = config.core_import_for_language(Language::Wasm);
     let source_remaps = config
         .wasm
