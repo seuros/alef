@@ -66,6 +66,7 @@ fn listing_fixture(item: &str) -> Fixture {
             client: None,
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: Default::default(),
+            sample_url_vars: Default::default(),
         }),
         ..Fixture::default()
     }

@@ -25,8 +25,9 @@ pub(super) fn render_snippet_body(
     language: &str,
     context: &SnippetRenderContext<'_>,
     sample_base_url: DocsSampleBaseUrl<'_>,
+    sample_url_template: Option<&SampleUrlTemplate>,
 ) -> Result<RenderedSnippetBody> {
-    let docs_fixture = fixture.docs_call_fixture_with_sample_base_url(sample_base_url.base());
+    let docs_fixture = fixture.docs_call_fixture_with_sample_url(sample_base_url.base(), sample_url_template);
     for extension in extensions {
         if let Some(body) = extension
             .render_e2e_snippet(
@@ -53,7 +54,8 @@ pub(super) fn render_snippet_body(
         &docs_fixture.tags,
         &docs_fixture.input,
     );
-    let docs_fixture = mock_url_defaults::with_default_mock_url_literals(docs_fixture, call, sample_base_url);
+    let docs_fixture =
+        mock_url_defaults::with_default_mock_url_literals(docs_fixture, call, sample_base_url, sample_url_template);
     let fixture = &docs_fixture;
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
@@ -106,10 +108,16 @@ pub(super) fn render_snippet_body(
 /// Deliberately measured on the finished body rather than on what
 /// [`mock_url_defaults::with_default_mock_url_literals`] injected. A fixture that writes
 /// `"$mock_url"` in its own `docs.input` never reaches that injection branch -- the
-/// placeholder is already substituted by [`Fixture::docs_call_fixture_with_sample_base_url`]
-/// before the module runs, and the resulting absolute URL reads to it as an address the
-/// author chose. Reporting the injection would therefore stay silent about a snippet that
-/// does publish an unreachable address. The published text cannot.
+/// placeholder is already substituted by [`Fixture::docs_call_fixture_with_sample_url`] before
+/// the module runs, and the resulting absolute URL reads to it as an address the author chose.
+/// Reporting the injection would therefore stay silent about a snippet that does publish an
+/// unreachable address. The published text cannot.
+///
+/// This is also what makes per-fixture template resolution safe to add without touching this
+/// function at all: a templated address that resolved successfully never contains
+/// `sample_base_url`'s text, so it never trips this check, and an unresolved occurrence falls
+/// back to `sample_base_url` -- which does -- so the placeholder warning still fires for
+/// exactly the fixtures a template cannot actually resolve. ~keep
 fn rendered(body: String, sample_base_url: DocsSampleBaseUrl<'_>) -> RenderedSnippetBody {
     let used_placeholder_sample_url = sample_base_url.is_placeholder() && body.contains(sample_base_url.base());
     RenderedSnippetBody {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat(e2e): `[crates.e2e.snippets].sample_url_template` and per-fixture `docs.sample_url_vars`, so a documentation sample URL can be resolved from facts about the fixture rather than from its mock path alone. `sample_base_url` can express only a flat prefix concatenated with a fixture's mock path, which structurally cannot address a content-addressed corpus where an object's real URL depends on a digest or bucket key. The template renders `{path}` against every fixture and every other placeholder against that fixture's own `docs.sample_url_vars`. Purely additive: unset, every fixture resolves exactly as before; configured but unsatisfied by a given fixture, that fixture falls back to `sample_base_url` -- and to the reserved-domain placeholder warning when that is also unconfigured, so this cannot silence the warning it exists to make fixable.
+
 ### Fixed
 
 - fix(snippets): recognize the standard documentation fence labels `html`/`htm`, `css`, `ini`, `makefile`/`make`, `mdx`, `nginx`, `groovy`, `sql`, `diff`, `md`, `svg`, `gradle` and the rest of the display vocabulary in `alef snippets audit`. `097724925` deleted the `is_known_display_tag` allowlist while fixing a different bug -- it was being used to *error* on any tag absent from it, which failed a run on a legitimate ```astro fence -- and once `a83a1ce44` added the warning tier, every name that list had covered started emitting a false-positive `UnrecognizedFenceLanguage`. The vocabulary is restored in a tier that only suppresses a finding, so it can no longer fail anything, and the names `Language::from_fence_tag` already resolves are left out rather than duplicated as dead arms. A tag alef genuinely cannot identify (a typo like `pyhton`) still warns.

@@ -566,6 +566,7 @@ mod tests {
             client: None,
             side_effects: crate::e2e::fixture::SideEffectClass::Safe,
             coverage_exceptions: Default::default(),
+            sample_url_vars: Default::default(),
         });
         let e2e = E2eConfig {
             call: CallConfig {

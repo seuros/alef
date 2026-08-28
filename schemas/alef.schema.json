@@ -6790,7 +6790,7 @@
       "properties": {
         "acknowledged_warnings": {
           "default": [],
-          "description": "Narrow, per-fixture/target acknowledgements for the reserved-placeholder-domain warning\n(task #540). Each entry silences exactly one fixture id publishing the placeholder for\nexactly one target language -- never every fixture, never every language. An entry that\nstops matching (because the fixture no longer publishes the placeholder for that target)\nfails the run rather than lingering as a no-op; see\n`crate::core::warning_ack::AcknowledgementLedger`. Configuring `sample_base_url` above\nremains the actual fix; this exists for fixtures whose sample input is genuinely\nreserved/non-routable documentation content on purpose.",
+          "description": "Narrow, per-fixture/target acknowledgements for the reserved-placeholder-domain warning\n(task #540). Each entry silences exactly one fixture id publishing the placeholder for\nexactly one target language -- never every fixture, never every language. An entry that\nstops matching (because the fixture no longer publishes the placeholder for that target)\nfails the run rather than lingering as a no-op; see\n`crate::core::warning_ack::AcknowledgementLedger`. Configuring `sample_base_url` or\n`sample_url_template` above remains the actual fix; this exists for fixtures whose\nsample input is genuinely reserved/non-routable documentation content on purpose.",
           "items": {
             "$ref": "#/$defs/WarningAcknowledgement"
           },
@@ -6823,6 +6823,14 @@
         "sample_base_url": {
           "default": null,
           "description": "Public base URL the generated *documentation* snippets bind for a fixture's\n`mock_url` / `mock_url_list` arguments, e.g. `\"https://samples.example.org\"`.\n\nDocumentation-only: the executable e2e suite keeps binding the per-fixture mock\nserver, so configuring this can never send a generated test to the network. Unset\nfalls back to `https://example.com`, the reserved documentation domain, and the\nsnippet run reports every fixture whose published snippet carries it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sample_url_template": {
+          "default": null,
+          "description": "A per-fixture URL template, e.g. `\"https://cdn.example.org/objects/{digest}\"`, resolved\nagainst a fixture's mock-relative path (`{path}`) and its own `docs.sample_url_vars` for\nevery other placeholder (see [`crate::core::config::e2e::SampleUrlTemplate`]).\n\n`sample_base_url` above can express only one shape of address: a flat prefix\nconcatenated with a fixture's mock path. That is structurally insufficient for a\ncontent-addressed sample corpus, where an object's real address depends on a fact about\nthat object (a digest, a bucket key, ...), not on its mock path alone. This field is\nadditive: unset, every fixture resolves exactly as it does today through\n`sample_base_url`. Configured, a fixture whose `docs.sample_url_vars` supply what the\ntemplate needs publishes the templated address; a fixture that does not still falls\nback to `sample_base_url` -- and to the reserved-domain placeholder when that is also\nunconfigured -- so the placeholder warning still fires for it.",
           "type": [
             "string",
             "null"

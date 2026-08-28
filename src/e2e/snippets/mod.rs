@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SnippetConfig};
+use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SampleUrlTemplate, SnippetConfig};
 use crate::core::config::warning_ack::{AcknowledgeableWarningCategory, WarningAcknowledgement};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
@@ -314,6 +314,11 @@ fn generate_snippet_report_with_extensions(
     let sample_base_url = snippets
         .docs_sample_base_url()
         .map_err(|error| anyhow::anyhow!("invalid documentation sample base URL: {error}"))?;
+    // Resolved alongside `sample_base_url`, for the same reason: an unusable template must fail
+    // the run before anything renders, not reach documentation as a broken address. ~keep
+    let sample_url_template: Option<SampleUrlTemplate> = snippets
+        .sample_url_template()
+        .map_err(|error| anyhow::anyhow!("invalid documentation sample URL template: {error}"))?;
     // Pin the *previous* run's ownership record before this run computes, let alone writes,
     // anything. `e2e::run` hands the freshly computed ledger to the same write batch as the
     // snippets, and `.alef-snippet-coverage.json` sorts ahead of every sibling snippet directory
@@ -421,6 +426,7 @@ fn generate_snippet_report_with_extensions(
                 language,
                 context,
                 sample_base_url,
+                sample_url_template.as_ref(),
             ) {
                 Ok(rendered) => rendered,
                 Err(error) => {

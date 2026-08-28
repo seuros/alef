@@ -19,6 +19,7 @@ fn snippet_paths_reject_traversal() {
         client: None,
         side_effects: Default::default(),
         coverage_exceptions: BTreeMap::new(),
+        sample_url_vars: Default::default(),
     };
     assert!(
         snippet_path(
@@ -59,6 +60,7 @@ fn target_path_override_precedes_topic_and_stem() {
         client: None,
         side_effects: Default::default(),
         coverage_exceptions: BTreeMap::new(),
+        sample_url_vars: Default::default(),
     };
 
     assert_eq!(
@@ -116,6 +118,7 @@ fn generated_docs_use_validator_canonical_language_identity() {
         client: None,
         side_effects: SideEffectClass::Safe,
         coverage_exceptions: BTreeMap::new(),
+        sample_url_vars: Default::default(),
     };
     let cases = [
         ("node", Language::Node, "typescript", "typescript"),

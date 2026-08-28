@@ -11,6 +11,11 @@ use crate::core::config::NewAlefConfig;
 
 const SAMPLE_HOST: &str = "https://samples.example.org";
 
+/// A content-addressed template a URL-centric consumer's corpus needs -- `sample_base_url`
+/// cannot express this shape at all, since the object's real address depends on a fact about
+/// the object (here `{digest}`), not on the fixture's mock path.
+const CONTENT_ADDRESSED_TEMPLATE: &str = "https://cdn.example.org/objects/{digest}";
+
 /// A fixture with a `mock_url` argument, documentation metadata, and a relative input path
 /// -- the shape a URL-centric consumer's fixtures actually have.
 fn url_fixture() -> Fixture {
@@ -22,6 +27,18 @@ fn url_fixture() -> Fixture {
         "docs": {"topic": "contract", "side_effects": "network"},
     }))
     .expect("fixture must parse")
+}
+
+/// [`url_fixture`], additionally declaring the fact [`CONTENT_ADDRESSED_TEMPLATE`] needs --
+/// the shape a fixture author writes once so their own corpus's real address reaches
+/// published documentation.
+fn url_fixture_with_digest(digest: &str) -> Fixture {
+    let mut fixture = url_fixture();
+    fixture.docs = Some(crate::e2e::fixture::FixtureDocs {
+        sample_url_vars: std::collections::BTreeMap::from([("digest".to_string(), digest.to_string())]),
+        ..fixture.docs.expect("url_fixture always carries docs")
+    });
+    fixture
 }
 
 fn url_e2e_config() -> (E2eConfig, ResolvedCrateConfig) {
@@ -61,6 +78,32 @@ fn python_snippet_report(sample_base_url: Option<&str>) -> SnippetGenerationRepo
     };
     generate_snippet_report_with_extensions(&[url_fixture()], &["python".into()], &snippet_config, &context, &[])
         .expect("python snippet report renders")
+}
+
+/// As [`python_snippet_report`], but also configuring `sample_url_template` and taking the
+/// fixture set explicitly, so the per-fixture template tests can drive a mix of fixtures that
+/// do and do not supply what the template needs.
+fn python_snippet_report_with_template(
+    sample_base_url: Option<&str>,
+    sample_url_template: Option<&str>,
+    fixtures: &[Fixture],
+) -> Result<SnippetGenerationReport> {
+    let (e2e, crate_config) = url_e2e_config();
+    let snippet_config = SnippetConfig {
+        output: "docs/snippets".into(),
+        sample_base_url: sample_base_url.map(str::to_string),
+        sample_url_template: sample_url_template.map(str::to_string),
+        ..SnippetConfig::default()
+    };
+    let context = SnippetRenderContext {
+        e2e: &e2e,
+        crate_config: &crate_config,
+        type_defs: &[],
+        enums: &[],
+        functions: &[],
+        errors: &[],
+    };
+    generate_snippet_report_with_extensions(fixtures, &["python".into()], &snippet_config, &context, &[])
 }
 
 fn only_snippet_content(report: &SnippetGenerationReport) -> &str {
@@ -152,6 +195,84 @@ fn an_explicit_mock_url_placeholder_resolves_against_the_configured_sample_base_
     assert!(
         !content.contains("$mock_url"),
         "no unresolved placeholder may reach published documentation:\n{content}"
+    );
+}
+
+/// The measured defect this feature exists to fix: `sample_base_url` can only express a flat
+/// prefix concatenated with a fixture's mock path, which cannot produce a content-addressed
+/// URL. With `[crates.e2e.snippets].sample_url_template` configured and this fixture supplying
+/// the digest the template needs, the published snippet carries the fixture's own resolved
+/// address instead of any flat base.
+#[test]
+fn a_fixture_with_a_configured_template_and_matching_vars_publishes_its_own_url() {
+    let report = python_snippet_report_with_template(
+        None,
+        Some(CONTENT_ADDRESSED_TEMPLATE),
+        &[url_fixture_with_digest("9f86d081884c7d659a2feaa0c55ad015")],
+    )
+    .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://cdn.example.org/objects/9f86d081884c7d659a2feaa0c55ad015"),
+        "the published snippet must carry the fixture's own templated address:\n{content}"
+    );
+    assert!(
+        !content.contains("example.com"),
+        "no trace of the reserved placeholder may survive a fully resolved template:\n{content}"
+    );
+    assert!(
+        report.placeholder_sample_url_fixtures.is_empty(),
+        "a fully resolved template has no placeholder to report"
+    );
+}
+
+/// The regression guard: a fixture that declares none of the facts a configured template
+/// needs falls back to `sample_base_url` exactly as it did before per-fixture templates
+/// existed -- a template being available in general must never change behavior for a fixture
+/// that does not participate in it.
+#[test]
+fn a_fixture_without_matching_vars_falls_back_to_sample_base_url_unchanged() {
+    let report =
+        python_snippet_report_with_template(Some(SAMPLE_HOST), Some(CONTENT_ADDRESSED_TEMPLATE), &[url_fixture()])
+            .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://samples.example.org/pdf/report.pdf"),
+        "a fixture missing the template's required facts must keep publishing the flat \
+         sample_base_url address:\n{content}"
+    );
+    assert!(
+        !content.contains("cdn.example.org"),
+        "no templated address may appear for a fixture that never supplied what the template \
+         needed:\n{content}"
+    );
+    assert!(
+        report.placeholder_sample_url_fixtures.is_empty(),
+        "a configured sample_base_url has no placeholder to report, template or not"
+    );
+}
+
+/// The case that keeps this feature from becoming a silencer: a template is configured, but
+/// this fixture supplies none of the facts it needs, and the project configures no
+/// `sample_base_url` either -- the fixture must still publish the reserved placeholder and the
+/// run must still warn about it, exactly as an unconfigured project always has.
+#[test]
+fn a_fixture_with_neither_template_vars_nor_sample_base_url_still_warns() {
+    let report = python_snippet_report_with_template(None, Some(CONTENT_ADDRESSED_TEMPLATE), &[url_fixture()])
+        .expect("python snippet report renders");
+    let content = only_snippet_content(&report);
+
+    assert!(
+        content.contains("https://example.com/pdf/report.pdf"),
+        "an unresolved fixture must keep publishing the reserved placeholder address:\n{content}"
+    );
+    assert_eq!(
+        report.placeholder_sample_url_fixtures,
+        vec!["extract_uri".to_string()],
+        "a template being configured must not silence the placeholder warning for a fixture it \
+         cannot actually resolve"
     );
 }
 
@@ -247,6 +368,20 @@ fn an_unusable_sample_base_url_fails_generation_naming_the_config_key() {
     let message = format!("{error:#}");
     assert!(
         message.contains("sample_base_url"),
+        "the error must name the key to fix: {message}"
+    );
+}
+
+/// The template's counterpart: a `sample_url_template` that cannot form a URL fails the run
+/// before anything renders, the same posture `sample_base_url` takes.
+#[test]
+fn an_unusable_sample_url_template_fails_generation_naming_the_config_key() {
+    let error = python_snippet_report_with_template(None, Some("cdn.example.org/objects/{digest}"), &[url_fixture()])
+        .expect_err("a scheme-less template cannot be published");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("sample_url_template"),
         "the error must name the key to fix: {message}"
     );
 }

@@ -55,6 +55,18 @@ pub struct FixtureDocs {
     pub side_effects: SideEffectClass,
     #[serde(default)]
     pub coverage_exceptions: BTreeMap<String, SnippetCoverageException>,
+    /// Facts this fixture supplies for `[crates.e2e.snippets].sample_url_template` placeholders
+    /// other than `{path}` (see `crate::core::config::e2e::SampleUrlTemplate`), e.g.
+    /// `{"digest": "9f86d081..."}` for a template shaped
+    /// `"https://cdn.example.org/objects/{digest}"`.
+    ///
+    /// Kept on the fixture rather than a separate corpus-manifest file the run would have to
+    /// read and keep in sync: the fact that decides this fixture's own address belongs beside
+    /// the fixture it describes. Unused, and harmless to leave empty, when the project
+    /// configures no `sample_url_template` at all -- resolution then falls back to
+    /// `sample_base_url` exactly as it always has.
+    #[serde(default)]
+    pub sample_url_vars: BTreeMap<String, String>,
 }
 
 /// How a documentation snippet constructs its client, for fixtures whose subject
@@ -308,6 +320,23 @@ mod tests {
         let docs: FixtureDocs =
             serde_json::from_value(serde_json::json!({"topic": "configuration"})).expect("fixture docs deserialize");
         assert_eq!(docs.client, None);
+    }
+
+    #[test]
+    fn sample_url_vars_default_to_empty_and_deserialize_when_declared() {
+        let bare: FixtureDocs =
+            serde_json::from_value(serde_json::json!({"topic": "configuration"})).expect("fixture docs deserialize");
+        assert!(bare.sample_url_vars.is_empty());
+
+        let with_vars: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "sample_url_vars": {"digest": "9f86d081884c7d659a2feaa0c55ad015"}
+        }))
+        .expect("fixture docs with sample_url_vars deserialize");
+        assert_eq!(
+            with_vars.sample_url_vars.get("digest").map(String::as_str),
+            Some("9f86d081884c7d659a2feaa0c55ad015")
+        );
     }
 
     #[test]
