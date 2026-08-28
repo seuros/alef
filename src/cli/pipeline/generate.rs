@@ -9,11 +9,16 @@ mod orphans;
 mod scaffold;
 mod scaffold_drift;
 #[cfg(test)]
+mod scaffold_lockfile_relock_tests;
+#[cfg(test)]
 mod scaffold_write_finalize_idempotency_tests;
 #[cfg(test)]
 mod tests;
 mod validation;
 mod write;
+
+use crate::core::backend::GeneratedFile;
+use std::path::Path;
 
 pub(crate) use binary::{decode_base64_binary, is_base64_binary_output};
 pub use diff::diff_files;
@@ -23,10 +28,7 @@ pub use normalization::normalize_content;
 pub use orphans::{
     collect_alef_headered_paths, generate_sweep_roots, sweep_manifest_orphans, sweep_orphans, targeted_e2e_sweep_roots,
 };
-pub use scaffold::{
-    readme, reconcile_managed_scaffold_manifests, scaffold, write_scaffold_files, write_scaffold_files_report,
-    write_scaffold_files_with_overwrite,
-};
+pub use scaffold::{readme, reconcile_managed_scaffold_manifests, scaffold};
 pub use scaffold_drift::find_create_once_template_drift;
 pub use write::{WriteReport, report_refused_writes};
 pub(crate) use write::{
@@ -40,3 +42,37 @@ pub use write::{
 
 #[cfg(test)]
 use normalization::{detect_crate_edition, parse_package_edition};
+
+/// Like [`scaffold::write_scaffold_files_report`], but also relocks any `Cargo.lock` sitting
+/// beside an alef-generated `Cargo.toml` this call actually changed.
+///
+/// Every caller of `write_scaffold_files*` funnels through this one entry point (the other two
+/// functions below both delegate here), so wrapping it covers `alef build`, `alef generate`,
+/// `alef scaffold`, and version-sync's own scaffold regen alike -- see
+/// [`super::version_lockfiles::relock_lockfiles_beside_changed_manifests`] for why this hook
+/// exists and why it is scoped to only the manifests this call rewrote.
+pub fn write_scaffold_files_report(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+    overwrite: bool,
+) -> anyhow::Result<WriteReport> {
+    let report = scaffold::write_scaffold_files_report(files, base_dir, overwrite)?;
+    super::version_lockfiles::relock_lockfiles_beside_changed_manifests(&report.changed_paths);
+    Ok(report)
+}
+
+/// Like [`write_scaffold_files_report`] above but returns a bare changed-file count.
+pub fn write_scaffold_files_with_overwrite(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+    overwrite: bool,
+) -> anyhow::Result<usize> {
+    Ok(write_scaffold_files_report(files, base_dir, overwrite)?.changed_count())
+}
+
+/// Like [`write_scaffold_files_with_overwrite`] above with `overwrite: false` -- scaffold files
+/// stay create-only, so an existing file a human may have grown past its placeholder is left
+/// alone.
+pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow::Result<usize> {
+    write_scaffold_files_with_overwrite(files, base_dir, false)
+}

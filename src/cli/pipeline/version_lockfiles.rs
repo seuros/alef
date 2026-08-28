@@ -10,7 +10,8 @@
 //! `crate::cli::commands::version_manifests::discover_cargo_locks` the validator uses, so the
 //! write set and the validate set cannot drift into checking a different set of files again.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::cli::commands::version_manifests::discover_cargo_locks;
@@ -47,6 +48,37 @@ pub(super) fn relock_cargo_lockfiles(canonical: &str) {
     }
 }
 
+/// Relock the `Cargo.lock` sitting beside a nested, alef-generated `Cargo.toml` (a Ruby, R, or
+/// Elixir native-extension manifest -- never a root workspace member) immediately after this
+/// write actually changed that manifest's content on disk.
+///
+/// [`relock_cargo_lockfiles`] above only ever runs from `sync_versions`, the version-bump
+/// pipeline. But a nested binding-crate manifest is `generated_header: true` and gets rewritten
+/// on every ordinary `alef build`/`alef generate`/`alef scaffold` too -- completely independent
+/// of a version bump, whenever a dependency constraint in it changes (a template dependency
+/// version bump, an added feature, a config edit). Nothing relocked the sibling lockfile on
+/// that path, so `cargo check --locked` against the freshly regenerated manifest could fail
+/// immediately with no version bump involved at all -- the manifest widened or tightened a
+/// requirement the lockfile's existing pin no longer satisfies. Scoped to `changed_paths`
+/// (never a full-tree walk like `relock_cargo_lockfiles`) so a routine build only ever pays for
+/// the manifests it actually rewrote, not every lockfile in the repo. ~keep
+pub(super) fn relock_lockfiles_beside_changed_manifests(changed_paths: &HashSet<PathBuf>) {
+    for path in changed_paths {
+        if path.file_name().and_then(|name| name.to_str()) != Some("Cargo.toml") {
+            continue;
+        }
+        let Some(dir) = path.parent() else {
+            continue;
+        };
+        let lock_path = dir.join("Cargo.lock");
+        if !lock_path.exists() {
+            continue;
+        }
+        info!("Relocking {} after its generated manifest changed", lock_path.display());
+        relock_one(dir, &lock_path);
+    }
+}
+
 /// Best-effort, like the other lockfile-refresh commands `sync_versions` already runs
 /// (`pnpm install`, `composer update`, `mix deps.get`): a missing `cargo` binary or a lockfile
 /// that fails to resolve offline must not abort the whole version sync.
@@ -61,14 +93,16 @@ fn relock_one(dir: &Path, lock_path: &Path) {
             warn!(
                 lock = %lock_path.display(),
                 code = ?status.code(),
-                "version-sync: cargo update --offline -w failed for this lockfile"
+                "cargo update --offline -w failed for this lockfile; it may still be stale against \
+                 its manifest. Re-run `cargo update` in that directory with network access if a \
+                 later `cargo check --locked` rejects it"
             );
         }
         Err(error) => {
             warn!(
                 lock = %lock_path.display(),
                 %error,
-                "version-sync: could not run cargo update for this lockfile"
+                "could not run cargo update for this lockfile; it may still be stale against its manifest"
             );
         }
     }

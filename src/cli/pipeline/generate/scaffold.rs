@@ -54,20 +54,6 @@ pub fn readme(
     crate::readme::generate_readmes(api, config, languages)
 }
 
-/// Write standalone generated files (not grouped by language) to disk.
-///
-/// Scaffold files are create-only by default: if the target file already exists
-/// on disk it is left untouched so that user customisations are preserved.
-/// Pass `overwrite = true` (e.g. via `--clean`) to force-write all files.
-///
-/// Files that carry the alef header marker (regenerated bindings, READMEs)
-/// will receive their `alef:hash:` line later via [`super::write::finalize_hashes`] —
-/// scaffold files without the marker (Cargo.toml templates, composer.json,
-/// gemspec) pass through unchanged.
-pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow::Result<usize> {
-    write_scaffold_files_with_overwrite(files, base_dir, false)
-}
-
 /// Reconcile generated manifests needed by generated bindings.
 ///
 /// Existing files are eligible only when their embedded marker proves Alef owns
@@ -101,32 +87,30 @@ pub fn reconcile_managed_scaffold_manifests(
             manifests.push(file.clone());
         }
     }
-    write_scaffold_files_report(&manifests, base_dir, false)
+    let report = write_scaffold_files_report(&manifests, base_dir, false)?;
+    // `alef generate` reaches manifest writes only through this function, never through the
+    // parent `generate` module's `write_scaffold_files*` wrappers -- so the relock hook has to
+    // be called here too, or a manifest `alef generate` regenerates (as opposed to `alef
+    // build`/`alef all`) would never get its sibling Cargo.lock refreshed. ~keep
+    super::super::version_lockfiles::relock_lockfiles_beside_changed_manifests(&report.changed_paths);
+    Ok(report)
 }
 
-/// Like [`write_scaffold_files`] but with an explicit `overwrite` flag.
+/// Write standalone generated files (not grouped by language) to disk, returning the full
+/// [`super::write::WriteReport`] (expected vs. actually-changed paths) instead of a bare count.
 ///
-/// Files marked `generated_header: true` are always overwritten regardless of the
-/// flag, *provided* [`write_scaffold_files_report`]'s ownership guard can prove alef
-/// authored the pre-existing content: these are fully alef-managed manifests
-/// (Cargo.toml, gemspec, composer.json) whose dependency lists are derived from
-/// `[workspace.languages]`, `[crates.*]`, and the active adapter set. Skipping them on
-/// regen means newly added streaming adapters or trait bridges never get their
-/// conditional deps (futures-util, futures, tokio sync features) appended, leaving the
-/// generated bindings referencing crates that aren't in `[dependencies]`. Files with
-/// `generated_header: false` are seeds (py.typed markers, sample test files,
-/// README.md placeholders) and stay create-only so user edits survive — see the
-/// ownership guard's doc for why this is now enforced even under `overwrite: true`.
-pub fn write_scaffold_files_with_overwrite(
-    files: &[GeneratedFile],
-    base_dir: &Path,
-    overwrite: bool,
-) -> anyhow::Result<usize> {
-    Ok(write_scaffold_files_report(files, base_dir, overwrite)?.changed_count())
-}
-
-/// Like [`write_scaffold_files`] but returns the full [`super::write::WriteReport`]
-/// (expected vs. actually-changed paths) instead of a bare count.
+/// Scaffold files are create-only by default: if the target file already exists on disk it is
+/// left untouched so that user customisations are preserved. Pass `overwrite = true` (e.g. via
+/// `--clean`) to force-write all files.
+///
+/// Two call paths reach this function: the parent `generate` module's
+/// [`super::write_scaffold_files`]/[`super::write_scaffold_files_with_overwrite`] wrappers (used
+/// by `alef build`/`alef all`/`alef scaffold`), and [`reconcile_managed_scaffold_manifests`]
+/// above (`alef generate`'s manifest-only path). Both relock any `Cargo.lock` beside a
+/// `Cargo.toml` this call actually changed, each calling
+/// [`crate::cli::pipeline::version_lockfiles::relock_lockfiles_beside_changed_manifests`] on the
+/// returned report rather than this function doing it once itself -- so a future third caller
+/// of this exact function needs to remember the same call, not get it for free.
 ///
 /// NEVER-STAMP / NEVER-OVERWRITE guard: for every file this run is about to write, if a
 /// file already exists on disk at that path with content alef cannot prove it authored,
