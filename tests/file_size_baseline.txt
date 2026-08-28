@@ -42,7 +42,6 @@ src/e2e/codegen/c/snippet_regressions.rs 1110
 src/e2e/codegen/c/test_function.rs 1860
 src/e2e/codegen/csharp.rs 1142
 src/e2e/codegen/csharp/assertions.rs 1312
-src/e2e/codegen/csharp/setup.rs 1002
 src/e2e/codegen/csharp/tests.rs 1257
 src/e2e/codegen/dart/test_case.rs 1181
 src/e2e/codegen/elixir/assertions.rs 1451
@@ -54,9 +53,9 @@ src/e2e/codegen/go/tests.rs 1397
 src/e2e/codegen/java/assertions.rs 1352
 src/e2e/codegen/kotlin/test_method.rs 1167
 src/e2e/codegen/kotlin/tests.rs 1241
-src/e2e/codegen/python/assertions.rs 1033
+src/e2e/codegen/python/assertions.rs 1027
 src/e2e/codegen/python/mod.rs 1373
-src/e2e/codegen/python/test_file.rs 1093
+src/e2e/codegen/python/test_file.rs 1066
 src/e2e/codegen/r/assertions.rs 1049
 src/e2e/codegen/ruby/examples.rs 1168
 src/e2e/codegen/rust/assertions.rs 1613
@@ -68,7 +67,7 @@ src/e2e/codegen/typescript/test_file/tests.rs 1569
 src/e2e/codegen/zig/assertions.rs 1317
 src/e2e/field_access/tests.rs 1352
 src/e2e/fixture.rs 1476
-src/e2e/validate.rs 1440
+src/e2e/validate.rs 1274
 src/readme/tests/template.rs 1371
 src/scaffold/languages/dart.rs 1358
 src/scaffold/languages/swift.rs 1827
@@ -91,7 +90,7 @@ tests/backends_kotlin_jni_emitter_test.rs 1268
 tests/backends_magnus_gen_bindings_test.rs 4807
 tests/backends_magnus_gen_stubs_test.rs 1128
 tests/backends_napi_gen_bindings_test.rs 3771
-tests/backends_pyo3_gen_stubs_test.rs 2442
+tests/backends_pyo3_gen_stubs_test.rs 2407
 tests/backends_rustler_gen_public_api_test.rs 1943
 tests/backends_swift_gen_bindings_test.rs 3427
 tests/backends_swift_gen_rust_crate_test.rs 2674
