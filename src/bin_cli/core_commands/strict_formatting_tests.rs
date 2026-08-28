@@ -40,9 +40,22 @@ fn generate_accepts_strict_and_defaults_to_lenient() {
 #[test]
 fn generate_threads_strict_into_the_package_formatting_pass() {
     let dispatch_source = include_str!("../core_commands.rs");
+    // ~keep Locate the arm and assert `strict` is among the bindings, rather than pinning the
+    // whole destructuring literal. The literal spelling names every OTHER field too, so adding
+    // an unrelated flag to the arm -- `skip_compile` did exactly this -- broke a test that has
+    // no opinion about that flag, and the repair is always "paste the new literal", which
+    // re-arms the same trip wire without ever having caught the thing this test exists to catch.
+    let arm = dispatch_source
+        .find("Commands::Generate {")
+        .expect("dispatch must have a Generate arm");
+    let bindings_end = dispatch_source[arm..]
+        .find('}')
+        .expect("the Generate arm's destructuring must be terminated");
+    let bindings = &dispatch_source[arm..arm + bindings_end];
     assert!(
-        dispatch_source.contains("Commands::Generate {\n            lang,\n            clean,\n            skip_frb,\n            strict,\n        }"),
-        "the Generate arm must destructure `strict` from the parsed command"
+        bindings.contains("strict,"),
+        "the Generate arm must destructure `strict` from the parsed command. Bindings were: \
+         {bindings}"
     );
     // The arm's body -- including the formatting-pass call this test pins -- lives in
     // `core_commands/generate.rs`, split out of `core_commands.rs` for the file-modularization
