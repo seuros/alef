@@ -889,4 +889,6 @@ pub fn strip_hash_line(content: &str) -> String {
 #[cfg(test)]
 mod stamp_recipe_tests;
 #[cfg(test)]
+mod stamp_syntax_tests;
+#[cfg(test)]
 mod tests;
