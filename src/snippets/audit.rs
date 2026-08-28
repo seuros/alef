@@ -61,13 +61,18 @@ pub enum AuditIssueKind {
     MissingInclude,
     InvalidInclude,
     UnknownLanguage,
-    /// A fence tag that names no language alef generates bindings for and resolves to nothing.
+    /// A fence tag that names no language alef generates bindings for, resolves to nothing,
+    /// and is not one of the standard display languages `is_recognized_display_language`
+    /// knows by name (`html`, `css`, `ini`, `makefile`, `mdx`, `nginx`, `groovy`, ...) -- those
+    /// audit clean with no finding at all, because alef cannot *validate* them but does
+    /// *recognize* them; this kind is for what is left after that.
     ///
-    /// A warning, not an error: a human-authored docs page may legitimately fence `astro`, `mdx`,
-    /// `hcl` or any other prose vocabulary, and failing the run on those made consumers relabel
-    /// their own documentation. But a typo (`pythn`) is indistinguishable from a prose vocabulary
-    /// without maintaining an allowlist of every language in existence, so staying SILENT here
-    /// makes snippet validation falsely green. Warning keeps the typo actionable while letting
+    /// A warning, not an error: a human-authored docs page may legitimately fence `astro`,
+    /// `hcl`, or any other prose vocabulary this module has not been taught by name, and
+    /// failing the run on those made consumers relabel their own documentation. But a typo
+    /// (`pythn`) is indistinguishable from an untaught prose vocabulary without maintaining an
+    /// allowlist of every language in existence, so staying SILENT here makes snippet
+    /// validation falsely green. Warning keeps the typo actionable while letting untaught
     /// prose fences through. ~keep
     UnrecognizedFenceLanguage,
     UnreadableFile,
@@ -382,22 +387,7 @@ fn audit_fences(path: &Path, content: &str) -> Vec<AuditIssue> {
                     index + 1,
                     "fenced code block is missing a language tag".to_string(),
                 ));
-            } else if Language::from_fence_info(&tag) == Language::Unknown {
-                let (kind, message) = if tag_claims_a_binding_target_language(&tag) {
-                    (
-                        AuditIssueKind::UnknownLanguage,
-                        format!("unknown fenced code language: {tag}"),
-                    )
-                } else {
-                    (
-                        AuditIssueKind::UnrecognizedFenceLanguage,
-                        format!(
-                            "fenced code language `{tag}` names no binding target and is not a recognized \
-                             display tag; it will not be validated. If that is a typo, correct it -- if it \
-                             is prose (`astro`, `mdx`, ...), this line is informational."
-                        ),
-                    )
-                };
+            } else if let Some((kind, message)) = unrecognized_fence_finding(&tag) {
                 issues.push(issue(kind, path, index + 1, message));
             }
             open = Some((index + 1, tag));
@@ -479,7 +469,7 @@ fn severity_for(kind: &AuditIssueKind) -> AuditSeverity {
 /// fence combining `rust` with an unrecognized extra token. A fence in that state is
 /// claiming a real binding-target language and getting it wrong, which is worth flagging.
 ///
-/// A tag that names no binding-target language at all -- `astro`, `mdx`, `hcl`, or any other
+/// A tag that names no binding-target language at all -- `astro`, `hcl`, or any other
 /// prose-decoration language a human-authored docs page may legitimately fence -- returns
 /// `false`: that fence is display-only, and must not fail validation just because nobody
 /// happened to add it to a hand-maintained allowlist. This replaced a hardcoded
@@ -490,6 +480,114 @@ fn tag_claims_a_binding_target_language(tag: &str) -> bool {
     tag.split(',')
         .map(str::trim)
         .any(|token| Language::from_fence_tag(token).is_binding_target())
+}
+
+/// True when `tag` names a real, standard documentation fence language that alef has no
+/// validator for and never will -- as opposed to a tag nobody can identify at all.
+///
+/// This is a distinct fact from [`tag_claims_a_binding_target_language`] returning `false`:
+/// that question asks "is this a broken/leaked binding-target tag," and covers every
+/// non-target string with a uniform warning, including a genuine typo like `pythn`.
+/// This question asks "is this specific tag a known quantity," so a real label -- `html`,
+/// `css`, `ini`, `makefile`, `mdx`, `nginx`, `groovy` -- can audit clean while an unrecognized
+/// string still warns. Recognizing everything here instead would erase that distinction and
+/// let `pythn` pass silently, which is exactly the falsely-green outcome
+/// [`AuditIssueKind::UnrecognizedFenceLanguage`] exists to prevent.
+///
+/// This vocabulary is not new and was not invented here: it is the `is_known_display_tag`
+/// allowlist that `097724925` deleted. That commit was fixing a different bug -- the allowlist
+/// was being used to *error* on anything absent from it, which failed a run on a legitimate
+/// ```astro fence -- and dropping it was the right fix for that. But it also discarded the
+/// curated vocabulary, and once `a83a1ce44` added the warning tier, every name the list had
+/// covered started warning instead of passing silently. Restored here in the tier that only
+/// suppresses a finding, so it can no longer fail anything. Entries that now resolve through
+/// `Language::from_fence_tag` on their own (`json`, `yaml`, `xml`, `mermaid`, `text`,
+/// `console`, ...) are deliberately left out -- this function runs only after
+/// `from_fence_info` has already returned `Unknown`, so those would be dead arms.
+///
+/// `htm` is the one addition, alongside `html`, for the same reason `Language::from_fence_tag`
+/// already pairs `docker`/`dockerfile` and `csharp`/`cs`/`c#`: one language, more than one
+/// conventional spelling.
+///
+/// Deliberately not folded into `Language` itself: that enum also drives snippet *discovery*
+/// and *coverage* accounting (`snippets::discovery`, `snippets::gaps::missing_language_variants`),
+/// and giving these markup/config/build languages a `Language` variant would pull them into
+/// coverage bookkeeping meant for binding-target and structured-data languages. This vocabulary
+/// answers exactly one question -- does this fence label deserve a finding -- and nothing else
+/// reads it. ~keep
+fn is_recognized_display_language(tag: &str) -> bool {
+    tag.split(',').map(str::trim).any(|token| {
+        matches!(
+            token.to_lowercase().as_str(),
+            "apache"
+                | "cmake"
+                | "css"
+                | "csv"
+                | "d2"
+                | "diff"
+                | "dot"
+                | "env"
+                | "gql"
+                | "gradle"
+                | "graphql"
+                | "graphviz"
+                | "groovy"
+                | "htm"
+                | "html"
+                | "ini"
+                | "latex"
+                | "log"
+                | "make"
+                | "makefile"
+                | "markdown"
+                | "md"
+                | "mdx"
+                | "nginx"
+                | "output"
+                | "patch"
+                | "plaintext"
+                | "plantuml"
+                | "properties"
+                | "rst"
+                | "sass"
+                | "scss"
+                | "sql"
+                | "svg"
+                | "tex"
+                | "tsv"
+        )
+    })
+}
+
+/// Classify a fence tag that failed to resolve to a concrete [`Language`], and decide whether
+/// that failure is worth an audit finding at all.
+///
+/// Three outcomes, in priority order: a tag that claims a real binding-target language and
+/// gets it wrong is an error (someone leaked or mistyped a target-language fence); a tag this
+/// module recognizes as a standard, unvalidated display language is not a finding at all; and
+/// everything else -- genuinely unidentified, which is indistinguishable from a typo -- is a
+/// warning. Returns `None` only for the middle case. ~keep
+fn unrecognized_fence_finding(tag: &str) -> Option<(AuditIssueKind, String)> {
+    if Language::from_fence_info(tag) != Language::Unknown {
+        return None;
+    }
+    if tag_claims_a_binding_target_language(tag) {
+        return Some((
+            AuditIssueKind::UnknownLanguage,
+            format!("unknown fenced code language: {tag}"),
+        ));
+    }
+    if is_recognized_display_language(tag) {
+        return None;
+    }
+    Some((
+        AuditIssueKind::UnrecognizedFenceLanguage,
+        format!(
+            "fenced code language `{tag}` names no binding target and is not a recognized \
+             display tag; it will not be validated. If that is a typo, correct it -- if it \
+             is prose (`astro`, `hcl`, ...), this line is informational."
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -760,5 +858,114 @@ mod tests {
 
         assert_eq!(report.issues.len(), 1, "issues: {:?}", report.issues);
         assert_eq!(report.issues[0].kind, AuditIssueKind::BrokenFence);
+    }
+
+    /// task #560: every one of these is a real, standard documentation fence label alef simply
+    /// has no validator for -- not an unknown language. Each must audit clean with zero
+    /// findings, not merely a downgraded warning: recognizing a label and being unable to
+    /// validate it are different facts, and only the first one belongs in this table.
+    ///
+    /// The table is the `is_known_display_tag` vocabulary `097724925` deleted, minus the names
+    /// `Language::from_fence_tag` resolves on its own, plus `htm`. It is written out in full
+    /// rather than looped over the function's own `matches!` arms so that deleting an arm fails
+    /// here instead of silently agreeing with itself.
+    #[test]
+    fn recognized_display_languages_audit_clean() {
+        let recognized = [
+            "apache",
+            "cmake",
+            "css",
+            "csv",
+            "d2",
+            "diff",
+            "dot",
+            "env",
+            "gql",
+            "gradle",
+            "graphql",
+            "graphviz",
+            "groovy",
+            "htm",
+            "html",
+            "ini",
+            "latex",
+            "log",
+            "make",
+            "makefile",
+            "markdown",
+            "md",
+            "mdx",
+            "nginx",
+            "output",
+            "patch",
+            "plaintext",
+            "plantuml",
+            "properties",
+            "rst",
+            "sass",
+            "scss",
+            "sql",
+            "svg",
+            "tex",
+            "tsv",
+        ];
+        for tag in recognized {
+            let dir = tempfile::tempdir().unwrap();
+            let docs = dir.path().join("docs");
+            std::fs::create_dir_all(&docs).unwrap();
+            std::fs::write(docs.join("guide.md"), format!("```{tag}\nexample\n```\n")).unwrap();
+
+            let report = audit(&AuditConfig {
+                docs_dirs: vec![docs],
+                snippet_dirs: Vec::new(),
+                require_frontmatter: false,
+                ..AuditConfig::default()
+            });
+
+            assert_eq!(
+                report.issues,
+                Vec::new(),
+                "`{tag}` is a real, standard fence label alef cannot validate but must \
+                 recognize -- it must produce no finding at all: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    /// Control, paired with the table above: recognizing the standard display vocabulary must
+    /// not widen into accepting every string. A bogus label that resembles none of the
+    /// recognized display languages, and claims no binding target either, must still surface a
+    /// warning -- otherwise this fix would pass equally well with the audit accepting anything,
+    /// which is exactly the "acknowledge the false positive" outcome the task rejected.
+    #[test]
+    fn a_bogus_label_resembling_no_recognized_language_still_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("guide.md"), "```pyhton\nprint(1)\n```\n").unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert_eq!(
+            report.issues.iter().map(|issue| &issue.kind).collect::<Vec<_>>(),
+            vec![&AuditIssueKind::UnrecognizedFenceLanguage],
+            "a bogus tag must still be reported, or a real typo could pass unnoticed: {:?}",
+            report.issues
+        );
+        assert!(
+            report.issues[0].message.contains("pyhton"),
+            "the diagnostic must name the offending tag so it is actionable: {:?}",
+            report.issues
+        );
+        assert!(
+            !report.has_errors(),
+            "an unrecognized tag warns rather than fails the run: {:?}",
+            report.issues
+        );
     }
 }
