@@ -86,6 +86,19 @@ impl Session {
         let _ = (input, mode);
         Err("unimplemented".to_string())
     }
+
+    /// Infallible counterpart to `analyze`: same fieldless-enum parameter (`Mode`), but no
+    /// `Result` return of its own. `analyze` alone cannot catch a declaration/implementation
+    /// fallibility mismatch on a type method: a fieldless enum parameter is reconstructed from
+    /// its wire string by a fallible helper, which forces a binding's shim to become
+    /// `Result<_, String>` even when the method itself is not -- but `analyze` was ALREADY
+    /// `Result`-returning, so both sides "agreeing on Result" proved nothing about whether the
+    /// forced-fallibility case is tracked at all. This method is the infallible pairing that
+    /// does exercise it. ~keep
+    pub fn mode_name(&self, mode: Mode) -> String {
+        let _ = mode;
+        self.token.clone()
+    }
 }
 
 pub fn summarize(input: String) -> Result<Report, String> {

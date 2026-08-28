@@ -9,7 +9,7 @@
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
     bridge_result_ok_type_with_handles, bridge_type_enum_aware_ref, bridge_type_with_handles, enum_from_string_fn_name,
-    needs_json_bridge, needs_json_bridge_with_handles, swift_bridge_rust_type,
+    forces_fallible_enum_bridge, needs_json_bridge, needs_json_bridge_with_handles, swift_bridge_rust_type,
 };
 use crate::backends::swift::naming::swift_rust_shim_ident as swift_ident;
 use crate::core::ir::{FunctionDef, PrimitiveType, TypeRef};
@@ -145,8 +145,8 @@ pub(crate) fn swift_call_arg(
         // An unrecognised wire string used to `panic!` inside `{fn_name}`, which unwinds across
         // the swift-bridge FFI boundary -- undefined behaviour at best. The generator now emits
         // `Result<_, String>` from `{fn_name}`; bind it here with `?` and force the enclosing
-        // shim to return `Result` (see `has_fallible_enum_param`/`forced_fallible` in
-        // `emit_function_shim`) instead of letting the panic reach the boundary. ~keep
+        // shim to return `Result` (see `forces_fallible_enum_bridge`) instead of letting the
+        // panic reach the boundary. ~keep
         let bound = format!("__{name}_enum");
         if p.optional {
             pre_call_bindings.push(format!("    let {bound} = {name}.map(|s| {fn_name}(&s)).transpose()?;"));
@@ -390,12 +390,7 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
     // already fallible (`f.error_type.is_some()`) that failure rides the existing `Result`; when
     // it is not, the shim's own return type must become `Result<_, String>` purely to carry this
     // one failure mode, or the `?` in `pre_call_bindings` has nothing to propagate into. ~keep
-    let has_fallible_enum_param = f.params.iter().any(|p| match &p.ty {
-        TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
-        TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
-        _ => false,
-    });
-    let forced_fallible = has_fallible_enum_param && f.error_type.is_none();
+    let forced_fallible = forces_fallible_enum_bridge(&f.params, f.error_type.as_ref(), unit_enum_names);
 
     let (return_ty, has_explicit_return) = if is_capsule_return {
         if forced_fallible {

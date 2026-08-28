@@ -8,8 +8,8 @@
 //! Enum wrappers live in `enums.rs`.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_result_ok_type_with_handles, bridge_type_enum_aware_ref, enum_from_string_fn_name, needs_json_bridge,
-    needs_json_bridge_with_handles, swift_bridge_rust_type,
+    bridge_result_ok_type_with_handles, bridge_type_enum_aware_ref, enum_from_string_fn_name,
+    forces_fallible_enum_bridge, needs_json_bridge, needs_json_bridge_with_handles, swift_bridge_rust_type,
 };
 use crate::core::ir::{PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 use crate::core::keywords::swift_ident;
@@ -82,18 +82,11 @@ pub(crate) fn emit_type_method_shims(
         }
         let params_str = params_vec.join(", ");
 
-        // See the identical `has_fallible_enum_param`/`forced_fallible` rationale in
-        // `gen_rust_crate::shims::emit_function_shim`: an unrecognised wire string used to
-        // `panic!` inside the enum's `_from_swift_string` helper (UB across the FFI boundary).
-        // The helper now returns `Result<_, String>`; when the method itself is not already
-        // fallible, this wrapper's own return type is forced to `Result<_, String>` purely to
-        // give the conversion's `?` somewhere to propagate to. ~keep
-        let has_fallible_enum_param = method.params.iter().any(|p| match &p.ty {
-            TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
-            TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
-            _ => false,
-        });
-        let forced_fallible = has_fallible_enum_param && method.error_type.is_none();
+        // An unrecognised wire string used to `panic!` inside the enum's `_from_swift_string`
+        // helper, unwinding across the FFI boundary. That helper now returns `Result<_, String>`,
+        // so this wrapper is forced fallible to give the `?` somewhere to go. The paired extern
+        // declaration calls the same helper -- see `forces_fallible_enum_bridge`. ~keep
+        let forced_fallible = forces_fallible_enum_bridge(&method.params, method.error_type.as_ref(), unit_enum_names);
 
         let return_ty = if method.error_type.is_some() || forced_fallible {
             let ok_ty = bridge_result_ok_type_with_handles(&method.return_type, handle_returned_types);

@@ -4,7 +4,7 @@
 //! `is_bridge_leaf`, and `rust_primitive_str` — pure functions with no
 //! side effects used across all other submodules.
 
-use crate::core::ir::{ApiSurface, PrimitiveType, TypeRef};
+use crate::core::ir::{ApiSurface, ParamDef, PrimitiveType, TypeRef};
 use heck::ToSnakeCase;
 use std::collections::HashSet;
 
@@ -335,4 +335,29 @@ pub(crate) fn rust_primitive_str(p: &PrimitiveType) -> &'static str {
         PrimitiveType::F32 => "f32",
         PrimitiveType::F64 => "f64",
     }
+}
+
+/// True when a bridged signature must become `Result<_, String>` even though the underlying Rust
+/// item declares no error type of its own.
+///
+/// A fieldless enum crosses swift-bridge as a wire `String` and is reconstructed by a fallible
+/// helper, so a shim taking one needs somewhere for that `?` to propagate to. The extern
+/// DECLARATION and the shim IMPLEMENTATION are emitted by different functions, and when each
+/// derived this rule independently they drifted apart twice -- once on free functions, once on
+/// type methods -- each time emitting a declared return type that disagreed with the actual
+/// `pub fn`, an `error[E0308]` that surfaced only in a downstream consumer build. Both sides call
+/// this so there is one rule to change rather than four to keep in sync. ~keep
+pub(crate) fn forces_fallible_enum_bridge(
+    params: &[ParamDef],
+    error_type: Option<&String>,
+    unit_enum_names: &HashSet<&str>,
+) -> bool {
+    if error_type.is_some() {
+        return false;
+    }
+    params.iter().any(|p| match &p.ty {
+        TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
+        TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
+        _ => false,
+    })
 }

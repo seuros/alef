@@ -396,9 +396,12 @@ fn emit_lib_rs(
             if has_ctor_override && let Some(ctor_block) = extern_block::emit_extern_block_for_type_constructor(ty) {
                 extern_blocks.push(format!("{cfg_open}{ctor_block}"));
             }
-            if let Some(method_block) =
-                extern_block::emit_extern_block_for_type_methods(ty, &handle_returned_types, &enum_names)
-            {
+            if let Some(method_block) = extern_block::emit_extern_block_for_type_methods(
+                ty,
+                &handle_returned_types,
+                &enum_names,
+                &unit_enum_names,
+            ) {
                 extern_blocks.push(format!("{cfg_open}{method_block}"));
             }
         }
