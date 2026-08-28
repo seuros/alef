@@ -19,19 +19,19 @@ pub mod npm {
     pub const NODE_ENGINE: &str = ">= 22";
 
     // renovate: datasource=npm depName=@napi-rs/cli
-    pub const NAPI_RS_CLI_DEVDEPS: &str = "^3.0.0";
+    pub const NAPI_RS_CLI_DEVDEPS: &str = "^3.8.6";
 
     // renovate: datasource=npm depName=@napi-rs/cli
-    pub const NAPI_RS_CLI_CRATE: &str = "^3.7.3";
+    pub const NAPI_RS_CLI_CRATE: &str = "^3.8.6";
 
     // renovate: datasource=npm depName=typescript
-    pub const TYPESCRIPT: &str = "^7.0.0";
+    pub const TYPESCRIPT: &str = "^7.0.2";
 
     // renovate: datasource=npm depName=vitest
-    pub const VITEST: &str = "^4.1.10";
+    pub const VITEST: &str = "^4.1.11";
 
     // renovate: datasource=npm depName=@types/node
-    pub const TYPES_NODE: &str = "^26.0.0";
+    pub const TYPES_NODE: &str = "^26.4.0";
 
     /// Filename `napi build` writes its own auto-derived type declarations to.
     ///
@@ -46,13 +46,13 @@ pub mod npm {
     pub const NAPI_AUTO_DTS_FILENAME: &str = "index.native.d.ts";
 
     // renovate: datasource=npm depName=rollup
-    pub const ROLLUP: &str = "^4.53.3";
+    pub const ROLLUP: &str = "^4.63.1";
 
     // renovate: datasource=npm depName=vite-plugin-top-level-await
-    pub const VITE_PLUGIN_TOP_LEVEL_AWAIT: &str = "^1.4.0";
+    pub const VITE_PLUGIN_TOP_LEVEL_AWAIT: &str = "^1.6.0";
 
     // renovate: datasource=npm depName=vite-plugin-wasm
-    pub const VITE_PLUGIN_WASM: &str = "^3.4.0";
+    pub const VITE_PLUGIN_WASM: &str = "^3.6.0";
 }
 
 pub mod cargo {
@@ -164,7 +164,7 @@ pub mod pypi {
 
     // Replaces mypy: pyrefly is a fast single-binary Rust type-checker, run as a
     // renovate: datasource=pypi depName=pyrefly
-    pub const PYREFLY: &str = ">=1.1.1";
+    pub const PYREFLY: &str = ">=1.2.0";
 
     // renovate: datasource=pypi depName=pytest
     pub const PYTEST: &str = ">=7.4";
@@ -214,21 +214,32 @@ pub mod gem {
 
 pub mod packagist {
 
-    // renovate: datasource=packagist depName=phpunit/phpunit
-    // ~keep Span every PHPUnit major that supports the generated `"php": ">=8.2"` floor: 11.x needs
+    // Span every PHPUnit major that supports the generated `"php": ">=8.2"` floor: 11.x needs
     // >=8.2, 12.x needs >=8.3, 13.x needs >=8.4.1. A 13-only constraint is unsatisfiable on 8.2/8.3,
     // so `composer install` hard-fails there, and Dependabot — which resolves Composer against the
     // declared platform floor rather than the runtime PHP — reported "requirements could not be
     // resolved" on every run. Composer picks the highest major the actual PHP supports.
+    //
+    // The marker below must sit directly above `pub const` with no comment line between them --
+    // the customManager regex in `renovate.json` requires that adjacency, same as BASE64 in
+    // `pub mod cargo` above. This const previously had a marker with this prose wedged between it
+    // and the const, which silently broke the match. It also needs a `rangeStrategy=widen`
+    // packageRule scoped to it: the plain `rangeStrategy=replace` used elsewhere in this file
+    // collapses a `||`-joined constraint down to just its last clause on a major bump (verified
+    // against `versioning/composer/index.ts`'s `getNewValue`), which would silently drop the
+    // 11.x/12.x majors this const deliberately keeps. `widen` appends a new `|| ^N.0` clause
+    // instead of replacing the whole constraint. ~keep
+    // renovate: datasource=packagist depName=phpunit/phpunit
     pub const PHPUNIT: &str = "^11.5 || ^12.0 || ^13.1";
 
-    // renovate: datasource=packagist depName=guzzlehttp/guzzle
     // Accept both ^7 and ^8: a Composer resolver picking guzzle 8.x (e.g. because
     // a committed composer.lock already resolved to 8.x) must not be rejected by a
     // stale ^7-only constraint, which makes `composer install` hard-fail on a
     // require/lock mismatch. If a generated e2e test depends on guzzle 7's
     // client-side Content-Length validation behavior, gate or rework that test
-    // rather than narrowing this constraint back to ^7 only.
+    // rather than narrowing this constraint back to ^7 only. Needs the same
+    // `rangeStrategy=widen` packageRule as PHPUNIT above, for the same reason. ~keep
+    // renovate: datasource=packagist depName=guzzlehttp/guzzle
     pub const GUZZLE: &str = "^7.0 || ^8.0";
 }
 
@@ -288,7 +299,7 @@ pub mod maven {
     pub const JACOCO_MAVEN_PLUGIN: &str = "0.8.15";
 
     // renovate: datasource=maven depName=com.puppycrawl.tools:checkstyle
-    pub const CHECKSTYLE: &str = "13.11.0";
+    pub const CHECKSTYLE: &str = "14.0.0";
 
     // renovate: datasource=maven depName=org.jspecify:jspecify
     pub const JSPECIFY: &str = "1.0.1";
@@ -311,8 +322,9 @@ pub mod maven {
     // renovate: datasource=maven depName=org.jetbrains.kotlin:kotlin-gradle-plugin
     pub const KOTLIN_JVM_PLUGIN: &str = "2.4.10";
 
-    // Android Gradle plugin — hosted on Google's Maven repo, not Maven Central; tracked manually.
-    pub const ANDROID_GRADLE_PLUGIN: &str = "9.2.1";
+    // Android Gradle plugin — hosted on Google's Maven repo, not Maven Central.
+    // renovate: datasource=maven depName=com.android.tools.build:gradle
+    pub const ANDROID_GRADLE_PLUGIN: &str = "9.3.2";
 
     // renovate: datasource=maven depName=org.jlleitschuh.gradle:ktlint-gradle
     pub const KTLINT_GRADLE_PLUGIN: &str = "14.2.0";
@@ -332,10 +344,12 @@ pub mod maven {
     // renovate: datasource=maven depName=junit:junit
     pub const JUNIT_LEGACY: &str = "4.13.2";
 
-    // androidx — hosted on Google's Maven repo, not Maven Central; tracked manually.
+    // androidx — hosted on Google's Maven repo, not Maven Central.
+    // renovate: datasource=maven depName=androidx.test.ext:junit
     pub const ANDROIDX_TEST_EXT_JUNIT: &str = "1.3.0";
 
-    // androidx — hosted on Google's Maven repo, not Maven Central; tracked manually.
+    // androidx — hosted on Google's Maven repo, not Maven Central.
+    // renovate: datasource=maven depName=androidx.test.espresso:espresso-core
     pub const ANDROIDX_TEST_ESPRESSO_CORE: &str = "3.7.0";
 
     // renovate: datasource=maven depName=com.vanniktech:gradle-maven-publish-plugin
@@ -358,11 +372,18 @@ pub mod maven {
 
 pub mod nuget {
     // renovate: datasource=nuget depName=Microsoft.NET.Test.Sdk
-    pub const MICROSOFT_NET_TEST_SDK: &str = "18.5.1";
+    pub const MICROSOFT_NET_TEST_SDK: &str = "18.9.0";
 
     // renovate: datasource=nuget depName=xunit
     pub const XUNIT: &str = "2.9.3";
 
+    // Deliberately held below xunit.runner.visualstudio 4.0.0: that release requires
+    // xUnit.net v3 test projects and drops v2 support ("This package supports xUnit.net
+    // v3 4.0 test projects" per https://xunit.net/releases/visualstudio/4.0.0), while XUNIT
+    // above pins the v2 line (the "xunit" package never publishes a v3; v3 ships under the
+    // separate "xunit.v3" package id). Bumping this to 4.0.0 without also migrating XUNIT to
+    // v3 would break every generated C# test project's `dotnet test` adapter resolution.
+    // 3.1.5 is the latest 3.x release, so this pin is already current for the v2 line. ~keep
     // renovate: datasource=nuget depName=xunit.runner.visualstudio
     pub const XUNIT_RUNNER_VISUALSTUDIO: &str = "3.1.5";
 }
@@ -389,20 +410,42 @@ pub mod hex {
     // renovate: datasource=hex depName=jason
     pub const JASON: &str = "~> 1.4";
 
-    // Gleam range constraints (`>= x and < y`) are not single auto-bumpable versions.
+    // Gleam range constraints (`>= x and < y`) ARE trackable: Renovate's `hex` versioning
+    // (`versioning/hex/index.ts`, `hex2npm`) strips the literal "and"/"or" keywords and
+    // delegates to its npm-range engine, so this syntax parses. It needs a `rangeStrategy=widen`
+    // packageRule scoped to these deps, though: the plain `rangeStrategy=replace` used elsewhere
+    // in this file recomputes only the trailing `< y` clause via npm's range `getNewValue` and
+    // returns that alone, silently dropping the `>= x` floor the day a tracked package's major
+    // actually advances past `y` (verified against `versioning/npm/range.ts`). `widen` preserves
+    // the floor and appends the new ceiling instead, and stays a no-op while the current release
+    // already satisfies the range, matching how these consts have always behaved. ~keep
+    // renovate: datasource=hex depName=gleam_stdlib
     pub const GLEAM_STDLIB_VERSION_RANGE: &str = ">= 0.34.0 and < 2.0.0";
 
+    // See GLEAM_STDLIB_VERSION_RANGE above for why this needs `rangeStrategy=widen`. ~keep
+    // renovate: datasource=hex depName=gleeunit
     pub const GLEEUNIT_VERSION_RANGE: &str = ">= 1.0.0 and < 2.0.0";
 
+    // NOT renovate-tracked, unlike the siblings above: `scaffold::languages::gleam` and
+    // `e2e::codegen::gleam::project` both render this single range for two different Hex
+    // packages -- `gleam_httpc` (currently 5.x) AND `gleam_http` (currently 4.x). Marking it
+    // against one depName would let Renovate compute a new ceiling from that one package's
+    // release cadence and silently misapply it to the other once their majors diverge; today's
+    // shared `< 6.0.0` ceiling covering both is coincidence, not a guarantee. Split this into two
+    // consts (one per package, each with its own dependency line in the two call sites above)
+    // before adding a marker here; see GLEAM_STDLIB_VERSION_RANGE above for the
+    // `rangeStrategy=widen` either would also need. ~keep
     pub const GLEAM_HTTPC_VERSION_RANGE: &str = ">= 4.0.0 and < 6.0.0";
 
+    // See GLEAM_STDLIB_VERSION_RANGE above for why this needs `rangeStrategy=widen`. ~keep
+    // renovate: datasource=hex depName=envoy
     pub const ENVOY_VERSION_RANGE: &str = ">= 1.0.0 and < 2.0.0";
 }
 
 /// pub.dev (Dart) ecosystem.
 pub mod pub_dev {
     // renovate: datasource=dart depName=test
-    pub const TEST_PACKAGE: &str = "^1.25.0";
+    pub const TEST_PACKAGE: &str = "^1.31.2";
 
     // renovate: datasource=dart depName=lints
     pub const LINTS: &str = "^6.1.0";
@@ -411,25 +454,25 @@ pub mod pub_dev {
     pub const FFI_PACKAGE: &str = "^2.2.0";
 
     // renovate: datasource=dart depName=http
-    pub const HTTP_PACKAGE: &str = "^1.2.0";
+    pub const HTTP_PACKAGE: &str = "^1.6.0";
 
     // renovate: datasource=dart depName=crypto
-    pub const CRYPTO: &str = "^3.0.0";
+    pub const CRYPTO: &str = "^3.0.7";
 
     // renovate: datasource=dart depName=freezed_annotation
     pub const FREEZED_ANNOTATION: &str = "^3.1.0";
 
     // renovate: datasource=dart depName=json_annotation
-    pub const JSON_ANNOTATION: &str = "^4.11.0";
+    pub const JSON_ANNOTATION: &str = "^4.12.0";
 
     // renovate: datasource=dart depName=freezed
     pub const FREEZED: &str = "^4.0.0";
 
     // renovate: datasource=dart depName=build_runner
-    pub const BUILD_RUNNER: &str = "^2.15.0";
+    pub const BUILD_RUNNER: &str = "^2.16.0";
 
     // renovate: datasource=dart depName=json_serializable
-    pub const JSON_SERIALIZABLE: &str = "^6.13.2";
+    pub const JSON_SERIALIZABLE: &str = "^6.14.1";
 
     // renovate: datasource=dart depName=native_assets_cli
     pub const NATIVE_ASSETS_CLI: &str = "^0.18.0";
@@ -437,9 +480,10 @@ pub mod pub_dev {
 
 /// Platform / toolchain pins. None of these auto-bump; track manually.
 pub mod toolchain {
+    // renovate: datasource=github-tags depName=ziglang/zig
     pub const MIN_ZIG_VERSION: &str = "0.16.0";
 
-    pub const DART_SDK_CONSTRAINT: &str = ">=3.11.0 <4.0.0";
+    pub const DART_SDK_CONSTRAINT: &str = ">=3.13.0 <4.0.0";
 
     /// JVM bytecode target for the Java backend (Panama FFM, JDK 22+ required).
     pub const JAVA_JVM_TARGET: &str = "25";
@@ -454,7 +498,8 @@ pub mod toolchain {
 
     pub const SWIFT_MIN_IOS: &str = "16.0";
 
-    pub const GRADLE_VERSION: &str = "9.6.0";
+    // renovate: datasource=gradle-version depName=gradle
+    pub const GRADLE_VERSION: &str = "9.7.1";
 
     pub const ANDROID_COMPILE_SDK: &str = "36";
     pub const ANDROID_MIN_SDK: &str = "24";
@@ -463,7 +508,7 @@ pub mod toolchain {
 
 pub mod cran {
     // Manually tracked: Renovate has no CRAN datasource.
-    pub const REXTENDR: &str = "0.4.2";
+    pub const REXTENDR: &str = "0.5.0";
 }
 
 pub mod precommit {

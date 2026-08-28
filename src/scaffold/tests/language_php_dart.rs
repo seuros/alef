@@ -346,7 +346,7 @@ fn test_scaffold_dart() {
         pubspec.content
     );
     assert!(
-        pubspec.content.contains("sdk: '>=3.11.0 <4.0.0'"),
+        pubspec.content.contains("sdk: '>=3.13.0 <4.0.0'"),
         "got: {}",
         pubspec.content
     );
@@ -356,7 +356,7 @@ fn test_scaffold_dart() {
         pubspec.content
     );
     assert!(
-        pubspec.content.contains("build_runner: '^2.15.0'"),
+        pubspec.content.contains("build_runner: '^2.16.0'"),
         "got: {}",
         pubspec.content
     );

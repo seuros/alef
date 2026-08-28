@@ -9,7 +9,7 @@
 /// This JAR is the official Gradle 8.5 wrapper JAR from the Gradle project.
 /// It is stored as base64 so it can be embedded as a string and decoded at write time.
 /// The wrapper JAR is forward-compatible and will bootstrap any Gradle version
-/// specified in gradle-wrapper.properties, including Gradle 9.6.0.
+/// specified in gradle-wrapper.properties, including Gradle 9.7.1.
 pub(super) fn get_gradle_wrapper_jar_base64() -> String {
     include_str!("../../../assets/gradle-wrapper-8.5.jar.b64")
         .chars()

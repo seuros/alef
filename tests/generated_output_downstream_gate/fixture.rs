@@ -166,8 +166,7 @@ pub fn recolor(swatch: foreign_core::Swatch) -> foreign_core::Swatch {
 // `toolkit` in the fixture workspace and sabotages the emitted pyo3 conversion to prove the
 // downstream gate actually compiles this shape -- see that module's doc for the full rationale
 // (alef commit f9795aea9's E0004 fix and its `unreachable_patterns` opposite). ~keep
-pub(crate) const FOREIGN_CRATE_CARGO_TOML: &str =
-    "[package]\nname = \"foreign_core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nspot-colors = []\n";
+pub(crate) const FOREIGN_CRATE_CARGO_TOML: &str = "[package]\nname = \"foreign_core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n[features]\nspot-colors = []\n";
 
 pub(crate) const FOREIGN_CRATE_SOURCE: &str = r#"
 /// A fieldless enum standing in for a dependency-owned type merged into `toolkit`'s binding
@@ -177,8 +176,13 @@ pub(crate) const FOREIGN_CRATE_SOURCE: &str = r#"
 /// from the type this enum compiles to. Fieldless only: a data-carrying enum never reaches the
 /// codegen path this fixture exercises (see `Pyo3Backend`'s own `enum_has_data_variants` skip).
 /// `Default` is required: the binding-to-core direction's `_ => Default::default()` catch-all
-/// (kept for the E0004 shape this fixture exists to reproduce) needs `Self: Default`. ~keep
-#[derive(Clone, Copy, Default)]
+/// (kept for the E0004 shape this fixture exists to reproduce) needs `Self: Default`.
+/// `Serialize`/`Deserialize` are required too, and NOT incidentally: the jni backend crosses the
+/// boundary by serializing through `serde_json::to_string`, so a bound type that does not derive
+/// serde fails `E0277` in the emitted `-jni` crate even though pyo3 compiles fine. The gate found
+/// that on its first full run -- every type alef binds must be serde-serializable, and a fixture
+/// whose foreign enum was not is the unrealistic party here, not the jni codegen. ~keep
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub enum Swatch {
     #[default]
     Base,

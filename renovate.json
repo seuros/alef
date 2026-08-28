@@ -94,6 +94,31 @@
       "description": "Group GitHub Actions",
       "matchManagers": ["github-actions"],
       "groupName": "github actions"
+    },
+    {
+      "description": "AGP and AndroidX artifacts live on Google's Maven repo, not Maven Central; without this their markers resolve to nothing and look tracked while never updating",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["maven"],
+      "matchPackageNames": [
+        "com.android.tools.build:gradle",
+        "androidx.test.ext:junit",
+        "androidx.test.espresso:espresso-core"
+      ],
+      "registryUrls": ["https://dl.google.com/dl/android/maven2", "https://repo.maven.apache.org/maven2"]
+    },
+    {
+      "description": "Toolchain floors and build targets: raising one can drop support for consumers on older toolchains, so these are surfaced for review and must never be automerged",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["gradle-version", "github-tags"],
+      "groupName": "toolchain pins",
+      "automerge": false
+    },
+    {
+      "description": "Widen deliberately multi-clause constraints. Under the default replace strategy Renovate rewrites an OR/AND chain to its LAST clause alone, silently dropping the older majors and the lower bound these ranges exist to keep",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["packagist", "hex"],
+      "matchPackageNames": ["phpunit/phpunit", "guzzlehttp/guzzle", "gleam_stdlib", "gleeunit", "envoy"],
+      "rangeStrategy": "widen"
     }
   ]
 }
