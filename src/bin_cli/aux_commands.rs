@@ -185,6 +185,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         pipeline::report_refused_writes(&report);
+                        pipeline::report_user_owned_skips(&report);
                         let count = report.expected_count();
                         let managed_files = pipeline::managed_generated_files(&files);
 
@@ -439,6 +440,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         pipeline::report_refused_writes(&report);
+                        pipeline::report_user_owned_skips(&report);
                         let count = report.changed_count();
                         let managed_files: Vec<_> = files
                             .iter()

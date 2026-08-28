@@ -67,6 +67,17 @@ pub(crate) struct VerifyCoverage {
     /// only when a reader happens to look at the missing-file headings that no longer name
     /// them. See `crate::core::config::verify`'s module doc for the incident this closes. ~keep
     pub(crate) ephemeral_excluded: usize,
+    /// Managed paths that `[workspace.ownership] user_owned`
+    /// ([`crate::core::config::OwnershipConfig`]) declares owned by the consuming repository
+    /// rather than by alef, and that this run therefore did not write, stamp, hash or hold to
+    /// any content claim.
+    ///
+    /// Counted here, unconditionally, for the reason this whole module exists: the declaration
+    /// shrinks what a green `alef verify` proves, and an opt-out that narrows a check must
+    /// never be free to shrink it silently. A reader who sees a clean run must be able to see
+    /// that 17 of the paths in the managed surface were exempted by config, not checked and
+    /// found correct. ~keep
+    pub(crate) declared_user_owned: usize,
 }
 
 impl VerifyCoverage {
@@ -81,6 +92,7 @@ impl VerifyCoverage {
         scan: super::verify_scan::ScanCoverage,
         create_once_unmarked: usize,
         ephemeral_excluded: usize,
+        declared_user_owned: usize,
     ) -> Self {
         let mut coverage = Self {
             managed_total: managed_paths.len(),
@@ -89,6 +101,7 @@ impl VerifyCoverage {
             files_unexamined: scan.unexamined,
             create_once_unmarked,
             ephemeral_excluded,
+            declared_user_owned,
             ..Self::default()
         };
         for path in managed_paths {
@@ -148,6 +161,14 @@ impl VerifyCoverage {
                  (declared intentionally ephemeral and deliberately never committed -- their absence is \
                  never a failure, but they ARE still counted in the {} above)",
                 self.ephemeral_excluded, self.managed_absent
+            ));
+        }
+        if self.declared_user_owned > 0 {
+            lines.push(format!(
+                "    {} declared user-owned by `[workspace.ownership] user_owned` in alef.toml: alef \
+                 does not write, stamp or content-check these at all, and this run made NO claim \
+                 about them -- remove the matching pattern to hand a path back to alef (-vv lists them)",
+                self.declared_user_owned
             ));
         }
         lines.push(format!(

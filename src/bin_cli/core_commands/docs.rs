@@ -73,6 +73,7 @@ pub(crate) fn handle(
         };
         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
         pipeline::report_refused_writes(&report);
+        pipeline::report_user_owned_skips(&report);
         docs_result?;
         let count = report.changed_count();
         let output_paths: Vec<PathBuf> = files

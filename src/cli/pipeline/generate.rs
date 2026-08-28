@@ -14,6 +14,9 @@ mod scaffold_lockfile_relock_tests;
 mod scaffold_write_finalize_idempotency_tests;
 #[cfg(test)]
 mod tests;
+mod user_owned;
+#[cfg(test)]
+mod user_owned_disposition_tests;
 mod validation;
 mod write;
 
@@ -30,7 +33,8 @@ pub use orphans::{
 };
 pub use scaffold::{readme, reconcile_managed_scaffold_manifests, scaffold};
 pub use scaffold_drift::find_create_once_template_drift;
-pub use write::{WriteReport, report_refused_writes};
+pub(crate) use user_owned::declared_user_owned;
+pub use write::{WriteReport, report_refused_writes, report_user_owned_skips};
 pub(crate) use write::{
     apply_shebang_chmod, atomic_write, ensure_generated_header, is_markable_path, is_owned_by_ownership_record,
     marker_comment_style, provenance_header_for_path, stamp_for_adoption,

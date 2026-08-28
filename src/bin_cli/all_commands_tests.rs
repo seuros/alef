@@ -210,7 +210,7 @@ fn all_never_drops_refusals_through_the_count_only_write_wrapper() {
     assert!(
         !source.contains("write_scaffold_files_with_overwrite"),
         "`alef all` must write through `write_scaffold_files_report` and fold every result into \
-         `refusals` via `absorb_refusals` -- the count-only wrapper silently drops refused writes, \
+         `refusals` via `absorb_unwritten` -- the count-only wrapper silently drops refused writes, \
          which is what let a run with thousands of refusals report success"
     );
 }

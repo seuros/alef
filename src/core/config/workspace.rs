@@ -26,6 +26,7 @@ use super::output::{
     BuildCommandConfig, CitationConfig, CleanConfig, DocsConfig, GeneratedHeaderConfig, LintConfig, OutputTemplate,
     ScaffoldConfig, SetupConfig, SyncConfig, TestConfig, UpdateConfig,
 };
+use super::ownership::OwnershipConfig;
 use super::package_metadata::PackageMetadataConfig;
 use super::poly::PolyConfig;
 use super::tools::ToolsConfig;
@@ -286,6 +287,19 @@ pub struct WorkspaceConfig {
     /// ```
     #[serde(default)]
     pub extra_clippy_allows: Vec<String>,
+
+    /// Consumer-declared ownership dispositions for generated paths -- currently just
+    /// `user_owned`, the list of repo-relative globs naming paths this repository maintains by
+    /// hand and alef must never write over. See [`OwnershipConfig`] for the full contract and
+    /// for why it is not `[crates.verify] ignore_ephemeral` or an `exclude_*` knob.
+    ///
+    /// Workspace-level rather than per-crate, unlike `[crates.verify]`: the patterns are
+    /// repo-relative, and the write guards that consult them see a path and a `base_dir` with
+    /// no notion of which crate emitted it. Keying the declaration per crate would require
+    /// every writer to re-derive that attribution, which is the "one fact, two derivations"
+    /// shape this repository's guards exist to avoid. ~keep
+    #[serde(default)]
+    pub ownership: OwnershipConfig,
 }
 
 #[cfg(test)]

@@ -249,7 +249,7 @@ fn run_e2e_substage(
                 diagnostic_log,
             )?;
             let e2e_report = pipeline::write_scaffold_files_report(&files, base_dir, true)?;
-            refusals.absorb_refusals(&e2e_report);
+            refusals.absorb_unwritten(&e2e_report);
             outcome.e2e_count = e2e_report.changed_count();
             if outcome.e2e_count > 0 {
                 outcome.any_output_changed = true;
@@ -348,7 +348,7 @@ fn run_test_apps_substage(
                 diagnostic_log,
             )?;
             let test_apps_report = pipeline::write_scaffold_files_report(&files, base_dir, true)?;
-            refusals.absorb_refusals(&test_apps_report);
+            refusals.absorb_unwritten(&test_apps_report);
             let test_apps_count = test_apps_report.changed_count();
             outcome.e2e_count += test_apps_count;
             if test_apps_count > 0 {

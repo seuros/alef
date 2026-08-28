@@ -27,6 +27,21 @@ pub struct WriteReport {
     /// site in a run, and the report is read by a person, so it must not repeat itself or
     /// reorder between runs. ~keep
     pub refused_paths: std::collections::BTreeSet<std::path::PathBuf>,
+    /// Paths this run left alone because `[workspace.ownership] user_owned`
+    /// ([`crate::core::config::OwnershipConfig`]) declares them owned by the consuming
+    /// repository rather than by alef.
+    ///
+    /// A separate set from [`Self::refused_paths`] because it is a separate FACT, not a
+    /// softer wording of the same one. A refusal is alef reporting that it wanted to write a
+    /// file and could not prove it may -- an unresolved condition with a human remedy. A
+    /// declared skip is alef reporting that it was told not to, by a committed line of config
+    /// someone can read. Folding the two would leave the operator with a failure tally that
+    /// only goes down by deleting the declaration, which is exactly the stable bad state the
+    /// declaration exists to end.
+    ///
+    /// Reported rather than silent for the same reason `refused_paths` is: a run that wrote
+    /// nothing because 17 paths were declared must say so. See [`report_user_owned_skips`]. ~keep
+    pub user_owned_paths: std::collections::BTreeSet<std::path::PathBuf>,
 }
 
 impl WriteReport {
@@ -42,6 +57,12 @@ impl WriteReport {
         self.refused_paths.len()
     }
 
+    /// How many paths this report left alone on the strength of `[workspace.ownership]
+    /// user_owned`.
+    pub fn user_owned_count(&self) -> usize {
+        self.user_owned_paths.len()
+    }
+
     /// Fold another phase's refusals into this report.
     ///
     /// A run writes through several independent phases — bindings, service API, type stubs,
@@ -50,9 +71,17 @@ impl WriteReport {
     /// reader works the list they were shown and is left with the refusals from every other
     /// phase, unlisted and with no remaining signal that they exist. Only `refused_paths`
     /// merges; the changed and expected sets stay per-phase because their counts are reported
-    /// per phase and summing them would double-count a path two phases both intended. ~keep
-    pub fn absorb_refusals(&mut self, other: &WriteReport) {
+    /// per phase and summing them would double-count a path two phases both intended.
+    ///
+    /// Folds BOTH not-written sets -- refusals and declared user-owned skips -- through this
+    /// one call rather than adding a second method beside it, so the ~13 `absorb_unwritten`
+    /// call sites cannot end up folding one set and dropping the other. That is not
+    /// hypothetical here: `alef all` already shipped a bug where a count-only wrapper
+    /// discarded `refused_paths` for a whole class of writes, and the run reported success
+    /// while the guard had silently refused thousands. ~keep
+    pub fn absorb_unwritten(&mut self, other: &WriteReport) {
         self.refused_paths.extend(other.refused_paths.iter().cloned());
+        self.user_owned_paths.extend(other.user_owned_paths.iter().cloned());
     }
 }
 
@@ -86,6 +115,36 @@ pub fn report_refused_writes(report: &WriteReport) {
     );
     for path in paths {
         warn!("  not written: {}", path.display());
+    }
+}
+
+/// State the count of writes skipped because `[workspace.ownership] user_owned` declares the
+/// path owned by the consuming repository.
+///
+/// INFO, not WARN, and worded as a disposition rather than a problem: nothing here needs
+/// fixing, and there is no remedy to name -- the remedy already happened, in a committed line
+/// of `alef.toml` a reviewer approved. Reporting it as a warning beside
+/// [`report_refused_writes`] would recreate the condition this option exists to end, where a
+/// deliberate, correct state is announced as a failure on every single run.
+///
+/// Not silent either. A run that skipped 17 paths has narrowed its own scope, and the same
+/// standard `crate::core::config::VerifyConfig`'s module doc sets for `alef verify` applies:
+/// the number is stated unconditionally, so the declaration stays visible to whoever reads the
+/// log rather than only to whoever reads the config. Paths go to DEBUG because the count is
+/// the operator-facing fact and a large declaration would otherwise bury the rest of the run. ~keep
+pub fn report_user_owned_skips(report: &WriteReport) {
+    if report.user_owned_paths.is_empty() {
+        return;
+    }
+    tracing::info!(
+        "{} file(s) were not written because `[workspace.ownership] user_owned` in alef.toml \
+         declares them owned by this repository rather than by alef. alef does not overwrite \
+         them, does not stamp them with a provenance marker, and does not verify their \
+         contents. Remove the matching pattern to hand a path back to alef.",
+        report.user_owned_paths.len()
+    );
+    for path in &report.user_owned_paths {
+        debug!("  declared user-owned, not written: {}", path.display());
     }
 }
 
@@ -581,6 +640,7 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
 /// exactly as before, provided it already carries the marker (markable) or a
 /// committed record (unmarkable) from the run that first wrote it. ~keep
 pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<WriteReport> {
+    let declared = super::user_owned::declared_user_owned(base_dir)?;
     let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
         let full_path = base_dir.join(&file.path);
@@ -588,7 +648,13 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             (super::binary::decode_base64_binary(&full_path, &file.content)?, false)
         } else {
             let normalized = normalize_content(&full_path, &file.content);
-            let normalized = if file.generated_header {
+            // A declared user-owned path is never stamped, including on the one write that
+            // seeds it. A marker is a claim of alef authorship, and stamping the seed would
+            // enrol a file alef has promised never to rewrite into `alef verify`'s
+            // marker-driven staleness walk -- where the consumer's first hand-edit makes it
+            // permanently stale with no reachable remedy, which is the stable bad state this
+            // declaration exists to end. ~keep
+            let normalized = if file.generated_header && !declared.matches(base_dir, &full_path) {
                 ensure_generated_header(&full_path, &normalized)
             } else {
                 if hash::content_has_alef_marker(&normalized) {
@@ -625,6 +691,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
 
     let changed_paths = std::sync::Mutex::new(std::collections::HashSet::new());
     let refused_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let user_owned_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
     let refuse = |path: &Path| {
         refused_paths
             .lock()
@@ -634,6 +701,21 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     prepared
         .par_iter()
         .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
+            // Ahead of every other branch, and unconditional. The declaration outranks the
+            // marker, the ownership record, `generated_header` and the content comparison
+            // alike -- it is the consuming repository stating authorship, which is the fact
+            // all of those are proxies for. The absent case falls through and seeds the path
+            // once, unstamped: suppressing creation entirely would leave `alef verify`'s
+            // missing-generated-file check failing forever for a path nothing will ever
+            // write. ~keep
+            if declared.matches(base_dir, full_path) && full_path.exists() {
+                user_owned_paths
+                    .lock()
+                    .expect("user-owned-path mutex poisoned")
+                    .insert(full_path.clone());
+                debug!("  declared user-owned (not written): {}", full_path.display());
+                return Ok(());
+            }
             if *is_text {
                 let normalized = std::str::from_utf8(content).context("prepared generated text was not UTF-8")?;
                 let is_markable = marker_comment_style(full_path).is_some();
@@ -702,7 +784,11 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                 }
                 atomic_write(full_path, content)?;
                 apply_shebang_chmod(full_path, normalized)?;
-                if !is_markable {
+                // A declared user-owned path is seeded but never recorded: the record is the
+                // unmarkable formats' equivalent of a provenance marker, and writing one
+                // would let a later run's ownership guard authorise the overwrite the
+                // declaration forbids. Same reason the header is suppressed above. ~keep
+                if !is_markable && !declared.matches(base_dir, full_path) {
                     crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
                 }
             } else {
@@ -727,7 +813,9 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                     }
                 }
                 atomic_write(full_path, content)?;
-                crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                if !declared.matches(base_dir, full_path) {
+                    crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                }
             }
             changed_paths
                 .lock()
@@ -738,9 +826,14 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
         })?;
 
     Ok(WriteReport {
+        // A declared user-owned path stays in `expected_paths` on purpose. That set is what
+        // the orphan sweeps read to decide a path is still wanted, and dropping a declared
+        // path from it would make the very next sweep delete the file alef just promised not
+        // to touch -- a strictly worse outcome than the refusal this replaces. ~keep
         expected_paths: prepared.into_keys().collect(),
         changed_paths: changed_paths.into_inner().expect("changed-path mutex poisoned"),
         refused_paths: refused_paths.into_inner().expect("refused-path mutex poisoned"),
+        user_owned_paths: user_owned_paths.into_inner().expect("user-owned-path mutex poisoned"),
     })
 }
 

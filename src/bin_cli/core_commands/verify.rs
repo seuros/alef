@@ -43,6 +43,17 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     // that verdict is about. Deriving the second from a second walk would let the report
     // describe a file set the verdict never saw -- see `verify_coverage`'s module doc. ~keep
     let (scanned, scan_coverage) = super::super::verify_scan::scan(&base_dir);
+    // A path `[workspace.ownership] user_owned` declares is dropped from the walk's RESULT, not
+    // from the walk: `scan_coverage` still counts the file as opened, because it was. What is
+    // removed is the verdict -- a declared path alef never rewrites cannot be held to a hash,
+    // and a consumer's first hand-edit to one it stamped under an earlier release would
+    // otherwise report it permanently stale with no reachable remedy. That is the same stable
+    // bad state the declaration exists to end, arriving through the other door. ~keep
+    let declared = pipeline::declared_user_owned(&base_dir)?;
+    let scanned: Vec<_> = scanned
+        .into_iter()
+        .filter(|(path, _, _)| !declared.matches(&base_dir, path))
+        .collect();
     let marked_paths: std::collections::HashSet<std::path::PathBuf> =
         scanned.iter().map(|(path, _, _)| path.clone()).collect();
     // Pure per-file content check -- see `crate::core::hash::compute_file_hash`'s doc for why
@@ -332,6 +343,20 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     // came to read a green `alef verify` as a whole-tree freshness gate when it is a claim
     // about marker-carrying files only. See `verify_coverage`'s module doc. ~keep
     let unmarked_seeds = crate::bin_cli::helpers::frozen::unmarked_create_once_seeds(&frozen_generated_files);
+    // Measured from the SAME managed surface the rest of this report is measured from, and with
+    // the same matcher the write guards use, so the number cannot describe a different file set
+    // than the one alef actually exempted. ~keep
+    let declared_user_owned_paths: Vec<&std::path::PathBuf> = all_managed_paths
+        .iter()
+        .filter(|path| declared.matches(&base_dir, path))
+        .collect();
+    let declared_user_owned_count = declared_user_owned_paths.len();
+    for path in &declared_user_owned_paths {
+        tracing::debug!(
+            "declared user-owned by [workspace.ownership] user_owned (contents not verified): {}",
+            path.display()
+        );
+    }
     // Paths at debug level, count in the report: one line per seed is 72 lines on a measured
     // consumer tree, and there is no action any of them prompts -- but the count must never be
     // invisible, which is what reporting them only inside the failure block amounted to. ~keep
@@ -344,6 +369,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         scan_coverage,
         unmarked_seeds.len(),
         ephemeral_excluded_count,
+        declared_user_owned_count,
     )
     .report_lines()
     {

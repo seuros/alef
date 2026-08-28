@@ -112,6 +112,9 @@ pub fn reconcile_managed_scaffold_manifests(
 /// returned report rather than this function doing it once itself -- so a future third caller
 /// of this exact function needs to remember the same call, not get it for free.
 ///
+/// `[workspace.ownership] user_owned` outranks every branch below, including `overwrite` --
+/// see [`super::user_owned::skip_declared_existing`] for what a declared path does instead.
+///
 /// NEVER-STAMP / NEVER-OVERWRITE guard: for every file this run is about to write, if a
 /// file already exists on disk at that path with content alef cannot prove it authored,
 /// the file is left completely untouched (no header stamp, no content change, `overwrite`
@@ -180,6 +183,7 @@ pub fn write_scaffold_files_report(
     base_dir: &Path,
     overwrite: bool,
 ) -> anyhow::Result<super::write::WriteReport> {
+    let declared = super::user_owned::declared_user_owned(base_dir)?;
     let mut report = super::write::WriteReport::default();
     let mut prepared = std::collections::BTreeMap::new();
     for file in files {
@@ -193,6 +197,9 @@ pub fn write_scaffold_files_report(
     }
     for file in prepared.into_values() {
         let full_path = base_dir.join(&file.path);
+        if super::user_owned::skip_declared_existing(&declared, base_dir, &full_path, &mut report) {
+            continue;
+        }
         // `can_skip` runs BEFORE the ownership guard and consults no ownership signal at all, so a
         // path alef demonstrably owns is still skipped outright by every `overwrite: false` writer.
         // That is harmless for a file a human may grow past a placeholder -- which is what
@@ -238,7 +245,9 @@ pub fn write_scaffold_files_report(
                     .with_context(|| format!("failed to create directory {}", parent.display()))?;
             }
             super::write::atomic_write(&full_path, &binary_content)?;
-            crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
+            if !declared.matches(base_dir, &full_path) {
+                crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
+            }
             report.changed_paths.insert(full_path.clone());
             debug!("  wrote (binary): {}", full_path.display());
             continue;
@@ -262,7 +271,8 @@ pub fn write_scaffold_files_report(
             file.content.clone()
         };
         let normalized = normalize_content(&full_path, &content);
-        let normalized = if file.generated_header {
+        // Seeded unstamped -- see `super::user_owned::skip_declared_existing`. ~keep
+        let normalized = if file.generated_header && !declared.matches(base_dir, &full_path) {
             super::write::ensure_generated_header(&full_path, &normalized)
         } else {
             normalized
@@ -366,6 +376,7 @@ pub fn write_scaffold_files_report(
         if !is_poly_merge_target
             && super::write::marker_comment_style(&full_path).is_none()
             && !crate::e2e::snippets::ownership::is_ledger_owned_snippet_path(base_dir, &full_path)
+            && !declared.matches(base_dir, &full_path)
         {
             crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
         }
@@ -572,7 +583,7 @@ pub fn write_scaffold_files_report(
     // The refusal summary is deliberately NOT emitted here. Scaffolding is one of five writing
     // phases, and a summary printed by one writer can only ever describe that writer's refusals —
     // which is how `alef all` came to report the scaffold phase's refusals while silently omitting
-    // every binding-phase one. Callers accumulate with `absorb_refusals` and report once. ~keep
+    // every binding-phase one. Callers accumulate with `absorb_unwritten` and report once. ~keep
     Ok(report)
 }
 

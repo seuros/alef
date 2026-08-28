@@ -14,6 +14,7 @@ pub mod lint_defaults;
 pub mod manifest_extras;
 pub mod new_config;
 pub mod output;
+pub mod ownership;
 pub mod package_metadata;
 pub mod poly;
 pub mod publish;
@@ -59,6 +60,7 @@ pub use output::{
     OutputConfig, OutputTemplate, ReadmeConfig, ScaffoldCargo, ScaffoldCargoEnvValue, ScaffoldCargoTargets,
     ScaffoldConfig, SetupConfig, SyncConfig, TestConfig, TextReplacement, UpdateConfig,
 };
+pub use ownership::{OwnershipConfig, UserOwnedPaths};
 pub use package_metadata::PackageMetadataConfig;
 pub use poly::{PolyConfig, TyposConfig};
 pub use publish::{PublishConfig, PublishLanguageConfig, VendorMode};

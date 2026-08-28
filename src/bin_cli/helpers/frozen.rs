@@ -112,11 +112,29 @@ pub(super) fn frozen_managed_paths(
     files: &[crate::core::backend::GeneratedFile],
     base_dir: &std::path::Path,
 ) -> Vec<FrozenFile> {
+    // `[workspace.ownership] user_owned` is consulted here, not just in the writers, because
+    // "frozen" means "alef would write this path and the guard refuses it forever" -- and for a
+    // declared path the antecedent is false by consumer declaration: no write is attempted, so
+    // no write is refused, and the absent marker is the documented steady state rather than a
+    // deadlock. Reporting one here would put it back under a heading whose only remedy (`alef
+    // adopt --write`) grants exactly the ownership the declaration disclaims. Deriving the
+    // declaration from `base_dir` is the same call the write guards make, so this report and
+    // those guards cannot disagree about which paths are declared. ~keep
+    //
+    // A config that declares ownership and fails to parse is fatal in `declared_user_owned`,
+    // but `alef verify` has already loaded and resolved the same file before reaching here, so
+    // that state is unreachable on this path; falling back to "declares nothing" is the same
+    // answer verify would give if the option were absent. ~keep
+    let declared = crate::cli::pipeline::declared_user_owned(base_dir)
+        .unwrap_or_else(|_| crate::core::config::UserOwnedPaths::none());
     crate::cli::pipeline::managed_generated_files(files)
         .into_iter()
         .chain(unmarkable_unclaimed_files(files, base_dir))
         .filter_map(|file| {
             let full_path = base_dir.join(&file.path);
+            if declared.matches(base_dir, &full_path) {
+                return None;
+            }
             let existing = std::fs::read_to_string(&full_path).ok()?;
             if crate::core::hash::content_has_alef_marker(&existing) {
                 return None;
