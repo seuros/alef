@@ -414,10 +414,63 @@ fn gen_field_access_body(
     out
 }
 
-pub(super) fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str, _core_import: &str) -> String {
+/// Which of `enum_def`'s variants a `_from_i32`/`_from_str` C validation function may still
+/// advertise, paired with each kept variant's ORIGINAL position in `enum_def.variants`.
+///
+/// The original position matters: [`gen_enum_from_i32_rs_helper`] reserves a discriminant per
+/// variant by enumeration position and never re-numbers when it drops an arm ("the discriminant
+/// is still reserved, so numbering stays stable across feature subsets" -- see that function's
+/// doc comment), so a validation function built from a re-sequenced (post-filter) index would
+/// disagree with the reconstruction helper about what a given integer means.
+fn declared_variant_indices<'a>(
+    enum_def: &'a EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> Vec<(usize, &'a crate::core::ir::EnumVariant)> {
+    enum_def
+        .variants
+        .iter()
+        .enumerate()
+        .filter(|(_, variant)| {
+            !matches!(
+                crate::codegen::conversions::enum_variant_declaration(variant, is_host_enum, configured_features),
+                crate::codegen::conversions::VariantDeclaration::Drop
+            )
+        })
+        .collect()
+}
+
+/// Generate the `{prefix}_{enum_snake}_from_i32` bounds-check function: accepts an i32
+/// discriminant iff it names a variant [`gen_enum_from_i32_rs_helper`] can actually reconstruct.
+///
+/// Filtering by [`crate::codegen::conversions::enum_variant_declaration`] -- the same authority
+/// napi's `gen_enum` consults for its wrapper declaration -- keeps this validation surface in
+/// agreement with that reconstruction helper: before this fix, every discriminant in
+/// `0..variants.len()` validated successfully here regardless of cfg, even though the helper
+/// already drops the reconstruction arm for any foreign cfg-gated variant unconditionally -- so a
+/// C caller could be told a discriminant was valid, then have the paired reconstruction silently
+/// return `None` for it. A host-owned cfg-gated variant, or a foreign one this binding's
+/// configured feature set cannot prove absent, is unaffected -- existing behavior, unchanged.
+///
+/// `host_crate_name`, not `core_import`, decides ownership -- the identical split
+/// [`gen_enum_from_i32_rs_helper`] already makes, and for the identical reason: `core_import` can
+/// be a configured re-export alias (`[crate] core_import`) that differs from the literal crate
+/// name a `rust_path`'s leading `::`-segment is stamped with, so comparing against it here would
+/// let this validation function disagree with the reconstruction helper about the exact same
+/// enum. ~keep
+pub(super) fn gen_enum_from_i32(
+    enum_def: &EnumDef,
+    prefix: &str,
+    host_crate_name: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let enum_name = &enum_def.name;
-    let variants: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(host_crate_name, &enum_def.rust_path);
+    let variants: Vec<minijinja::Value> = declared_variant_indices(enum_def, is_host_enum, configured_features)
+        .into_iter()
+        .map(|(index, variant)| context! { index => index, name => variant.name.clone() })
+        .collect();
 
     crate::backends::ffi::template_env::render(
         "enum_from_i32.jinja",
@@ -430,13 +483,27 @@ pub(super) fn gen_enum_from_i32(enum_def: &EnumDef, prefix: &str, _core_import: 
     )
 }
 
-pub(super) fn gen_enum_to_i32(enum_def: &EnumDef, prefix: &str, _core_import: &str) -> String {
+/// Generate the `{prefix}_{enum_snake}_from_str` function: maps a serde wire-value string to its
+/// integer discriminant, accepting only a wire value [`gen_enum_from_i32_rs_helper`] can actually
+/// reconstruct from that same discriminant. See [`gen_enum_from_i32`]'s doc comment -- the
+/// identical declaration/reconstruction agreement (and `host_crate_name` vs `core_import` split),
+/// for the string-keyed sibling function. ~keep
+pub(super) fn gen_enum_to_i32(
+    enum_def: &EnumDef,
+    prefix: &str,
+    host_crate_name: &str,
+    configured_features: Option<&std::collections::HashSet<&str>>,
+) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let enum_name = &enum_def.name;
-    let variants: Vec<String> = enum_def
-        .variants
-        .iter()
-        .map(|v| wire_variant_value(&v.name, v.serde_rename.as_deref(), enum_def.serde_rename_all.as_deref()))
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(host_crate_name, &enum_def.rust_path);
+    let variants: Vec<minijinja::Value> = declared_variant_indices(enum_def, is_host_enum, configured_features)
+        .into_iter()
+        .map(|(index, variant)| {
+            let serde_rename_all = enum_def.serde_rename_all.as_deref();
+            let wire_value = wire_variant_value(&variant.name, variant.serde_rename.as_deref(), serde_rename_all);
+            context! { index => index, wire_value => wire_value }
+        })
         .collect();
 
     crate::backends::ffi::template_env::render(

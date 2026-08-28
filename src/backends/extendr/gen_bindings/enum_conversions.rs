@@ -71,7 +71,12 @@ pub(super) fn gen_from_binding_to_core(
         })
         .collect();
 
-    let catch_all = catch_all(enum_def, is_host_enum, configured_features).then(|| {
+    // This match is over the BINDING enum extendr itself declares (`generators::gen_enum`, used
+    // whenever this bespoke module is reached), which keeps a foreign cfg-gated variant
+    // unconditionally regardless of `configured_features` -- so `declaration_may_drop_variant` is
+    // `false` here, unlike the core->binding direction below. See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
+    let catch_all = catch_all(enum_def, is_host_enum, configured_features, false).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_binding_to_core_catch_all.jinja",
             minijinja::context! {},
@@ -115,7 +120,10 @@ pub(super) fn gen_from_core_to_binding(
         })
         .collect();
 
-    let catch_all = catch_all(enum_def, is_host_enum, configured_features).then(|| {
+    // This match is over the real CORE type -- a shape extendr does not declare and cannot
+    // influence, so `configured_features`' proof is already the complete answer and
+    // `declaration_may_drop_variant` stays `true`, unlike the binding->core direction above. ~keep
+    let catch_all = catch_all(enum_def, is_host_enum, configured_features, true).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_core_to_binding_catch_all.jinja",
             minijinja::context! {},
@@ -133,7 +141,12 @@ pub(super) fn gen_from_core_to_binding(
     )
 }
 
-fn catch_all(enum_def: &EnumDef, is_host_enum: bool, configured_features: Option<&[String]>) -> bool {
+fn catch_all(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&[String]>,
+    declaration_may_drop_variant: bool,
+) -> bool {
     let has_excluded_variants = !enum_def.excluded_variants.is_empty();
     let core_has_struct_variants = enum_def
         .variants
@@ -157,6 +170,7 @@ fn catch_all(enum_def: &EnumDef, is_host_enum: bool, configured_features: Option
         is_host_enum,
         has_excluded_variants,
         configured_features,
+        declaration_may_drop_variant,
     ) || core_has_struct_variants
         || has_any_data_variants
 }

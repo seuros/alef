@@ -17,7 +17,7 @@
 use super::RustlerBackend;
 use crate::core::backend::Backend;
 use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, ParamDef, TypeRef};
 
 fn rustler_config_with_feature(configured_feature: Option<&str>) -> ResolvedCrateConfig {
     let features_line = configured_feature
@@ -77,6 +77,27 @@ fn foreign_cfg_tagged_enum_api() -> ApiSurface {
         }],
         ..Default::default()
     }
+}
+
+/// Like `foreign_cfg_tagged_enum_api`, but also declares a function taking the enum as a
+/// PARAMETER (not just a return type) -- `impl From<BindingEnum> for CoreType` is only generated
+/// for types `input_type_names` finds among parameter types, so the plain
+/// `foreign_cfg_tagged_enum_api` fixture (return-type-only, implicit via no `functions` at all)
+/// never exercises the binding->core direction at all. ~keep
+fn foreign_cfg_tagged_enum_api_with_param_function() -> ApiSurface {
+    let mut api = foreign_cfg_tagged_enum_api();
+    api.functions.push(FunctionDef {
+        name: "set_routing_strategy".to_string(),
+        rust_path: "test_lib::set_routing_strategy".to_string(),
+        params: vec![ParamDef {
+            name: "strategy".to_string(),
+            ty: TypeRef::Named("RoutingStrategy".to_string()),
+            ..Default::default()
+        }],
+        return_type: TypeRef::Unit,
+        ..Default::default()
+    });
+    api
 }
 
 /// Same foreign-ownership shape as `foreign_cfg_tagged_enum_api`, but the non-cfg variant
@@ -149,6 +170,31 @@ fn generate_bindings_keeps_catch_all_for_tagged_enum_foreign_variant_not_proven_
         conversion.contains("_ => Default::default(),"),
         "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
          match stays exhaustive, got:\n{conversion}"
+    );
+}
+
+/// THE E0004 REGRESSION this task fixes, reproduced end to end: Rustler's own `NifTaggedEnum`
+/// declaration (`types::gen_enum`, the non-flat-struct branch) declares every variant
+/// unconditionally -- it never consults `configured_features` at all -- so `Extra` is still part
+/// of the real generated `RoutingStrategy` Rust type even though this binding's own configured
+/// feature set proves the CORE dependency's own `Extra` variant unreachable. `impl From<RoutingStrategy>
+/// for dep_crate::RoutingStrategy` matches over that declared type, not the core type, so
+/// dropping its catch-all on the core-side proof leaves a real gap: `error[E0004]: non-exhaustive
+/// patterns`. ~keep
+#[test]
+fn generate_bindings_keeps_binding_to_core_catch_all_for_tagged_enum_foreign_variant_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_tagged_enum_api_with_param_function();
+    let config = rustler_config_with_feature(None);
+    let files = RustlerBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = core_to_binding_conversion(lib_rs, "impl From<RoutingStrategy> for dep_crate::RoutingStrategy {");
+
+    assert!(
+        conversion.contains("_ => Default::default(),"),
+        "Rustler's NifTaggedEnum declaration declares every variant unconditionally regardless of \
+         configured_features, so the binding->core match must keep its catch-all even when the \
+         core dependency's own variant is proven unreachable -- omitting it is \
+         error[E0004]: non-exhaustive patterns, got:\n{conversion}"
     );
 }
 

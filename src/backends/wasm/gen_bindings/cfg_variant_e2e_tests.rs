@@ -9,7 +9,7 @@
 use super::WasmBackend;
 use crate::core::backend::Backend;
 use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, EnumDef, EnumVariant};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FunctionDef, ParamDef, TypeRef};
 
 /// alef #536/#538: production once passed `None` for `configured_features` at this exact call
 /// site, so `enums::gen_enum`'s declaration was always unconditional while its conversion arm
@@ -157,6 +157,26 @@ fn foreign_cfg_enum_api() -> ApiSurface {
     }
 }
 
+/// Like `foreign_cfg_enum_api`, but also declares a function taking the enum as a PARAMETER
+/// (not just a return type) -- `impl From<BindingEnum> for CoreType` is only generated for
+/// types `input_type_names` finds among parameter types, so the plain `foreign_cfg_enum_api`
+/// fixture (return-type-only) never exercises the binding->core direction at all. ~keep
+fn foreign_cfg_enum_api_with_param_function() -> ApiSurface {
+    let mut api = foreign_cfg_enum_api();
+    api.functions.push(FunctionDef {
+        name: "set_routing_strategy".to_string(),
+        rust_path: "test_lib::set_routing_strategy".to_string(),
+        params: vec![ParamDef {
+            name: "strategy".to_string(),
+            ty: TypeRef::Named("RoutingStrategy".to_string()),
+            ..Default::default()
+        }],
+        return_type: TypeRef::Unit,
+        ..Default::default()
+    });
+    api
+}
+
 /// Slice out the `impl From<dep_crate::RoutingStrategy> for WasmRoutingStrategy { ... }`
 /// core-to-binding conversion -- the arm this task's fix touches (`gen_enum_from_core_to_binding_cfg`
 /// is what wasm's `ConversionConfig.configured_features` now reaches). ~keep
@@ -164,6 +184,22 @@ fn core_to_binding_conversion(lib_rs: &str) -> &str {
     let start = lib_rs
         .find("impl From<dep_crate::RoutingStrategy> for WasmRoutingStrategy {")
         .expect("generated crate must convert the foreign enum from core to the binding type");
+    let end = lib_rs[start..]
+        .find("\n}")
+        .map(|i| start + i + 2)
+        .expect("conversion impl must close");
+    &lib_rs[start..end]
+}
+
+/// Slice out the `impl From<WasmRoutingStrategy> for dep_crate::RoutingStrategy { ... }`
+/// binding-to-core conversion -- unlike `core_to_binding_conversion` above, this direction
+/// matches over the WASM wrapper enum itself, which `enums::gen_enum`'s foreign-variant branch
+/// (`enum_variant_declaration_without_cfg_attribute`, `None` for foreign) keeps unconditionally
+/// regardless of `configured_features`. ~keep
+fn binding_to_core_conversion(lib_rs: &str) -> &str {
+    let start = lib_rs
+        .find("impl From<WasmRoutingStrategy> for dep_crate::RoutingStrategy {")
+        .expect("generated crate must convert the binding enum back to the foreign core type");
     let end = lib_rs[start..]
         .find("\n}")
         .map(|i| start + i + 2)
@@ -206,5 +242,30 @@ fn generate_bindings_keeps_catch_all_for_foreign_variant_not_proven_unreachable_
         conversion.contains("_ => Default::default(),"),
         "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all so the \
          match stays exhaustive, got:\n{conversion}"
+    );
+}
+
+/// THE E0004 REGRESSION this task fixes, reproduced end to end: the WASM wrapper enum's
+/// foreign-variant declaration branch keeps `Extra` unconditionally regardless of
+/// `configured_features` (see `binding_to_core_conversion`'s doc comment), so
+/// `impl From<WasmRoutingStrategy> for dep_crate::RoutingStrategy` still needs its catch-all even
+/// though this binding's own configured feature set proves the CORE dependency's own `Extra`
+/// variant unreachable. Before this task's fix, `has_unresolved_foreign_cfg_variants` resolved
+/// both conversion directions from the same core-side proof and this test failed with the
+/// catch-all missing (`error[E0004]: non-exhaustive patterns`). ~keep
+#[test]
+fn generate_bindings_keeps_binding_to_core_catch_all_for_foreign_variant_proven_unreachable_end_to_end() {
+    let api = foreign_cfg_enum_api_with_param_function();
+    let config = wasm_config_with_feature(None);
+    let files = WasmBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = lib_rs_content(&files);
+    let conversion = binding_to_core_conversion(lib_rs);
+
+    assert!(
+        conversion.contains("_ => Default::default(),"),
+        "the WASM wrapper enum keeps a foreign cfg-gated variant unconditionally regardless of \
+         configured_features, so the binding->core match must keep its catch-all even when the \
+         core dependency's own variant is proven unreachable -- omitting it is \
+         error[E0004]: non-exhaustive patterns, got:\n{conversion}"
     );
 }

@@ -178,6 +178,31 @@ pub struct ConversionConfig<'a> {
     /// behavior (assume a foreign cfg-gated variant might still exist) unchanged -- only a
     /// backend that explicitly passes `Some` gets the more precise treatment. ~keep
     pub configured_features: Option<&'a [String]>,
+    /// Whether this backend's binding-wrapper enum DECLARATION (the `#[pyclass] enum Foo`,
+    /// `#[napi(string_enum)] enum Js...`, the extendr/rustler/dart mirror enum, etc -- emitted by
+    /// a `gen_enum`-style function outside `codegen::conversions`, not by this module) itself
+    /// drops a FOREIGN cfg-gated variant when `configured_features` proves it unreachable, the
+    /// same verdict `enum_variant_declaration` computes.
+    ///
+    /// This flag only changes [`gen_enum_from_binding_to_core_cfg`]'s catch-all decision. That
+    /// conversion's match is over the BINDING type this backend itself declares, so whether the
+    /// match stays exhaustive without a catch-all depends on what that declaration actually
+    /// emitted -- not on whether `configured_features` can merely prove the dependency's own
+    /// variant unreachable. [`gen_enum_from_core_to_binding_cfg`] is unaffected by this flag: its
+    /// match is over the real CORE type, a shape alef does not declare and cannot influence, so
+    /// `configured_features`' proof about that dependency is already the complete, correct answer
+    /// there regardless of what any binding declaration does.
+    ///
+    /// NAPI is the only backend whose enum declaration
+    /// (`backends::napi::gen_bindings::enums::gen_enum`) calls `enum_variant_declaration` with
+    /// `Some(configured_features)` and therefore genuinely drops the variant -- every other
+    /// backend's wrapper declaration (pyo3's flat/data enum bodies, magnus, rustler, dart, and
+    /// wasm's foreign-variant branch of `enum_variant_declaration_without_cfg_attribute`) keeps a
+    /// foreign cfg-gated variant unconditionally, ignoring `configured_features` entirely, so for
+    /// them the binding_to_core catch-all is required whenever such a variant exists no matter
+    /// what `configured_features` proves. Defaults to `false` (the safe direction: emit the
+    /// catch-all). Only NAPI sets this `true`. ~keep
+    pub declaration_drops_unreachable_foreign_variants: bool,
 }
 
 impl<'a> ConversionConfig<'a> {

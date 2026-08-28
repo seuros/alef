@@ -122,24 +122,39 @@ fn foreign_variant_proven_unreachable(cfg: &str, configured_features: &HashSet<&
 }
 
 /// Whether at least one of `enum_def`'s FOREIGN cfg-gated variants remains a real gap that a
-/// conversion catch-all must cover: not proven unreachable by `configured_features` (`None` means
-/// "unknown", the existing conservative default). Host-owned cfg-gated variants never count --
-/// see [`enum_conversion_needs_catch_all`]'s own doc comment for why the compiler already
-/// guarantees exhaustiveness for those without a catch-all.
+/// conversion catch-all must cover. Host-owned cfg-gated variants never count -- see
+/// [`enum_conversion_needs_catch_all`]'s own doc comment for why the compiler already guarantees
+/// exhaustiveness for those without a catch-all.
+///
+/// `declaration_may_drop_variant` says whether `configured_features`' proof that a foreign
+/// variant is unreachable is actually reflected in the shape being matched: `true` when the match
+/// is over the real CORE type (alef never declares that type, so the dependency's own compiled
+/// shape -- exactly what `configured_features` predicts -- is the whole story), or over a BINDING
+/// declaration that itself drops the variant on the same proof. `false` when the match is over a
+/// BINDING declaration that keeps the variant unconditionally regardless of `configured_features`
+/// -- there the gap is real independent of the proof, so every foreign cfg-gated variant counts.
+/// See [`ConversionConfig::declaration_drops_unreachable_foreign_variants`]'s doc comment for the
+/// full reasoning and which backends fall in which bucket. ~keep
 fn has_unresolved_foreign_cfg_variants(
     enum_def: &EnumDef,
     is_host_enum: bool,
     configured_features: Option<&HashSet<&str>>,
+    declaration_may_drop_variant: bool,
 ) -> bool {
     if is_host_enum {
         return false;
     }
     enum_def.variants.iter().any(|v| match v.cfg.as_deref() {
         None => false,
-        Some(cfg) => match configured_features {
-            Some(features) => !foreign_variant_proven_unreachable(cfg, features),
-            None => true,
-        },
+        Some(cfg) => {
+            if !declaration_may_drop_variant {
+                return true;
+            }
+            match configured_features {
+                Some(features) => !foreign_variant_proven_unreachable(cfg, features),
+                None => true,
+            }
+        }
     })
 }
 
@@ -230,17 +245,31 @@ pub fn enum_conversion_needs_catch_all(
 /// hand-rolled `has_cfg_variants` that ignores configured features entirely -- this is the direct
 /// entry point into the identical resolver, so those generators land on the same verdict as every
 /// other backend instead of re-deriving their own rule (alef #544). ~keep
+///
+/// `declaration_may_drop_variant` carries the same meaning as
+/// [`ConversionConfig::declaration_drops_unreachable_foreign_variants`] -- pass `true` when the
+/// generated match is over the real CORE type (matches `gen_enum_from_core_to_binding_cfg`'s
+/// shape) and `false` when it is over an alef-declared BINDING type that keeps a foreign
+/// cfg-gated variant unconditionally (matches `gen_enum_from_binding_to_core_cfg`'s shape for
+/// every backend but NAPI). A caller whose match is over a string tag value rather than a real
+/// Rust enum (e.g. rustler's and PHP's binding->core flat-enum matches) never risks
+/// `unreachable_patterns` and does not need this resolver at all. ~keep
 #[must_use]
 pub fn enum_conversion_needs_catch_all_for_features(
     enum_def: &EnumDef,
     is_host_enum: bool,
     has_excluded_variants: bool,
     configured_features: Option<&[String]>,
+    declaration_may_drop_variant: bool,
 ) -> bool {
     let features_set: Option<HashSet<&str>> =
         configured_features.map(|features| features.iter().map(String::as_str).collect());
-    let has_unresolved_cfg_variants =
-        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, features_set.as_ref());
+    let has_unresolved_cfg_variants = has_unresolved_foreign_cfg_variants(
+        enum_def,
+        is_host_enum,
+        features_set.as_ref(),
+        declaration_may_drop_variant,
+    );
     enum_conversion_needs_catch_all(has_unresolved_cfg_variants, is_host_enum, has_excluded_variants)
 }
 
@@ -272,9 +301,17 @@ pub fn gen_enum_from_binding_to_core_cfg(enum_def: &EnumDef, core_import: &str, 
         })
         .collect();
 
+    // This match is over the BINDING type this backend itself declares (`binding_name` above),
+    // not the real core type -- see `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s
+    // doc comment for why that makes `config`'s flag (not an unconditional `true`) the correct
+    // input here, unlike `gen_enum_from_core_to_binding_cfg` below. ~keep
     let configured_features = configured_features_set(config);
-    let has_unresolved_cfg_variants =
-        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, configured_features.as_ref());
+    let has_unresolved_cfg_variants = has_unresolved_foreign_cfg_variants(
+        enum_def,
+        is_host_enum,
+        configured_features.as_ref(),
+        config.declaration_drops_unreachable_foreign_variants,
+    );
     let needs_catch_all = enum_conversion_needs_catch_all(has_unresolved_cfg_variants, is_host_enum, false);
 
     crate::codegen::template_env::render(
@@ -316,9 +353,14 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
         })
         .collect();
 
+    // This match is over the real CORE type (`core_path` above), a shape alef does not declare
+    // and cannot influence -- `configured_features`' proof about that dependency is already the
+    // complete answer regardless of what any binding declaration does, so this always passes
+    // `true` here unlike `gen_enum_from_binding_to_core_cfg` above. See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     let configured_features = configured_features_set(config);
     let has_unresolved_cfg_variants =
-        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, configured_features.as_ref());
+        has_unresolved_foreign_cfg_variants(enum_def, is_host_enum, configured_features.as_ref(), true);
     let needs_catch_all = enum_conversion_needs_catch_all(
         has_unresolved_cfg_variants,
         is_host_enum,

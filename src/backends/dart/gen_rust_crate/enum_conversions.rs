@@ -151,12 +151,16 @@ pub(super) fn emit_from_mirror_to_core_enum(
     // generator can't drift from that verdict (alef #547). `false` for `has_excluded_variants`:
     // this binding->core direction only ever matches the mirror's OWN declared variants, which by
     // construction never carries a gap the way the core->binding direction's `excluded_variants`
-    // can. ~keep
+    // can. This match is over the Mirror enum this crate itself declares (`mirror::emit_mirror_enum`),
+    // which keeps a foreign cfg-gated variant unconditionally regardless of `configured_features`
+    // -- so `declaration_may_drop_variant` is `false`, unlike `emit_from_impl_for_enum` below. See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
         en,
         is_host_enum,
         false,
         configured_features,
+        false,
     ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"cfg-gated variant of {} not active in this build\"),\n",
@@ -393,12 +397,17 @@ pub(super) fn emit_from_impl_for_enum(
     // resolver every other Rust-emitting backend's enum conversion uses, so this bespoke Dart
     // generator can't drift from that verdict (alef #547). `!en.excluded_variants.is_empty()`
     // covers the orthogonal gap this core->binding direction alone can have: a core variant this
-    // binding never generates an arm for at all, regardless of cfg. ~keep
+    // binding never generates an arm for at all, regardless of cfg. This match is over the real
+    // CORE type (`core_ty` above) -- a shape this crate does not declare and cannot influence, so
+    // `configured_features`' proof about the dependency is already the complete answer regardless
+    // of the Mirror declaration's own policy. `true` here, unlike `emit_from_mirror_to_core_enum`
+    // above. See `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
         en,
         is_host_enum,
         !en.excluded_variants.is_empty(),
         configured_features,
+        true,
     ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"cfg-gated variant of {} not active in this build\"),\n",
@@ -728,6 +737,47 @@ mod tests {
         assert!(
             !out_mirror.contains("Tier1 =>"),
             "a foreign-crate cfg-gated variant must not be referenced in the From<Mirror> match, got:\n{out_mirror}"
+        );
+    }
+
+    /// THE E0004 REGRESSION this task fixes: when `configured_features` proves a foreign
+    /// cfg-gated variant unreachable, the core->binding catch-all is correctly omitted (matching
+    /// the real CORE type, which this crate does not declare -- the proof is the complete
+    /// answer), but the binding->core catch-all is still REQUIRED: the Mirror enum this crate
+    /// itself declares (`mirror::emit_mirror_enum`) keeps the variant unconditionally regardless
+    /// of `configured_features`, so the gap is real independent of the proof. Before this fix,
+    /// both directions shared one undifferentiated verdict and the mirror->core catch-all was
+    /// wrongly dropped too, producing `error[E0004]: non-exhaustive patterns`. ~keep
+    #[test]
+    fn foreign_cfg_variant_proven_unreachable_keeps_mirror_to_core_catch_all_but_drops_core_to_binding() {
+        let en = EnumDef {
+            name: "External".to_string(),
+            rust_path: "dep_crate::External".to_string(),
+            variants: vec![
+                make_unit_variant("Foo", None),
+                make_unit_variant("Bar", Some(r#"feature = "extra""#)),
+            ],
+            ..Default::default()
+        };
+        // No feature configured, so `configured_features` proves the foreign "extra" gate
+        // unsatisfied -- the real core type's `Bar` variant cannot exist in this build.
+        let configured_features: Option<&[String]> = Some(&[]);
+
+        let mut out_core = String::new();
+        emit_from_impl_for_enum(&mut out_core, &en, "mylib", configured_features);
+        assert!(
+            !out_core.contains("_ => unreachable!"),
+            "core->binding match is over the real core type, proven by configured_features to \
+             lack the variant -- a catch-all here is an unreachable pattern:\n{out_core}"
+        );
+
+        let mut out_mirror = String::new();
+        emit_from_mirror_to_core_enum(&mut out_mirror, &en, "mylib", configured_features);
+        assert!(
+            out_mirror.contains("_ => unreachable!"),
+            "binding->core match is over the Mirror enum this crate declares, which keeps the \
+             foreign variant unconditionally regardless of configured_features -- omitting the \
+             catch-all here is error[E0004]: non-exhaustive patterns:\n{out_mirror}"
         );
     }
 

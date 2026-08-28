@@ -5,9 +5,10 @@
 
 use crate::backends::swift::gen_rust_crate::type_bridge::enum_from_string_fn_name;
 use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::generators::type_paths::resolve_type_path;
-use crate::core::ir::EnumDef;
-use std::collections::HashMap;
+use crate::core::ir::{EnumDef, EnumVariant};
+use std::collections::{HashMap, HashSet};
 
 pub(crate) fn emit_enum_wrapper(
     en: &EnumDef,
@@ -22,6 +23,29 @@ pub(crate) fn emit_enum_wrapper(
     // Cargo feature; a variant's cfg is only safe to re-emit verbatim when this enum is owned
     // by the host crate. See `is_host_owned_rust_path`'s doc for why both halves must agree. ~keep
     let is_host_enum = is_host_owned_rust_path(source_crate, &en.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+
+    // The swift-bridge mirror enum below is self-contained -- unlike the `From`-impl match arms
+    // further down, its variant list never references `source_path`, so it compiles regardless
+    // of cfg. That is exactly why it can (and, before this fix, did) unconditionally advertise a
+    // FOREIGN cfg-gated variant this binding's own configured feature set proves unreachable: a
+    // Swift caller could construct `.tier1` even though the `From`-impl below already drops that
+    // variant's arm unconditionally (see the loop below), so no conversion could ever produce it.
+    // `declared_variants` is the SAME authority (`enum_variant_declaration`) napi's `gen_enum`
+    // consults for the identical decision -- both the mirror declaration and the to-string match
+    // further below must agree on this exact list, since both reference `Self::{variant}` against
+    // this same mirror type. ~keep
+    let declared_variants: Vec<&EnumVariant> = en
+        .variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
 
     out.push_str(&crate::backends::swift::template_env::render(
         "enum_unit_header.jinja",
@@ -29,7 +53,7 @@ pub(crate) fn emit_enum_wrapper(
             name => &en.name,
         },
     ));
-    for variant in &en.variants {
+    for variant in &declared_variants {
         out.push_str(&crate::backends::swift::template_env::render(
             "enum_unit_variant.jinja",
             minijinja::context! {
@@ -102,12 +126,17 @@ pub(crate) fn emit_enum_wrapper(
     // resolver every other Rust-emitting backend's enum conversion uses, so this bespoke Swift
     // generator can't drift from that verdict (alef #547). `!en.excluded_variants.is_empty()`
     // covers the orthogonal gap this match alone can have: a core variant this binding never
-    // generates an arm for at all, regardless of cfg. ~keep
+    // generates an arm for at all, regardless of cfg. This match is over the real CORE type
+    // (`source_path` above) -- swift-bridge only ever generates this one direction for enums, and
+    // the bridge wrapper declared just above is never matched over -- so `configured_features`'
+    // proof about the dependency is already the complete answer. `true` here. See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     if crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
         en,
         is_host_enum,
         !en.excluded_variants.is_empty(),
         configured_features,
+        true,
     ) {
         out.push_str(&format!(
             "            _ => unreachable!(\"bridge enum variant of {} not exposed in binding\"),\n",
@@ -119,8 +148,12 @@ pub(crate) fn emit_enum_wrapper(
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
+    // Filtered by `declared_variants`, not `en.variants`: this match arm names `Self::{variant}`
+    // against the SAME mirror type declared above, so it must reference exactly the variants that
+    // type actually has -- a proven-unreachable foreign variant dropped from the declaration would
+    // otherwise still be matched here, an `E0599: no variant found` compile error. ~keep
     let mut variants = String::new();
-    for variant in &en.variants {
+    for variant in &declared_variants {
         let serde_name = serde_variant_wire_name(variant, en.serde_rename_all.as_deref());
         variants.push_str(&crate::backends::swift::template_env::render(
             "rust_enum_to_string_variant.rs.jinja",
@@ -507,6 +540,97 @@ mod tests {
         assert!(
             !out.contains("_ => unreachable!"),
             "a host-owned cfg-gated variant alone must not trigger a catch-all, got:\n{out}"
+        );
+    }
+
+    /// The regression this task fixes: the swift-bridge mirror enum's own variant list is a
+    /// self-contained declaration -- unlike the From-impl arms above it, it never references
+    /// `source_path`, so it compiled fine even while unconditionally listing a FOREIGN cfg-gated
+    /// variant this binding's own configured feature set proves unreachable. A Swift caller could
+    /// then construct `.extra` even though no From-impl arm (dropped unconditionally regardless
+    /// of provenance, see the tests above) could ever produce it.
+    #[test]
+    fn foreign_variant_proven_unreachable_is_absent_from_mirror_declaration() {
+        let en = EnumDef {
+            name: "SampleMode".to_string(),
+            rust_path: "dep_crate::SampleMode".to_string(),
+            variants: vec![
+                make_unit_variant("Base", None),
+                make_unit_variant("Extra", Some(r#"feature = "testkit""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let configured_features: Vec<String> = vec![];
+        let out = emit_enum_wrapper(&en, "hostlib", &type_paths, Some(&configured_features));
+
+        assert!(
+            out.contains("pub enum SampleMode {\n    Base,\n}\n\n"),
+            "the mirror enum must declare only the reachable variant, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Extra,"),
+            "a proven-unreachable foreign variant must not be declared on the mirror enum, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Self::Extra"),
+            "the to-string match must not reference a variant the mirror enum no longer declares, got:\n{out}"
+        );
+    }
+
+    /// Same foreign variant, but `configured_features` is `None` -- "unknown", not proven absent,
+    /// since Cargo feature unification could still enable it -- so the mirror declaration must
+    /// keep advertising it, unchanged from before this fix.
+    #[test]
+    fn foreign_variant_not_proven_unreachable_stays_on_mirror_declaration() {
+        let en = EnumDef {
+            name: "SampleMode".to_string(),
+            rust_path: "dep_crate::SampleMode".to_string(),
+            variants: vec![
+                make_unit_variant("Base", None),
+                make_unit_variant("Extra", Some(r#"feature = "testkit""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "hostlib", &type_paths, None);
+
+        assert!(
+            out.contains("pub enum SampleMode {\n    Base,\n    Extra,\n}\n\n"),
+            "an unproven foreign variant must stay on the mirror declaration, got:\n{out}"
+        );
+        assert!(
+            out.contains("Self::Extra => \"Extra\".to_string(),"),
+            "the to-string match must still cover it, got:\n{out}"
+        );
+    }
+
+    /// A host-owned cfg-gated variant must never be dropped from the mirror declaration --
+    /// existing behavior, unchanged by this fix -- regardless of what `configured_features` says.
+    #[test]
+    fn host_owned_cfg_gated_variant_stays_on_mirror_declaration_regardless_of_configured_features() {
+        let en = EnumDef {
+            name: "SampleMode".to_string(),
+            rust_path: "hostlib::SampleMode".to_string(),
+            variants: vec![
+                make_unit_variant("Base", None),
+                make_unit_variant("Extra", Some(r#"feature = "extra_feature""#)),
+            ],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let configured_features: Vec<String> = vec![];
+        let out = emit_enum_wrapper(&en, "hostlib", &type_paths, Some(&configured_features));
+
+        assert!(
+            out.contains("pub enum SampleMode {\n    Base,\n    Extra,\n}\n\n"),
+            "a host-owned cfg-gated variant must stay declared, got:\n{out}"
         );
     }
 }

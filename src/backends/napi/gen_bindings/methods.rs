@@ -480,12 +480,17 @@ pub(super) fn gen_tagged_enum_core_to_binding(
     // configured feature set proves the variant unreachable -- delegated to
     // `codegen::conversions::enum_conversion_needs_catch_all_for_features`, the same resolver
     // every `ConversionConfig`-driven enum conversion already uses, so this bespoke
-    // tagged-data-enum generator can't drift from that verdict (alef #547). ~keep
+    // tagged-data-enum generator can't drift from that verdict (alef #547). This match is over
+    // the real CORE type (`core_path` above) -- the flattened `#[napi(object)]` struct this
+    // generator's sibling `gen_tagged_enum_as_object` declares is never matched over here, so
+    // `configured_features`' proof about the dependency is already the complete answer. `true`
+    // here. See `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     let has_excluded_variants = enum_conversion_needs_catch_all_for_features(
         enum_def,
         is_host_enum,
         !enum_def.excluded_variants.is_empty(),
         configured_features,
+        true,
     );
 
     crate::backends::napi::template_env::render(

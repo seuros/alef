@@ -58,6 +58,13 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     builder.add_import("std::ffi::{c_char, CStr, CString}");
     builder.add_import("std::cell::RefCell");
     let core_import = config.core_import_name();
+    // This binding's own configured feature set, used to decide whether a FOREIGN-owned
+    // cfg-gated enum variant is provably unreachable for this binding -- see
+    // `codegen::conversions::enum_variant_declaration`, the same authority napi's `gen_enum`
+    // consults for its wrapper declaration. ~keep
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Ffi);
+    let configured_features_set: std::collections::HashSet<&str> =
+        enabled_features.iter().map(String::as_str).collect();
 
     let lib_setup = build_lib_setup_context(api, config);
     let path_map = &lib_setup.path_map;
@@ -347,8 +354,21 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
 
     for enum_def in &api.enums {
         if crate::codegen::conversions::can_generate_enum_conversion(enum_def) {
-            builder.add_item(&gen_enum_from_i32(enum_def, prefix, &core_import));
-            builder.add_item(&gen_enum_to_i32(enum_def, prefix, &core_import));
+            // `&api.crate_name`, not `&core_import`: matches `gen_enum_from_i32_rs_helper`'s own
+            // `host_crate_name` argument a few lines above, so the two agree about which variants
+            // are host- vs foreign-owned for the identical enum.
+            builder.add_item(&gen_enum_from_i32(
+                enum_def,
+                prefix,
+                &api.crate_name,
+                Some(&configured_features_set),
+            ));
+            builder.add_item(&gen_enum_to_i32(
+                enum_def,
+                prefix,
+                &api.crate_name,
+                Some(&configured_features_set),
+            ));
         }
     }
 

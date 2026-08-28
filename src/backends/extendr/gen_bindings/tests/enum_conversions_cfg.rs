@@ -164,17 +164,14 @@ fn host_owned_cfg_gated_variant_keeps_arm_under_matching_cfg_guard() {
 /// `cargo clippy --all-targets`, an ungated arm naming a variant that may not exist would still
 /// compile and fail `E0599`. The ungated sibling variant's arm must still be present.
 ///
-/// Fails on pre-fix code the same way as the host-owned test: the original code never dropped
-/// any arm and never guarded any arm, so `External::Bar` (and `foreign_crate::External::Bar`)
-/// appear unconditionally in pre-fix output -- the `!out.contains(...)` assertions below fail.
-///
 /// `make_config()` configures no features at all, so the gating feature "extra" is provably NOT
-/// configured for this binding -- the foreign `Bar` variant can never exist in this build. Per
-/// alef #547, the catch-all must therefore be OMITTED (it would otherwise be an unreachable
-/// pattern under `-D warnings`); see the sibling positive-control test below for the case where
-/// the feature IS configured. ~keep
+/// configured for this binding -- the foreign `Bar` variant can never exist in the real CORE
+/// type. See the dedicated regression test below
+/// (`foreign_owned_cfg_gated_variant_proven_unreachable_drops_core_to_binding_catch_all_but_keeps_binding_to_core`)
+/// for why the catch-all verdict differs by direction once the variant is proven unreachable this
+/// way -- this test only covers arm-dropping and cfg-forwarding, common to both directions. ~keep
 #[test]
-fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_arm_and_catch_all() {
+fn foreign_owned_cfg_gated_variant_drops_arm_and_cfg_forward_in_both_directions() {
     let api = ApiSurface {
         enums: vec![EnumDef {
             name: "External".to_string(),
@@ -208,19 +205,74 @@ fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_arm_and_catch_all() 
         !out.contains(r#"#[cfg(feature = "extra")]"#),
         "a foreign crate's cfg gate must never be forwarded into this generated crate:\n{out}"
     );
+}
+
+/// THE E0004 REGRESSION this task fixes: `enum_conversion_needs_catch_all_for_features` used to
+/// resolve the SAME verdict for both conversion directions from one undifferentiated
+/// `configured_features` proof. That proof is only the complete answer for the core->binding
+/// direction (`gen_from_core_to_binding`, matching the real CORE type -- a shape extendr does not
+/// declare, so `configured_features` proving the dependency's own variant unreachable really does
+/// make the match exhaustive without a catch-all). The binding->core direction
+/// (`gen_from_binding_to_core`) matches the BINDING enum extendr itself declares
+/// (`codegen::generators::enums::gen_enum`), which keeps a foreign cfg-gated variant
+/// UNCONDITIONALLY regardless of `configured_features` -- so dropping its catch-all on the same
+/// proof left a real gap: `error[E0004]: non-exhaustive patterns` on
+/// `impl From<External> for foreign_crate::External`. Calling the two generators directly (rather
+/// than through the full `ExtendrBackend` pipeline) keeps each direction's output unambiguous. ~keep
+#[test]
+fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_core_to_binding_catch_all_but_keeps_binding_to_core() {
+    let enum_def = EnumDef {
+        name: "External".to_string(),
+        rust_path: "foreign_crate::External".to_string(),
+        variants: vec![
+            gated_variant("Foo", None),
+            gated_variant("Bar", Some(r#"feature = "extra""#)),
+        ],
+        ..Default::default()
+    };
+    let type_paths = std::collections::HashMap::new();
+    // No feature configured at all, so `configured_features` proves the foreign "extra" gate
+    // unsatisfied -- the real core type's `Bar` variant cannot exist in this build.
+    let configured_features: Option<&[String]> = Some(&[]);
+
+    let binding_to_core = super::super::enum_conversions::gen_from_binding_to_core(
+        &enum_def,
+        "test_lib",
+        &type_paths,
+        configured_features,
+    );
+    let core_to_binding = super::super::enum_conversions::gen_from_core_to_binding(
+        &enum_def,
+        "test_lib",
+        &type_paths,
+        configured_features,
+    );
+
     assert!(
-        !out.contains("_ => Self::default(),"),
-        "a foreign cfg-gated variant proven unreachable by this binding's own configured feature \
-         set must not leave behind an unreachable catch-all (a cargo clippy -D warnings failure), \
-         got:\n{out}"
+        !binding_to_core.contains("Bar") && !core_to_binding.contains("Bar"),
+        "a foreign crate's cfg-gated variant must not be named anywhere in the conversion output:\n\
+         binding->core:\n{binding_to_core}\ncore->binding:\n{core_to_binding}"
+    );
+
+    assert!(
+        binding_to_core.contains("_ => Self::default(),"),
+        "the binding->core match is over the BINDING enum extendr itself declares, which keeps a \
+         foreign cfg-gated variant unconditionally regardless of configured features -- omitting \
+         the catch-all here is error[E0004]: non-exhaustive patterns, got:\n{binding_to_core}"
+    );
+    assert!(
+        !core_to_binding.contains("_ => Self::default(),"),
+        "the core->binding match is over the real core type, which this binding's own configured \
+         feature set proves lacks the variant -- a catch-all there is an unreachable pattern under \
+         -D warnings, got:\n{core_to_binding}"
     );
 }
 
 /// Positive control for the test above: when the gating feature IS configured (so the foreign
-/// variant is NOT proven unreachable), the catch-all must still be emitted -- otherwise the fix
-/// would have overcorrected into "never emit a catch-all," which trades one build failure
-/// (unreachable pattern) for another (non-exhaustive match, since the arm itself is still always
-/// dropped for a foreign variant). ~keep
+/// variant is NOT proven unreachable), the catch-all must still be emitted in BOTH directions --
+/// otherwise the fix would have overcorrected into "never emit a catch-all," which trades one
+/// build failure (unreachable pattern) for another (non-exhaustive match, since the arm itself is
+/// still always dropped for a foreign variant). ~keep
 #[test]
 fn foreign_owned_cfg_gated_variant_not_proven_unreachable_keeps_catch_all() {
     let api = ApiSurface {

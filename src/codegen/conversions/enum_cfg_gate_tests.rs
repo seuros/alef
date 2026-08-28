@@ -169,10 +169,73 @@ fn foreign_cfg_variant_proven_disabled_needs_no_catch_all() {
         "the still-reachable variant must still convert, got:\n{core_to_binding}"
     );
 
+    // `gen_enum_from_core_to_binding_cfg`'s match is over the real CORE type -- a shape alef
+    // does not declare -- so `configured_features`' proof is the complete answer there
+    // regardless of `declaration_drops_unreachable_foreign_variants`. `gen_enum_from_binding_to_core_cfg`
+    // is the opposite: see the two tests below.
+}
+
+/// THE E0004 REGRESSION this task fixes: `ConversionConfig::declaration_drops_unreachable_foreign_variants`
+/// defaults to `false`, matching every backend but NAPI -- pyo3's flat/data enum bodies, magnus,
+/// rustler, dart, and wasm's foreign-variant declaration branch all keep a foreign cfg-gated
+/// variant in their wrapper declaration UNCONDITIONALLY, ignoring `configured_features` entirely.
+/// So even though `configured_features` here proves the dependency's own variant unreachable,
+/// this backend's declared BINDING type still carries it, and `gen_enum_from_binding_to_core_cfg`
+/// (whose match is over that binding type) must still catch it. Before this fix, the catch-all
+/// was dropped on the strength of the same proof `gen_enum_from_core_to_binding_cfg` legitimately
+/// uses, and the generated binding crate failed with `error[E0004]: non-exhaustive patterns`
+/// (this test fails on that pre-fix code with a default `ConversionConfig`). ~keep
+#[test]
+fn foreign_cfg_variant_proven_disabled_still_needs_binding_to_core_catch_all_by_default() {
+    let mut enum_def = simple_enum();
+    enum_def.rust_path = "dep_crate::Backend".to_string();
+    enum_def.variants[1].cfg = Some(r#"feature = "gpu-accel""#.to_string());
+
+    let configured = vec!["other-feature".to_string()];
+    let config = ConversionConfig {
+        configured_features: Some(configured.as_slice()),
+        ..Default::default()
+    };
+
+    let binding_to_core = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
+    assert!(
+        binding_to_core.contains("_ => Default::default()"),
+        "this backend's binding declaration keeps a foreign cfg-gated variant unconditionally \
+         (declaration_drops_unreachable_foreign_variants defaults to false), so proving the \
+         dependency's own variant unreachable must NOT drop the binding->core catch-all -- \
+         omitting it here is error[E0004]: non-exhaustive patterns, got:\n{binding_to_core}"
+    );
+}
+
+/// The NAPI shape: when `declaration_drops_unreachable_foreign_variants` is `true` (set only by
+/// NAPI, whose own enum declaration threads the identical `configured_features` proof into
+/// `enum_variant_declaration` and genuinely drops the variant), the binding->core catch-all IS
+/// correctly omitted on the same proof -- the binding type this backend declares no longer
+/// carries the variant either, so keeping the catch-all would be an unreachable pattern under
+/// `-D warnings`. This is the one case where dropping the catch-all is safe. ~keep
+#[test]
+fn foreign_cfg_variant_proven_disabled_drops_binding_to_core_catch_all_when_declaration_drops_it() {
+    let mut enum_def = simple_enum();
+    enum_def.rust_path = "dep_crate::Backend".to_string();
+    enum_def.variants[1].cfg = Some(r#"feature = "gpu-accel""#.to_string());
+
+    let configured = vec!["other-feature".to_string()];
+    let config = ConversionConfig {
+        configured_features: Some(configured.as_slice()),
+        declaration_drops_unreachable_foreign_variants: true,
+        ..Default::default()
+    };
+
     let binding_to_core = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
     assert!(
         !binding_to_core.contains("_ => Default::default()"),
-        "same proof, opposite direction, got:\n{binding_to_core}"
+        "when this backend's own binding declaration also drops a foreign variant proven \
+         unreachable (the NAPI shape), the binding->core catch-all must be omitted too -- keeping \
+         it would be an unreachable pattern under -D warnings, got:\n{binding_to_core}"
+    );
+    assert!(
+        !binding_to_core.contains("Backend::Gpu"),
+        "the proven-unreachable variant must not be referenced at all, got:\n{binding_to_core}"
     );
 }
 

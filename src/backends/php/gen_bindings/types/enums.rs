@@ -1,17 +1,29 @@
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::ImplBuilder;
-use crate::codegen::conversions::enum_conversion_needs_catch_all_for_features;
+use crate::codegen::conversions::{
+    VariantDeclaration, enum_conversion_needs_catch_all_for_features, enum_variant_declaration,
+};
 use crate::codegen::naming::wire_variant_value;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 use ahash::AHashSet;
+use std::collections::HashSet;
 
 use super::structs::is_php_copy_type;
 
 /// Generate a `#[php_class]` with class constants for unit-variant enums.
 ///
 /// Emits a PHP-visible class that allows consumers to reference enum values as constants.
-pub(crate) fn gen_enum_constants(enum_def: &EnumDef, php_namespace: Option<&str>) -> String {
+///
+/// `is_host_enum`/`configured_features` are forwarded to [`enum_constant_entries`] so a
+/// FOREIGN cfg-gated variant this binding's own configured feature set proves unreachable is
+/// never advertised as a constant here -- see that function's doc comment. ~keep
+pub(crate) fn gen_enum_constants(
+    enum_def: &EnumDef,
+    php_namespace: Option<&str>,
+    is_host_enum: bool,
+    configured_features: Option<&HashSet<&str>>,
+) -> String {
     let mut lines = vec![];
 
     // Emit the #[php_class] decorator with optional namespace.
@@ -32,7 +44,7 @@ pub(crate) fn gen_enum_constants(enum_def: &EnumDef, php_namespace: Option<&str>
     lines.push("#[php_impl]".to_string());
     lines.push(format!("impl {} {{", enum_def.name));
 
-    for (const_name, wire_value) in enum_constant_entries(enum_def) {
+    for (const_name, wire_value) in enum_constant_entries(enum_def, is_host_enum, configured_features) {
         lines.push(format!("    pub const {const_name}: &str = \"{wire_value}\";"));
     }
 
@@ -56,10 +68,30 @@ pub(crate) fn gen_enum_constants(enum_def: &EnumDef, php_namespace: Option<&str>
 /// `gen_enum_stub` (`type_stubs.rs`), so the two surfaces cannot independently drift on member
 /// names or values — the stub declares exactly what this function tells the runtime to register,
 /// not a native PHP `enum` the extension never registers. ~keep
-pub(crate) fn enum_constant_entries(enum_def: &EnumDef) -> Vec<(String, String)> {
+///
+/// A variant this binding's own configured feature set proves unreachable
+/// ([`enum_variant_declaration`] returns [`VariantDeclaration::Drop`]) is omitted entirely: unlike
+/// a Rust enum declaration, `pub const NAME: &str = "value"` compiles regardless of whether the
+/// real Rust variant exists, so nothing here would otherwise catch a constant that advertises a
+/// value the generated binding->core conversion can never actually produce (that conversion
+/// already drops the match arm for any foreign cfg-gated variant unconditionally). Dropping the
+/// entry here closes that gap instead of leaving it to a runtime PHP caller. A host-owned
+/// cfg-gated variant is never dropped -- `enum_variant_declaration` always resolves it to `Keep`,
+/// matching every other backend's declaration surface. ~keep
+pub(crate) fn enum_constant_entries(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&HashSet<&str>>,
+) -> Vec<(String, String)> {
     enum_def
         .variants
         .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features),
+                VariantDeclaration::Drop
+            )
+        })
         .map(|variant| {
             let const_name = escape_php_reserved_constant(&variant.name.to_uppercase());
             let wire_value = wire_variant_value(
@@ -255,6 +287,15 @@ pub(crate) fn gen_flat_data_enum(enum_def: &EnumDef, mapper: &PhpMapper, php_nam
 /// for the flat data enum. `opaque_types` / `bridge_type_aliases` / `enum_names` / `core_import` are
 /// threaded into the per-variant constructor machinery so it reuses the same param and conversion
 /// logic the flat-enum `From` impl and method bodies use.
+///
+/// `configured_features` narrows `allowed_tags` -- the `from_json` validation list -- to variants
+/// [`enum_variant_declaration`] does not resolve to [`VariantDeclaration::Drop`]. Without this, a
+/// FOREIGN cfg-gated variant proven unreachable stayed in `allowed_tags` even though
+/// [`gen_flat_data_enum_from_impls`]'s binding->core match already drops its arm unconditionally:
+/// `from_json` would accept the tag, then the eventual `.into()` conversion falls through to the
+/// catch-all, silently producing a different variant (or `unreachable!()`) instead of ever
+/// constructing the one the tag named. Rejecting the tag up front at `from_json` closes that gap
+/// instead of deferring to a worse failure downstream. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gen_flat_data_enum_methods(
     enum_def: &EnumDef,
@@ -263,14 +304,22 @@ pub(crate) fn gen_flat_data_enum_methods(
     bridge_type_aliases: &AHashSet<String>,
     enum_names: &AHashSet<String>,
     core_import: &str,
+    configured_features: Option<&HashSet<&str>>,
 ) -> String {
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
     let mut impl_builder = ImplBuilder::new(&enum_def.name);
     impl_builder.add_attr("php_impl");
 
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let allowed_tags = enum_def
         .variants
         .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features),
+                VariantDeclaration::Drop
+            )
+        })
         .map(|variant| format!("{:?}", variant_tag_value(variant, enum_def)))
         .collect::<Vec<_>>()
         .join(" | ");
@@ -489,12 +538,19 @@ pub(crate) fn gen_flat_data_enum_from_impls(
     // configured-feature-aware resolver every `ConversionConfig`-driven enum conversion already
     // uses, which this defers to so the reimplementations here and in NAPI's
     // `gen_tagged_enum_core_to_binding` can't drift back out of sync with each other or with the
-    // shared `gen_enum_from_core_to_binding_cfg` (alef #544). ~keep
+    // shared `gen_enum_from_core_to_binding_cfg` (alef #544). This match is over the real CORE
+    // type (`core_path` above), a shape this crate does not declare and cannot influence, so
+    // `configured_features`' proof about the dependency is already the complete answer -- `true`
+    // here. (The sibling `From<PhpDataEnum> for core::DataEnum` impl below matches a runtime
+    // string tag, never a real enum, so `unreachable_patterns` can never fire there and it needs
+    // no call into this resolver at all.) See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     if enum_conversion_needs_catch_all_for_features(
         enum_def,
         is_host_enum,
         !enum_def.excluded_variants.is_empty(),
         configured_features,
+        true,
     ) {
         out.push_str("            _ => Default::default(),\n");
     }

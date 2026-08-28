@@ -389,7 +389,7 @@ fn struct_with_unit_enum_field() -> crate::core::ir::TypeDef {
 /// (`serde_json::to_value`) produces.
 #[test]
 fn php_enum_class_constant_carries_the_serde_wire_value_not_the_rust_variant_name() {
-    let emitted = super::types::gen_enum_constants(&snake_case_unit_enum(), None);
+    let emitted = super::types::gen_enum_constants(&snake_case_unit_enum(), None, false, None);
 
     assert!(
         emitted.contains("pub const INPROGRESS: &str = \"in_progress\";"),
@@ -424,7 +424,7 @@ fn php_enum_class_constant_values_are_all_accepted_by_the_generated_string_to_co
         std::slice::from_ref(&enum_def),
     );
 
-    let constants = super::types::gen_enum_constants(&enum_def, None);
+    let constants = super::types::gen_enum_constants(&enum_def, None, false, None);
     let values: Vec<String> = constants
         .lines()
         .filter_map(|line| line.split_once("= \"").and_then(|(_, rest)| rest.split_once('"')))

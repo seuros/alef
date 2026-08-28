@@ -431,7 +431,7 @@ mod flat_data_enum_from_impls_tests {
         };
         let generated_struct = gen_flat_data_enum(&enum_def, &mapper, None);
         let empty = AHashSet::new();
-        let generated_methods = gen_flat_data_enum_methods(&enum_def, &mapper, &empty, &empty, &empty, "crate");
+        let generated_methods = gen_flat_data_enum_methods(&enum_def, &mapper, &empty, &empty, &empty, "crate", None);
 
         assert!(
             !generated_struct.contains("#[php(prop"),
@@ -526,6 +526,133 @@ mod flat_data_enum_from_impls_tests {
         assert!(
             !generated.contains("#[cfg("),
             "ungated enum must not emit #[cfg(...)], got:\n{generated}"
+        );
+    }
+}
+
+/// Coverage for the declaration-surface parity fix: `enum_constant_entries` (the class-constants
+/// declaration) and `gen_flat_data_enum_methods`'s `allowed_tags` (the flat-enum `from_json`
+/// validation list) must both defer to `codegen::conversions::enum_variant_declaration` -- the
+/// same authority the napi backend's `gen_enum` already consults -- so a FOREIGN cfg-gated
+/// variant this binding's configured feature set proves unreachable is never advertised as
+/// constructible, while a host-owned cfg-gated variant (or a foreign one that is merely unproven,
+/// not proven absent) keeps its prior unconditional behavior. ~keep
+#[cfg(test)]
+mod enum_declaration_parity_tests {
+    use super::super::{enum_constant_entries, gen_enum_constants, gen_flat_data_enum_methods};
+    use crate::backends::php::type_map::PhpMapper;
+    use crate::core::ir::{EnumDef, EnumVariant};
+    use ahash::AHashSet;
+    use std::collections::HashSet;
+
+    const HOST_CRATE: &str = "hostlib";
+
+    fn unit_variant(name: &str, cfg: Option<&str>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            cfg: cfg.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// `Base` is always ungated; `Extra` carries `cfg`. `owner` selects whether the whole enum
+    /// (and therefore `Extra`'s cfg) is host- or foreign-owned relative to [`HOST_CRATE`].
+    fn sample_enum(owner: &str, cfg: &str) -> EnumDef {
+        EnumDef {
+            name: "SampleMode".to_string(),
+            rust_path: format!("{owner}::SampleMode"),
+            serde_tag: Some("kind".to_string()),
+            variants: vec![unit_variant("Base", None), unit_variant("Extra", Some(cfg))],
+            ..Default::default()
+        }
+    }
+
+    fn mapper() -> PhpMapper {
+        PhpMapper {
+            enum_names: AHashSet::new(),
+            data_enum_names: AHashSet::new(),
+            untagged_data_enum_names: AHashSet::new(),
+            json_string_enum_names: AHashSet::new(),
+        }
+    }
+
+    /// A foreign-owned `Extra` behind a feature absent from `configured_features` is proven
+    /// unreachable -- neither the class constant nor the flat-enum `allowed_tags` entry may
+    /// advertise it, since the binding->core conversion can never produce it either.
+    #[test]
+    fn foreign_variant_proven_unreachable_is_absent_from_both_declaration_surfaces() {
+        let en = sample_enum("dep_crate", r#"feature = "testkit""#);
+        let is_host_enum = false;
+        let configured: HashSet<&str> = HashSet::new();
+
+        let entries = enum_constant_entries(&en, is_host_enum, Some(&configured));
+        assert_eq!(
+            entries,
+            vec![("BASE".to_string(), "Base".to_string())],
+            "the proven-unreachable foreign variant must be dropped, got: {entries:?}"
+        );
+        let constants = gen_enum_constants(&en, None, is_host_enum, Some(&configured));
+        assert!(!constants.contains("EXTRA"), "got:\n{constants}");
+
+        let empty = AHashSet::new();
+        let methods = gen_flat_data_enum_methods(&en, &mapper(), &empty, &empty, &empty, HOST_CRATE, Some(&configured));
+        assert!(
+            methods.contains("matches!(value.kind_tag.as_str(), \"Base\" )"),
+            "allowed_tags must list only the reachable variant, got:\n{methods}"
+        );
+        assert!(!methods.contains("\"Extra\""), "got:\n{methods}");
+    }
+
+    /// The same foreign `Extra`, but `configured_features` is `None` ("unknown" -- alef's static
+    /// read cannot prove the feature off, since Cargo feature unification could still enable it).
+    /// Both declaration surfaces must keep advertising it, unchanged from before this fix.
+    #[test]
+    fn foreign_variant_not_proven_unreachable_stays_on_both_declaration_surfaces() {
+        let en = sample_enum("dep_crate", r#"feature = "testkit""#);
+        let is_host_enum = false;
+
+        let entries = enum_constant_entries(&en, is_host_enum, None);
+        assert_eq!(
+            entries,
+            vec![
+                ("BASE".to_string(), "Base".to_string()),
+                ("EXTRA".to_string(), "Extra".to_string()),
+            ],
+            "an unproven foreign variant must stay declared, got: {entries:?}"
+        );
+
+        let empty = AHashSet::new();
+        let methods = gen_flat_data_enum_methods(&en, &mapper(), &empty, &empty, &empty, HOST_CRATE, None);
+        assert!(
+            methods.contains("matches!(value.kind_tag.as_str(), \"Base\" | \"Extra\" )"),
+            "got:\n{methods}"
+        );
+    }
+
+    /// A host-owned cfg-gated `Extra` (the enum's `rust_path` is rooted in [`HOST_CRATE`] itself)
+    /// must never be dropped by [`enum_variant_declaration`] -- existing behavior, unchanged by
+    /// this fix -- regardless of what `configured_features` says.
+    #[test]
+    fn host_owned_cfg_gated_variant_stays_on_both_declaration_surfaces() {
+        let en = sample_enum(HOST_CRATE, r#"feature = "extra_feature""#);
+        let is_host_enum = true;
+        let configured: HashSet<&str> = HashSet::new();
+
+        let entries = enum_constant_entries(&en, is_host_enum, Some(&configured));
+        assert_eq!(
+            entries,
+            vec![
+                ("BASE".to_string(), "Base".to_string()),
+                ("EXTRA".to_string(), "Extra".to_string()),
+            ],
+            "a host-owned cfg-gated variant must stay declared, got: {entries:?}"
+        );
+
+        let empty = AHashSet::new();
+        let methods = gen_flat_data_enum_methods(&en, &mapper(), &empty, &empty, &empty, HOST_CRATE, Some(&configured));
+        assert!(
+            methods.contains("matches!(value.kind_tag.as_str(), \"Base\" | \"Extra\" )"),
+            "got:\n{methods}"
         );
     }
 }

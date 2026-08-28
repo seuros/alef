@@ -6,6 +6,7 @@ mod common;
 mod constructors;
 mod custom_modules;
 mod doxygen;
+mod enum_i32_declaration_parity;
 mod enum_item_cfg;
 mod feature_defines;
 mod fields;

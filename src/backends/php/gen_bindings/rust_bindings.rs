@@ -152,8 +152,11 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     // This binding's own configured feature set (already expanded through the core crate's
     // `[features]` graph), used to decide whether a FOREIGN-owned cfg-gated enum variant is
     // provably unreachable for this binding -- see
-    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features`. ~keep
+    // `codegen::conversions::enums::enum_conversion_needs_catch_all_for_features` and
+    // `codegen::conversions::enum_variant_declaration`. ~keep
     let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Php);
+    let configured_features_set: std::collections::HashSet<&str> =
+        enabled_features.iter().map(String::as_str).collect();
 
     let php_config = config.php.as_ref();
     let exclude_functions = php_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
@@ -392,6 +395,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     }
 
     for enum_def in &api.enums {
+        let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(&core_import, &enum_def.rust_path);
         if is_tagged_data_enum(enum_def) {
             builder.add_item(&gen_flat_data_enum(enum_def, &mapper, Some(&php_namespace)));
             builder.add_item(&gen_flat_data_enum_methods(
@@ -401,9 +405,15 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 &bridge_type_aliases_set,
                 &enum_names,
                 &core_import,
+                Some(&configured_features_set),
             ));
         } else {
-            builder.add_item(&gen_enum_constants(enum_def, Some(&php_namespace)));
+            builder.add_item(&gen_enum_constants(
+                enum_def,
+                Some(&php_namespace),
+                is_host_enum,
+                Some(&configured_features_set),
+            ));
         }
     }
 

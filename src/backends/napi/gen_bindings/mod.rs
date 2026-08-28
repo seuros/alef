@@ -524,6 +524,11 @@ impl Backend for NapiBackend {
             json_as_value: true,
             never_skip_cfg_field_names: &never_skip_cfg_field_names,
             configured_features: Some(enabled_features.as_slice()),
+            // NAPI's own enum declaration (`enums::gen_enum`, below) threads `configured_features`
+            // into `enum_variant_declaration` and genuinely drops a foreign cfg-gated variant it
+            // proves unreachable -- the only backend that does. See
+            // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
+            declaration_drops_unreachable_foreign_variants: true,
             ..Default::default()
         };
         for typ in api

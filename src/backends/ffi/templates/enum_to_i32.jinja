@@ -17,7 +17,7 @@ pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_from_str(name: *const c_c
         }
     };
     match s {
-{% for variant in variants %}        "{{ variant }}" => {{ loop.index0 }},
+{% for variant in variants %}        "{{ variant.wire_value }}" => {{ variant.index }},
 {% endfor %}        _ => {
             set_last_error(1, "Unknown {{ enum_name }} variant");
             -1

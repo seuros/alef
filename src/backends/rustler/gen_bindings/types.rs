@@ -404,11 +404,16 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(
     // `codegen::conversions::enum_conversion_needs_catch_all_for_features`, the same resolver
     // every `ConversionConfig`-driven enum conversion already uses, so this bespoke flat-data
     // generator can't drift from that verdict (alef #544). ~keep
+    // This match is over the real CORE type (`core_path` above) -- a shape this generator does
+    // not declare and cannot influence, so `configured_features`' proof about the dependency is
+    // already the complete answer regardless of any binding declaration. `true` here. See
+    // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
     if enum_conversion_needs_catch_all_for_features(
         enum_def,
         is_host_enum,
         !enum_def.excluded_variants.is_empty(),
         configured_features,
+        true,
     ) {
         out.push_str("            _ => Self::default(),\n");
     }
