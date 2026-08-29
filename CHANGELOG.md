@@ -10,9 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Dart enum JSON decoding now returns an error for variants unavailable in the binding instead of panicking.
-
-### Fixed
-
+- Generated Python converters now type-check mixed optional constructor defaults with Pyrefly.
 - Refresh Alef-managed Ruby development-gem constraints in existing Gemfiles
   while preserving consumer-added development dependencies.
 - Resolve Node stream item types from explicit recipes or matching adapters, then

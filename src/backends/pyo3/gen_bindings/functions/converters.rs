@@ -70,6 +70,9 @@ pub(super) fn emit_converters(
     out.push_str(
     "def _coerce_enum(enum_cls: type[_E], value: object) -> _E:\n    \"\"\"Coerce a string/alias value into the matching pyclass enum instance.\"\"\"\n    if isinstance(value, enum_cls):\n        return value\n    if value is None:\n        msg = f\"unknown {getattr(enum_cls, '__name__', enum_cls)!s} value: {value!r}\"\n        raise ValueError(msg)\n    s = str(value).replace(\"-\", \"_\").replace(\" \", \"_\")\n    snake = _pascal_to_snake(s)\n    candidates = (\n        s,\n        s.upper(),\n        s.lower(),\n        snake,\n        snake.upper(),\n        \"\".join(part.capitalize() for part in s.split(\"_\")),\n        \"\".join(part.capitalize() for part in snake.split(\"_\")),\n    )\n    for candidate in candidates:\n        attr = getattr(enum_cls, candidate, None)\n        if isinstance(attr, enum_cls):\n            return attr\n    msg = f\"unknown {getattr(enum_cls, '__name__', enum_cls)!s} value: {value!r}\"\n    raise ValueError(msg)\n\n\n",
 );
+    out.push_str(
+        "def _optional_kwarg(name: str, value: Any) -> dict[str, Any]:\n    return {} if value is None else {name: value}\n\n\n",
+    );
 
     for type_name in needed_converters {
         let typ = default_types[type_name];

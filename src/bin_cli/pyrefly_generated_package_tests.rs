@@ -293,6 +293,32 @@ pub fn describe_layout(spec: LayoutSpec) -> String {
     };
     format!("{}: {alignment}/{density}/{casing}", spec.title)
 }
+
+fn default_minimum_score() -> f64 {
+    0.5
+}
+
+fn default_minimum_words() -> usize {
+    10
+}
+
+fn default_require_text() -> bool {
+    true
+}
+
+#[derive(Default)]
+pub struct QualityThresholds {
+    #[serde(default = "default_minimum_score")]
+    pub minimum_score: f64,
+    #[serde(default = "default_minimum_words")]
+    pub minimum_words: usize,
+    #[serde(default = "default_require_text")]
+    pub require_text: bool,
+}
+
+pub fn assess_quality(thresholds: QualityThresholds) -> bool {
+    thresholds.require_text && thresholds.minimum_words > 0 && thresholds.minimum_score > 0.0
+}
 "#;
 
 const FIXTURE_ALEF_TOML: &str = r#"

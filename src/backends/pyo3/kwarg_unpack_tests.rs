@@ -295,9 +295,49 @@ fn should_keep_the_kwargs_unpack_when_options_defaults_the_field_to_none() {
 
     assert_eq!(
         arguments,
-        vec![r#"**({"theme": value.theme} if value.theme is not None else {})"#.to_string()],
+        vec![r#"**_optional_kwarg("theme", value.theme)"#.to_string()],
         "a field `options.py` defaults to `None` must stay omittable -- passing `None` to a \
          non-`Option` pyo3 parameter fails extraction:\n{facade}"
+    );
+}
+
+#[test]
+fn mixed_optional_primitive_defaults_use_heterogeneous_kwarg_helper() {
+    let fields = [
+        ("minimum_score", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64)),
+        (
+            "minimum_words",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::Usize),
+        ),
+        ("require_text", TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)),
+    ]
+    .into_iter()
+    .map(|(name, ty)| FieldDef {
+        name: name.to_string(),
+        ty,
+        typed_default: Some(DefaultValue::FunctionCall(format!("test_lib::default_{name}"))),
+        ..Default::default()
+    })
+    .collect();
+    let facade = render_facade_and_stub(&surface(fields, Vec::new(), Vec::new())).0;
+    let arguments = constructor_call_arguments(&facade);
+
+    assert_eq!(
+        arguments,
+        vec![
+            r#"**_optional_kwarg("minimum_score", value.minimum_score)"#.to_string(),
+            r#"**_optional_kwarg("minimum_words", value.minimum_words)"#.to_string(),
+            r#"**_optional_kwarg("require_text", value.require_text)"#.to_string(),
+        ],
+        "mixed optional values must flow through a heterogeneous kwargs type: {facade}"
+    );
+    assert!(
+        facade.contains("def _optional_kwarg(name: str, value: Any) -> dict[str, Any]:"),
+        "the generated helper must expose heterogeneous values to the type checker: {facade}"
+    );
+    assert!(
+        !facade.contains("**({"),
+        "homogeneous dict unpacks trigger Pyrefly errors: {facade}"
     );
 }
 
@@ -377,7 +417,7 @@ fn a_function_derived_default_on_a_non_named_field_is_omitted_not_passed_as_none
             "strict=value.strict".to_string(),
             "wrap_columns=value.wrap_columns".to_string(),
             "tags=value.tags".to_string(),
-            r#"**({"allowed_marks": value.allowed_marks} if value.allowed_marks is not None else {})"#.to_string(),
+            r#"**_optional_kwarg("allowed_marks", value.allowed_marks)"#.to_string(),
         ],
         "only the function-derived field may be omitted, and it must be omitted rather than \
          passed as `None`:\n{facade}"
