@@ -351,7 +351,19 @@ fn the_swift_json_bridged_count_wording_is_counted_not_fatal() {
 fn ruby_serialized_enum_accessor_wording_is_counted_not_fatal() {
     let body = "    # skipped: enum variant accessor 'metadata.format.excel' not available on Ruby \
                 (serialized to Hash)\n";
-    assert_eq!(verdicts_for(body, "ruby", &[]), vec![SkipVerdict::Limitation]);
+    // Reclassified LanguageLimitation -> GeneratorGap in 0.77.0: magnus DOES generate a native
+    // per-variant accessor, but the enum-registration loop skips every internally-tagged enum, so
+    // the accessor is never wired to Ruby. That is alef's unfinished wiring, not a Ruby property.
+    // The bucket changed; the property this test exists for did not -- a GeneratorGap is still
+    // never fatal, because a consumer cannot fix alef's debt from their own `alef.toml`. ~keep
+    assert_eq!(
+        verdicts_for(body, "ruby", &[]),
+        vec![SkipVerdict::AwaitingGeneratorSupport]
+    );
+    assert!(
+        strict_error_for(body, "ruby", "metadata_format", &[]).is_none(),
+        "a generator gap must never fail a consumer's build"
+    );
 }
 
 #[test]
@@ -444,5 +456,95 @@ fn diagnostic_names_language_fixture_field_and_the_opt_in() {
     assert!(
         message.contains(super::STRICT_ASSERTIONS_ENV),
         "must name the escape hatch: {message}"
+    );
+}
+
+/// xberg issue #1529: a census across five consumer repos found this exact wording on 15
+/// backends, `rust` and `brew` among them, and initially read that as 15 independent backend
+/// gaps. It is not — every backend renderer calls the same `FieldResolver::is_valid_for_result`
+/// (grep `is_valid_for_result` across `e2e/codegen/*/assertions.rs`: one predicate, ~18 call
+/// sites), so a field flagged in several languages is one resolution answered once. `rust` is
+/// the strongest single data point because, unlike `gleam`/`brew` (see
+/// `COARSE_FIELD_ORACLE_LANGUAGES`), it is always IR-wired and resolves an accessor for every
+/// field its own IR sees — a rust refusal cannot be a rust-specific capability limit. This pins
+/// the diagnostic that now says so, matched exactly (not `contains`) because the wording and its
+/// placement — right after the offender list, before the "how to fix it" guidance — is the thing
+/// under test. ~keep
+#[test]
+fn strict_error_names_the_shared_oracle_and_flags_rust_specifically() {
+    let message = strict_error_for(
+        "    # skipped: field 'chunks' not available on result type\n",
+        "rust",
+        "widget_smoke",
+        &[],
+    )
+    .expect("an unresolved field must fail under strict");
+    let expected = [
+        "1 e2e assertion(s) reference a field the availability oracle cannot resolve, so they \
+         would have been silently dropped and the generated tests would have passed while \
+         asserting nothing:",
+        "  [rust] fixture `widget_smoke`: field `chunks`",
+        "",
+        "Every backend asks the same field-availability oracle, so a field named for more than \
+         one language here is one resolution answered once, not several backends independently \
+         failing. `rust` is in the list above, and rust resolves an accessor for every field its \
+         own IR sees, so this cannot be a language-capability limit — check the fixture path \
+         against the crate's actual fields, or the field-availability config, before suspecting \
+         any one backend.",
+        "",
+        "Either fix the field path (or the field-availability config) so the assertion runs, or \
+         declare on the assertion why it cannot:",
+        "  \"skip\": { \"kind\": \"not_representable\", \"reason\": \"...\" }      — alef cannot \
+         express this shape yet (an assertion *kind* such as \"the call errored\", a property of \
+         the call rather than the result, or an assertion over a stream's events)",
+        "  \"skip\": { \"kind\": \"language_limitation\", \"languages\": [\"<lang>\"], \
+         \"reason\": \"...\" }  — this binding genuinely cannot reach the field",
+        "Either way the skip stays counted in the end-of-run summary, in the bucket that names \
+         who owns it. Set ALEF_E2E_STRICT_ASSERTIONS=0 to downgrade this to a warning for one \
+         run.",
+    ]
+    .join("\n");
+    assert_eq!(message, expected);
+}
+
+/// The mirror control: when `rust` is NOT among the offenders, the rust-specific clause must not
+/// appear at all — only the general shared-oracle sentence does. Without this, a fix that always
+/// appended the rust clause (rather than gating it on `gaps` actually naming rust) would pass the
+/// test above unnoticed and print a claim about rust for languages where rust never even ran.
+#[test]
+fn strict_error_omits_the_rust_clause_when_rust_is_not_among_the_gaps() {
+    let message = strict_error_for(
+        "    # skipped: field 'usage' not available on result type\n",
+        "python",
+        "batch_smoke",
+        &[],
+    )
+    .expect("an unresolved field must fail under strict");
+    let expected = [
+        "1 e2e assertion(s) reference a field the availability oracle cannot resolve, so they \
+         would have been silently dropped and the generated tests would have passed while \
+         asserting nothing:",
+        "  [python] fixture `batch_smoke`: field `usage`",
+        "",
+        "Every backend asks the same field-availability oracle, so a field named for more than \
+         one language here is one resolution answered once, not several backends independently \
+         failing.",
+        "",
+        "Either fix the field path (or the field-availability config) so the assertion runs, or \
+         declare on the assertion why it cannot:",
+        "  \"skip\": { \"kind\": \"not_representable\", \"reason\": \"...\" }      — alef cannot \
+         express this shape yet (an assertion *kind* such as \"the call errored\", a property of \
+         the call rather than the result, or an assertion over a stream's events)",
+        "  \"skip\": { \"kind\": \"language_limitation\", \"languages\": [\"<lang>\"], \
+         \"reason\": \"...\" }  — this binding genuinely cannot reach the field",
+        "Either way the skip stays counted in the end-of-run summary, in the bucket that names \
+         who owns it. Set ALEF_E2E_STRICT_ASSERTIONS=0 to downgrade this to a warning for one \
+         run.",
+    ]
+    .join("\n");
+    assert_eq!(message, expected);
+    assert!(
+        !message.contains("rust"),
+        "the rust-specific clause must not appear when rust never gapped: {message}"
     );
 }

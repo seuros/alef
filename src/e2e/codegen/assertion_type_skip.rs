@@ -158,6 +158,19 @@ assertion_type_skip_variants! {
         "assertion type ",
         " has an additional declared value not checked by this backend",
     ),
+    /// ~keep Emitted verbatim by `csharp/discriminated.rs` and `kotlin/discriminated.rs` (which
+    /// `kotlin_android` reuses) when a discriminated-union field carries an assertion type their
+    /// union renderer does not implement. It went unregistered until 0.77.0, so
+    /// `ALEF_E2E_STRICT_ASSERTIONS` walked past every instance -- the gate reported clean on a
+    /// line it could not classify, which is the exact failure this registry exists to prevent.
+    ///
+    /// `GeneratorGap`: both renderers already narrow the union correctly and implement
+    /// `equals`/ordering/`contains`/`contains_all`/`not_empty`/`is_empty`. The gap is an
+    /// unimplemented match arm, not a property of C# or Kotlin.
+    DiscriminatedUnionAssertionTypeNotSupported: GeneratorGap => (
+        "assertion type ",
+        " not yet supported for discriminated union fields",
+    ),
 }
 
 /// The `skipped:` line for a streaming assertion whose *type* this backend's streaming renderer
@@ -278,6 +291,30 @@ mod tests {
             "got: {line}"
         );
         assert!(line.contains("# skipped: "), "the census prefix must survive: {line}");
+    }
+
+    /// The two `discriminated.rs` renderers build their line by hand rather than through a
+    /// helper, so nothing but this test couples their wording to the registry. Both literals are
+    /// copied from the call sites (`csharp/discriminated.rs`, `kotlin/discriminated.rs`, the
+    /// latter also serving `kotlin_android`); if either is reworded, this fails instead of the
+    /// strict gate silently going blind to it again. ~keep
+    #[test]
+    fn the_discriminated_union_wording_is_recognised_at_both_call_sites() {
+        for (indent, comment_open) in [("            ", "//"), ("                ", "//")] {
+            let line = format!(
+                "{indent}{comment_open} skipped: assertion type 'matches_regex' \
+                 not yet supported for discriminated union fields"
+            );
+            let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert_eq!(
+                AssertionTypeSkip::extract_classified(&line),
+                Some((
+                    "matches_regex",
+                    AssertionTypeSkip::DiscriminatedUnionAssertionTypeNotSupported
+                )),
+                "got: {line}"
+            );
+        }
     }
 
     /// The two helpers must stay distinguishable: each line may only match its own variant, or the

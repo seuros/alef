@@ -205,9 +205,23 @@ field_skip_variants! {
         "array element field ",
         " not yet supported in Gleam e2e",
     ),
-    /// ~keep Ruby serializes enums to a Hash, so there is no variant accessor to call. A property
-    /// of the Ruby binding's representation choice.
-    EnumVariantAccessorNotAvailableInRuby: LanguageLimitation => (
+    /// ~keep The wording says "serialized to Hash", but that is not a permanent property of
+    /// Ruby/magnus: `backends::magnus::gen_bindings::classes::gen_enum`'s
+    /// `enum_magnus.rs.jinja` template ALREADY generates a native per-variant accessor —
+    /// `impl {{ enum_name }} { pub fn {{ variant.snake_name }}(&self) -> Option<&T> { .. } }` —
+    /// for every internally-tagged (`serde_tag.is_some()`) data enum's single-field tuple
+    /// variants. Magnus is a general-purpose Ruby binding library with no restriction on
+    /// registering arbitrary instance methods (see the sibling `data_enum_variant_constructor_
+    /// registrations`, which registers real Ruby singleton methods for the OTHER data-enum
+    /// shape). The generated accessor is simply never wired to the Ruby class:
+    /// `functions/module_init.rs`'s only enum-registration loop explicitly
+    /// `continue`s past every enum with `serde_tag.is_some()` (it registers constructors for the
+    /// externally-tagged sibling instead), so the accessor is unreachable dead code today, not a
+    /// property Ruby's type system or magnus's FFI model forbids. `GeneratorGap`, not
+    /// `LanguageLimitation`: a future alef release that registers the already-generated method
+    /// (and clones the payload rather than borrowing it, so `Option<T>: IntoValue` applies)
+    /// closes this gap; no fixture or `alef.toml` edit can, so it is not an `AuthoringGap` either.
+    EnumVariantAccessorNotAvailableInRuby: GeneratorGap => (
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
     ),
@@ -409,6 +423,16 @@ mod tests {
             SkipClass::LanguageLimitation,
             "this guard fires only on fields the resolver ACCEPTED; classifying it as an authoring \
              gap makes the backend and the strict gate contradict each other about one field"
+        );
+        assert_eq!(
+            FieldSkip::EnumVariantAccessorNotAvailableInRuby.class(),
+            SkipClass::GeneratorGap,
+            "backends::magnus already generates a native per-variant accessor method for \
+             internally tagged data enums (gen_enum's per-variant impl block) — it is simply \
+             never registered with the Ruby class in module_init.rs. Magnus can register \
+             arbitrary instance methods, so this is alef's own unfinished wiring, not a property \
+             of Ruby or magnus; a LanguageLimitation verdict would misattribute it and block a \
+             future alef release from ever closing it without a reclassification"
         );
     }
 
