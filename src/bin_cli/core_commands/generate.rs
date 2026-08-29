@@ -528,6 +528,17 @@ pub(crate) fn handle_generate(
                 error,
             );
         }
+        // Same check, same shared function and same deferral rationale as `all_commands.rs`'s
+        // call site, for the Node ecosystem's equivalent: a generated `package.json` whose
+        // specifiers a committed `pnpm-lock.yaml` no longer matches fails `pnpm install` under
+        // the default frozen lockfile in CI just as surely as a stale `Cargo.lock` fails `cargo
+        // build --locked`. ~keep
+        if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths) {
+            stage_failures.record(
+                &format!("[{}] generated pnpm-lock.yaml freshness", resolved_cfg.name),
+                error,
+            );
+        }
 
         let previous_generation_owned: std::collections::HashMap<_, _> = languages
             .iter()

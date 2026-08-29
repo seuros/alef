@@ -824,6 +824,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         error,
                     );
                 }
+                // Same reasoning as the Cargo.lock check immediately above, for the Node
+                // ecosystem's equivalent: e2e/test-app generation can leave a `package.json`
+                // whose specifiers a committed `pnpm-lock.yaml` no longer matches, which fails
+                // `pnpm install` under the default frozen lockfile in CI. See
+                // `cli::pipeline::lock_freshness::check_generated_node_lock_freshness`'s doc
+                // comment for why this is a sibling check rather than a shared one. ~keep
+                if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths) {
+                    stage_failures.record(
+                        &format!("[{}] generated pnpm-lock.yaml freshness", resolved_cfg.name),
+                        error,
+                    );
+                }
 
                 grand_binding_count += binding_count;
                 grand_stub_count += stub_count;
