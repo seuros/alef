@@ -9,7 +9,7 @@
 //! and the per-field init expression the variant-constructor emitter splices in
 //! ([`coercible_field_init`]). The variant-constructor emission itself lives in [`super::enums`].
 
-use super::enums::{collect_all_variant_constructors, enum_has_data_variants};
+use super::enums::{collect_all_variant_constructors, enum_has_data_variants, variant_constructor_is_reachable};
 use crate::core::ir::{EnumDef, TypeRef};
 use ahash::AHashSet;
 
@@ -176,15 +176,32 @@ pub fn coercible_payload<'a>(ty: &'a TypeRef, coercible: &AHashSet<&str>) -> Opt
 
 /// True when any generated variant constructor of `enum_def` has a coercible config-DTO payload
 /// field — i.e. the [`PYO3_DTO_COERCE_HELPER`] runtime helper must be emitted into the module.
-pub fn data_enum_needs_dto_coercion(enum_def: &EnumDef, coercible_dto_names: &AHashSet<&str>) -> bool {
+///
+/// `is_host_enum` excludes a constructor `gen_pyo3_enum_variant_constructors_content` itself drops
+/// as an unreachable FOREIGN cfg-gated variant, so a dropped constructor's coercible field never
+/// pulls in the coercion helper / rename-schema consts on its own.
+pub fn data_enum_needs_dto_coercion(
+    enum_def: &EnumDef,
+    coercible_dto_names: &AHashSet<&str>,
+    is_host_enum: bool,
+) -> bool {
     if !enum_has_data_variants(enum_def) {
         return false;
     }
-    collect_all_variant_constructors(enum_def).iter().any(|c| {
-        c.params
-            .iter()
-            .any(|p| coercible_payload(&p.ty, coercible_dto_names).is_some())
-    })
+    collect_all_variant_constructors(enum_def)
+        .iter()
+        .filter(|c| {
+            enum_def
+                .variants
+                .iter()
+                .find(|v| v.name == c.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
+        })
+        .any(|c| {
+            c.params
+                .iter()
+                .any(|p| coercible_payload(&p.ty, coercible_dto_names).is_some())
+        })
 }
 
 /// Build the struct-literal init expression for a coercible config-DTO payload field. The param

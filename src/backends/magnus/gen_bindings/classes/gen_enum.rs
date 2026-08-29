@@ -5,6 +5,30 @@ use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 use std::collections::HashSet;
 
+/// The variants `enum_def`'s own Magnus wrapper `enum` (rendered by [`gen_enum`] below) actually
+/// declares, per the [`enum_variant_declaration`] authority. Shared by `gen_enum` and the two
+/// per-variant-constructor generators below: a factory built here emits `Self::<Variant> { .. }`
+/// against that SAME wrapper type (not the core dependency's), so a constructor for a variant
+/// `gen_enum` dropped is a hard `E0599` (`Self` has no such variant), and a `method!` registration
+/// for a dropped constructor is a hard `E0599` too (`method!` resolves the path at compile time).
+/// All three must therefore agree on the identical declared set. ~keep
+fn declared_enum_variants<'a>(
+    enum_def: &'a EnumDef,
+    is_host_enum: bool,
+    configured_features: Option<&HashSet<&str>>,
+) -> Vec<&'a EnumVariant> {
+    enum_def
+        .variants
+        .iter()
+        .filter(|v| {
+            !matches!(
+                enum_variant_declaration(v, is_host_enum, configured_features),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect()
+}
+
 /// Generate a Magnus enum definition with IntoValue and TryConvert impls.
 /// Unit-variant enums are represented as Ruby Symbols for ergonomic Ruby usage.
 ///
@@ -22,16 +46,8 @@ pub fn gen_enum(enum_def: &EnumDef, core_import: &str, configured_features: Opti
     let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let configured_features_set: Option<HashSet<&str>> =
         configured_features.map(|features| features.iter().map(String::as_str).collect());
-    let declared_variants: Vec<&EnumVariant> = enum_def
-        .variants
-        .iter()
-        .filter(|v| {
-            !matches!(
-                enum_variant_declaration(v, is_host_enum, configured_features_set.as_ref()),
-                VariantDeclaration::Drop
-            )
-        })
-        .collect();
+    let declared_variants: Vec<&EnumVariant> =
+        declared_enum_variants(enum_def, is_host_enum, configured_features_set.as_ref());
 
     let has_data = declared_variants.iter().any(|v| !v.fields.is_empty());
     let first_variant = declared_variants.first().map(|v| v.name.as_str()).unwrap_or("Default");
@@ -197,9 +213,29 @@ pub(super) fn serde_field_type(ty: &TypeRef, optional: bool) -> String {
 /// accessor of the same snake_case name; Ruby registers it under the bare snake name via
 /// `define_singleton_method`.
 ///
+/// `core_import`/`configured_features` narrow the constructor set to [`declared_enum_variants`] --
+/// the SAME set `gen_enum` above declares for the wrapper `enum` this constructor's `Self::<Variant>`
+/// literal references. Without this, a FOREIGN cfg-gated variant `gen_enum` already drops left its
+/// constructor still emitting `Self::Rect { .. }` for a variant the wrapper enum no longer has: a
+/// hard `E0599`, not a warning.
+///
 /// Returns an empty string when no variant qualifies (no empty `impl` block).
-pub fn gen_data_enum_variant_constructors(enum_def: &EnumDef) -> String {
-    let constructors = crate::codegen::generators::collect_all_variant_constructors(enum_def);
+pub fn gen_data_enum_variant_constructors(
+    enum_def: &EnumDef,
+    core_import: &str,
+    configured_features: Option<&[String]>,
+) -> String {
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_features = configured_features_set.as_ref();
+    let declared: Vec<&EnumVariant> = declared_enum_variants(enum_def, is_host_enum, declared_features);
+    let declared_names: HashSet<&str> = declared.iter().map(|v| v.name.as_str()).collect();
+
+    let constructors: Vec<_> = crate::codegen::generators::collect_all_variant_constructors(enum_def)
+        .into_iter()
+        .filter(|ctor| declared_names.contains(ctor.variant_name))
+        .collect();
     if constructors.is_empty() {
         return String::new();
     }
@@ -239,9 +275,26 @@ pub fn gen_data_enum_variant_constructors(enum_def: &EnumDef) -> String {
 
 /// Ruby method names of the per-variant constructors generated for `enum_def`, paired with their
 /// Rust function names and arity. Used by module-init to register `define_singleton_method`s.
-pub fn data_enum_variant_constructor_registrations(enum_def: &EnumDef) -> Vec<(String, String, i32)> {
+///
+/// Must resolve `core_import`/`configured_features` identically to
+/// [`gen_data_enum_variant_constructors`] above: registering a `method!(Shape::_factory_rect, ..)`
+/// path for a constructor that function no longer emits is a hard `E0599` at the registration
+/// site, not a missing Ruby method.
+pub fn data_enum_variant_constructor_registrations(
+    enum_def: &EnumDef,
+    core_import: &str,
+    configured_features: Option<&[String]>,
+) -> Vec<(String, String, i32)> {
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_features = configured_features_set.as_ref();
+    let declared: Vec<&EnumVariant> = declared_enum_variants(enum_def, is_host_enum, declared_features);
+    let declared_names: HashSet<&str> = declared.iter().map(|v| v.name.as_str()).collect();
+
     crate::codegen::generators::collect_all_variant_constructors(enum_def)
         .into_iter()
+        .filter(|ctor| declared_names.contains(ctor.variant_name))
         .map(|ctor| {
             let arity = ctor.params.len() as i32;
             (ctor.snake_name.clone(), format!("_factory_{}", ctor.snake_name), arity)

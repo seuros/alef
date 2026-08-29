@@ -39,8 +39,8 @@ pub(super) fn gen_enum_stub(
     configured_features: &HashSet<&str>,
 ) -> String {
     let mut content = String::new();
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
     if !is_tagged_data_enum(enum_def) {
-        let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
         content.push_str(&crate::backends::php::template_env::render(
             "php_record_class_stub_declaration.jinja",
             context! { class_name => &enum_def.name },
@@ -94,7 +94,7 @@ pub(super) fn gen_enum_stub(
         },
     ));
 
-    for ctor in gen_data_enum_variant_constructor_stubs(enum_def, enum_names) {
+    for ctor in gen_data_enum_variant_constructor_stubs(enum_def, enum_names, is_host_enum) {
         content.push_str(&ctor);
     }
     content.push_str("}\n\n");

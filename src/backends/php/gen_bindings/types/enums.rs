@@ -833,17 +833,27 @@ pub(crate) fn gen_flat_data_enum_variant_constructors(
         gen_php_call_args_with_let_bindings_vec, gen_php_function_params, gen_php_named_let_bindings,
         param_conversion_is_fallible,
     };
-    use crate::codegen::generators::collect_all_variant_constructors;
+    use crate::codegen::generators::{collect_all_variant_constructors, variant_constructor_is_reachable};
     use crate::codegen::naming::to_php_name;
 
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let mutex_types: AHashSet<String> = AHashSet::new();
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
 
     let qualifying = collect_all_variant_constructors(enum_def);
     qualifying
         .iter()
         .filter_map(|ctor| {
             let variant = enum_def.variants.iter().find(|v| v.name == ctor.variant_name)?;
+            // The factory body below builds `<core_path>::<Variant> { .. }` directly (the
+            // wrapper-convert model, like extendr/pyo3): a FOREIGN variant behind a `#[cfg(...)]`
+            // this crate cannot declare as its own Cargo feature has no compile-safe fallback the
+            // way a match arm's `_ => ..` wildcard has, so it must be dropped unconditionally
+            // rather than kept on the "maybe reachable" assumption `enum_variant_declaration`
+            // affords a mere declaration line. See `variant_constructor_is_reachable`. ~keep
+            if !variant_constructor_is_reachable(variant, is_host_enum) {
+                return None;
+            }
 
             let params = gen_php_function_params(&ctor.params, mapper, opaque_types, bridge_type_aliases);
 

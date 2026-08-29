@@ -49,6 +49,7 @@ pub(super) fn generate_public_api(
         .as_ref()
         .map(|c| c.exclude_functions.iter().cloned().collect())
         .unwrap_or_default();
+    let core_import = config.core_import_name();
     let wrappers_content = r_wrappers::gen_extendr_wrappers_r(
         api,
         &package_name,
@@ -56,6 +57,7 @@ pub(super) fn generate_public_api(
         &trait_bridge_fns,
         &r_exclude_functions,
         &config.trait_bridges,
+        &core_import,
     );
     files.push(GeneratedFile {
         path: PathBuf::from(&r_wrapper_dir).join("extendr-wrappers.R"),

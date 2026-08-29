@@ -65,7 +65,7 @@ fn per_field_rename_is_carried_to_wire_name() {
     let api = surface(vec![cfg], vec![enum_with_payload("RunConfig")]);
     let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
 
-    let generated = gen_wire_schema_consts(&api, &coercible);
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert!(
         generated.contains("const __ALEF_WIRE_RUN_CONFIG: &[__AlefAlias] = &["),
@@ -89,7 +89,7 @@ fn struct_level_rename_all_is_applied_to_wire_names() {
     let api = surface(vec![cfg], vec![enum_with_payload("RunConfig")]);
     let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
 
-    let generated = gen_wire_schema_consts(&api, &coercible);
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert!(
         generated.contains(r#"__AlefAlias { rust: "model_id", wire: "modelId", kind: __AlefKind::Leaf, nested: &[] }"#),
@@ -105,7 +105,7 @@ fn nested_dto_recurses_with_its_own_schema_const() {
     let api = surface(vec![outer, inner], vec![enum_with_payload("OuterConfig")]);
     let coercible: AHashSet<&str> = ["OuterConfig", "InnerConfig"].into_iter().collect();
 
-    let generated = gen_wire_schema_consts(&api, &coercible);
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert!(
         generated.contains(
@@ -140,7 +140,7 @@ fn vec_and_optional_of_dto_use_seq_kind() {
     let api = surface(vec![outer, item], vec![enum_with_payload("OuterConfig")]);
     let coercible: AHashSet<&str> = ["OuterConfig", "ItemConfig"].into_iter().collect();
 
-    let generated = gen_wire_schema_consts(&api, &coercible);
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert!(
         generated.contains(
@@ -167,7 +167,7 @@ fn cyclic_type_graph_breaks_back_edge() {
     let api = surface(vec![node], vec![enum_with_payload("NodeConfig")]);
     let coercible: AHashSet<&str> = ["NodeConfig"].into_iter().collect();
 
-    let generated = gen_wire_schema_consts(&api, &coercible);
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert_eq!(
         generated.matches("const __ALEF_WIRE_NODE_CONFIG:").count(),
@@ -189,5 +189,50 @@ fn cyclic_type_graph_breaks_back_edge() {
 fn no_coercible_types_emits_nothing() {
     let api = surface(vec![], vec![]);
     let coercible: AHashSet<&str> = AHashSet::new();
-    assert!(gen_wire_schema_consts(&api, &coercible).is_empty());
+    assert!(gen_wire_schema_consts(&api, &coercible, "crate").is_empty());
+}
+
+/// A data enum whose ONLY coercible-payload variant is FOREIGN and cfg-gated: the runtime factory
+/// (`gen_pyo3_enum_variant_constructors_content`) drops that constructor unconditionally, so
+/// nothing left in the module needs the coercion helper's rename schema. Emitting a schema const
+/// for a DTO no reachable constructor ever coerces would be dead code -- not a compile break, but
+/// scope creep the reachability check should have caught.
+#[test]
+fn drops_schema_const_for_foreign_cfg_gated_only_consumer() {
+    let cfg = config_type(
+        "RunConfig",
+        None,
+        vec![string_field("max_chars", Some("maxCharacters"))],
+    );
+    let mut gated = enum_with_payload("RunConfig");
+    gated.variants[0].cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    let api = surface(vec![cfg], vec![gated]);
+    let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
+
+    // core_import ("host_crate") does not prefix-match rust_path ("crate::ModelType") -> FOREIGN.
+    let generated = gen_wire_schema_consts(&api, &coercible, "host_crate");
+
+    assert!(
+        generated.is_empty(),
+        "no reachable constructor coerces RunConfig, so no schema const should be emitted: {generated}"
+    );
+}
+
+/// Control: the identical fixture with a HOST-owned enum keeps emitting the schema const.
+#[test]
+fn keeps_schema_const_for_host_owned_cfg_gated_consumer() {
+    let cfg = config_type(
+        "RunConfig",
+        None,
+        vec![string_field("max_chars", Some("maxCharacters"))],
+    );
+    let mut gated = enum_with_payload("RunConfig");
+    gated.variants[0].cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    let api = surface(vec![cfg], vec![gated]);
+    let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
+
+    // core_import ("crate") DOES prefix-match rust_path ("crate::ModelType") -> host-owned.
+    let generated = gen_wire_schema_consts(&api, &coercible, "crate");
+
+    assert!(!generated.is_empty(), "{generated}");
 }

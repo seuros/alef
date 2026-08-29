@@ -97,7 +97,7 @@ fn shape_enum() -> EnumDef {
 
 #[test]
 fn emits_staticmethod_constructor_per_struct_variant() {
-    let stub = gen_enum_stub(&shape_enum(), false, &no_dtos());
+    let stub = gen_enum_stub(&shape_enum(), false, &no_dtos(), true);
 
     assert!(stub.contains("class Shape:"), "{stub}");
     assert!(stub.contains("    type: str"), "{stub}");
@@ -114,9 +114,53 @@ fn emits_staticmethod_constructor_per_struct_variant() {
     assert!(circle_at < str_at, "constructors must precede dunders: {stub}");
 }
 
+fn cfg_shape_enum() -> EnumDef {
+    let mut gated = variant(
+        "Rect",
+        vec![
+            field("width", TypeRef::Primitive(PrimitiveType::U32)),
+            field("height", TypeRef::Primitive(PrimitiveType::U32)),
+        ],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    enum_def(
+        "Shape",
+        vec![
+            variant("Circle", vec![field("radius", TypeRef::Primitive(PrimitiveType::F64))]),
+            gated,
+        ],
+    )
+}
+
+/// The stub must not advertise a `@staticmethod` the runtime binding drops for the same reason
+/// (`gen_pyo3_enum_variant_constructors_content`, `codegen::generators::enums`): a FOREIGN
+/// cfg-gated variant's factory is unreachable (compiled out via `#[cfg(...)]` naming an undeclared
+/// feature) and dropped unconditionally.
+#[test]
+fn drops_staticmethod_for_foreign_cfg_gated_variant() {
+    let stub = gen_enum_stub(&cfg_shape_enum(), false, &no_dtos(), false);
+
+    assert!(!stub.contains("def rect("), "{stub}");
+    assert!(
+        stub.contains("    @staticmethod\n    def circle(radius: float) -> Shape: ..."),
+        "{stub}"
+    );
+}
+
+/// Control: a host-owned cfg-gated variant's factory must stay documented.
+#[test]
+fn keeps_staticmethod_for_host_owned_cfg_gated_variant() {
+    let stub = gen_enum_stub(&cfg_shape_enum(), false, &no_dtos(), true);
+
+    assert!(
+        stub.contains("    @staticmethod\n    def rect(width: int, height: int) -> Shape: ..."),
+        "{stub}"
+    );
+}
+
 #[test]
 fn dunder_stubs_carry_no_unused_noqa() {
-    let stub = gen_enum_stub(&shape_enum(), false, &no_dtos());
+    let stub = gen_enum_stub(&shape_enum(), false, &no_dtos(), true);
 
     assert!(stub.contains("    def __str__(self) -> str: ..."), "{stub}");
     assert!(stub.contains("    def __repr__(self) -> str: ..."), "{stub}");
@@ -137,7 +181,7 @@ fn maps_named_dto_field_to_its_type() {
         )],
     );
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(
         stub.contains("    @staticmethod\n    def llm(config: LlmConfig) -> Source: ..."),
@@ -156,7 +200,7 @@ fn widens_dataclass_backed_config_dto_factory_param() {
     );
     let coercible: AHashSet<&str> = ["LlmConfig"].into_iter().collect();
 
-    let stub = gen_enum_stub(&def, false, &coercible);
+    let stub = gen_enum_stub(&def, false, &coercible, true);
 
     assert!(
         stub.contains(
@@ -186,7 +230,7 @@ fn qualifies_builtin_shadowed_by_a_variant_factory_name() {
         ],
     );
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(
         stub.contains("    @staticmethod\n    def list(ordered: str) -> NodeContent: ..."),
@@ -219,7 +263,7 @@ fn skips_unit_tuple_excluded_and_sanitized_variants() {
         ],
     );
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(!stub.contains("def empty("), "{stub}");
     assert!(!stub.contains("def pair("), "{stub}");
@@ -238,7 +282,7 @@ fn optional_field_is_nilable_with_default() {
         vec![variant("Tag", vec![optional_field("label", TypeRef::String)])],
     );
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(
         stub.contains("    @staticmethod\n    def tag(label: str | None = None) -> Source: ..."),
@@ -259,7 +303,7 @@ fn param_after_optional_is_promoted_to_nilable() {
         )],
     );
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(
         stub.contains(
@@ -286,7 +330,7 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
         ..shape_enum()
     };
 
-    let stub = gen_enum_stub(&def, false, &no_dtos());
+    let stub = gen_enum_stub(&def, false, &no_dtos(), true);
 
     assert!(
         stub.contains("    @staticmethod\n    def circle(radius: float) -> Shape: ..."),
@@ -322,7 +366,7 @@ fn adjacent_shape_enum() -> EnumDef {
 
 #[test]
 fn adjacent_variant_typeddict_nests_the_payload_under_the_content_key() {
-    let stub = gen_enum_stub(&adjacent_shape_enum(), false, &no_dtos());
+    let stub = gen_enum_stub(&adjacent_shape_enum(), false, &no_dtos(), true);
     let wire: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(&AdjacentShape::Circle { radius: 1.0 }).expect("serializes"))
             .expect("serde output is JSON");

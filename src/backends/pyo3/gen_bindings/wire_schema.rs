@@ -10,9 +10,10 @@
 //! DTOs, sequences, maps, and optionals so renamed fields at any depth survive the round-trip.
 
 use super::errors::is_dataclass_backed_config;
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::generators::{
     PYO3_DTO_COERCE_HELPER, coercible_payload, collect_all_variant_constructors, data_enum_needs_dto_coercion,
-    enum_has_data_variants, pyo3_wire_schema_const_name,
+    enum_has_data_variants, pyo3_wire_schema_const_name, variant_constructor_is_reachable,
 };
 use crate::codegen::naming::wire_field_name;
 use crate::codegen::shared::binding_fields;
@@ -48,12 +49,21 @@ pub(in crate::backends::pyo3) fn coercible_dto_names<'a>(
 /// unavailable — the helper deserializes the coerced JSON into the core type). The helper and the
 /// schema consts are joined the same way `RustFileBuilder` joins items (`"\n\n"`), so emitting this
 /// as a single item is byte-identical to emitting them separately.
-pub(super) fn emit_dto_coercion_section(api: &ApiSurface, has_serde: bool, coercible: &AHashSet<&str>) -> String {
-    let needed = has_serde && api.enums.iter().any(|e| data_enum_needs_dto_coercion(e, coercible));
+pub(super) fn emit_dto_coercion_section(
+    api: &ApiSurface,
+    has_serde: bool,
+    coercible: &AHashSet<&str>,
+    core_import: &str,
+) -> String {
+    let needed = has_serde
+        && api.enums.iter().any(|e| {
+            let is_host_enum = is_host_owned_rust_path(core_import, &e.rust_path);
+            data_enum_needs_dto_coercion(e, coercible, is_host_enum)
+        });
     if !needed {
         return String::new();
     }
-    let schema_consts = gen_wire_schema_consts(api, coercible);
+    let schema_consts = gen_wire_schema_consts(api, coercible, core_import);
     if schema_consts.is_empty() {
         PYO3_DTO_COERCE_HELPER.to_string()
     } else {
@@ -74,7 +84,11 @@ struct AliasEntry {
 /// variant-constructor payload field (transitively through nested coercible DTO fields). Returns an
 /// empty string when no coercion is in play. Cyclic type graphs are broken at back-edges (the deeper
 /// occurrence references `&[]`) so the emitted consts never form a const-evaluation cycle.
-pub(super) fn gen_wire_schema_consts(api: &ApiSurface, coercible_dto_names: &AHashSet<&str>) -> String {
+pub(super) fn gen_wire_schema_consts(
+    api: &ApiSurface,
+    coercible_dto_names: &AHashSet<&str>,
+    core_import: &str,
+) -> String {
     if coercible_dto_names.is_empty() {
         return String::new();
     }
@@ -85,7 +99,14 @@ pub(super) fn gen_wire_schema_consts(api: &ApiSurface, coercible_dto_names: &AHa
         if !enum_has_data_variants(e) {
             continue;
         }
-        for ctor in collect_all_variant_constructors(e) {
+        let is_host_enum = is_host_owned_rust_path(core_import, &e.rust_path);
+        let reachable_ctors = collect_all_variant_constructors(e).into_iter().filter(|ctor| {
+            e.variants
+                .iter()
+                .find(|v| v.name == ctor.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
+        });
+        for ctor in reachable_ctors {
             for p in &ctor.params {
                 if let Some((dto, _)) = coercible_payload(&p.ty, coercible_dto_names)
                     && !seeds.iter().any(|s| s == dto)

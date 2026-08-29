@@ -31,12 +31,17 @@ fn to_python_enum_variant(name: &str) -> String {
 }
 
 /// Generate a Python enum stub.
-pub(super) fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool, coercible_dtos: &AHashSet<&str>) -> String {
+pub(super) fn gen_enum_stub(
+    enum_def: &EnumDef,
+    emit_docstrings: bool,
+    coercible_dtos: &AHashSet<&str>,
+    is_host_enum: bool,
+) -> String {
     use crate::codegen::generators::enum_has_data_variants;
     let mut lines = vec![];
 
     if enum_has_data_variants(enum_def) {
-        gen_data_enum_typeddicts(&mut lines, enum_def, coercible_dtos);
+        gen_data_enum_typeddicts(&mut lines, enum_def, coercible_dtos, is_host_enum);
     } else {
         lines.push(format!("class {}:", enum_def.name));
         if emit_docstrings && let Some(docstring) = pyi_docstring(&enum_def.doc, "    ") {
@@ -90,7 +95,12 @@ fn adjacent_payload_type(lines: &mut Vec<String>, enum_def: &EnumDef, variant: &
 }
 
 /// Generate TypedDicts for each variant of a data enum, plus a Union type alias.
-fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercible_dtos: &AHashSet<&str>) {
+fn gen_data_enum_typeddicts(
+    lines: &mut Vec<String>,
+    enum_def: &EnumDef,
+    coercible_dtos: &AHashSet<&str>,
+    is_host_enum: bool,
+) {
     let repr = crate::codegen::serde_enum_repr::serde_enum_repr(enum_def);
     let tag_field = repr.tag().unwrap_or(DEFAULT_TAG_FIELD);
     let rename_all = enum_def.serde_rename_all.as_deref();
@@ -138,7 +148,7 @@ fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercib
 
     lines.push(format!("class {}:", enum_def.name));
     lines.push(format!("    {}: str", tag_field));
-    gen_data_enum_variant_constructor_stubs(lines, enum_def, coercible_dtos);
+    gen_data_enum_variant_constructor_stubs(lines, enum_def, coercible_dtos, is_host_enum);
     // The runtime wrapper exposes a `#[new]` accepting a tag string, a `{"type": ...}` dict, or
     // serde-based `#[new]` is omitted and the type is return-only. Mirror that here so a converter
     if !crate::codegen::generators::enum_has_sanitized_fields(enum_def) {
@@ -159,14 +169,29 @@ fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercib
 /// `binding_excluded` / sanitized-field variants) so the stub and runtime binding stay aligned —
 /// including for a variant whose snake_case name collides with a hand-written `impl EnumType { .. }`
 /// method, since the runtime binding never forwards that method either (see its doc comment).
+///
+/// `is_host_enum` additionally excludes any variant
+/// `gen_pyo3_enum_variant_constructors_content` (`codegen::generators::enums`) itself drops as an
+/// unreachable FOREIGN cfg-gated variant -- without this the stub would advertise a
+/// `@staticmethod` PyO3 never registers.
 fn gen_data_enum_variant_constructor_stubs(
     lines: &mut Vec<String>,
     enum_def: &EnumDef,
     coercible_dtos: &AHashSet<&str>,
+    is_host_enum: bool,
 ) {
-    use crate::codegen::generators::collect_all_variant_constructors;
+    use crate::codegen::generators::{collect_all_variant_constructors, variant_constructor_is_reachable};
 
-    let ctors = collect_all_variant_constructors(enum_def);
+    let ctors: Vec<_> = collect_all_variant_constructors(enum_def)
+        .into_iter()
+        .filter(|ctor| {
+            enum_def
+                .variants
+                .iter()
+                .find(|v| v.name == ctor.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
+        })
+        .collect();
 
     const SHADOWABLE_BUILTINS: &[&str] = &["list", "dict", "set", "tuple", "frozenset", "type"];
     let shadowed: Vec<&str> = SHADOWABLE_BUILTINS

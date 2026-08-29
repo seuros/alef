@@ -328,7 +328,7 @@ fn variant_constructors_coerce_dataclass_backed_dto_field() {
     );
     assert!(!generated.contains("llm: llm.into()"), "{generated}");
     assert!(
-        crate::codegen::generators::data_enum_needs_dto_coercion(&def, &coercible),
+        crate::codegen::generators::data_enum_needs_dto_coercion(&def, &coercible, true),
         "expected coercion to be flagged"
     );
 }
@@ -406,7 +406,32 @@ fn variant_constructors_skip_coercion_for_non_dataclass_named_field() {
     );
     assert!(generated.contains("llm: llm.into()"), "{generated}");
     assert!(!generated.contains("__alef_coerce_dto"), "{generated}");
-    assert!(!data_enum_needs_dto_coercion(&def, &empty), "should not flag coercion");
+    assert!(
+        !data_enum_needs_dto_coercion(&def, &empty, true),
+        "should not flag coercion"
+    );
+}
+
+/// `is_host_enum: false` excludes a FOREIGN cfg-gated variant's coercible payload from the flag:
+/// `gen_pyo3_enum_variant_constructors_content` drops that constructor unconditionally, so nothing
+/// left in the module actually needs the coercion helper.
+#[test]
+fn data_enum_needs_dto_coercion_excludes_foreign_cfg_gated_only_consumer() {
+    use crate::codegen::generators::data_enum_needs_dto_coercion;
+    use ahash::AHashSet;
+    let mut gated_llm = variant("Llm", vec![typed_field("llm", TypeRef::Named("LlmConfig".to_string()))]);
+    gated_llm.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    let def = enum_def("Wrapper", vec![gated_llm]);
+    let coercible: AHashSet<&str> = ["LlmConfig"].into_iter().collect();
+
+    assert!(
+        !data_enum_needs_dto_coercion(&def, &coercible, false),
+        "the only coercible-payload variant is foreign cfg-gated and dropped, so no coercion is needed"
+    );
+    assert!(
+        data_enum_needs_dto_coercion(&def, &coercible, true),
+        "control: a host-owned cfg-gated variant's coercible payload must still be flagged"
+    );
 }
 
 #[test]
@@ -788,4 +813,31 @@ fn variant_constructors_json_field_warns_and_defaults_on_unparseable_json() {
     );
     assert!(generated.contains("Default::default()"), "{generated}");
     assert!(!generated.contains("unwrap_or_default()"), "{generated}");
+}
+
+/// Table-driven coverage for `variant_constructor_is_reachable`, the shared policy PHP's flat-enum
+/// factory and extendr's JSON-passthrough factory (and pyo3's own stub/DTO-coercion metadata) all
+/// apply: keep an ungated variant or a host-owned one unconditionally, drop a FOREIGN cfg-gated one
+/// regardless of `is_host_enum`'s only other input (there is none -- this policy intentionally does
+/// not consult `configured_features`; see the function's doc comment for why).
+#[test]
+fn variant_constructor_is_reachable_table() {
+    let ungated = variant("Plain", vec![]);
+    let mut gated = variant("Gated", vec![]);
+    gated.cfg = Some(r#"feature = "x""#.to_string());
+
+    let cases = [
+        ("ungated, foreign", &ungated, false, true),
+        ("ungated, host-owned", &ungated, true, true),
+        ("gated, foreign", &gated, false, false),
+        ("gated, host-owned", &gated, true, true),
+    ];
+
+    for (label, v, is_host_enum, expected) in cases {
+        assert_eq!(
+            variant_constructor_is_reachable(v, is_host_enum),
+            expected,
+            "case `{label}` expected {expected}"
+        );
+    }
 }

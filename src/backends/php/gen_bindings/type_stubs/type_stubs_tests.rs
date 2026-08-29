@@ -97,7 +97,7 @@ fn shape_enum() -> EnumDef {
 
 #[test]
 fn emits_static_factory_per_struct_variant() {
-    let stubs = gen_data_enum_variant_constructor_stubs(&shape_enum(), &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&shape_enum(), &AHashSet::new(), true).join("");
 
     assert!(
         stubs.contains("public static function circle(float $radius): Shape"),
@@ -119,7 +119,7 @@ fn maps_named_dto_field_to_its_type() {
         )],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
 
     assert!(
         stubs.contains("public static function llm(LlmConfig $config): Source"),
@@ -151,7 +151,7 @@ fn emits_param_phpdoc_for_map_and_vec_variant_fields() {
         ],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
 
     assert!(
         stubs.contains("/** @param array<string, string> $config */"),
@@ -174,7 +174,7 @@ fn optional_field_is_nullable_with_default() {
         vec![variant("Tag", vec![field("label", TypeRef::String, true)])],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
 
     assert!(
         stubs.contains("public static function tag(?string $label = null): Source"),
@@ -203,7 +203,7 @@ fn skips_unit_tuple_excluded_and_sanitized_variants() {
         ],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
 
     assert!(!stubs.contains("function empty("), "{stubs}");
     assert!(!stubs.contains("function pair("), "{stubs}");
@@ -211,6 +211,70 @@ fn skips_unit_tuple_excluded_and_sanitized_variants() {
     assert!(!stubs.contains("function raw("), "{stubs}");
     assert!(
         stubs.contains("public static function real(string $value): Shape"),
+        "{stubs}"
+    );
+}
+
+/// The stub must not document a static factory the runtime drops for the identical reason
+/// (`gen_flat_data_enum_variant_constructors`, `gen_bindings/types/enums.rs`): a FOREIGN
+/// `#[cfg(...)]`-gated variant's factory builds `core_path::<Variant>` directly with no
+/// compile-safe fallback. `is_host_enum: false` here mirrors a `core_import` that does not
+/// prefix-match the enum's `rust_path`.
+#[test]
+fn drops_stub_for_foreign_cfg_gated_variant() {
+    let mut gated = variant(
+        "Rect",
+        vec![field("width", TypeRef::Primitive(PrimitiveType::U32), false)],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    let def = enum_def(
+        "Shape",
+        vec![
+            variant(
+                "Circle",
+                vec![field("radius", TypeRef::Primitive(PrimitiveType::F64), false)],
+            ),
+            gated,
+        ],
+    );
+
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), false).join("");
+
+    assert!(!stubs.contains("function rect("), "{stubs}");
+    assert!(
+        stubs.contains("public static function circle(float $radius): Shape"),
+        "{stubs}"
+    );
+}
+
+/// Control: the identical gate on a HOST-owned enum must never be dropped from the stub, matching
+/// `enum_variant_declaration`'s authority (a host-owned gate never resolves to `Drop`).
+#[test]
+fn keeps_stub_for_host_owned_cfg_gated_variant() {
+    let mut gated = variant(
+        "Rect",
+        vec![field("width", TypeRef::Primitive(PrimitiveType::U32), false)],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    let def = enum_def(
+        "Shape",
+        vec![
+            variant(
+                "Circle",
+                vec![field("radius", TypeRef::Primitive(PrimitiveType::F64), false)],
+            ),
+            gated,
+        ],
+    );
+
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
+
+    assert!(
+        stubs.contains("public static function rect(int $width): Shape"),
+        "a host-owned cfg-gated variant's factory stub must stay:\n{stubs}"
+    );
+    assert!(
+        stubs.contains("public static function circle(float $radius): Shape"),
         "{stubs}"
     );
 }
@@ -231,7 +295,7 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
         ..shape_enum()
     };
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new(), true).join("");
 
     assert!(
         stubs.contains("public static function circle(float $radius): Shape"),

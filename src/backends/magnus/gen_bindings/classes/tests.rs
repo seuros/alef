@@ -494,7 +494,7 @@ fn shape_enum() -> EnumDef {
 
 #[test]
 fn variant_constructors_emit_singleton_per_struct_variant() {
-    let code = gen_data_enum_variant_constructors(&shape_enum());
+    let code = gen_data_enum_variant_constructors(&shape_enum(), "test_lib", None);
 
     assert!(code.contains("impl Shape {"), "must emit an impl block: {code}");
     assert!(
@@ -542,7 +542,7 @@ fn variant_constructors_use_serde_shaped_named_field_type() {
         version: Default::default(),
     };
 
-    let code = gen_data_enum_variant_constructors(&def);
+    let code = gen_data_enum_variant_constructors(&def, "test_lib", None);
 
     assert!(
         code.contains("pub fn _factory_llm(llm: LlmConfig, opts: String) -> Self"),
@@ -572,7 +572,7 @@ fn variant_constructors_skip_unit_tuple_and_excluded() {
         ..shape_enum()
     };
 
-    let code = gen_data_enum_variant_constructors(&def);
+    let code = gen_data_enum_variant_constructors(&def, "test_lib", None);
 
     assert!(!code.contains("_factory_empty"), "{code}");
     assert!(!code.contains("_factory_pair"), "{code}");
@@ -596,7 +596,7 @@ fn variant_constructors_emit_factory_even_with_colliding_hand_written_method() {
         ..shape_enum()
     };
 
-    let code = gen_data_enum_variant_constructors(&def);
+    let code = gen_data_enum_variant_constructors(&def, "test_lib", None);
 
     assert!(
         code.contains("pub fn _factory_circle(radius: String) -> Self"),
@@ -615,8 +615,85 @@ fn variant_constructors_empty_for_unit_only_enum() {
         variants: vec![make_variant("A", vec![]), make_variant("B", vec![])],
         ..shape_enum()
     };
-    let code = gen_data_enum_variant_constructors(&def);
+    let code = gen_data_enum_variant_constructors(&def, "test_lib", None);
     assert!(code.is_empty(), "expected no output for unit-only enum: {code}");
+}
+
+fn cfg_shape_enum_with_rust_path(rust_path: &str) -> EnumDef {
+    let mut gated = make_variant(
+        "Rect",
+        vec![
+            make_field("width", TypeRef::String, false),
+            make_field("height", TypeRef::String, false),
+        ],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    EnumDef {
+        rust_path: rust_path.to_string(),
+        variants: vec![
+            make_variant("Circle", vec![make_field("radius", TypeRef::String, false)]),
+            gated,
+            make_variant("Point", vec![make_field("value", TypeRef::String, false)]),
+        ],
+        ..shape_enum()
+    }
+}
+
+/// The factory builds `Self::<Variant> { .. }` against the SAME wrapper `enum` `gen_enum` declares
+/// (see `declared_enum_variants`'s doc comment): a FOREIGN cfg-gated variant `gen_enum` already
+/// drops must not leave a constructor still naming it -- that literal would be a hard `E0599`
+/// against the (correctly) narrower wrapper `enum` `gen_enum` renders alongside it.
+#[test]
+fn variant_constructors_drop_foreign_cfg_gated_variant() {
+    // core_import ("crate") does not prefix-match rust_path ("dep_crate::Shape") -> FOREIGN.
+    let def = cfg_shape_enum_with_rust_path("dep_crate::Shape");
+
+    // `Some(&[])` is load-bearing, not `None`: a foreign cfg-gated variant is only DROPPED once
+    // the configured feature set is known and provably excludes its gate. With `None` the
+    // nuanced authority keeps it unconditionally on purpose -- feature unification could enable
+    // a dependency's feature in a way alef's static read cannot observe. ~keep
+    let code = gen_data_enum_variant_constructors(&def, "crate", Some(&[]));
+
+    assert!(!code.contains("_factory_rect"), "{code}");
+    assert!(
+        code.contains("pub fn _factory_circle(radius: String) -> Self"),
+        "{code}"
+    );
+    assert!(code.contains("pub fn _factory_point(value: String) -> Self"), "{code}");
+}
+
+/// Control: the identical gate on a HOST-owned enum is never dropped -- `enum_variant_declaration`
+/// never resolves a host-owned gate to `Drop`.
+#[test]
+fn variant_constructors_keep_host_owned_cfg_gated_variant() {
+    // core_import ("crate") DOES prefix-match rust_path ("crate::Shape") -> host-owned.
+    let def = cfg_shape_enum_with_rust_path("crate::Shape");
+
+    let code = gen_data_enum_variant_constructors(&def, "crate", None);
+
+    assert!(
+        code.contains("pub fn _factory_rect(width: String, height: String) -> Self"),
+        "a host-owned cfg-gated variant's factory must stay reachable: {code}"
+    );
+}
+
+/// The registration list feeding `method!(Shape::_factory_rect, ..)` must resolve the identical
+/// FOREIGN/host verdict as the constructor generator above -- registering a path the constructor
+/// no longer emits is a hard `E0599` at the registration site, not a missing Ruby method.
+#[test]
+fn variant_constructor_registrations_match_generated_constructors() {
+    let foreign = cfg_shape_enum_with_rust_path("dep_crate::Shape");
+    let registrations = data_enum_variant_constructor_registrations(&foreign, "crate", Some(&[]));
+    let names: std::collections::BTreeSet<&str> = registrations
+        .iter()
+        .map(|(ruby_name, _, _)| ruby_name.as_str())
+        .collect();
+
+    assert_eq!(
+        names,
+        ["circle", "point"].into_iter().collect(),
+        "registrations must exclude the dropped foreign cfg-gated `rect` variant: {registrations:?}"
+    );
 }
 
 /// Issue #232: an adjacently-tagged enum (`tag` + `content`) emits tuple-form variants

@@ -46,7 +46,7 @@ fn shape_enum() -> EnumDef {
 #[test]
 fn emits_constructor_per_struct_variant_building_core_then_into() {
     let core_path = "test_lib::Shape";
-    let methods = gen_extendr_enum_variant_constructors(&shape_enum(), &ExtendrBackend, core_path);
+    let methods = gen_extendr_enum_variant_constructors(&shape_enum(), &ExtendrBackend, core_path, true);
 
     let code = methods.join("\n");
     assert!(code.contains("pub fn _factory_circle(radius: f64) -> Shape"), "{code}");
@@ -74,7 +74,7 @@ fn casts_remapped_primitive_back_to_core() {
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Sized_");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Sized_", true);
     let code = methods.join("\n");
     assert!(code.contains("pub fn _factory_big(count: f64) -> Sized_"), "{code}");
     assert!(
@@ -98,7 +98,7 @@ fn skips_variant_constructor_with_named_dto_field() {
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Wrapper");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Wrapper", true);
     let code = methods.join("\n");
     assert!(
         !code.contains("_factory_llm"),
@@ -138,7 +138,7 @@ fn skips_variant_constructor_when_any_field_is_unconstructible() {
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Job");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Job", true);
     let code = methods.join("\n");
     assert!(
         !code.contains("_factory_run"),
@@ -174,7 +174,7 @@ fn skips_unit_tuple_and_excluded_variants() {
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Mixed");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Mixed", true);
     let code = methods.join("\n");
     assert!(!code.contains("_factory_empty"), "{code}");
     assert!(!code.contains("_factory_pair"), "{code}");
@@ -197,13 +197,90 @@ fn emits_factory_even_with_colliding_hand_written_method() {
         }],
         ..shape_enum()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Shape");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Shape", true);
     let code = methods.join("\n");
     assert!(
         code.contains("pub fn _factory_circle(radius: f64) -> Shape"),
         "Circle factory must stay reachable despite the colliding hand-written method: {code}"
     );
     assert!(code.contains("pub fn _factory_rect"), "{code}");
+}
+
+fn cfg_shape_enum(rust_path: &str) -> EnumDef {
+    let mut gated = variant(
+        "Rect",
+        vec![
+            field("width", TypeRef::Primitive(PrimitiveType::F64)),
+            field("height", TypeRef::Primitive(PrimitiveType::F64)),
+        ],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    EnumDef {
+        rust_path: rust_path.to_string(),
+        variants: vec![
+            variant("Circle", vec![field("radius", TypeRef::Primitive(PrimitiveType::F64))]),
+            gated,
+            variant("Point", vec![field("value", TypeRef::Primitive(PrimitiveType::F64))]),
+        ],
+        ..shape_enum()
+    }
+}
+
+/// The factory body builds `<core_path>::<Variant> { .. }` directly (asserted by
+/// `emits_constructor_per_struct_variant_building_core_then_into` above): a FOREIGN variant behind
+/// a `#[cfg(...)]` this crate cannot declare as its own Cargo feature has no compile-safe fallback,
+/// so its factory must be dropped entirely rather than reference a variant the dependency may not
+/// have compiled in.
+#[test]
+fn drops_constructor_for_foreign_cfg_gated_variant() {
+    let def = cfg_shape_enum("dep_crate::Shape");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "dep_crate::Shape", false);
+    let code = methods.join("\n");
+
+    assert!(!code.contains("_factory_rect"), "{code}");
+    assert!(code.contains("pub fn _factory_circle(radius: f64) -> Shape"), "{code}");
+    assert!(code.contains("pub fn _factory_point(value: f64) -> Shape"), "{code}");
+}
+
+/// Control: the identical gate on a HOST-owned enum must never be dropped.
+#[test]
+fn keeps_constructor_for_host_owned_cfg_gated_variant() {
+    let def = cfg_shape_enum("crate::Shape");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "crate::Shape", true);
+    let code = methods.join("\n");
+
+    assert!(
+        code.contains("pub fn _factory_rect(width: f64, height: f64) -> Shape"),
+        "a host-owned cfg-gated variant's factory must stay reachable: {code}"
+    );
+}
+
+/// `struct_embeds_constructors_in_impl_block` (below) exercises the same drop end-to-end through
+/// `gen_extendr_json_passthrough_enum_struct`, which computes `is_host_enum` itself from
+/// `core_import` -- this test pins that internal computation directly.
+#[test]
+fn struct_embeds_no_constructor_for_foreign_cfg_gated_variant() {
+    let def = cfg_shape_enum("dep_crate::Shape");
+    let code = gen_extendr_json_passthrough_enum_struct(&def, &ExtendrBackend, "crate");
+
+    assert!(!code.contains("_factory_rect"), "{code}");
+    assert!(code.contains("pub fn _factory_circle(radius: f64) -> Shape"), "{code}");
+}
+
+/// R-facing registrations must resolve the identical FOREIGN/host verdict as the Rust constructor
+/// generator: registering an R wrapper for a name the Rust side dropped calls a
+/// `wrap__<Name>___factory_<snake>` FFI symbol `extendr_module!` never registers.
+#[test]
+fn registrations_exclude_foreign_cfg_gated_variant() {
+    let def = cfg_shape_enum("dep_crate::Shape");
+    let regs = extendr_enum_variant_constructor_registrations(&def, false);
+    let names: std::collections::BTreeSet<&str> = regs.iter().map(|(r_name, _, _)| r_name.as_str()).collect();
+
+    assert_eq!(
+        names,
+        ["circle", "point"].into_iter().collect(),
+        "registrations must exclude the dropped foreign cfg-gated `rect` variant: {regs:?}"
+    );
 }
 
 #[test]
@@ -227,7 +304,7 @@ fn casts_optional_remapped_primitive_back_to_core() {
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
-    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Bounded");
+    let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Bounded", true);
     let code = methods.join("\n");
     assert!(
         code.contains("pub fn _factory_limit(max: Option<f64>) -> Bounded"),
@@ -241,7 +318,7 @@ fn casts_optional_remapped_primitive_back_to_core() {
 
 #[test]
 fn registrations_pair_r_name_with_factory_fn() {
-    let regs = extendr_enum_variant_constructor_registrations(&shape_enum());
+    let regs = extendr_enum_variant_constructor_registrations(&shape_enum(), true);
     assert_eq!(
         regs,
         vec![
@@ -271,7 +348,7 @@ fn registrations_include_variant_colliding_with_hand_written_method() {
         }],
         ..shape_enum()
     };
-    let regs = extendr_enum_variant_constructor_registrations(&def);
+    let regs = extendr_enum_variant_constructor_registrations(&def, true);
     assert_eq!(
         regs,
         vec![

@@ -857,14 +857,26 @@ fn gen_data_enum_property_declarations(enum_def: &EnumDef, enum_names: &AHashSet
 /// (`gen_flat_data_enum_variant_constructors` in `gen_bindings/types/enums.rs`) stay aligned —
 /// neither one suppresses a variant on a hand-written-method name collision, since
 /// `enum_def.methods` is never forwarded into the generated `#[php_impl]` block.
+///
+/// `is_host_enum` additionally excludes any variant the runtime factory itself drops as an
+/// unreachable FOREIGN cfg-gated variant (see [`variant_constructor_is_reachable`]) — without this
+/// the stub would document a static method PHPStan accepts but the extension never registers.
 fn gen_data_enum_variant_constructor_stubs(
     enum_def: &crate::core::ir::EnumDef,
     enum_names: &AHashSet<String>,
+    is_host_enum: bool,
 ) -> Vec<String> {
-    use crate::codegen::generators::collect_all_variant_constructors;
+    use crate::codegen::generators::{collect_all_variant_constructors, variant_constructor_is_reachable};
 
     collect_all_variant_constructors(enum_def)
         .iter()
+        .filter(|ctor| {
+            enum_def
+                .variants
+                .iter()
+                .find(|v| v.name == ctor.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
+        })
         .map(|ctor| {
             let first_optional_idx = ctor.params.iter().position(|p| p.optional);
             let params: Vec<String> = ctor

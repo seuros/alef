@@ -22,6 +22,8 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
     streaming_method_registrations: &std::collections::HashMap<String, Vec<String>>,
     streaming_adapters: &[streaming::StreamingAdapter<'_>],
 ) -> String {
+    let core_import = config.core_import_name();
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Ruby);
     let mut lines = vec![
         "#[magnus::init]".to_string(),
         "fn ruby_init(ruby: &Ruby) -> Result<(), Error> {".to_string(),
@@ -208,7 +210,11 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
         if enum_def.serde_tag.is_some() {
             continue;
         }
-        let registrations = classes::data_enum_variant_constructor_registrations(enum_def);
+        let registrations = classes::data_enum_variant_constructor_registrations(
+            enum_def,
+            &core_import,
+            Some(enabled_features.as_slice()),
+        );
         if registrations.is_empty() {
             continue;
         }

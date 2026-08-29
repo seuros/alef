@@ -1,11 +1,14 @@
 use crate::backends::magnus::type_map::{rbs_marshalled_type, rbs_type};
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types, substitute_trait_interfaces};
-use crate::core::config::TraitBridgeConfig;
+use crate::core::config::{Language, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
 
 pub fn gen_stubs(
     api: &ApiSurface,
+    config: &ResolvedCrateConfig,
     gem_name: &str,
     emit_docstrings: bool,
     streaming_return_types: &ahash::AHashMap<String, String>,
@@ -74,8 +77,18 @@ pub fn gen_stubs(
         }
     }
 
+    let core_import = config.core_import_name();
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Ruby);
+    let configured_features_set: std::collections::HashSet<&str> =
+        enabled_features.iter().map(String::as_str).collect();
     for enum_def in &api.enums {
-        lines.push(gen_enum_stub(enum_def, emit_docstrings));
+        let is_host_enum = is_host_owned_rust_path(&core_import, &enum_def.rust_path);
+        lines.push(gen_enum_stub(
+            enum_def,
+            emit_docstrings,
+            is_host_enum,
+            &configured_features_set,
+        ));
         lines.push("".to_string());
     }
 
@@ -534,7 +547,12 @@ fn gen_method_stub(
 /// Generate a Ruby enum stub.
 /// Unit-variant enums are represented as Ruby Symbols (e.g., :left_to_right).
 /// RBS stubs are minimal — actual return types use symbol unions in method signatures.
-fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
+fn gen_enum_stub(
+    enum_def: &EnumDef,
+    emit_docstrings: bool,
+    is_host_enum: bool,
+    configured_features: &std::collections::HashSet<&str>,
+) -> String {
     let mut lines = vec![];
 
     lines.push(format!("  class {}", enum_def.name));
@@ -564,7 +582,7 @@ fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
             .collect();
         lines.push(format!("    type value = {}", symbol_variants.join(" | ")));
     } else if enum_def.serde_tag.is_none() {
-        gen_data_enum_variant_constructor_stubs(&mut lines, enum_def);
+        gen_data_enum_variant_constructor_stubs(&mut lines, enum_def, is_host_enum, configured_features);
     }
 
     lines.push("  end".to_string());
@@ -581,10 +599,33 @@ fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
 /// tuple / `binding_excluded` / sanitized-field variants) so the stub and runtime binding stay
 /// aligned — including for a variant whose snake_case name collides with a hand-written
 /// `impl EnumType { .. }` method, since the runtime binding never forwards that method either.
-fn gen_data_enum_variant_constructor_stubs(lines: &mut Vec<String>, enum_def: &EnumDef) {
+///
+/// `is_host_enum`/`configured_features` additionally narrow the stub to the SAME
+/// [`enum_variant_declaration`] verdict `classes::gen_enum::gen_data_enum_variant_constructors`
+/// consults for the runtime factory: a FOREIGN cfg-gated variant the runtime drops must not stay
+/// documented here, or steep would accept a call the extension never registers.
+fn gen_data_enum_variant_constructor_stubs(
+    lines: &mut Vec<String>,
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+    configured_features: &std::collections::HashSet<&str>,
+) {
     use crate::codegen::generators::collect_all_variant_constructors;
 
-    for ctor in collect_all_variant_constructors(enum_def) {
+    let declared_names: std::collections::HashSet<&str> = enum_def
+        .variants
+        .iter()
+        .filter(|v| {
+            let verdict = enum_variant_declaration(v, is_host_enum, Some(configured_features));
+            !matches!(verdict, VariantDeclaration::Drop)
+        })
+        .map(|v| v.name.as_str())
+        .collect();
+
+    for ctor in collect_all_variant_constructors(enum_def)
+        .into_iter()
+        .filter(|ctor| declared_names.contains(ctor.variant_name))
+    {
         let params: Vec<String> = ctor
             .params
             .iter()

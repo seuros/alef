@@ -290,8 +290,10 @@ pub fn gen_stubs(
     // `options.py` `@dataclass`, not the compiled `#[pyclass]` this stub declares. A data-enum
     let coercible_dtos = crate::backends::pyo3::gen_bindings::wire_schema::coercible_dto_names(api, config);
 
+    let core_import = config.core_import_name();
     for enum_def in &api.enums {
-        body_lines.push(gen_enum_stub(enum_def, emit_docstrings, &coercible_dtos));
+        let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(&core_import, &enum_def.rust_path);
+        body_lines.push(gen_enum_stub(enum_def, emit_docstrings, &coercible_dtos, is_host_enum));
         body_lines.push("".to_string());
     }
 

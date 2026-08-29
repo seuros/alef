@@ -112,7 +112,8 @@ pub(super) fn gen_extendr_json_passthrough_enum_struct(
 ) -> String {
     let name = &enum_def.name;
     let core_path = enum_core_path(enum_def, core_import);
-    let variant_constructors = gen_extendr_enum_variant_constructors(enum_def, mapper, &core_path);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let variant_constructors = gen_extendr_enum_variant_constructors(enum_def, mapper, &core_path, is_host_enum);
     let variant_constructors_block = if variant_constructors.is_empty() {
         String::new()
     } else {
@@ -198,12 +199,21 @@ fn extendr_factory_param_is_constructible(ty: &TypeRef) -> bool {
 /// `<Name>$<snake>(...)`. Returns one rendered method per qualifying variant (empty when none
 /// qualifies). Variants whose fields cannot cross the extendr input boundary (see
 /// `extendr_factory_param_is_constructible`) are skipped.
+///
+/// `is_host_enum` additionally drops a FOREIGN variant behind a `#[cfg(...)]` this crate cannot
+/// declare as its own Cargo feature: the method body below builds `<core_path>::<Variant> { .. }`
+/// directly, with no compiler-deferred fallback the way a match arm's wildcard has, so an
+/// "unproven, might still be reachable" foreign gate cannot be risked here -- see
+/// `variant_constructor_is_reachable`.
 pub(super) fn gen_extendr_enum_variant_constructors(
     enum_def: &EnumDef,
     mapper: &dyn TypeMapper,
     core_path: &str,
+    is_host_enum: bool,
 ) -> Vec<String> {
-    use crate::codegen::generators::{collect_all_variant_constructors, variant_field_init};
+    use crate::codegen::generators::{
+        collect_all_variant_constructors, variant_constructor_is_reachable, variant_field_init,
+    };
     use crate::codegen::shared::{function_params, is_promoted_optional};
 
     let name = &enum_def.name;
@@ -215,6 +225,13 @@ pub(super) fn gen_extendr_enum_variant_constructors(
             ctor.params
                 .iter()
                 .all(|p| extendr_factory_param_is_constructible(&p.ty))
+        })
+        .filter(|ctor| {
+            enum_def
+                .variants
+                .iter()
+                .find(|v| v.name == ctor.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
         })
         .map(|ctor| {
             let params_str = function_params(&ctor.params, &map_fn);
@@ -251,13 +268,29 @@ pub(super) fn gen_extendr_enum_variant_constructors(
 /// R-facing registrations for the per-variant constructors of a JSON-passthrough data enum:
 /// `(r_name, rust_fn_name, param_names)`. Used by `r_wrappers` to bind
 /// `<Name>$<snake> <- function(<params>) .Call("wrap__<Name>___factory_<snake>", <params>, ...)`.
-pub(super) fn extendr_enum_variant_constructor_registrations(enum_def: &EnumDef) -> Vec<(String, String, Vec<String>)> {
+///
+/// `is_host_enum` must resolve identically to [`gen_extendr_enum_variant_constructors`]: R binding
+/// a name the Rust side dropped would call a `wrap__<Name>___factory_<snake>` FFI symbol
+/// `extendr_module!` never registers -- a dynamic "function not found" at call time, not build time.
+pub(super) fn extendr_enum_variant_constructor_registrations(
+    enum_def: &EnumDef,
+    is_host_enum: bool,
+) -> Vec<(String, String, Vec<String>)> {
+    use crate::codegen::generators::variant_constructor_is_reachable;
+
     crate::codegen::generators::collect_all_variant_constructors(enum_def)
         .into_iter()
         .filter(|ctor| {
             ctor.params
                 .iter()
                 .all(|p| extendr_factory_param_is_constructible(&p.ty))
+        })
+        .filter(|ctor| {
+            enum_def
+                .variants
+                .iter()
+                .find(|v| v.name == ctor.variant_name)
+                .is_some_and(|v| variant_constructor_is_reachable(v, is_host_enum))
         })
         .map(|ctor| {
             let param_names: Vec<String> = ctor.params.iter().map(|p| p.name.clone()).collect();

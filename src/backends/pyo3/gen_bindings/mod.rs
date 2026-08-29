@@ -545,7 +545,8 @@ impl Backend for Pyo3Backend {
 
         // `@dataclass`/`dict`, not the compiled `#[pyclass]`) so enum-variant payloads of those
         let coercible_dto_names = wire_schema::coercible_dto_names(api, config);
-        let coercion_section = wire_schema::emit_dto_coercion_section(api, has_serde, &coercible_dto_names);
+        let coercion_section =
+            wire_schema::emit_dto_coercion_section(api, has_serde, &coercible_dto_names, &core_import);
         if !coercion_section.is_empty() {
             builder.add_item(&coercion_section);
         }

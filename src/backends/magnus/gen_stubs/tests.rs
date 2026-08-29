@@ -91,10 +91,50 @@ fn shape_enum() -> EnumDef {
 
 #[test]
 fn emits_singleton_constructor_per_struct_variant() {
-    let stub = gen_enum_stub(&shape_enum(), false);
+    let stub = gen_enum_stub(&shape_enum(), false, true, &std::collections::HashSet::new());
 
     assert!(stub.contains("  class Shape"), "{stub}");
     assert!(stub.contains("    def self.circle: (Float radius) -> Shape"), "{stub}");
+    assert!(
+        stub.contains("    def self.rect: (Integer width, Integer height) -> Shape"),
+        "{stub}"
+    );
+}
+
+fn cfg_shape_enum() -> EnumDef {
+    let mut gated = variant(
+        "Rect",
+        vec![
+            field("width", TypeRef::Primitive(PrimitiveType::U32)),
+            field("height", TypeRef::Primitive(PrimitiveType::U32)),
+        ],
+    );
+    gated.cfg = Some(r#"feature = "extra-shapes""#.to_string());
+    enum_def(
+        "Shape",
+        vec![
+            variant("Circle", vec![field("radius", TypeRef::Primitive(PrimitiveType::F64))]),
+            gated,
+        ],
+    )
+}
+
+/// The stub must not document a singleton constructor the runtime binding drops for the same
+/// reason (`classes::gen_enum::gen_data_enum_variant_constructors`): a FOREIGN cfg-gated variant's
+/// factory has no compile-safe fallback and is dropped unconditionally.
+#[test]
+fn drops_singleton_constructor_for_foreign_cfg_gated_variant() {
+    let stub = gen_enum_stub(&cfg_shape_enum(), false, false, &std::collections::HashSet::new());
+
+    assert!(!stub.contains("def self.rect"), "{stub}");
+    assert!(stub.contains("    def self.circle: (Float radius) -> Shape"), "{stub}");
+}
+
+/// Control: a host-owned cfg-gated variant's constructor must stay documented.
+#[test]
+fn keeps_singleton_constructor_for_host_owned_cfg_gated_variant() {
+    let stub = gen_enum_stub(&cfg_shape_enum(), false, true, &std::collections::HashSet::new());
+
     assert!(
         stub.contains("    def self.rect: (Integer width, Integer height) -> Shape"),
         "{stub}"
@@ -108,7 +148,7 @@ fn tagged_data_enum_emits_no_singleton_constructors() {
         serde_tag: Some("type".to_string()),
         ..shape_enum()
     };
-    let stub = gen_enum_stub(&tagged, false);
+    let stub = gen_enum_stub(&tagged, false, true, &std::collections::HashSet::new());
     assert!(stub.contains("  class Shape"), "{stub}");
     assert!(
         !stub.contains("def self.circle"),
@@ -129,7 +169,7 @@ fn unit_enum_stub_type_value_matches_the_verbatim_wire_symbol_without_rename_all
         "DataNodeKind",
         vec![variant("KeyValue", vec![]), variant("Sequence", vec![])],
     );
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
     assert!(
         stub.contains("type value = :KeyValue | :Sequence"),
         "no rename_all declared, so the stub's symbol union must be verbatim: {stub}"
@@ -146,7 +186,7 @@ fn maps_named_dto_field_to_its_type() {
         )],
     );
 
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
 
     assert!(
         stub.contains("    def self.llm: (LlmConfig config) -> Source"),
@@ -175,7 +215,7 @@ fn skips_unit_tuple_excluded_and_sanitized_variants() {
         ],
     );
 
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
 
     assert!(!stub.contains("def self.empty"), "{stub}");
     assert!(!stub.contains("def self.pair"), "{stub}");
@@ -191,7 +231,7 @@ fn optional_field_is_nilable() {
         vec![variant("Tag", vec![optional_field("label", TypeRef::String)])],
     );
 
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
 
     assert!(stub.contains("    def self.tag: (?String label) -> Source"), "{stub}");
 }
@@ -209,7 +249,7 @@ fn param_after_optional_is_promoted_to_nilable() {
         )],
     );
 
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
 
     assert!(
         stub.contains("    def self.ring: (?Float radius, ?Integer width) -> Shape"),
@@ -233,7 +273,7 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
         ..shape_enum()
     };
 
-    let stub = gen_enum_stub(&def, false);
+    let stub = gen_enum_stub(&def, false, true, &std::collections::HashSet::new());
 
     assert!(
         stub.contains("    def self.circle: (Float radius) -> Shape"),
@@ -426,6 +466,7 @@ fn initialize_keywords_match_the_kwargs_constructor_contract() {
     };
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -473,6 +514,7 @@ fn defaulted_struct_attributes_are_read_only() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -545,6 +587,7 @@ fn attr_types_match_the_accessor_the_binding_emits() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -617,6 +660,7 @@ fn attr_and_same_named_method_emit_the_name_once() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -663,6 +707,7 @@ fn non_opaque_static_method_other_than_new_is_never_stubbed() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -702,6 +747,7 @@ fn opaque_static_method_other_than_variant_wrapper_new_is_never_stubbed() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -747,6 +793,7 @@ fn opaque_variant_wrapper_new_constructor_is_still_stubbed() {
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),
@@ -789,6 +836,7 @@ fn opaque_variant_wrapper_new_is_not_stubbed_when_client_constructor_overrides_i
 
     let stub = super::gen_stubs(
         &api,
+        &crate::core::config::ResolvedCrateConfig::default(),
         "test_lib",
         false,
         &ahash::AHashMap::new(),

@@ -374,7 +374,11 @@ impl Backend for MagnusBackend {
                     Some(enabled_features.as_slice()),
                 ));
                 if enum_def.serde_tag.is_none() {
-                    let constructors = classes::gen_data_enum_variant_constructors(enum_def);
+                    let constructors = classes::gen_data_enum_variant_constructors(
+                        enum_def,
+                        &core_import,
+                        Some(enabled_features.as_slice()),
+                    );
                     if !constructors.is_empty() {
                         builder.add_item(&constructors);
                     }
@@ -666,6 +670,7 @@ impl Backend for MagnusBackend {
             config.client_constructors.keys().map(String::as_str).collect();
         let content = crate::backends::magnus::gen_stubs::gen_stubs(
             api,
+            config,
             &gem_name,
             emit_docstrings,
             &streaming_return_types,

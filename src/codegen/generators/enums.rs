@@ -189,6 +189,32 @@ pub(crate) fn collect_all_variant_constructors(enum_def: &EnumDef) -> Vec<Varian
         .collect()
 }
 
+/// True when a data-carrying struct variant's per-variant factory constructor may safely
+/// reference `core_path::<Variant>` (or an equivalent single-source-of-truth variant name, e.g.
+/// Magnus's own wrapper `enum` declared by `gen_enum`) unconditionally, with no compiler-deferred
+/// fallback the way a `#[cfg(...)]`-gated match arm's `_ => ...` wildcard has.
+///
+/// Keeps an ungated variant and any host-owned variant unconditionally -- `enum_variant_declaration`
+/// never resolves a host-owned gate to `Drop`, so a host-owned variant's own crate always compiles
+/// it in. Drops any FOREIGN-owned variant behind a `#[cfg(...)]` this crate cannot declare as its
+/// own Cargo feature, regardless of `configured_features`: an "unproven, might still be reachable"
+/// foreign gate is exactly what `enum_variant_declaration` keeps (a declaration line is deferred to
+/// the compiler, which CAN express "maybe"), but a whole `#[staticmethod] fn` body that names
+/// `core_path::Variant` has no such deferral -- if the dependency compiled the variant out, the
+/// reference is a hard `E0599`/`E0433`, not a warning.
+///
+/// This is the same policy `write_pyo3_variant_accessors` / `gen_pyo3_enum_variant_constructors_content`
+/// already apply inline for PyO3's own data-enum accessors and factories; extracted here so other
+/// backends whose generated code shape has the identical "no fallback" property (extendr's
+/// JSON-passthrough factory, PHP's flat-enum factory) apply the identical rule instead of
+/// re-deriving it independently. ~keep
+pub(crate) fn variant_constructor_is_reachable(variant: &EnumVariant, is_host_enum: bool) -> bool {
+    match variant.cfg.as_deref() {
+        None => true,
+        Some(_) => is_host_enum,
+    }
+}
+
 /// Build the struct-literal init expression for one variant field.
 ///
 /// Returns the value placed at `<field>: <expr>` in `<core>::<Variant> { .. }`. The conversion is

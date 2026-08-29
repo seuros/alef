@@ -312,6 +312,82 @@ mod variant_constructor_tests {
         let code = gen_flat_data_enum_variant_constructors(&def, &mapper(), &empty, &empty, &empty, "crate");
         assert!(code.is_empty(), "no constructors for unit-only enum: {code:?}");
     }
+
+    /// Extract the exact set of `_factory_<snake>` names a rendered constructor set declares,
+    /// parsed from `pub fn _factory_<name>(`, shape-agnostic (works whether the renderer puts one
+    /// method per line or several).
+    fn factory_names(code: &[String]) -> std::collections::BTreeSet<String> {
+        let joined = code.join("\n");
+        joined
+            .split("pub fn _factory_")
+            .skip(1)
+            .filter_map(|rest| rest.split('(').next())
+            .map(|name| name.trim().to_string())
+            .collect()
+    }
+
+    fn cfg_shape_enum(cfg: &str) -> EnumDef {
+        EnumDef {
+            name: "Shape".to_string(),
+            rust_path: "dep_crate::Shape".to_string(),
+            variants: vec![
+                variant("Circle", vec![field("radius", TypeRef::Primitive(PrimitiveType::F64))]),
+                EnumVariant {
+                    cfg: Some(cfg.to_string()),
+                    ..variant(
+                        "Rect",
+                        vec![
+                            field("width", TypeRef::Primitive(PrimitiveType::F64)),
+                            field("height", TypeRef::Primitive(PrimitiveType::F64)),
+                        ],
+                    )
+                },
+                variant("Point", vec![field("value", TypeRef::Primitive(PrimitiveType::F64))]),
+            ],
+            serde_content: None,
+            serde_tag: Some("type".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The factory body builds `<core_path>::<Variant> { .. }` directly (asserted above by
+    /// `emits_static_constructor_building_core_variant_then_into`): a FOREIGN variant behind a
+    /// `#[cfg(...)]` this crate cannot declare as its own Cargo feature has no compile-safe
+    /// fallback, so its factory must be dropped entirely, not merely left referencing a variant the
+    /// dependency may not have compiled in.
+    #[test]
+    fn drops_factory_for_foreign_cfg_gated_variant() {
+        let def = cfg_shape_enum(r#"feature = "extra-shapes""#);
+        let empty = AHashSet::new();
+        // core_import ("crate") does not prefix-match rust_path ("dep_crate::Shape"), so the enum
+        // is classified FOREIGN.
+        let code = gen_flat_data_enum_variant_constructors(&def, &mapper(), &empty, &empty, &empty, "crate");
+
+        assert_eq!(
+            factory_names(&code),
+            ["circle", "point"].into_iter().map(String::from).collect(),
+            "the foreign cfg-gated `rect` factory must be dropped, leaving exactly the two \
+             unconditional variants:\n{code:?}"
+        );
+    }
+
+    /// Control: the identical `#[cfg(...)]` gate on a HOST-owned enum must never be dropped --
+    /// `enum_variant_declaration`'s authority never resolves a host-owned gate to `Drop`, and this
+    /// helper mirrors that for factory reachability too.
+    #[test]
+    fn keeps_factory_for_host_owned_cfg_gated_variant() {
+        let mut def = cfg_shape_enum(r#"feature = "extra-shapes""#);
+        def.rust_path = "crate::Shape".to_string();
+        let empty = AHashSet::new();
+        // core_import ("crate") now DOES prefix-match rust_path ("crate::Shape"): host-owned.
+        let code = gen_flat_data_enum_variant_constructors(&def, &mapper(), &empty, &empty, &empty, "crate");
+
+        assert_eq!(
+            factory_names(&code),
+            ["circle", "point", "rect"].into_iter().map(String::from).collect(),
+            "a host-owned cfg-gated variant's factory must stay unconditionally reachable:\n{code:?}"
+        );
+    }
 }
 
 #[cfg(test)]
