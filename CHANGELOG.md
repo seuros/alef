@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(typescript): annotate an empty preserved `mock_url_list` argument as `string[]` so generated
+  node and wasm docs snippets and e2e tests compile under `noImplicitAny` (`const urls = [];`
+  previously failed with TS7034/TS7005).
+
 
 ## [0.74.0] - 2026-08-29
 

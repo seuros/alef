@@ -101,7 +101,20 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                     .map(|url| format!("\"{}\"", escape_js(url)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                setup_lines.push(format!("const {name} = [{literals}];"));
+                // A bare `const urls = [];` never has an element pushed onto it in this scope, so
+                // under `strict`/`noImplicitAny` TypeScript cannot resolve its element type and
+                // reports TS7034 at the declaration and TS7005 at every read (the "evolving array"
+                // diagnostic, which only fires for an unannotated `[]` initializer -- a non-empty
+                // literal already carries `string[]` from its own elements, so this must not touch
+                // that case). `mock_url_list` is always a URL string list by construction -- the
+                // same fact `mock_url`'s scalar sibling already leans on above -- so `string[]` is
+                // not a guess. ~keep
+                let declaration = if urls.is_empty() {
+                    format!("const {name}: string[] = [];")
+                } else {
+                    format!("const {name} = [{literals}];")
+                };
+                setup_lines.push(declaration);
                 parts.push(name.clone());
                 continue;
             }
@@ -679,5 +692,152 @@ mod tests {
             !call_args.contains("bytes: [72, 105]"),
             "must not fall back to the untyped json_to_js_camel dump: {call_args}"
         );
+    }
+
+    /// Regression: a preserved (`preserve_input_urls: true`) `mock_url_list` argument whose
+    /// fixture declares zero URLs used to render the bare `const urls = [];` -- no element is
+    /// ever pushed onto it in this scope, so under `strict`/`noImplicitAny` `tsc` cannot resolve
+    /// its element type and reports TS7034 at the declaration and TS7005 at the call site that
+    /// reads it. The element type is always `string` for this arg type, so the fix annotates
+    /// only the empty case as `string[]`.
+    #[test]
+    fn node_empty_preserved_url_list_declares_a_typed_empty_array() {
+        let mut fixture = fixture();
+        fixture.preserve_input_urls = true;
+        let input = serde_json::json!({ "urls": [] });
+        let args = [ArgMapping {
+            name: "urls".into(),
+            field: "input.urls".into(),
+            arg_type: "mock_url_list".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let (setup_lines, call_args) = build_args_and_setup(
+            &input,
+            &args,
+            None,
+            &fixture,
+            &Default::default(),
+            "node",
+            &Default::default(),
+            &Default::default(),
+            None,
+            &[],
+            &[],
+            "",
+            &config,
+            true,
+            &mut Default::default(),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+        );
+
+        assert_eq!(
+            setup_lines,
+            vec!["const urls: string[] = [];".to_string()],
+            "an empty URL list must declare an explicit string[] type, not a bare [] TypeScript cannot infer"
+        );
+        assert_eq!(call_args, "urls");
+    }
+
+    /// Control for `node_empty_preserved_url_list_declares_a_typed_empty_array`: a non-empty
+    /// preserved URL list already infers `string[]` from its own elements, so the fix must not
+    /// touch this rendering at all.
+    #[test]
+    fn node_non_empty_preserved_url_list_is_unchanged() {
+        let mut fixture = fixture();
+        fixture.preserve_input_urls = true;
+        let input = serde_json::json!({ "urls": ["https://a.example/x", "https://b.example/y"] });
+        let args = [ArgMapping {
+            name: "urls".into(),
+            field: "input.urls".into(),
+            arg_type: "mock_url_list".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let (setup_lines, call_args) = build_args_and_setup(
+            &input,
+            &args,
+            None,
+            &fixture,
+            &Default::default(),
+            "node",
+            &Default::default(),
+            &Default::default(),
+            None,
+            &[],
+            &[],
+            "",
+            &config,
+            true,
+            &mut Default::default(),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+        );
+
+        assert_eq!(
+            setup_lines,
+            vec!["const urls = [\"https://a.example/x\", \"https://b.example/y\"];".to_string()],
+            "a non-empty preserved URL list must keep its untyped literal -- TypeScript already infers string[]"
+        );
+        assert_eq!(call_args, "urls");
+    }
+
+    /// The wasm half of `node_empty_preserved_url_list_declares_a_typed_empty_array`. Wasm and
+    /// node share `build_args_and_setup` for this argument kind -- neither branches on `lang` --
+    /// so this pins that the shared code path is fixed for both targets, not only node's.
+    #[test]
+    fn wasm_empty_preserved_url_list_declares_a_typed_empty_array() {
+        let mut fixture = fixture();
+        fixture.preserve_input_urls = true;
+        let input = serde_json::json!({ "urls": [] });
+        let args = [ArgMapping {
+            name: "urls".into(),
+            field: "input.urls".into(),
+            arg_type: "mock_url_list".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let (setup_lines, call_args) = build_args_and_setup(
+            &input,
+            &args,
+            None,
+            &fixture,
+            &Default::default(),
+            "wasm",
+            &Default::default(),
+            &Default::default(),
+            None,
+            &[],
+            &[],
+            "Wasm",
+            &config,
+            true,
+            &mut Default::default(),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+        );
+
+        assert_eq!(
+            setup_lines,
+            vec!["const urls: string[] = [];".to_string()],
+            "the wasm target must render the same typed empty-array declaration as node"
+        );
+        assert_eq!(call_args, "urls");
     }
 }
