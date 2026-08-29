@@ -498,7 +498,7 @@ mod tagged_union_assertion_tests {
                 name: "FormatMetadata".to_string(),
                 variants: vec![EnumVariant {
                     name: "Html".to_string(),
-                    fields: vec![field("field0", TypeRef::Named("HtmlMetadata".to_string()))],
+                    fields: vec![field("0", TypeRef::Named("HtmlMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -507,7 +507,7 @@ mod tagged_union_assertion_tests {
                 name: "DetailUnion".to_string(),
                 variants: vec![EnumVariant {
                     name: "Stats".to_string(),
-                    fields: vec![field("field0", TypeRef::Named("StatsMetadata".to_string()))],
+                    fields: vec![field("stats_payload", TypeRef::Named("StatsMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -516,7 +516,7 @@ mod tagged_union_assertion_tests {
                 name: "DirectOuter".to_string(),
                 variants: vec![EnumVariant {
                     name: "Wrapped".to_string(),
-                    fields: vec![field("field0", TypeRef::Named("DirectInner".to_string()))],
+                    fields: vec![field("0", TypeRef::Named("DirectInner".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -525,7 +525,7 @@ mod tagged_union_assertion_tests {
                 name: "DirectInner".to_string(),
                 variants: vec![EnumVariant {
                     name: "Value".to_string(),
-                    fields: vec![field("field0", TypeRef::Named("StatsMetadata".to_string()))],
+                    fields: vec![field("0", TypeRef::Named("StatsMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -598,7 +598,7 @@ mod tagged_union_assertion_tests {
         });
         assert_eq!(
             out,
-            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.detail as DetailUnion_Stats).field0.count, equals(3));\n"
+            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.detail as DetailUnion_Stats).statsPayload.count, equals(3));\n"
         );
     }
 
@@ -612,7 +612,7 @@ mod tagged_union_assertion_tests {
         });
         assert_eq!(
             out,
-            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.details?.kind as DetailUnion_Stats).field0.count, equals(3));\n"
+            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.details?.kind as DetailUnion_Stats).statsPayload.count, equals(3));\n"
         );
     }
 
@@ -701,11 +701,16 @@ mod tagged_union_assertion_tests {
         .map(render)
         .collect::<String>();
         let source = format!(
-            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass DetailUnion {{}}\nclass DetailUnion_Stats extends DetailUnion {{ final StatsMetadata field0; DetailUnion_Stats(this.field0); }}\nclass DirectOuter {{}}\nclass DirectOuter_Wrapped extends DirectOuter {{ final DirectInner field0; DirectOuter_Wrapped(this.field0); }}\nclass DirectInner {{}}\nclass DirectInner_Value extends DirectInner {{ final StatsMetadata field0; DirectInner_Value(this.field0); }}\nclass StatsMetadata {{ final int count; StatsMetadata(this.count); }}\nclass Details {{ final DetailUnion kind; Details(this.kind); }}\nclass HtmlMetadata {{ final String title; final List<String>? headers; final DetailUnion detail; final Details? details; HtmlMetadata(this.title, this.headers, this.detail, this.details); }}\nclass Metadata {{ final FormatMetadata? format; final DirectOuter direct; Metadata(this.format, this.direct); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final stats = StatsMetadata(3); final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b'], DetailUnion_Stats(stats), Details(DetailUnion_Stats(stats)))), DirectOuter_Wrapped(DirectInner_Value(stats))))]);\n{assertions}}}\n"
+            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass DetailUnion {{}}\nclass DetailUnion_Stats extends DetailUnion {{ final StatsMetadata statsPayload; DetailUnion_Stats(this.statsPayload); }}\nclass DirectOuter {{}}\nclass DirectOuter_Wrapped extends DirectOuter {{ final DirectInner field0; DirectOuter_Wrapped(this.field0); }}\nclass DirectInner {{}}\nclass DirectInner_Value extends DirectInner {{ final StatsMetadata field0; DirectInner_Value(this.field0); }}\nclass StatsMetadata {{ final int count; StatsMetadata(this.count); }}\nclass Details {{ final DetailUnion kind; Details(this.kind); }}\nclass HtmlMetadata {{ final String title; final List<String>? headers; final DetailUnion detail; final Details? details; HtmlMetadata(this.title, this.headers, this.detail, this.details); }}\nclass Metadata {{ final FormatMetadata? format; final DirectOuter direct; Metadata(this.format, this.direct); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final stats = StatsMetadata(3); final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b'], DetailUnion_Stats(stats), Details(DetailUnion_Stats(stats)))), DirectOuter_Wrapped(DirectInner_Value(stats))))]);\n{assertions}}}\n"
         );
         assert!(
             dart_analyze(&source).success(),
             "generated union assertion did not analyze:\n{source}"
+        );
+        let numeric_payload = source.replace("FormatMetadata_Html).field0.title", "FormatMetadata_Html).0.title");
+        assert!(
+            !dart_analyze(&numeric_payload).success(),
+            "Dart analyzer accepted a numeric tuple payload accessor; tuple naming check was vacuous"
         );
         let sabotaged = source.replace("DirectInner_Value).field0", "MissingVariant).field0");
         assert!(

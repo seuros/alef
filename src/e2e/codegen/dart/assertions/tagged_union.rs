@@ -1,3 +1,4 @@
+use crate::codegen::naming::dart_tuple_field_identifier;
 use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
@@ -93,6 +94,14 @@ fn dart_payload_accessor(field_resolver: &FieldResolver, owner: &str, path: &str
     accessor
 }
 
+fn dart_union_payload_accessor(payload_field: &str) -> String {
+    if payload_field.starts_with(|character: char| character.is_ascii_digit()) {
+        dart_tuple_field_identifier(payload_field)
+    } else {
+        field_to_dart_accessor(payload_field)
+    }
+}
+
 fn narrow_tagged_union_expression(
     field_resolver: &FieldResolver,
     container: String,
@@ -103,7 +112,7 @@ fn narrow_tagged_union_expression(
     let (payload_field, payload_type) = field_resolver.union_variant_payload(&union_type, &variant)?;
     let narrowed = format!(
         "({container} as {union_type}_{variant}).{}",
-        field_to_dart_accessor(payload_field)
+        dart_union_payload_accessor(payload_field)
     );
     let Some((prefix, next_union, next_variant, next_suffix)) =
         field_resolver.ir_tagged_union_split_from(payload_type, &suffix)
