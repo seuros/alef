@@ -744,7 +744,8 @@ pub(super) fn emit_from_json_fn(out: &mut String, ty: &TypeDef, source_crate_nam
     } else {
         core_ty_base
     };
-    emit_named_from_json_fn(out, &ty.name, &core_ty, ty.cfg.as_deref());
+    let conversion = format!("|value| Ok({}::from(value))", ty.name);
+    emit_named_from_json_fn(out, &ty.name, &core_ty, ty.cfg.as_deref(), &conversion);
 }
 
 pub(super) fn emit_enum_from_json_fn(out: &mut String, enum_def: &EnumDef, source_crate_name: &str) {
@@ -753,10 +754,17 @@ pub(super) fn emit_enum_from_json_fn(out: &mut String, enum_def: &EnumDef, sourc
     } else {
         enum_def.rust_path.replace('-', "_")
     };
-    emit_named_from_json_fn(out, &enum_def.name, &core_ty, enum_def.cfg.as_deref());
+    let conversion = super::enum_conversions::fallible_from_core_fn_name(&enum_def.name);
+    emit_named_from_json_fn(out, &enum_def.name, &core_ty, enum_def.cfg.as_deref(), &conversion);
 }
 
-fn emit_named_from_json_fn(out: &mut String, type_name: &str, core_ty: &str, source_cfg: Option<&str>) {
+fn emit_named_from_json_fn(
+    out: &mut String,
+    type_name: &str,
+    core_ty: &str,
+    source_cfg: Option<&str>,
+    conversion: &str,
+) {
     let snake = dart_rust_function_component(type_name);
     let fn_name = format!("create_{snake}_from_json");
 
@@ -767,6 +775,7 @@ fn emit_named_from_json_fn(out: &mut String, type_name: &str, core_ty: &str, sou
             type_name => type_name,
             core_ty => core_ty,
             source_cfg => source_cfg.unwrap_or(""),
+            conversion => conversion,
         },
     ));
 }
@@ -796,6 +805,11 @@ mod tests {
         assert!(out.contains("pub fn create_workflow_step_from_json"), "{out}");
         assert!(out.contains("serde_json::from_str::<mylib::WorkflowStep>"), "{out}");
         assert!(out.contains("Result<WorkflowStep, String>"), "{out}");
+        assert!(
+            out.contains(".and_then(try_convert_workflow_step_from_core)"),
+            "enum JSON must use the fallible binding conversion: {out}"
+        );
+        assert!(!out.contains(".map(WorkflowStep::from)"), "{out}");
     }
 
     /// The regression this task fixes: `emit_from_json_fn` names `core_ty` (the host path)

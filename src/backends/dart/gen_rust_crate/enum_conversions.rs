@@ -423,6 +423,74 @@ pub(super) fn emit_from_impl_for_enum(
         "rust_from_impl_close.jinja",
         minijinja::context! {},
     ));
+
+    emit_fallible_from_core_enum(out, en, &core_ty, is_host_enum, configured_features);
+}
+
+pub(super) fn fallible_from_core_fn_name(enum_name: &str) -> String {
+    let snake = crate::codegen::naming::public_host_identifier(
+        crate::core::config::Language::Rust,
+        crate::codegen::naming::PublicIdentifierKind::Function,
+        enum_name,
+    );
+    format!("try_convert_{snake}_from_core")
+}
+
+fn emit_fallible_from_core_enum(
+    out: &mut String,
+    en: &EnumDef,
+    core_ty: &str,
+    is_host_enum: bool,
+    configured_features: Option<&[String]>,
+) {
+    let fn_name = fallible_from_core_fn_name(&en.name);
+    if let Some(cfg) = en.cfg.as_deref() {
+        out.push_str(&format!("#[cfg({cfg})]\n"));
+    }
+    out.push_str(&format!(
+        "fn {fn_name}(value: {core_ty}) -> Result<{}, String> {{\n    let representable = match &value {{\n",
+        en.name
+    ));
+    for variant in &en.excluded_variants {
+        let pattern = if variant.is_tuple {
+            format!("{core_ty}::{}(..)", variant.name)
+        } else if !variant.fields.is_empty() || variant.originally_had_data_fields {
+            format!("{core_ty}::{} {{ .. }}", variant.name)
+        } else {
+            format!("{core_ty}::{}", variant.name)
+        };
+        out.push_str(&format!("        {pattern} => false,\n"));
+    }
+    for variant in &en.variants {
+        if variant.cfg.is_some() && !is_host_enum {
+            continue;
+        }
+        if let Some(cfg) = variant.cfg.as_deref() {
+            out.push_str(&format!("        #[cfg({cfg})]\n"));
+        }
+        let pattern = if variant.is_tuple {
+            format!("{core_ty}::{}(..)", variant.name)
+        } else if !variant.fields.is_empty() || variant.originally_had_data_fields {
+            format!("{core_ty}::{} {{ .. }}", variant.name)
+        } else {
+            format!("{core_ty}::{}", variant.name)
+        };
+        out.push_str(&format!("        {pattern} => true,\n"));
+    }
+    let needs_catch_all = crate::codegen::conversions::enum_conversion_needs_catch_all_for_features(
+        en,
+        is_host_enum,
+        false,
+        configured_features,
+        true,
+    );
+    if needs_catch_all {
+        out.push_str("        _ => false,\n");
+    }
+    out.push_str(&format!(
+        "    }};\n    if !representable {{\n        return Err(\"{} contains a variant unavailable in the Dart binding\".to_string());\n    }}\n    Ok({}::from(value))\n}}\n",
+        en.name, en.name
+    ));
 }
 
 /// Build the conversion expression for one enum variant field.
@@ -646,6 +714,42 @@ mod tests {
         assert!(
             !out_mirror.contains("_ => unreachable!"),
             "unexpected catch-all in From<Mirror> impl for no-cfg enum:\n{out_mirror}"
+        );
+    }
+
+    #[test]
+    fn fallible_from_core_rejects_excluded_struct_variant() {
+        let excluded = EnumVariant {
+            name: "Internal".to_string(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "reason".to_string(),
+                ..Default::default()
+            }],
+            originally_had_data_fields: true,
+            ..Default::default()
+        };
+        let en = EnumDef {
+            name: "WorkflowStep".to_string(),
+            rust_path: "mylib::WorkflowStep".to_string(),
+            variants: vec![make_unit_variant("Ready", None)],
+            excluded_variants: vec![excluded],
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_from_impl_for_enum(&mut out, &en, "mylib", None);
+
+        assert!(
+            out.contains("mylib::WorkflowStep::Internal { .. } => false"),
+            "excluded struct variants must be rejected without invoking From: {out}"
+        );
+        assert!(
+            out.contains("return Err(\"WorkflowStep contains a variant unavailable in the Dart binding\".to_string())"),
+            "unrepresentable variants must return an error: {out}"
+        );
+        assert_eq!(
+            out.matches("_ => false").count(),
+            0,
+            "fully enumerated variants must not emit an unreachable catch-all: {out}"
         );
     }
 
