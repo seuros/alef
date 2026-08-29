@@ -26,6 +26,7 @@ use super::helpers::{
 };
 use super::http::render_http_test_function;
 use super::test_function::handle_values::collect_used_nested_types;
+use super::test_function::helper_functions::{render_item_texts_helper, render_text_helper};
 use super::test_function::{render_test_function, resolve_field_enum_type};
 
 /// Render a complete Python test file for a single fixture category.
@@ -43,6 +44,7 @@ pub(super) fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
     force_bind_result: bool,
 ) -> String {
     let module = resolve_module(e2e_config);
@@ -328,6 +330,10 @@ pub(super) fn render_test_file(
         }
     }
 
+    used_config_types.extend(super::test_function::error_types::collect_used_error_types(
+        fixtures, errors,
+    ));
+
     let mut stdlib_imports: Vec<String> = Vec::new();
     let mut thirdparty_bare: Vec<String> = Vec::new();
     let mut thirdparty_from: Vec<String> = Vec::new();
@@ -379,6 +385,7 @@ pub(super) fn render_test_file(
                 type_defs,
                 enums,
                 functions,
+                errors,
                 effective_options_type.as_deref(),
                 effective_options_via,
                 enum_fields,
@@ -463,38 +470,6 @@ pub(super) fn references_identifier(source: &str, name: &str) -> bool {
         offset = start + name.len().max(1);
     }
     false
-}
-
-/// Emit `_alef_e2e_text`, the scalar coercion both the enum `equals` assertion and
-/// `_alef_e2e_item_texts` call.
-fn render_text_helper(out: &mut String) {
-    let _ = writeln!(out, "def _alef_e2e_text(value: object) -> str:");
-    let _ = writeln!(out, "    return \"\" if value is None else str(value)");
-    let _ = writeln!(out);
-    let _ = writeln!(out);
-}
-
-/// Emit `_alef_e2e_item_texts`, which the array `contains`/`contains_any` assertions call.
-/// Its body references `_alef_e2e_text`, so [`render_text_helper`] must run alongside it.
-fn render_item_texts_helper(out: &mut String) {
-    let _ = writeln!(out, "def _alef_e2e_item_texts(item: object) -> tuple[str, ...]:");
-    let _ = writeln!(out, "    raw_items = getattr(item, \"items\", None)");
-    let _ = writeln!(
-        out,
-        "    items_text = \" \".join(str(value) for value in raw_items) if isinstance(raw_items, list) else \"\""
-    );
-    let _ = writeln!(out, "    return (");
-    let _ = writeln!(out, "        _alef_e2e_text(item),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"kind\", None)),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"name\", None)),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"source\", None)),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"alias\", None)),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"text\", None)),");
-    let _ = writeln!(out, "        _alef_e2e_text(getattr(item, \"signature\", None)),");
-    let _ = writeln!(out, "        items_text,");
-    let _ = writeln!(out, "    )");
-    let _ = writeln!(out);
-    let _ = writeln!(out);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -802,7 +777,17 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums, &[], false);
+        let out = render_test_file(
+            "basic",
+            &fixtures,
+            &e2e_config,
+            &config,
+            &type_defs,
+            &enums,
+            &[],
+            &[],
+            false,
+        );
         assert!(out.contains("E2e tests for category: basic"), "got: {out}");
     }
 
@@ -917,7 +902,17 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let out = render_test_file("smoke", &fixtures, &e2e_config, &config, &type_defs, &enums, &[], false);
+        let out = render_test_file(
+            "smoke",
+            &fixtures,
+            &e2e_config,
+            &config,
+            &type_defs,
+            &enums,
+            &[],
+            &[],
+            false,
+        );
 
         assert!(
             !out.contains("_alef_e2e_item_texts"),
@@ -1019,7 +1014,7 @@ mod tests {
         .into_iter()
         .map(|(category, fixture)| {
             let fixtures: Vec<&crate::e2e::fixture::Fixture> = vec![fixture];
-            let out = render_test_file(category, &fixtures, &e2e_config, &config, &[], &[], &[], false);
+            let out = render_test_file(category, &fixtures, &e2e_config, &config, &[], &[], &[], &[], false);
             (category, out)
         })
         .collect();

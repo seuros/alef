@@ -11,6 +11,7 @@ pub(super) fn emit_error_assertion(
     arg_bindings_str: &str,
     call_expr: &str,
     is_streaming_error_call: bool,
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     // ~keep Routed through the shared `declared_error_value` (see its own doc comment) rather
     // than a local `.find(|a| a.assertion_type == "error")`: a fixture commonly declares two
@@ -18,6 +19,18 @@ pub(super) fn emit_error_assertion(
     // only the shared helper looks past the first to find the one that actually has a value.
     let declared_value = crate::e2e::codegen::declared_error_value(fixture);
     let has_message = declared_value.is_some();
+    // ~keep Reuses the same seam the docs-snippet renderer already consults
+    // (`python/snippet.rs`) instead of re-deriving "does this fixture name a real variant" —
+    // see the `two-generators-disagree` skill. `pyo3::create_exception!` gives every
+    // `ErrorVariant` its own exception class unconditionally
+    // (`declared_error_variant::substantiates_variant_identity`'s `"python" => true` arm), so
+    // when the declared value names a real variant, `pytest.raises(<TheVariantError>)` is a
+    // strictly stronger, type-discriminating check than the message-or-class-name substring
+    // match below — it fails if the wrong error type is raised for any reason. The substring
+    // fallback still renders for message-style values (config-validation fixtures whose
+    // declared value is a message substring, not a variant name), which no per-variant class
+    // exists for.
+    let typed_branch = crate::e2e::codegen::snippet_error_branch::for_fixture("python", fixture, errors);
 
     render_unrenderable_error_path_assertions(out, fixture);
 
@@ -31,7 +44,17 @@ pub(super) fn emit_error_assertion(
         .collect();
 
     if has_message {
-        let _ = writeln!(out, "    with pytest.raises(Exception) as exc_info:  # noqa: B017");
+        if let Some(branch) = &typed_branch {
+            // The fixture names a real `ErrorVariant` and pyo3 generates a dedicated exception
+            // class for it — catch that class directly. No `# noqa: B017` needed: B017 warns
+            // specifically about the broad `pytest.raises(Exception)`, and a named class is
+            // exactly the narrower catch the lint wants. Unlike the substring fallback below,
+            // this fails the test when the wrong error type is raised, even if its message or
+            // class name happens to contain the same substring.
+            let _ = writeln!(out, "    with pytest.raises({}):", branch.host_type);
+        } else {
+            let _ = writeln!(out, "    with pytest.raises(Exception) as exc_info:  # noqa: B017");
+        }
         out.push_str(&indented_bindings);
         if is_streaming_error_call {
             // The streaming iterator returns synchronously (chat_stream returns the
@@ -46,7 +69,9 @@ pub(super) fn emit_error_assertion(
         } else {
             let _ = writeln!(out, "        {call_expr}");
         }
-        if let Some(msg) = declared_value {
+        if typed_branch.is_none()
+            && let Some(msg) = declared_value
+        {
             let escaped = escape_python(msg);
             // Match against EITHER the rendered exception message OR the
             // exception class name. Different crates use different
@@ -56,7 +81,8 @@ pub(super) fn emit_error_assertion(
             //   * API-error fixtures may use class-name prefixes such as
             //     `Authentication`, `BadRequest`, or `ContentPolicy`.
             //     `BadRequestError`, `ContentPolicyError`), not message text.
-            // The disjunction lets a single codegen path satisfy both.
+            // The disjunction lets a single codegen path satisfy both. Only reached when no
+            // typed class exists for the declared value (see `typed_branch` above).
             let _ = writeln!(
                 out,
                 "    assert \"{escaped}\" in str(exc_info.value) or \"{escaped}\" in type(exc_info.value).__name__"
@@ -138,6 +164,7 @@ mod tests {
             "    payload = {}\n",
             "await client.chat_stream(payload)",
             true,
+            &[],
         );
 
         assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
@@ -161,6 +188,7 @@ mod tests {
             "    payload = {}\n",
             "client.create(payload)",
             false,
+            &[],
         );
 
         assert!(out.contains("with pytest.raises(Exception):"), "got: {out}");
@@ -209,6 +237,7 @@ mod tests {
             "    payload = {}\n",
             "client.create(payload)",
             false,
+            &[],
         );
 
         // The fixture's only assertion this backend can actually run must still run.
@@ -254,6 +283,7 @@ mod tests {
             "    payload = {}\n",
             "client.create(payload)",
             false,
+            &[],
         );
         assert!(
             out.contains("assert \"BadRequest\" in str(exc_info.value)"),
@@ -294,6 +324,7 @@ mod tests {
             "    url = \"http://127.0.0.1:9/\"\n",
             "scrape(engine, url)",
             false,
+            &[],
         );
 
         assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
@@ -304,6 +335,143 @@ mod tests {
             ),
             "the declared value on the second `error` assertion must still render a message \
              check: got: {out}"
+        );
+    }
+
+    fn error_def_with_variant(error_name: &str, variant_name: &str) -> crate::core::ir::ErrorDef {
+        crate::core::ir::ErrorDef {
+            name: error_name.to_string(),
+            rust_path: format!("lib::{error_name}"),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: variant_name.to_string(),
+                is_unit: true,
+                ..crate::core::ir::ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// The structural half of the xberg #1525 fix: when a fixture's declared `error` value
+    /// names a real `ErrorVariant`, `pyo3::create_exception!` gives it a dedicated exception
+    /// class unconditionally (`declared_error_variant::substantiates_variant_identity`'s
+    /// `"python" => true` arm), so the generated assertion must catch THAT class rather than
+    /// the broad `Exception`, and the substring proxy the class-scoped catch supersedes must
+    /// not also render.
+    #[test]
+    fn a_declared_variant_renders_a_class_scoped_raises_instead_of_the_substring_proxy() {
+        let fixture = fixture_with_error(Some(serde_json::Value::String("BadRequest".to_string())));
+        let errors = vec![error_def_with_variant("ApiError", "BadRequest")];
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    payload = {}\n",
+            "client.create(payload)",
+            false,
+            &errors,
+        );
+
+        assert!(out.contains("with pytest.raises(BadRequestError):"), "got: {out}");
+        assert!(!out.contains("pytest.raises(Exception)"), "got: {out}");
+        assert!(
+            !out.contains("in str(exc_info.value) or"),
+            "the class-scoped catch makes the substring proxy redundant: got: {out}"
+        );
+    }
+
+    fn python3_available() -> bool {
+        which::which("python3").is_ok()
+    }
+
+    /// A minimal `pytest.raises` stand-in carrying the ONE behaviour this test cares about:
+    /// like real `pytest.raises`, it does NOT suppress an exception whose type is not a
+    /// subclass of the expected one — it propagates, failing the enclosing test. There is no
+    /// `pytest` package dependency available to a Rust unit test, so this mirrors just that
+    /// discriminating behaviour rather than pulling one in. ~keep
+    const PYTEST_RAISES_STUB: &str = "\
+class _Raises:
+    def __init__(self, expected):
+        self.expected = expected
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb):
+        if exc_type is None:
+            raise AssertionError(f\"DID NOT RAISE {self.expected}\")
+        return issubclass(exc_type, self.expected)
+
+
+def raises(expected, *args, **kwargs):
+    return _Raises(expected)
+";
+
+    /// Runs `raises_block` (the exact text [`emit_error_assertion`] renders for the `with
+    /// pytest.raises(...)` block) as a real Python 3 process under [`PYTEST_RAISES_STUB`],
+    /// with `BadRequestError`/`UnrelatedError` classes defined and a `client.create(...)` that
+    /// raises `raising_class`. Returns whether the script ran to completion with no uncaught
+    /// exception — i.e. whether the generated assertion would have passed.
+    fn generated_assertion_passes_when_call_raises(raises_block: &str, raising_class: &str) -> bool {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("pytest.py"), PYTEST_RAISES_STUB).expect("write pytest stub");
+        let script = format!(
+            "import pytest\n\n\
+             class BadRequestError(Exception):\n    pass\n\n\
+             class UnrelatedError(Exception):\n    pass\n\n\
+             class _Client:\n    def create(self, payload):\n        raise {raising_class}(\"BadRequest-shaped input rejected\")\n\n\
+             client = _Client()\n\n\
+             def test_case():\n{raises_block}\n\
+             test_case()\n"
+        );
+        std::fs::write(dir.path().join("script.py"), script).expect("write script");
+        let status = std::process::Command::new("python3")
+            .arg("script.py")
+            .current_dir(dir.path())
+            .status()
+            .expect("run python3");
+        status.success()
+    }
+
+    /// The runtime half of the xberg #1525 fix, and the one property the replaced substring
+    /// proxy provably lacked: it passed for ANY exception whose message or class name merely
+    /// *contained* the declared variant name — `"BadRequest" in str(exc_info.value) or ...` —
+    /// including an unrelated error. `UnrelatedError("BadRequest-shaped input rejected")` is
+    /// exactly that shape: its message contains the substring, its class does not carry the
+    /// name. Under the class-scoped `pytest.raises(BadRequestError)` this now renders, that
+    /// call must FAIL the generated assertion — proving the discrimination the substring check
+    /// could never provide — while the real `BadRequestError` must still pass it.
+    #[test]
+    fn wrong_error_type_fails_the_generated_assertion_even_when_its_message_matches() {
+        if !python3_available() {
+            return;
+        }
+        let fixture = fixture_with_error(Some(serde_json::Value::String("BadRequest".to_string())));
+        let errors = vec![error_def_with_variant("ApiError", "BadRequest")];
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    payload = {}\n",
+            "client.create(payload)",
+            false,
+            &errors,
+        );
+        let raises_block = out.trim_start_matches('\n');
+
+        assert!(
+            generated_assertion_passes_when_call_raises(raises_block, "BadRequestError"),
+            "the correct error type must satisfy the generated assertion"
+        );
+        assert!(
+            !generated_assertion_passes_when_call_raises(raises_block, "UnrelatedError"),
+            "an unrelated error type whose MESSAGE merely contains the variant name must fail \
+             the generated assertion, not pass it — this is exactly what the substring proxy \
+             could not do"
         );
     }
 }

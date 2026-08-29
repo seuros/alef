@@ -2,7 +2,9 @@
 
 mod args;
 mod error_assertions;
+pub(super) mod error_types;
 pub(super) mod handle_values;
+pub(super) mod helper_functions;
 mod result_assertions;
 mod typed_values;
 
@@ -31,6 +33,7 @@ pub(super) fn render_test_function(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
     options_type: Option<&str>,
     options_via: &str,
     enum_fields: &HashMap<String, String>,
@@ -299,6 +302,7 @@ pub(super) fn render_test_function(
             &arg_bindings_str,
             &call_expr,
             is_streaming_error_call,
+            errors,
         );
         // ~keep The ledger recording now lives inside `error_path_assertions::render`, which every
         // backend's error block shares. Gating here as well would double-count every python marker.
@@ -421,6 +425,7 @@ mod tests {
             &config,
             &type_defs,
             &enums,
+            &[],
             &[],
             None,
             "kwargs",

@@ -63,6 +63,7 @@ pub(super) fn render_snippet_body(
         type_defs,
         enums,
         &[],
+        errors,
         force_bind_result,
     );
     let (imports, body, is_async) = extract_python_snippet(&test_file)?;

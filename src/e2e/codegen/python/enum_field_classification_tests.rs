@@ -140,6 +140,7 @@ fn render(
         type_defs,
         enums,
         functions,
+        &[],
         None,
         "kwargs",
         &std::collections::HashMap::new(),

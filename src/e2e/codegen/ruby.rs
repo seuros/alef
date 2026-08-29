@@ -238,6 +238,7 @@ mod http;
 mod project;
 mod snippet;
 mod spec_file;
+mod streaming_assertion;
 mod stubs;
 mod values;
 mod visitor;
