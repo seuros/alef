@@ -22,6 +22,19 @@
 //! `segments` with a "current owner type" cursor (mirroring `render_swift_with_first_class_map`)
 //! and consults [`PythonTypedDictMap::is_typeddict`] at each link to pick `["field"]` vs.
 //! `.field` — asking the pyo3 backend's own predicate for the answer rather than re-deriving it.
+//!
+//! A THIRD, later defect: that owner cursor always started at `typeddict_map.root_type` — the
+//! call's declared RESULT type — even when rendering an element-anchored path (the closure body
+//! a wildcard `container[].field` fixture path expands to). A result envelope can be a
+//! `TypedDict` while its collection ELEMENTS stay a native `#[pyclass]` (attribute access), or
+//! vice versa — the two are independent per-type classifications, not one style inherited down
+//! the whole path. Starting the element cursor at the result root produced
+//! `any("Function" in str(_e["kind"]) for _e in (result["structure"] or []))` against a consumer
+//! whose `SampleItem` elements are plain attribute-access `#[pyclass]` instances:
+//! `TypeError: 'SampleItem' object is not subscriptable`. [`python_element_owner_type`] resolves
+//! the actual element owner type by walking the array field's own path through
+//! `typeddict_map.field_types`, so [`FieldResolver::python_element_accessor`] can start the
+//! cursor there instead. ~keep
 
 use super::optional_renderers::{push_key_field_name, push_key_index_suffix};
 use super::renderers::quoted_key_literal;
@@ -42,6 +55,37 @@ pub(super) fn render_python_with_optionals(
     optional_fields: &HashSet<String>,
     typeddict_map: &PythonTypedDictMap,
 ) -> String {
+    render_python_with_optionals_from_owner(
+        segments,
+        result_var,
+        optional_fields,
+        typeddict_map,
+        typeddict_map.root_type.clone(),
+    )
+}
+
+/// [`render_python_with_optionals`], but for a path that is already relative to a bound
+/// collection element (the closure/loop variable a wildcard fixture path expands to) rather than
+/// to the call's result variable — `owner_type` is the IR type of THAT element, resolved by
+/// [`python_element_owner_type`], not `typeddict_map.root_type`. See the module doc for the
+/// runtime failure this fixes.
+pub(super) fn render_python_element_with_optionals(
+    segments: &[PathSegment],
+    element_var: &str,
+    optional_fields: &HashSet<String>,
+    typeddict_map: &PythonTypedDictMap,
+    owner_type: Option<String>,
+) -> String {
+    render_python_with_optionals_from_owner(segments, element_var, optional_fields, typeddict_map, owner_type)
+}
+
+fn render_python_with_optionals_from_owner(
+    segments: &[PathSegment],
+    result_var: &str,
+    optional_fields: &HashSet<String>,
+    typeddict_map: &PythonTypedDictMap,
+    owner_type: Option<String>,
+) -> String {
     let last_index = segments.len().saturating_sub(1);
     let mut crossings: Vec<usize> = Vec::new();
     let mut path_so_far = String::new();
@@ -53,12 +97,41 @@ pub(super) fn render_python_with_optionals(
         push_key_index_suffix(&mut path_so_far, segment);
     }
 
-    let mut expression = render_python_accessor(segments, result_var, typeddict_map);
+    let mut expression = render_python_accessor_from_owner(segments, result_var, typeddict_map, owner_type.clone());
     for &index in crossings.iter().rev() {
-        let condition = render_python_accessor(&field_only_prefix(segments, index), result_var, typeddict_map);
+        let condition = render_python_accessor_from_owner(
+            &field_only_prefix(segments, index),
+            result_var,
+            typeddict_map,
+            owner_type.clone(),
+        );
         expression = format!("({expression} if {condition} else None)");
     }
     expression
+}
+
+/// The IR type that owns the ELEMENTS of `array_segments` — e.g. `"SampleItem"` for a
+/// `structure: Vec<SampleItem>` field — walking `typeddict_map.field_types` from
+/// `typeddict_map.root_type` through every segment of the array field's own path, exactly the
+/// way [`render_python_accessor`]'s cursor advances. `None` under the same "IR cannot judge"
+/// conditions [`PythonTypedDictMap::advance`] answers `None` for: an unresolved root, or a
+/// segment the map never recorded a traversal edge for. [`PythonTypedDictMap::is_typeddict`]
+/// treats `None` as "attribute access", the correct default for an opaque/native `#[pyclass]`
+/// element type.
+pub(super) fn python_element_owner_type(
+    array_segments: &[PathSegment],
+    typeddict_map: &PythonTypedDictMap,
+) -> Option<String> {
+    let mut current_type = typeddict_map.root_type.clone();
+    for segment in array_segments {
+        let field_name = match segment {
+            PathSegment::Field(f) => f,
+            PathSegment::ArrayField { name, .. } => name,
+            PathSegment::MapAccess { .. } | PathSegment::Length => continue,
+        };
+        current_type = typeddict_map.advance(current_type.as_deref(), field_name);
+    }
+    current_type
 }
 
 /// Render a Python accessor expression for `segments`, tracking the IR type that "owns" each
@@ -72,8 +145,20 @@ pub(super) fn render_python_with_optionals(
 /// `TypedDict` correctly switches back to attribute access at that link, and does not need a
 /// special case: the cursor just stops finding `is_typeddict(current_type) == true` for it.
 pub(super) fn render_python_accessor(segments: &[PathSegment], result_var: &str, map: &PythonTypedDictMap) -> String {
+    render_python_accessor_from_owner(segments, result_var, map, map.root_type.clone())
+}
+
+/// [`render_python_accessor`], but starting the owner-type cursor at `owner_type` instead of
+/// `map.root_type` — see the module doc and [`python_element_owner_type`] for why an
+/// element-anchored path needs a different starting owner.
+fn render_python_accessor_from_owner(
+    segments: &[PathSegment],
+    result_var: &str,
+    map: &PythonTypedDictMap,
+    owner_type: Option<String>,
+) -> String {
     let mut out = result_var.to_string();
-    let mut current_type = map.root_type.clone();
+    let mut current_type = owner_type;
     for seg in segments {
         match seg {
             PathSegment::Field(f) => {

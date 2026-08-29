@@ -110,7 +110,10 @@ fn mixed_fixtures() -> Vec<Fixture> {
         serde_json::json!({
             "id": "invalid_input_errors",
             "description": "Raises on invalid input",
-            "assertions": [{"type": "error"}]
+            "assertions": [
+                {"type": "error"},
+                {"type": "equals", "field": "error.status_code", "value": 429}
+            ]
         }),
         serde_json::json!({
             "id": "skipped_case",
@@ -184,7 +187,47 @@ fn conftest_and_test_file_survive_a_realistic_ruff_lint_pass() {
     let conftest_py = render_conftest(&e2e_config, &groups);
     let fixture_refs: Vec<&Fixture> = fixtures.iter().collect();
     let config = ResolvedCrateConfig::default();
-    let test_basic_py = render_test_file("basic", &fixture_refs, &e2e_config, &config, &[], &[], &[], &[], false);
+    let sample_error = crate::core::ir::ErrorDef {
+        name: "SampleError".to_string(),
+        rust_path: "mypackage::SampleError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![crate::core::ir::ErrorVariant::default()],
+        doc: String::new(),
+        methods: vec![crate::core::ir::MethodDef {
+            name: "status_code".to_string(),
+            params: Vec::new(),
+            return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
+            is_async: false,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+    let test_basic_py = render_test_file(
+        "basic",
+        &fixture_refs,
+        &e2e_config,
+        &config,
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&sample_error),
+        false,
+    );
 
     let (success, output) = run_ruff_check(&[
         ("conftest.py", conftest_py.as_str()),

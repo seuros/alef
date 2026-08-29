@@ -65,3 +65,7 @@ fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() 
 /// ceiling and may not grow by even a `mod` declaration.
 #[path = "assertion_wildcard_element_tests.rs"]
 mod assertion_wildcard_element_tests;
+
+/// ~keep Same reason as `assertion_wildcard_element_tests` above.
+#[path = "wildcard_typeddict_tests.rs"]
+mod wildcard_typeddict_tests;

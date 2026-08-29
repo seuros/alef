@@ -789,6 +789,17 @@ impl FieldResolver {
         Some(!self.java_wrapper_enum_names.contains(&name))
     }
 
+    /// Whether Ruby's Magnus binding backend lowers the enum type backing `field`'s leaf segment
+    /// to a plain `Hash` (per `ruby_hash_serialized_enum_names`) rather than a `Symbol`. `None`
+    /// when the IR does not positively resolve `field` to a concrete enum type at all (unresolved
+    /// root type, a path segment the IR does not recognize, or a field classified as enum only
+    /// via the hand-maintained `fields_enum` config) — the caller decides its own fallback for
+    /// "unknown" rather than this method guessing.
+    pub fn ruby_enum_serialized_as_hash(&self, field: &str) -> Option<bool> {
+        let name = self.ir_enum_type_name(field)?;
+        Some(self.ruby_hash_serialized_enum_names.contains(&name))
+    }
+
     /// Check if a field name is the root of a collection type (i.e., the field
     /// itself returns a `Vec`/array, even though it is not in `fields_array`
     /// directly).

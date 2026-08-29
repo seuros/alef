@@ -98,6 +98,7 @@ impl FieldResolver {
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
+            ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
@@ -136,6 +137,7 @@ impl FieldResolver {
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
+            ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
@@ -184,6 +186,7 @@ impl FieldResolver {
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
+            ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
@@ -238,6 +241,7 @@ impl FieldResolver {
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
+            ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
@@ -276,6 +280,7 @@ impl FieldResolver {
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
+            ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
@@ -336,6 +341,15 @@ impl FieldResolver {
     /// this empty. See `java_wrapper_enum_names`'s field doc for the source of truth.
     pub fn with_java_wrapper_enum_names(mut self, names: HashSet<String>) -> Self {
         self.java_wrapper_enum_names = names;
+        self
+    }
+
+    /// Attach the set of IR enum type names Ruby's Magnus binding backend lowers to a plain
+    /// `Hash` rather than a `Symbol`. Ruby e2e codegen is the only caller; every other backend's
+    /// resolver leaves this empty. See `ruby_hash_serialized_enum_names`'s field doc for the
+    /// source of truth.
+    pub fn with_ruby_hash_serialized_enum_names(mut self, names: HashSet<String>) -> Self {
+        self.ruby_hash_serialized_enum_names = names;
         self
     }
 

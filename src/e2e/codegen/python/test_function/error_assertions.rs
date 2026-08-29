@@ -2,8 +2,38 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::core::ir::ErrorDef;
+use crate::e2e::codegen::error_field_reachability::resolvable_equals_error_field;
 use crate::e2e::escape::escape_python;
-use crate::e2e::fixture::Fixture;
+use crate::e2e::fixture::{Assertion, Fixture};
+
+use super::super::json::json_to_python_literal;
+
+/// A fixture's `equals` assertion against `error.<field>` that resolves to one of the crate's
+/// whitelisted error introspection methods (`ErrorDef.methods`), paired with the declared error
+/// type that answers it.
+struct ResolvedErrorField<'a> {
+    sub_field: &'a str,
+    expected: &'a serde_json::Value,
+    error_def: &'a ErrorDef,
+}
+
+fn resolved_error_fields<'a>(fixture: &'a Fixture, errors: &'a [ErrorDef]) -> Vec<ResolvedErrorField<'a>> {
+    fixture
+        .assertions
+        .iter()
+        .filter_map(|assertion: &'a Assertion| {
+            let (error_def, _method) = resolvable_equals_error_field(assertion, errors)?;
+            let sub_field = assertion.field.as_deref()?.strip_prefix("error.")?;
+            let expected = assertion.value.as_ref()?;
+            Some(ResolvedErrorField {
+                sub_field,
+                expected,
+                error_def,
+            })
+        })
+        .collect()
+}
 
 pub(super) fn emit_error_assertion(
     out: &mut String,
@@ -11,7 +41,8 @@ pub(super) fn emit_error_assertion(
     arg_bindings_str: &str,
     call_expr: &str,
     is_streaming_error_call: bool,
-    errors: &[crate::core::ir::ErrorDef],
+    errors: &[ErrorDef],
+    native_module: &str,
 ) {
     // ~keep Routed through the shared `declared_error_value` (see its own doc comment) rather
     // than a local `.find(|a| a.assertion_type == "error")`: a fixture commonly declares two
@@ -32,7 +63,18 @@ pub(super) fn emit_error_assertion(
     // exists for.
     let typed_branch = crate::e2e::codegen::snippet_error_branch::for_fixture("python", fixture, errors);
 
-    render_unrenderable_error_path_assertions(out, fixture);
+    // Real, per-field assertions this backend CAN render: an `equals` against `error.<field>`
+    // where `<field>` is one of the crate's whitelisted error introspection methods. See
+    // `error_field_reachability` for why this is reachable here (pyo3's own error converter
+    // calls the live Rust error value's method and threads the result through the raised
+    // exception's `args`) when it is NOT reachable for most other backends. Collected before
+    // deciding whether to bind `exc_info` — a fixture may declare no message value at all and
+    // still need it for one of these, and a fixture that ALSO has a typed variant branch still
+    // needs `exc_info` bound alongside the narrower `pytest.raises({Variant}Error)`.
+    let resolved_fields = resolved_error_fields(fixture, errors);
+    let needs_exc_info = has_message || !resolved_fields.is_empty();
+
+    render_unrenderable_error_path_assertions(out, fixture, errors);
 
     // Re-indent arg_bindings by an extra 4 spaces so they land inside the `with`
     // block. arg_bindings already begin with 4 spaces (function-body level);
@@ -43,17 +85,27 @@ pub(super) fn emit_error_assertion(
         .map(|l| format!("    {l}\n"))
         .collect();
 
-    if has_message {
+    if needs_exc_info {
         if let Some(branch) = &typed_branch {
             // The fixture names a real `ErrorVariant` and pyo3 generates a dedicated exception
             // class for it — catch that class directly. No `# noqa: B017` needed: B017 warns
             // specifically about the broad `pytest.raises(Exception)`, and a named class is
             // exactly the narrower catch the lint wants. Unlike the substring fallback below,
             // this fails the test when the wrong error type is raised, even if its message or
-            // class name happens to contain the same substring.
-            let _ = writeln!(out, "    with pytest.raises({}):", branch.host_type);
+            // class name happens to contain the same substring. `exc_info` is bound alongside
+            // the narrowed class exactly when a resolved field assertion below needs it — the
+            // typed catch and the field assertion are independent claims about the same raised
+            // exception and must compose, not compete.
+            let exc_info_suffix = if resolved_fields.is_empty() { "" } else { " as exc_info" };
+            let _ = writeln!(out, "    with pytest.raises({}){exc_info_suffix}:", branch.host_type);
         } else {
-            let _ = writeln!(out, "    with pytest.raises(Exception) as exc_info:  # noqa: B017");
+            // No `# noqa: B017` here, unlike the bare `pytest.raises(Exception):` below: B017
+            // does not fire once the exception is BOUND, because binding it is the evidence that
+            // the test goes on to inspect what was raised. Emitting the directive anyway made
+            // ruff report RUF100 (unused `noqa`) against alef's own generated output -- caught by
+            // `lint_clean_python_tests`, and confirmed by deleting the directive and watching
+            // B017 stay silent, not by reading the rule's documentation. ~keep
+            let _ = writeln!(out, "    with pytest.raises(Exception) as exc_info:");
         }
         out.push_str(&indented_bindings);
         if is_streaming_error_call {
@@ -88,6 +140,7 @@ pub(super) fn emit_error_assertion(
                 "    assert \"{escaped}\" in str(exc_info.value) or \"{escaped}\" in type(exc_info.value).__name__"
             );
         }
+        emit_resolved_error_field_assertions(out, &resolved_fields, native_module);
     } else {
         let _ = writeln!(out, "    with pytest.raises(Exception):  # noqa: B017");
         out.push_str(&indented_bindings);
@@ -101,6 +154,33 @@ pub(super) fn emit_error_assertion(
     }
 }
 
+/// Renders one `assert {module}.{info_fn}(exc_info.value).{field} == {expected}` line per
+/// resolved field, importing the info-function's module once up front. `{info_fn}` is the exact
+/// free function `src/codegen/error_gen/pyo3.rs`'s `gen_pyo3_error_methods_impl` registers on the
+/// native module (`m.add_function(wrap_pyfunction!({info_fn}, m)?)?;` in
+/// `pyo3::gen_bindings::methods::gen_module_init`) — asked for by name via
+/// `pyo3_error_info_fn_name` rather than re-derived, so this can never spell a function the
+/// native module does not actually export.
+fn emit_resolved_error_field_assertions(
+    out: &mut String,
+    resolved_fields: &[ResolvedErrorField<'_>],
+    native_module: &str,
+) {
+    if resolved_fields.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "    import {native_module}  # noqa: PLC0415");
+    for field in resolved_fields {
+        let info_fn = crate::codegen::error_gen::pyo3_error_info_fn_name(field.error_def);
+        let expected = json_to_python_literal(field.expected);
+        let _ = writeln!(
+            out,
+            "    assert {native_module}.{info_fn}(exc_info.value).{} == {expected}",
+            field.sub_field
+        );
+    }
+}
+
 /// Every fixture assertion beyond the one `"error"`-type check [`emit_error_assertion`] renders
 /// (a message-or-class-name match inside the `pytest.raises` block) used to be silently dropped: a
 /// second `"error"` assertion, an `equals` against an `error.<field>` path, or any other assertion
@@ -109,8 +189,8 @@ pub(super) fn emit_error_assertion(
 /// ledger recording and the reason no non-`rust` backend can resolve `error.<field>` now all live
 /// in [`crate::e2e::codegen::error_path_assertions`], shared with every other backend's error
 /// block; this stays as the python-shaped entry point (comment token `#`, four-space indent). ~keep
-fn render_unrenderable_error_path_assertions(out: &mut String, fixture: &Fixture) {
-    crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    # ", "python");
+fn render_unrenderable_error_path_assertions(out: &mut String, fixture: &Fixture, errors: &[ErrorDef]) {
+    crate::e2e::codegen::error_path_assertions::emit_with_errors(out, fixture, "    # ", "python", errors);
 }
 
 #[cfg(test)]
@@ -165,6 +245,7 @@ mod tests {
             "await client.chat_stream(payload)",
             true,
             &[],
+            "native",
         );
 
         assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
@@ -189,6 +270,7 @@ mod tests {
             "client.create(payload)",
             false,
             &[],
+            "native",
         );
 
         assert!(out.contains("with pytest.raises(Exception):"), "got: {out}");
@@ -238,6 +320,7 @@ mod tests {
             "client.create(payload)",
             false,
             &[],
+            "native",
         );
 
         // The fixture's only assertion this backend can actually run must still run.
@@ -284,6 +367,7 @@ mod tests {
             "client.create(payload)",
             false,
             &[],
+            "native",
         );
         assert!(
             out.contains("assert \"BadRequest\" in str(exc_info.value)"),
@@ -325,6 +409,7 @@ mod tests {
             "scrape(engine, url)",
             false,
             &[],
+            "native",
         );
 
         assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
@@ -374,6 +459,7 @@ mod tests {
             "client.create(payload)",
             false,
             &errors,
+            "native",
         );
 
         assert!(out.contains("with pytest.raises(BadRequestError):"), "got: {out}");
@@ -382,6 +468,184 @@ mod tests {
             !out.contains("in str(exc_info.value) or"),
             "the class-scoped catch makes the substring proxy redundant: got: {out}"
         );
+    }
+
+    fn error_def_with_status_code() -> crate::core::ir::ErrorDef {
+        crate::core::ir::ErrorDef {
+            name: "SampleError".to_string(),
+            rust_path: "sample_llm::SampleError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant::default()],
+            doc: String::new(),
+            methods: vec![status_code_method()],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    fn status_code_method() -> crate::core::ir::MethodDef {
+        crate::core::ir::MethodDef {
+            name: "status_code".to_string(),
+            params: Vec::new(),
+            return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
+            is_async: false,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// Same shape as `error_def_with_variant`, but ALSO whitelists `status_code` — the fixture
+    /// this backs declares both a real variant (drives the typed `pytest.raises` branch) and a
+    /// resolvable `error.status_code` field (drives the field assertion), so the two independently
+    /// -correct changes have to compose in one `ErrorDef`.
+    fn error_def_with_variant_and_status_code(error_name: &str, variant_name: &str) -> crate::core::ir::ErrorDef {
+        crate::core::ir::ErrorDef {
+            name: error_name.to_string(),
+            rust_path: format!("lib::{error_name}"),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: variant_name.to_string(),
+                is_unit: true,
+                ..crate::core::ir::ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![status_code_method()],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// The positive case task #1524 exists to prove: a fixture whose declared `error` value is
+    /// message-style (so no typed `pytest.raises` branch applies) alongside an `equals` against a
+    /// whitelisted `error.<field>`. The generator must now emit a REAL assertion against the
+    /// crate's own `{Error}Info` companion pyclass — the one `src/codegen/error_gen/pyo3.rs`
+    /// already registers on the native module and populates from the live Rust error value at
+    /// conversion time — instead of a skip comment. Asserts exact rendered bytes, not `contains`,
+    /// so a change to either the accessor shape or the literal rendering is caught here. ~keep
+    #[test]
+    fn equals_on_a_whitelisted_error_field_renders_a_real_assertion_instead_of_a_skip() {
+        let fixture = fixture_with_assertions(vec![
+            assertion(
+                "error",
+                None,
+                Some(serde_json::Value::String("rate limit exceeded".to_string())),
+            ),
+            assertion("equals", Some("error.status_code"), Some(serde_json::Value::from(429))),
+        ]);
+        let errors = vec![error_def_with_status_code()];
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    payload = {}\n",
+            "client.create(payload)",
+            false,
+            &errors,
+            "sample_llm._native",
+        );
+
+        assert_eq!(
+            out,
+            "    with pytest.raises(Exception) as exc_info:\n        payload = {}\n        \
+             client.create(payload)\n    assert \"rate limit exceeded\" in str(exc_info.value) or \"rate limit \
+             exceeded\" in type(exc_info.value).__name__\n    import sample_llm._native  # noqa: PLC0415\n    \
+             assert sample_llm._native.sample_error_info(exc_info.value).status_code == 429\n"
+        );
+
+        // No skip marker for this assertion, and the strict gate agrees there is nothing left
+        // to count for this fixture.
+        let _ = crate::e2e::codegen::take_skip_records();
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out, "python", &fixture.id);
+        assert!(crate::e2e::codegen::take_skip_records().is_empty());
+    }
+
+    /// A resolvable field with NO declared message value still needs `exc_info` bound — the
+    /// `has_message` flag alone used to decide that, so a bare `{"type": "error"}` (no value)
+    /// paired with a resolvable `error.status_code` would have rendered `exc_info` unbound and
+    /// crashed the emitted assertion at generation time with a Python `NameError` at runtime, not
+    /// a compile-time signal. Pins the `with ... as exc_info:` form even though no message
+    /// assertion is present, and confirms no typed branch applies (there is no declared value to
+    /// name a variant from).
+    #[test]
+    fn a_resolvable_field_forces_exc_info_binding_even_without_a_message() {
+        let fixture = fixture_with_assertions(vec![
+            assertion("error", None, None),
+            assertion("equals", Some("error.status_code"), Some(serde_json::Value::from(429))),
+        ]);
+        let errors = vec![error_def_with_status_code()];
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    payload = {}\n",
+            "client.create(payload)",
+            false,
+            &errors,
+            "sample_llm._native",
+        );
+
+        assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
+        assert!(
+            out.contains("assert sample_llm._native.sample_error_info(exc_info.value).status_code == 429"),
+            "got: {out}"
+        );
+    }
+
+    /// THE case that matters most in this change: the typed-variant branch (merged separately,
+    /// xberg #1525) and the resolved-error-field branch (this change, xberg #1524) both apply to
+    /// the same fixture and must compose in one `pytest.raises` block, not compete — the fixture
+    /// declares a real `ErrorVariant` (narrows the catch to `BadRequestError`) AND a resolvable
+    /// `error.status_code` (adds a field assertion), and both claims about the same raised
+    /// exception must render together. Before this composition was wired, the typed branch bound
+    /// no `exc_info` at all, so the field assertion below would have referenced an undefined name.
+    /// Exact-bytes assertion so a regression in either half, or in how they combine, is caught
+    /// here rather than by two tests that each pass in isolation. ~keep
+    #[test]
+    fn a_declared_variant_and_a_resolvable_error_field_compose() {
+        let fixture = fixture_with_assertions(vec![
+            assertion("error", None, Some(serde_json::Value::String("BadRequest".to_string()))),
+            assertion("equals", Some("error.status_code"), Some(serde_json::Value::from(429))),
+        ]);
+        let errors = vec![error_def_with_variant_and_status_code("ApiError", "BadRequest")];
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    payload = {}\n",
+            "client.create(payload)",
+            false,
+            &errors,
+            "sample_llm._native",
+        );
+
+        assert_eq!(
+            out,
+            "    with pytest.raises(BadRequestError) as exc_info:\n        payload = {}\n        \
+             client.create(payload)\n    import sample_llm._native  # noqa: PLC0415\n    assert \
+             sample_llm._native.api_error_info(exc_info.value).status_code == 429\n"
+        );
+        // The typed catch supersedes the substring proxy exactly as it does without a resolved
+        // field present — composing with the field assertion must not resurrect it.
+        assert!(!out.contains("in str(exc_info.value) or"), "got: {out}");
+        assert!(!out.contains("pytest.raises(Exception)"), "got: {out}");
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out, "python", &fixture.id);
+        assert!(crate::e2e::codegen::take_skip_records().is_empty());
     }
 
     fn python3_available() -> bool {
@@ -460,6 +724,7 @@ def raises(expected, *args, **kwargs):
             "client.create(payload)",
             false,
             &errors,
+            "native",
         );
         let raises_block = out.trim_start_matches('\n');
 

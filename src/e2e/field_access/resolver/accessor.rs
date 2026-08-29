@@ -4,7 +4,9 @@ use super::super::optional_renderers::{
     render_rust_with_optionals, render_typescript_with_optionals, render_zig_with_optionals,
 };
 use super::super::parse::parse_path;
-use super::super::python_renderer::render_python_with_optionals;
+use super::super::python_renderer::{
+    python_element_owner_type, render_python_element_with_optionals, render_python_with_optionals,
+};
 use super::super::renderers::{render_accessor, render_swift_with_first_class_map};
 use super::super::types::{FieldResolver, PathSegment};
 
@@ -50,6 +52,38 @@ impl FieldResolver {
     pub fn element_accessor(&self, element_path: &str, language: &str, element_var: &str) -> String {
         let effective = self.resolve(element_path);
         self.render_relative_to(effective, language, element_var)
+    }
+
+    /// Python-only counterpart to [`Self::element_accessor`], carrying one extra fact
+    /// `render_relative_to`'s python branch has no way to reach: `array_path`, the container
+    /// field a wildcard (`container[].field`) fixture path iterates.
+    ///
+    /// `element_accessor`'s shared `render_relative_to` always renders Python through
+    /// `render_python_with_optionals`, whose `TypedDict`-vs-attribute owner cursor starts at
+    /// `self.python_typeddict_map.root_type` — the call's RESULT type. That is correct for a
+    /// result-anchored path, but an element-anchored path is owned by the collection's ELEMENT
+    /// type, which can classify differently: an envelope result classified as `TypedDict` (so
+    /// `result["structure"]` subscripts correctly) commonly holds elements that stay a native
+    /// `#[pyclass]` (attribute access), and starting the element cursor at the result root
+    /// rendered `_e["kind"]` against those elements — `TypeError: 'SampleItem' object is not
+    /// subscriptable`. This resolves the element owner type by walking `array_path` through
+    /// `python_typeddict_map.field_types` (via [`python_element_owner_type`]) and starts the
+    /// cursor there instead. ~keep
+    pub fn python_element_accessor(&self, element_path: &str, array_path: &str, element_var: &str) -> String {
+        let array_effective = self.resolve(array_path);
+        let array_segments = parse_path(array_effective);
+        let owner_type = python_element_owner_type(&array_segments, &self.python_typeddict_map);
+
+        let effective = self.resolve(element_path);
+        let segments = parse_path(effective);
+        let segments = self.inject_array_indexing(segments);
+        render_python_element_with_optionals(
+            &segments,
+            element_var,
+            &self.optional_fields,
+            &self.python_typeddict_map,
+            owner_type,
+        )
     }
 
     /// Render an already-anchored path as a language-specific accessor rooted at `result_var`,

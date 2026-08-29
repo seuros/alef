@@ -98,6 +98,15 @@ pub struct FieldResolver {
     /// was wired in, in which case `java_enum_emits_get_value` answers `None` (unknown) rather
     /// than assuming either shape.
     pub(super) java_wrapper_enum_names: HashSet<String>,
+    /// Names of IR enum types `backends::magnus` (Ruby) lowers to a plain Ruby `Hash` via
+    /// `serde_json::to_value` inside `IntoValue`, rather than a `Symbol` — i.e.
+    /// `backends::magnus::gen_bindings::classes::gen_enum::gen_enum`'s own `has_data` predicate
+    /// (`enum_def.variants.iter().any(|v| !v.fields.is_empty())`). Populated once per crate IR,
+    /// from `e2e::codegen::ruby::enum_variant_access::hash_serialized_enum_names`, via
+    /// `with_ruby_hash_serialized_enum_names`. Empty for every non-Ruby resolver and for any Ruby
+    /// resolver built before that IR data was wired in, in which case
+    /// `ruby_enum_serialized_as_hash` answers `None` for every field — never a false skip.
+    pub(super) ruby_hash_serialized_enum_names: HashSet<String>,
     /// IR-derived collection-field classification (`crate_type -> field -> {is-Vec, next
     /// type}`), anchored at the call's declared result type. Populated via
     /// `with_ir_collection_map`; empty when a codegen call site hasn't wired IR data in, in

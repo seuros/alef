@@ -161,12 +161,18 @@ fn render_python_wildcard_assertion(
     } else {
         field_resolver.accessor(array_part, "python", result_var)
     };
-    // `element_accessor`, not `accessor`: the path is already element-relative, so the
-    // result-anchoring `accessor` applies would re-prefix it with the container. ~keep
+    // `python_element_accessor`, not `accessor`: the path is already element-relative, so the
+    // result-anchoring `accessor` applies would re-prefix it with the container. It also isn't
+    // the generic cross-language `element_accessor`: that anchors Python's TypedDict-vs-attribute
+    // owner cursor at the call's RESULT type, which answers a different question than "is the
+    // ELEMENT type a TypedDict" whenever a result envelope and its collection elements classify
+    // differently (subscript at the container level, attribute at the element level, or vice
+    // versa) -- `python_element_accessor` takes `array_part` so it can resolve the actual element
+    // owner type instead. ~keep
     let elem_accessor = if elem_part.is_empty() {
         "_e".to_string()
     } else {
-        field_resolver.element_accessor(elem_part, "python", "_e")
+        field_resolver.python_element_accessor(elem_part, array_part, "_e")
     };
     let iterable = format!("({array_accessor} or [])");
     // `str({elem_accessor})` below is call-argument position: a narrowing crossing in

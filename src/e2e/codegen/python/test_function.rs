@@ -295,6 +295,15 @@ pub(super) fn render_test_function(
         // `create_engine(CrawlConfig(max_depth=200))` before the `await scrape(...)`
         // call ever runs). Pass arg_bindings_str to emit_error_assertion so it
         // can emit them indented one level deeper, inside the with block.
+        // The module a resolvable `error.<field>` assertion imports its `{Error}Info` companion
+        // from. `from_json_module` already exists precisely to name the native extension module
+        // (as opposed to the public package) from generated Python test code -- see
+        // `test_file.rs`'s `from_json_module` handling for the sibling use of the same override
+        // -- so this reuses it rather than adding a second, parallel config knob for the same
+        // fact. ~keep
+        let native_module = python_override
+            .and_then(|o| o.from_json_module.clone())
+            .unwrap_or_else(|| helpers::resolve_module(e2e_config));
         let mut error_assertion_block = String::new();
         emit_error_assertion(
             &mut error_assertion_block,
@@ -303,6 +312,7 @@ pub(super) fn render_test_function(
             &call_expr,
             is_streaming_error_call,
             errors,
+            &native_module,
         );
         // ~keep The ledger recording now lives inside `error_path_assertions::render`, which every
         // backend's error block shares. Gating here as well would double-count every python marker.
