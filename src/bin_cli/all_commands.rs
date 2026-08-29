@@ -836,6 +836,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         error,
                     );
                 }
+                // Same reasoning as the two lock checks immediately above, for the Python/uv
+                // ecosystem's equivalent: e2e/test-app generation can leave a `pyproject.toml`
+                // whose dependency specifiers a committed `uv.lock` no longer records, which fails
+                // `uv sync --locked` under CI's default frozen lockfile. See
+                // `cli::pipeline::lock_freshness::check_generated_uv_lock_freshness`'s doc comment
+                // for why this is a sibling check rather than a shared one. ~keep
+                if let Some(error) = pipeline::check_generated_uv_lock_freshness(&current_gen_paths) {
+                    stage_failures.record(&format!("[{}] generated uv.lock freshness", resolved_cfg.name), error);
+                }
 
                 grand_binding_count += binding_count;
                 grand_stub_count += stub_count;

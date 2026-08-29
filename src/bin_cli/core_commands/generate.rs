@@ -539,6 +539,14 @@ pub(crate) fn handle_generate(
                 error,
             );
         }
+        // Same check, same shared function and same deferral rationale as `all_commands.rs`'s
+        // call site, for the Python/uv ecosystem's equivalent: a generated `pyproject.toml` whose
+        // dependency specifiers a committed `uv.lock` no longer records fails `uv sync --locked`
+        // under CI's default frozen lockfile just as surely as a stale `Cargo.lock` or
+        // `pnpm-lock.yaml` fails their own frozen-install commands. ~keep
+        if let Some(error) = pipeline::check_generated_uv_lock_freshness(&current_gen_paths) {
+            stage_failures.record(&format!("[{}] generated uv.lock freshness", resolved_cfg.name), error);
+        }
 
         let previous_generation_owned: std::collections::HashMap<_, _> = languages
             .iter()
