@@ -43,13 +43,8 @@ fn sync_mode_enum() -> EnumDef {
 /// drop is conditional on `configured_features`, not a blanket "foreign means gone" rule.
 #[test]
 fn foreign_cfg_excluded_variant_vanishes_from_ex_module_unless_active() {
-    let excluded = gen_elixir_enum_module_with_known_types(
-        &sync_mode_enum(),
-        "SampleApp",
-        &AHashSet::new(),
-        "mylib",
-        Some(&[]),
-    );
+    let excluded =
+        gen_elixir_enum_module_with_known_types(&sync_mode_enum(), "SampleApp", &AHashSet::new(), "mylib", Some(&[]));
     assert!(
         excluded.contains("@type t :: :manual | :automatic"),
         "the @type union must list exactly the two retained atoms, got:\n{excluded}"
@@ -117,7 +112,10 @@ fn foreign_cfg_excluded_variant_vanishes_from_data_enum_ex_module() {
     };
 
     let out = gen_elixir_enum_module_with_known_types(&en, "SampleApp", &AHashSet::new(), "mylib", Some(&[]));
-    assert!(out.contains("Text"), "the always-present data variant must still be documented, got:\n{out}");
+    assert!(
+        out.contains("Text"),
+        "the always-present data variant must still be documented, got:\n{out}"
+    );
     assert!(
         !out.contains("Testkit"),
         "the excluded data variant must not appear anywhere in the module, got:\n{out}"

@@ -226,7 +226,12 @@ fn cases() -> Vec<Case> {
 fn mirror_declaration_and_conversion_catch_all_agree_across_enum_shapes() {
     for case in cases() {
         let mut mirror_out = String::new();
-        emit_mirror_enum(&mut mirror_out, &case.enum_def, "mylib", case.configured_features.as_deref());
+        emit_mirror_enum(
+            &mut mirror_out,
+            &case.enum_def,
+            "mylib",
+            case.configured_features.as_deref(),
+        );
         assert_eq!(
             declared_unit_variant_names(&mirror_out),
             case.mirror_declared_variants,

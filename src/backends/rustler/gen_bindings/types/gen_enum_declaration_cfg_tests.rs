@@ -120,7 +120,10 @@ fn foreign_variant_proven_unreachable_dropped_from_tagged_enum_declaration() {
         out.contains("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, rustler::NifTaggedEnum)]"),
         "this fixture must exercise the NifTaggedEnum path, not the flat NifStruct path, got:\n{out}"
     );
-    assert!(out.contains("Text"), "the always-present data variant must still be declared, got:\n{out}");
+    assert!(
+        out.contains("Text"),
+        "the always-present data variant must still be declared, got:\n{out}"
+    );
     assert!(
         !out.contains("Testkit"),
         "the excluded data variant must not appear anywhere in the declaration, got:\n{out}"
@@ -167,7 +170,13 @@ fn foreign_variant_proven_unreachable_dropped_from_flat_struct_declaration_contr
         }
     }
 
-    let excluded = gen_enum(&payload_enum(), "SampleCrate", &ApiSurface::default(), "mylib", Some(&[]));
+    let excluded = gen_enum(
+        &payload_enum(),
+        "SampleCrate",
+        &ApiSurface::default(),
+        "mylib",
+        Some(&[]),
+    );
     assert!(
         excluded.contains("rustler::NifStruct"),
         "this fixture must exercise the flat NifStruct path, got:\n{excluded}"

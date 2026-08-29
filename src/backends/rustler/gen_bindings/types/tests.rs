@@ -352,7 +352,13 @@ fn gen_enum_emits_expect_for_genuinely_oversized_variant() {
     let mut api = ApiSurface::default();
     api.types.push(heavy_config_type());
 
-    let result = gen_enum(&enum_with_one_oversized_struct_variant(), "SampleCrate", &api, "mylib", None);
+    let result = gen_enum(
+        &enum_with_one_oversized_struct_variant(),
+        "SampleCrate",
+        &api,
+        "mylib",
+        None,
+    );
 
     assert!(
         result.contains("#[expect(clippy::large_enum_variant, reason ="),
@@ -377,7 +383,13 @@ fn gen_enum_emits_expect_for_genuinely_oversized_variant() {
 fn gen_enum_does_not_emit_expect_for_similarly_sized_variants() {
     let api = ApiSurface::default();
 
-    let result = gen_enum(&enum_with_similarly_sized_struct_variant(), "SampleCrate", &api, "mylib", None);
+    let result = gen_enum(
+        &enum_with_similarly_sized_struct_variant(),
+        "SampleCrate",
+        &api,
+        "mylib",
+        None,
+    );
 
     assert!(
         result.contains("NifTaggedEnum"),

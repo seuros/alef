@@ -558,8 +558,8 @@ fn enum_variant_field_conv(binding: &str, field: &FieldDef, source_crate_name: &
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::mirror::emit_mirror_enum;
+    use super::*;
     use crate::core::ir::{EnumDef, EnumVariant};
 
     fn make_unit_variant(name: &str, cfg: Option<&str>) -> EnumVariant {

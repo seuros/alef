@@ -53,7 +53,11 @@ fn poly_toml_hooks_builtins_exclude_schemas_directory() {
     let files = scaffold(&api, &config, &[Language::Python]).unwrap();
     let c = &poly_toml(&files).content;
 
-    for builtin in ["lint = { exclude = [", "fmt = { exclude = [", "file_safety = { exclude = ["] {
+    for builtin in [
+        "lint = { exclude = [",
+        "fmt = { exclude = [",
+        "file_safety = { exclude = [",
+    ] {
         let pos = c
             .find(builtin)
             .unwrap_or_else(|| panic!("{builtin} builtin present; got:\n{c}"));
