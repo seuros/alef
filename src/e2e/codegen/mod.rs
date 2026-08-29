@@ -598,11 +598,29 @@ pub(crate) fn strict_assertion_failure(records: &[SkipRecord], strict: bool) -> 
         .into_iter()
         .collect::<Vec<_>>()
         .join("\n");
+    // ~keep Every backend calls this same oracle (grep `is_valid_for_result` across
+    // `e2e/codegen/*/assertions.rs`), so a field flagged for several languages is one
+    // resolution answered once, not several backends independently declining it — the
+    // reflex to suspect a per-language capability gap is exactly backwards here. `rust` is
+    // the strongest single data point when it appears: unlike `gleam`/`brew` (see
+    // `COARSE_FIELD_ORACLE_LANGUAGES`), rust is always IR-wired and resolves an accessor
+    // for every field its own IR sees, so a rust refusal cannot be a rust-specific limit.
+    let shared_oracle_note = if gaps.iter().any(|record| record.language == "rust") {
+        " `rust` is in the list above, and rust resolves an accessor for every field its own \
+         IR sees, so this cannot be a language-capability limit — check the fixture path \
+         against the crate's actual fields, or the field-availability config, before \
+         suspecting any one backend."
+    } else {
+        ""
+    };
     Some(anyhow::anyhow!(
         "{} e2e assertion(s) reference a field the availability oracle cannot resolve, so they \
          would have been silently dropped and the generated tests would have passed while \
-         asserting nothing:\n{detail}\n\nEither fix the field path (or the field-availability \
-         config) so the assertion runs, or declare on the assertion why it cannot:\n  \
+         asserting nothing:\n{detail}\n\nEvery backend asks the same field-availability oracle, \
+         so a field named for more than one language here is one resolution answered once, not \
+         several backends independently failing.{shared_oracle_note}\n\nEither fix the field \
+         path (or the field-availability config) so the assertion runs, or declare on the \
+         assertion why it cannot:\n  \
          \"skip\": {{ \"kind\": \"not_representable\", \"reason\": \"...\" }}      — alef cannot \
          express this shape yet (an assertion *kind* such as \"the call errored\", a property of \
          the call rather than the result, or an assertion over a stream's events)\n  \
