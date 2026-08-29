@@ -57,23 +57,6 @@ pub(super) fn render_snippet_body_with_ir(
         type_defs,
         enums,
     );
-    // `_parsePageAction` has the same module-scope shape as the trait-bridge stub classes
-    // just collected above: the test-case body below may call it, but Dart forbids the
-    // switch that defines it from living inside the call expression. Carry the same
-    // definition the full e2e test-file emitter would use whenever this fixture's call
-    // needs it, or the snippet calls a function that is never defined -- see
-    // `values::PARSE_PAGE_ACTION_HELPER`'s doc comment for why this must not drift from
-    // `test_file.rs`'s copy.
-    if fixture
-        .resolved_args(call)
-        .iter()
-        .any(|arg| super::values::arg_needs_parse_page_action_helper(arg, &fixture.input))
-    {
-        if !stub_classes.is_empty() {
-            stub_classes.push('\n');
-        }
-        stub_classes.push_str(super::values::PARSE_PAGE_ACTION_HELPER);
-    }
     let stub_classes = stub_classes.trim_end().to_string();
     let bridge_class = config.dart_bridge_class_name();
     let first_class_map = super::values::build_dart_first_class_map(type_defs, enums, e2e_config);
@@ -567,33 +550,22 @@ mod tests {
         assert!(class_pos < main_pos, "stub class must precede main():\n{body}");
     }
 
-    // Regression test: a fixture whose call declares a `PageAction` array argument (e.g.
-    // `interact`) renders a call site that invokes `_parsePageAction(...)` -- `test_case.rs`
-    // hand-authors this JSON decoder because `PageAction` is an enum and the Dart bridge-crate
-    // generator only emits a `create<Type>FromJson` factory for struct `TypeDef`s. The full
-    // e2e test-file emitter (`test_file.rs`) has always carried this function's *definition*
-    // alongside every call site that needs it; the standalone snippet emitter shared the call
-    // site (via the same `render_test_case`) but never the definition, so a consumer's
-    // generated snippet called an undefined function and failed Dart AOT compilation. This
-    // asserts the snippet's helper text is byte-identical to the canonical definition
-    // (`values::PARSE_PAGE_ACTION_HELPER`) rather than merely present, so a future edit to
-    // either copy cannot silently diverge from the other.
     #[test]
-    fn snippet_carries_the_parse_page_action_helper_its_call_needs() {
+    fn enum_array_uses_the_generated_package_decoder() {
         let fixture: Fixture = serde_json::from_value(serde_json::json!({
-            "id": "interact_click", "description": "Interact with page actions",
-            "input": {"actions": [{"type": "click", "selector": "#submit"}]}
+            "id": "run_steps", "description": "Run workflow steps",
+            "input": {"steps": [{"type": "approve", "identifier": "42"}]}
         }))
         .expect("fixture");
         let mut e2e_config = E2eConfig::default();
-        e2e_config.call.function = "interact".into();
+        e2e_config.call.function = "run_workflow".into();
         e2e_config.call.args.push(crate::e2e::config::ArgMapping {
-            name: "actions".into(),
-            field: "actions".into(),
+            name: "steps".into(),
+            field: "steps".into(),
             arg_type: "json_object".into(),
             optional: false,
             owned: false,
-            element_type: Some("PageAction".into()),
+            element_type: Some("WorkflowStep".into()),
             go_type: None,
             vec_inner_is_ref: false,
             trait_name: None,
@@ -602,47 +574,13 @@ mod tests {
         let body =
             render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
 
-        let definition_start = body
-            .find("PageAction _parsePageAction(")
-            .unwrap_or_else(|| panic!("snippet must define _parsePageAction:\n{body}"));
-        let definition_end = definition_start
-            + body[definition_start..]
-                .find("\nFuture<void> main")
-                .unwrap_or_else(|| panic!("could not find the end of the helper definition:\n{body}"));
-        let rendered_definition = body[definition_start..definition_end].trim_end();
-
-        assert_eq!(
-            rendered_definition,
-            super::super::values::PARSE_PAGE_ACTION_HELPER.trim_end(),
-            "the snippet's _parsePageAction definition must match the canonical helper text exactly:\n{body}"
-        );
-        assert_eq!(
-            body.matches("_parsePageAction(e as Map<String, dynamic>)").count(),
-            1,
-            "the snippet's call site must reference the helper exactly once:\n{body}"
-        );
-    }
-
-    // Negative control for the regression above: a fixture whose call has no `PageAction`
-    // argument must render no `_parsePageAction` text at all. Without this, the positive test
-    // above could pass vacuously against a renderer that always emits the helper regardless of
-    // whether the call actually needs it.
-    #[test]
-    fn snippet_omits_the_parse_page_action_helper_when_the_call_does_not_need_it() {
-        let fixture = Fixture {
-            id: "sample".into(),
-            description: "Sample".into(),
-            ..Fixture::default()
-        };
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call.function = "load_document".into();
-
-        let body =
-            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
-
         assert!(
-            !body.contains("_parsePageAction"),
-            "a snippet whose call never references PageAction must not carry the helper:\n{body}"
+            body.contains("createWorkflowStepFromJson(json: jsonEncode(m))"),
+            "enum elements must use the generated package decoder:\n{body}"
+        );
+        assert!(
+            !body.contains("_parse"),
+            "no hand-authored enum decoder may be emitted:\n{body}"
         );
     }
 

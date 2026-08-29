@@ -1,4 +1,3 @@
-use super::values;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::e2e::codegen::resolve_field;
@@ -77,19 +76,6 @@ pub(super) fn render_test_file(
             .args
             .iter()
             .any(|a| a.arg_type == "json_object" && resolve_field(&f.input, &a.field).is_array())
-    });
-
-    // Detect whether any fixture uses a PageAction array argument (for interact calls).
-    // PageAction and ScrollDirection types must be emitted in the test helper code only if used.
-    let has_page_action = fixtures.iter().any(|f| {
-        if f.is_http_test() {
-            return false;
-        }
-        let call_config =
-            e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        f.resolved_args(call_config)
-            .iter()
-            .any(|a| values::arg_needs_parse_page_action_helper(a, &f.input))
     });
 
     // Collect plugin trait types used in test_backend arguments. These types must be imported
@@ -202,7 +188,7 @@ pub(super) fn render_test_file(
     if has_http_fixtures || has_mock_url_refs {
         let _ = writeln!(out, "import 'dart:async';");
     }
-    // dart:convert provides jsonDecode for HTTP response parsing and PageAction array
+    // dart:convert provides jsonDecode for HTTP response parsing and typed JSON arrays
     // deserialization, plus utf8/LineSplitter for decoding the mock-server's startup stdout
     // (MOCK_SERVER_URL= / MOCK_SERVERS=) in the spawn harness. Handle-arg engine construction
     // no longer needs jsonDecode — it routes through `create<Config>FromJson(json:)` which
@@ -211,7 +197,7 @@ pub(super) fn render_test_file(
     // Generic typed json_object arrays (e.g. batch items) materialize via
     // `jsonDecode(r'…')` in the test body, so the import is required whenever
     // any fixture passes a json_object array argument with no element_type
-    // (PageAction) handling.
+    // element decoding.
     let has_json_array_args = fixtures.iter().any(|f| {
         if f.is_http_test() {
             return false;
@@ -225,7 +211,7 @@ pub(super) fn render_test_file(
                 && resolve_field(&f.input, &a.field).is_array()
         })
     });
-    if has_http_fixtures || has_page_action || has_mock_url_refs || has_json_array_args {
+    if has_http_fixtures || has_mock_url_refs || has_json_array_args {
         let _ = writeln!(out, "import 'dart:convert';");
     }
     // Require dart:ffi for setenv if e2e config has env vars to inject
@@ -290,15 +276,6 @@ pub(super) fn render_test_file(
 
     let _ = writeln!(out, "// E2e tests for category: {category}");
     let _ = writeln!(out);
-
-    // Only emit _parsePageAction if any fixture uses PageAction arrays. The helper text is
-    // shared with the standalone snippet renderer (`snippet.rs`) via `values` so the two
-    // never render different definitions for the same call -- see
-    // `values::PARSE_PAGE_ACTION_HELPER`'s doc comment.
-    if has_page_action {
-        out.push_str(values::PARSE_PAGE_ACTION_HELPER);
-        let _ = writeln!(out);
-    }
 
     // Whether this test file must spawn the SUT app harness. True for direct HTTP
     // fixtures and for any fixture that derives a URL from `SUT_URL`

@@ -569,6 +569,14 @@ fn emit_lib_rs(
         content.push('\n');
         opaque::emit_from_json_fn(&mut content, ty, source_crate_name);
     }
+    for enum_def in api
+        .enums
+        .iter()
+        .filter(|e| !exclude_types.contains(&e.name) && !e.binding_excluded && e.has_serde)
+    {
+        content.push('\n');
+        opaque::emit_enum_from_json_fn(&mut content, enum_def, source_crate_name);
+    }
 
     let dart_backend_name = "dart";
     for bridge_cfg in &config.trait_bridges {

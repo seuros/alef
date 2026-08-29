@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::codegen::naming::{PublicIdentifierKind, public_host_identifier};
 use crate::core::config::{AdapterConfig, Language, ResolvedCrateConfig};
-use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
 
 use super::{bridge_fn, conversions};
 
@@ -734,11 +734,8 @@ fn build_opaque_return_wrap(ty: &TypeRef, returns_ref: bool) -> String {
 /// local mirror type using the `From<source_crate::TypeName> for TypeName` impl that is
 /// already emitted by `emit_from_impl_for_struct`.
 pub(super) fn emit_from_json_fn(out: &mut String, ty: &TypeDef, source_crate_name: &str) {
-    let type_name = &ty.name;
-    let snake = dart_rust_function_component(type_name);
-    let fn_name = format!("create_{snake}_from_json");
     let core_ty_base = if ty.rust_path.is_empty() {
-        format!("{source_crate_name}::{type_name}")
+        format!("{source_crate_name}::{}", ty.name)
     } else {
         ty.rust_path.replace('-', "_")
     };
@@ -747,14 +744,29 @@ pub(super) fn emit_from_json_fn(out: &mut String, ty: &TypeDef, source_crate_nam
     } else {
         core_ty_base
     };
+    emit_named_from_json_fn(out, &ty.name, &core_ty, ty.cfg.as_deref());
+}
+
+pub(super) fn emit_enum_from_json_fn(out: &mut String, enum_def: &EnumDef, source_crate_name: &str) {
+    let core_ty = if enum_def.rust_path.is_empty() {
+        format!("{source_crate_name}::{}", enum_def.name)
+    } else {
+        enum_def.rust_path.replace('-', "_")
+    };
+    emit_named_from_json_fn(out, &enum_def.name, &core_ty, enum_def.cfg.as_deref());
+}
+
+fn emit_named_from_json_fn(out: &mut String, type_name: &str, core_ty: &str, source_cfg: Option<&str>) {
+    let snake = dart_rust_function_component(type_name);
+    let fn_name = format!("create_{snake}_from_json");
 
     out.push_str(&crate::backends::dart::template_env::render(
         "rust_from_json_bridge_fn.rs.jinja",
         minijinja::context! {
             fn_name => fn_name.as_str(),
             type_name => type_name,
-            core_ty => core_ty.as_str(),
-            source_cfg => ty.cfg.as_deref().unwrap_or(""),
+            core_ty => core_ty,
+            source_cfg => source_cfg.unwrap_or(""),
         },
     ));
 }
@@ -767,8 +779,24 @@ fn dart_rust_function_component(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::emit_from_json_fn;
-    use crate::core::ir::TypeDef;
+    use super::{emit_enum_from_json_fn, emit_from_json_fn};
+    use crate::core::ir::{EnumDef, TypeDef};
+
+    #[test]
+    fn serde_enum_emits_package_level_from_json_fn() {
+        let enum_def = EnumDef {
+            name: "WorkflowStep".to_string(),
+            rust_path: "mylib::WorkflowStep".to_string(),
+            has_serde: true,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_enum_from_json_fn(&mut out, &enum_def, "mylib");
+
+        assert!(out.contains("pub fn create_workflow_step_from_json"), "{out}");
+        assert!(out.contains("serde_json::from_str::<mylib::WorkflowStep>"), "{out}");
+        assert!(out.contains("Result<WorkflowStep, String>"), "{out}");
+    }
 
     /// The regression this task fixes: `emit_from_json_fn` names `core_ty` (the host path)
     /// directly in `serde_json::from_str::<core_ty>`, so when the whole type is gated

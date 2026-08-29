@@ -648,8 +648,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                             args.push(list_literal);
                         }
                     } else if arg_value.is_array() {
-                        // Generic typed array (e.g. `actions: [PageAction]` for interact,
-                        // or `items: [BatchBytesItem]` for batch). Decode via jsonDecode at
+                        // Generic typed array (for example `items: [BatchBytesItem]`). Decode via jsonDecode at
                         // test-run time and convert to typed instances.
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         let var_name = arg_def.name.clone();
@@ -666,20 +665,14 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         } else {
                             format!("r'{json_str}'")
                         };
-                        if elem_type == "PageAction" {
-                            setup_lines.push(format!(
-                                "final {var_name} = (jsonDecode({json_source}) as List<dynamic>).map((e) => _parsePageAction(e as Map<String, dynamic>)).toList();"
-                            ));
-                        } else {
-                            // FRB-generated `create<ElementType>FromJson(json:)` factory
-                            // takes a JSON string per item. Map each map to its typed
-                            // instance and await the futures together so the typed list
-                            // matches the binding's parameter type (e.g. List<BatchBytesItem>).
-                            let dart_fn = type_name_to_create_from_json_dart(elem_type);
-                            setup_lines.push(format!(
-                                "final {var_name} = await Future.wait((jsonDecode({json_source}) as List<dynamic>).cast<Map<String, dynamic>>().map((m) => {dart_fn}(json: jsonEncode(m))));"
-                            ));
-                        }
+                        // FRB-generated `create<ElementType>FromJson(json:)` factory
+                        // takes a JSON string per item. Map each map to its typed
+                        // instance and await the futures together so the typed list
+                        // matches the binding's parameter type.
+                        let dart_fn = type_name_to_create_from_json_dart(elem_type);
+                        setup_lines.push(format!(
+                            "final {var_name} = await Future.wait((jsonDecode({json_source}) as List<dynamic>).cast<Map<String, dynamic>>().map((m) => {dart_fn}(json: jsonEncode(m))));"
+                        ));
                         // For generic arrays, emit named parameter if it's a direct FRB call
                         if is_frb_bridge_call {
                             let dart_param_name = snake_to_camel(&arg_def.name);

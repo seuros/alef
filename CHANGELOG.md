@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generate Dart package-level JSON decoders for serde enums and use them for
+  typed e2e array arguments instead of consumer-specific helper code.
 - Derive generated Node e2e tagged-enum discriminant keys from the same N-API
   resolver that declares the binding surface.
 
