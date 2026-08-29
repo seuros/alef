@@ -171,6 +171,71 @@ pub(super) fn type_name_to_create_from_json_dart(type_name: &str) -> String {
         .join("")
 }
 
+/// The Dart source for alef's hand-authored `_parsePageAction` JSON decoder.
+///
+/// `PageAction` is a Rust enum, and the Dart bridge-crate generator only emits a
+/// `create_<type>_from_json` factory for struct `TypeDef`s (see
+/// `crate::backends::dart::gen_rust_crate::opaque::emit_from_json_fn`), so a `Vec<PageAction>`
+/// argument has no package-level deserializer to call the way struct arguments (via
+/// [`type_name_to_create_from_json_dart`]) do. This hand-authored switch fills that gap, and it
+/// must render byte-identical wherever a call references `_parsePageAction`: the full e2e
+/// test-file preamble (`test_file.rs`, gated across every fixture in a category) and the
+/// standalone snippet renderer (`snippet.rs`, gated per fixture) both read this one constant via
+/// [`arg_needs_parse_page_action_helper`], so neither can drift from the other and leave a call
+/// site without its callee. ~keep
+pub(super) const PARSE_PAGE_ACTION_HELPER: &str = concat!(
+    "PageAction _parsePageAction(Map<String, dynamic> json) {\n",
+    "  final actionType = json['type'] as String?;\n",
+    "  switch (actionType) {\n",
+    "    case 'click':\n",
+    "      return PageAction.click(selector: json['selector'] as String);\n",
+    "    case 'type':\n",
+    "      return PageAction.typeText(\n",
+    "        selector: json['selector'] as String,\n",
+    "        text: json['text'] as String,\n",
+    "      );\n",
+    "    case 'press':\n",
+    "      return PageAction.press(\n",
+    "        key: json['key'] as String,\n",
+    "      );\n",
+    "    case 'scroll':\n",
+    "      return PageAction.scroll(\n",
+    "        direction: ScrollDirection.down,\n",
+    "        selector: json['selector'] as String? ?? '',\n",
+    "        amount: json['amount'] as int? ?? 0,\n",
+    "      );\n",
+    "    case 'wait':\n",
+    "      return PageAction.wait(\n",
+    "        milliseconds: json['timeout_ms'] as int? ?? 0,\n",
+    "        selector: json['selector'] as String,\n",
+    "      );\n",
+    "    case 'screenshot':\n",
+    "      return PageAction.screenshot(fullPage: json['full_page'] as bool? ?? false);\n",
+    "    case 'executeJs':\n",
+    "      return PageAction.executeJs(script: json['script'] as String);\n",
+    "    case 'scrape':\n",
+    "      return const PageAction.scrape();\n",
+    "    default:\n",
+    "      throw UnsupportedError('Unknown PageAction type: $actionType');\n",
+    "  }\n",
+    "}\n",
+);
+
+/// Whether a resolved call argument needs [`PARSE_PAGE_ACTION_HELPER`]: declared as a
+/// `PageAction` array whose fixture input actually resolves to a JSON array at that field.
+///
+/// The single predicate every call site consults before deciding whether to emit
+/// `_parsePageAction`'s definition, so the question is asked once and answered identically for
+/// the full e2e test file and for a standalone snippet -- see [`PARSE_PAGE_ACTION_HELPER`]'s doc
+/// comment for why divergence here is exactly the failure this exists to prevent. ~keep
+pub(super) fn arg_needs_parse_page_action_helper(
+    arg: &crate::core::config::e2e::ArgMapping,
+    input: &serde_json::Value,
+) -> bool {
+    arg.element_type.as_deref() == Some("PageAction")
+        && crate::e2e::codegen::resolve_field(input, &arg.field).is_array()
+}
+
 /// Build the Dart stringy field classification map for aggregating text accessors
 /// in `Vec<T>` contains assertions. Similar to Swift's `build_swift_first_class_map`,
 /// but Dart doesn't distinguish first-class vs opaque types — we just track stringy

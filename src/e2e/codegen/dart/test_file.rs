@@ -1,3 +1,4 @@
+use super::values;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::e2e::codegen::resolve_field;
@@ -88,7 +89,7 @@ pub(super) fn render_test_file(
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
         f.resolved_args(call_config)
             .iter()
-            .any(|a| a.element_type.as_deref() == Some("PageAction") && resolve_field(&f.input, &a.field).is_array())
+            .any(|a| values::arg_needs_parse_page_action_helper(a, &f.input))
     });
 
     // Collect plugin trait types used in test_backend arguments. These types must be imported
@@ -290,55 +291,12 @@ pub(super) fn render_test_file(
     let _ = writeln!(out, "// E2e tests for category: {category}");
     let _ = writeln!(out);
 
-    // Only emit _parsePageAction if any fixture uses PageAction arrays.
+    // Only emit _parsePageAction if any fixture uses PageAction arrays. The helper text is
+    // shared with the standalone snippet renderer (`snippet.rs`) via `values` so the two
+    // never render different definitions for the same call -- see
+    // `values::PARSE_PAGE_ACTION_HELPER`'s doc comment.
     if has_page_action {
-        let _ = writeln!(out, "PageAction _parsePageAction(Map<String, dynamic> json) {{");
-        let _ = writeln!(out, "  final actionType = json['type'] as String?;");
-        let _ = writeln!(out, "  switch (actionType) {{");
-        let _ = writeln!(out, "    case 'click':");
-        let _ = writeln!(
-            out,
-            "      return PageAction.click(selector: json['selector'] as String);"
-        );
-        let _ = writeln!(out, "    case 'type':");
-        let _ = writeln!(out, "      return PageAction.typeText(");
-        let _ = writeln!(out, "        selector: json['selector'] as String,");
-        let _ = writeln!(out, "        text: json['text'] as String,");
-        let _ = writeln!(out, "      );");
-        let _ = writeln!(out, "    case 'press':");
-        let _ = writeln!(out, "      return PageAction.press(");
-        let _ = writeln!(out, "        key: json['key'] as String,");
-        let _ = writeln!(out, "      );");
-        let _ = writeln!(out, "    case 'scroll':");
-        let _ = writeln!(out, "      return PageAction.scroll(");
-        let _ = writeln!(out, "        direction: ScrollDirection.down,");
-        let _ = writeln!(out, "        selector: json['selector'] as String? ?? '',");
-        let _ = writeln!(out, "        amount: json['amount'] as int? ?? 0,");
-        let _ = writeln!(out, "      );");
-        let _ = writeln!(out, "    case 'wait':");
-        let _ = writeln!(out, "      return PageAction.wait(");
-        let _ = writeln!(out, "        milliseconds: json['timeout_ms'] as int? ?? 0,");
-        let _ = writeln!(out, "        selector: json['selector'] as String,");
-        let _ = writeln!(out, "      );");
-        let _ = writeln!(out, "    case 'screenshot':");
-        let _ = writeln!(
-            out,
-            "      return PageAction.screenshot(fullPage: json['full_page'] as bool? ?? false);"
-        );
-        let _ = writeln!(out, "    case 'executeJs':");
-        let _ = writeln!(
-            out,
-            "      return PageAction.executeJs(script: json['script'] as String);"
-        );
-        let _ = writeln!(out, "    case 'scrape':");
-        let _ = writeln!(out, "      return const PageAction.scrape();");
-        let _ = writeln!(out, "    default:");
-        let _ = writeln!(
-            out,
-            "      throw UnsupportedError('Unknown PageAction type: $actionType');"
-        );
-        let _ = writeln!(out, "  }}");
-        let _ = writeln!(out, "}}");
+        out.push_str(values::PARSE_PAGE_ACTION_HELPER);
         let _ = writeln!(out);
     }
 
