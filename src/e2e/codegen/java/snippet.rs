@@ -57,16 +57,60 @@ pub(super) fn render_snippet_body_with_ir(
     let options_type = recipe
         .options_type
         .or_else(|| recipe.compatible_options_type(&["kotlin", "csharp", "c", "go", "python"]));
+
+    // Resolve the same adapter metadata `java/test_method.rs` resolves for the generated e2e
+    // test, so a docs snippet for a streaming (or other adapter-backed) call shows the real
+    // request-DTO call shape the facade actually declares, instead of the flat scalar-argument
+    // shape a plain call takes. Without this the snippet always rendered `Facade.method(engine,
+    // url)` even when the facade signature is `Facade.method(engine, SomeRequest req)` --
+    // `String` is not assignable to a request DTO. ~keep
+    let adapter_lookup_name = call.core_lookup_name("java");
+    let adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|a| a.name == name));
+    let is_streaming_adapter =
+        adapter.is_some_and(|a| matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming));
+    let adapter_request_type: Option<String> = adapter
+        .and_then(|a| a.request_type.as_deref())
+        .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
+    // Mirrors `java/test_method.rs`'s `filtered_args`: a non-streaming owner_type adapter
+    // encapsulates the handle inside the facade call, so its handle `ArgMapping` must not also
+    // be passed positionally. A streaming owner_type adapter keeps it -- it becomes the
+    // instance-method receiver below, not a positional argument.
+    let filtered_args: Vec<crate::e2e::config::ArgMapping> =
+        if adapter.is_some_and(|a| a.owner_type.is_some()) && !is_streaming_adapter {
+            recipe
+                .args
+                .iter()
+                .filter(|arg| arg.arg_type != "handle")
+                .cloned()
+                .collect()
+        } else {
+            recipe.args.to_vec()
+        };
+    // Streaming owner_type adapters are facade-exposed as INSTANCE methods on the owner handle
+    // (`engine.someStream(req)`), not as static facade methods -- see `test_method.rs`'s
+    // identical `streaming_owner_handle`.
+    let streaming_owner_handle: Option<String> =
+        if is_streaming_adapter && adapter.is_some_and(|a| a.owner_type.is_some()) {
+            filtered_args
+                .iter()
+                .find(|a| a.arg_type == "handle")
+                .map(|a| a.name.clone())
+        } else {
+            None
+        };
+
     let mut teardown = String::new();
     let (mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
-        recipe.args,
+        &filtered_args,
         JavaArgsContext {
             class_name: &class_name,
             options_type,
             fixture,
-            adapter_request_type: None,
-            owner_handle_is_receiver: false,
+            adapter_request_type: adapter_request_type.as_deref(),
+            owner_handle_is_receiver: streaming_owner_handle.is_some(),
             config,
             type_defs,
             enums,
@@ -114,6 +158,18 @@ pub(super) fn render_snippet_body_with_ir(
         .unwrap_or(&class_name)
         .to_string();
     let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
+    // The template renders `{{ class_name }}.{{ function_name }}(...)` unconditionally.
+    // Substitute the owner handle's variable name for a streaming owner_type adapter's
+    // flat-call shape, so the snippet shows the real instance-method invocation
+    // (`engine.someStream(req)`) instead of a nonexistent static overload. `client_factory`
+    // fixtures already dispatch on `client`, not `class_name`, so this substitution is scoped
+    // to the flat-call path where it actually changes the rendered call target -- mirrors
+    // `kotlin/snippet.rs`'s identical `call_target_class_name`. ~keep
+    let call_target_class_name = if client_factory.is_none() {
+        streaming_owner_handle.unwrap_or_else(|| simple_class_name.clone())
+    } else {
+        simple_class_name.clone()
+    };
     let presentation =
         crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java", type_defs, enums, functions);
     let expects_error = fixture
@@ -134,7 +190,7 @@ pub(super) fn render_snippet_body_with_ir(
         "java/snippet_body.jinja",
         minijinja::context! {
             package_name => package_name,
-            class_name => simple_class_name,
+            class_name => call_target_class_name,
             setup_lines => setup_lines,
             client_factory => client_factory,
             client_args => client_args,
@@ -258,6 +314,10 @@ pub(super) fn split_rendered_lines(block: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "snippet/oversized_literal_javac_tests.rs"]
 mod oversized_literal_javac_tests;
+
+#[cfg(test)]
+#[path = "snippet/streaming_tests.rs"]
+mod streaming_tests;
 
 #[cfg(test)]
 mod tests {

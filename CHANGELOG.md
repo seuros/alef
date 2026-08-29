@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(java): resolve streaming-adapter request DTOs in doc snippets the same way the generated e2e
+  test does, so a streaming call's snippet passes the typed request -- and, for an `owner_type`
+  adapter, dispatches on the owner-handle instance -- instead of the flat scalar-argument shape
+  that fails to compile.
+- fix(csharp): resolve streaming-adapter request DTOs in doc snippets via `config.adapters`,
+  matching `csharp/streaming.rs`'s e2e test generation, instead of always passing `None` and
+  rendering a bare `string`/`List<string>` where the binding expects a typed request record.
+- fix(csharp): fold the `mock_url_list` batch-request wrapping into `build_args_and_setup` itself
+  instead of a `csharp/streaming.rs`-only post-processing step, so every caller -- including the
+  docs snippet renderer -- gets the same batch request-DTO shape.
 - fix(typescript): annotate an empty preserved `mock_url_list` argument as `string[]` so generated
   node and wasm docs snippets and e2e tests compile under `noImplicitAny` (`const urls = [];`
   previously failed with TS7034/TS7005).

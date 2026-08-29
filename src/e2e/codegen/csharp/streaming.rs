@@ -110,7 +110,11 @@ pub(super) fn render_streaming_test_method(
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
     let mut _chat_stream_class_decls: Vec<String> = Vec::new();
     let mut _chat_stream_teardown_lines: Vec<String> = Vec::new();
-    let (mut setup_lines, mut args_str) = build_args_and_setup(
+    // `mock_url_list` args are wrapped in `adapter_request_type_cs`'s declared request type
+    // directly inside `build_args_and_setup` (see `setup.rs`'s `mock_url_list` arm), the same
+    // way `mock_url` args always were -- this used to be a separate post-processing step here
+    // alone, which the docs snippet renderer never got to consult. ~keep
+    let (setup_lines, args_str) = build_args_and_setup(
         &fixture.input,
         args,
         class_name,
@@ -127,24 +131,6 @@ pub(super) fn render_streaming_test_method(
         &mut _chat_stream_class_decls,
         &mut _chat_stream_teardown_lines,
     );
-
-    // For streaming methods with mock_url_list, wrap the URL list in the request type.
-    if adapter_request_type_cs.is_some() {
-        let has_mock_url_list = args.iter().any(|arg| arg.arg_type == "mock_url_list");
-        if has_mock_url_list && let Some(req_type) = &adapter_request_type_cs {
-            let parts: Vec<&str> = args_str.split(", ").collect();
-            if parts.len() >= 2 {
-                let urls_var = parts[parts.len() - 1];
-                let req_var = format!("{}Req", urls_var);
-                setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {urls_var} }};"));
-                args_str = parts[..parts.len() - 1].join(", ");
-                if !args_str.is_empty() {
-                    args_str.push_str(", ");
-                }
-                args_str.push_str(&req_var);
-            }
-        }
-    }
 
     let client_factory = cs_overrides.and_then(|o| o.client_factory.as_deref()).or_else(|| {
         e2e_config

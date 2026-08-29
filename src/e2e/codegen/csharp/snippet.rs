@@ -73,6 +73,15 @@ pub(super) fn render_snippet_body_with_ir(
     let options_via = overrides
         .and_then(|value| value.options_via.as_deref())
         .filter(|value| *value != "from_json");
+    // Resolve the adapter's declared request type exactly as `csharp/streaming.rs` does for the
+    // generated e2e test, so a streaming/adapter-backed snippet shows the real request-DTO call
+    // shape instead of a bare `string`/`List<string>` -- CS1503 against the binding. ~keep
+    let adapter_lookup_name = call.core_lookup_name("csharp");
+    let adapter_request_type: Option<String> = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|a| a.name == name))
+        .and_then(|a| a.request_type.as_deref())
+        .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
     let mut visitor_declarations = Vec::new();
     let mut teardown_lines = Vec::new();
     let (mut setup_lines, mut args) = super::setup::build_args_and_setup(
@@ -84,7 +93,7 @@ pub(super) fn render_snippet_body_with_ir(
         &HashMap::new(),
         &HashMap::new(),
         fixture,
-        None,
+        adapter_request_type.as_deref(),
         config,
         type_defs,
         enums,
@@ -980,3 +989,9 @@ mod nullable_presentation_tests;
 #[cfg(test)]
 #[path = "snippet/optional_iterate_tests.rs"]
 mod optional_iterate_tests;
+
+/// Regression coverage for the streaming-adapter request-DTO seam, split into its own file
+/// per the `file-modularization` rule: `snippet.rs` was already close to the 1,000-line cap.
+#[cfg(test)]
+#[path = "snippet/streaming_request_tests.rs"]
+mod streaming_request_tests;

@@ -144,7 +144,13 @@ pub(super) fn build_args_and_setup(
                     "var {name} = new System.Collections.Generic.List<string>(new string[] {{ {} }});",
                     literals.join(", ")
                 ));
-                parts.push(name.clone());
+                if let Some(req_type) = adapter_request_type {
+                    let req_var = format!("{name}Req");
+                    setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {name} }};"));
+                    parts.push(req_var);
+                } else {
+                    parts.push(name.clone());
+                }
                 continue;
             }
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
@@ -165,7 +171,21 @@ pub(super) fn build_args_and_setup(
             setup_lines.push(format!(
                 "var {name} = new System.Collections.Generic.List<string>(new string[] {{ {paths_literal} }}.Select(p => p.StartsWith(\"http\") ? p : _base_{name} + p));"
             ));
-            parts.push(name.clone());
+            // Wrap the URL list in the adapter's declared request type when one is
+            // configured (batch streaming/adapter calls take a typed request, not the
+            // bare `List<string>` the binding itself would reject) -- mirrors the
+            // `mock_url` wrapping just above and Java's identical `mock_url_list`
+            // handling in `java/args.rs`. This used to be a separate post-processing
+            // step bolted onto `csharp/streaming.rs` alone, which is exactly the kind
+            // of second derivation that silently drifted out of sync with every other
+            // caller of `build_args_and_setup` (e.g. the docs snippet renderer). ~keep
+            if let Some(req_type) = adapter_request_type {
+                let req_var = format!("{name}Req");
+                setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {name} }};"));
+                parts.push(req_var);
+            } else {
+                parts.push(name.clone());
+            }
             continue;
         }
 
