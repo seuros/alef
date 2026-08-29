@@ -21,7 +21,7 @@ pub(super) fn render_assertion_with_streaming_item_type(
     result_enum_fields: &std::collections::HashMap<String, String>,
     lang: &str,
     is_streaming: bool,
-    streaming_item_type: Option<&str>,
+    streaming_item_enum: Option<&crate::core::ir::EnumDef>,
     returns_void: bool,
     not_error_may_assert_presence: bool,
 ) {
@@ -113,7 +113,7 @@ pub(super) fn render_assertion_with_streaming_item_type(
             result_var,
             f,
             is_streaming,
-            streaming_item_type,
+            streaming_item_enum,
             field_resolver,
             lang,
         ) {
@@ -292,7 +292,7 @@ fn render_synthetic_field_assertion(
     result_var: &str,
     field: &str,
     is_streaming: bool,
-    streaming_item_type: Option<&str>,
+    streaming_item_enum: Option<&crate::core::ir::EnumDef>,
     field_resolver: &FieldResolver,
     lang: &str,
 ) -> bool {
@@ -368,15 +368,11 @@ fn render_synthetic_field_assertion(
         // accessor resolution (e.g. `result.chunks`).
         f if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) => {
             // lang is always "node" or "wasm" here; both use the same JS expressions.
-            if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
-                    f,
-                    "node",
-                    "chunks",
-                    None,
-                    streaming_item_type,
-                )
-            {
+            let node_event_expr =
+                streaming_item_enum.and_then(|enum_def| node_stream_event_variant_accessor(f, "chunks", enum_def));
+            if let Some(expr) = node_event_expr.or_else(|| {
+                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "node", "chunks")
+            }) {
                 match assertion.assertion_type.as_str() {
                     "count_min" => {
                         if let Some(val) = &assertion.value {
@@ -470,6 +466,32 @@ fn render_synthetic_field_assertion(
         }
         _ => false,
     }
+}
+
+fn node_stream_event_variant_accessor(
+    field: &str,
+    chunks_var: &str,
+    enum_def: &crate::core::ir::EnumDef,
+) -> Option<String> {
+    let variant_name = match field {
+        "stream.has_page_event" => "Page",
+        "stream.has_error_event" => "Error",
+        "stream.has_complete_event" => "Complete",
+        _ => return None,
+    };
+    let variant = enum_def.variants.iter().find(|variant| variant.name == variant_name)?;
+    let tag_field = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
+    let tag_value = crate::codegen::naming::wire_variant_value(
+        &variant.name,
+        variant.serde_rename.as_deref(),
+        enum_def.serde_rename_all.as_deref(),
+    );
+    let tag_field = serde_json::to_string(tag_field).ok()?;
+    let tag_value = serde_json::to_string(&tag_value).ok()?;
+    Some(format!(
+        "{chunks_var}.some((event: {}) => event[{tag_field}] === {tag_value})",
+        enum_def.name
+    ))
 }
 
 /// ~keep Every value-taking streaming arm above narrowed on `assertion.value` and emitted nothing

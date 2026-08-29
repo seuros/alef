@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Thread configured stream item types into generated Node event-variant assertions
-  so those checks emit real predicates instead of unsupported-field skips.
+- Resolve Node stream item types from explicit recipes or matching adapters, then
+  derive strict event discriminant predicates from the item enum IR.
 - Generate Dart package-level JSON decoders for serde enums and use them for
   typed e2e array arguments instead of consumer-specific helper code.
 - Decode generated Dart typed-array elements without assuming their JSON values

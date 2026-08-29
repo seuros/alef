@@ -22,14 +22,14 @@ fn empty_resolver() -> FieldResolver {
 }
 
 fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> (String, bool) {
-    render_streaming_with_item_type(assertion_type, field, value, None)
+    render_streaming_with_item_enum(assertion_type, field, value, None)
 }
 
-fn render_streaming_with_item_type(
+fn render_streaming_with_item_enum(
     assertion_type: &str,
     field: &str,
     value: Option<serde_json::Value>,
-    item_type: Option<&str>,
+    item_enum: Option<&crate::core::ir::EnumDef>,
 ) -> (String, bool) {
     let assertion = Assertion {
         assertion_type: assertion_type.to_string(),
@@ -44,7 +44,7 @@ fn render_streaming_with_item_type(
         "result",
         field,
         true,
-        item_type,
+        item_enum,
         &empty_resolver(),
         "node",
     );
@@ -53,10 +53,23 @@ fn render_streaming_with_item_type(
 
 #[test]
 fn configured_stream_item_type_emits_event_variant_assertion() {
-    let (out, handled) =
-        render_streaming_with_item_type("is_true", "stream.has_page_event", None, Some("WorkflowEvent"));
+    let item_enum = crate::core::ir::EnumDef {
+        name: "WorkflowEvent".into(),
+        serde_tag: Some("event_kind".into()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Page".into(),
+            serde_rename: Some("page-event".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let (out, handled) = render_streaming_with_item_enum("is_true", "stream.has_page_event", None, Some(&item_enum));
     assert!(handled);
-    assert!(out.contains("chunks.some((e: any) => e?.type === \"page\")"), "{out}");
+    assert!(
+        out.contains("chunks.some((event: WorkflowEvent) => event[\"event_kind\"] === \"page-event\")"),
+        "{out}"
+    );
+    assert!(!out.contains(": any"), "{out}");
     assert!(!out.contains("skipped:"), "{out}");
 }
 

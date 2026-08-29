@@ -99,6 +99,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
         .with_functions(functions);
     let function_name = resolve_node_function_name(call_config);
+    let core_lookup_name = call_config.core_lookup_name(lang);
+    let adapter_lookup_names = core_lookup_name.as_deref().map_or_else(
+        || vec![function_name.as_str()],
+        |core| vec![function_name.as_str(), core],
+    );
+    let streaming_item_type =
+        crate::e2e::codegen::recipe::streaming_item_type(call_config, &config.adapters, &adapter_lookup_names);
+    let streaming_item_enum = streaming_item_type.and_then(|name| enums.iter().find(|enum_def| enum_def.name == name));
     let result_var = call_config.effective_result_var();
     // A per-language `async` override is an explicit, trusted answer -- honor it verbatim
     // even against a disagreeing IR, the same way every other per-language override in this
@@ -361,7 +369,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             &effective_result_enum_fields,
             lang,
             is_streaming,
-            call_config.streaming_item_type(),
+            streaming_item_enum,
             call_config.returns_void,
             not_error_may_assert_presence,
         );
