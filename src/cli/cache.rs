@@ -166,7 +166,7 @@ pub fn read_cached_ir(crate_name: &str) -> anyhow::Result<crate::core::ir::ApiSu
 /// Write IR to cache for the given crate.
 pub fn write_ir_cache(crate_name: &str, api: &crate::core::ir::ApiSurface, cache_key: &CacheKey) -> anyhow::Result<()> {
     let cache_dir = ir_cache_dir(crate_name);
-    crate::core::cache_dir::ensure_cache_dir(&cache_dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &cache_dir)?;
     fs::write(cache_dir.join("ir.json"), serde_json::to_string_pretty(api)?)?;
     fs::write(cache_dir.join("ir.hash"), cache_key.as_str())?;
     Ok(())
@@ -217,7 +217,7 @@ pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey) -> boo
 /// caller never folded a later phase's output back in" (alef#158). ~keep
 pub fn write_lang_hash(crate_name: &str, lang: &str, key: &CacheKey, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    crate::core::cache_dir::ensure_cache_dir(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &dir)?;
     fs::write(dir.join(format!("{lang}.hash")), key.as_str())?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
     tracing::debug!(
@@ -233,7 +233,7 @@ pub fn write_lang_hash(crate_name: &str, lang: &str, key: &CacheKey, output_path
 /// its files. The language hash itself remains unchanged.
 pub fn write_lang_manifest(crate_name: &str, lang: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    crate::core::cache_dir::ensure_cache_dir(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &dir)?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
     tracing::debug!(
         crate_name,
@@ -275,7 +275,7 @@ pub fn read_lang_manifest(crate_name: &str, lang: &str) -> Vec<PathBuf> {
 /// clobber the recorded paths for every other language's manifests.
 pub fn write_scaffold_manifest(crate_name: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    crate::core::cache_dir::ensure_cache_dir(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &dir)?;
     write_manifest(&dir.join("scaffold-ownership.manifest"), output_paths)
 }
 
@@ -1054,7 +1054,7 @@ pub fn write_stage_hash(
     output_paths: &[PathBuf],
 ) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    crate::core::cache_dir::ensure_cache_dir(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &dir)?;
     fs::write(dir.join(format!("{stage}.hash")), stage_hash)?;
     write_manifest(&dir.join(format!("{stage}.manifest")), output_paths)?;
     Ok(())
@@ -1114,7 +1114,7 @@ pub fn hash_content(content: &str) -> String {
 /// reflect pure codegen output, independent of any on-disk formatter.
 pub fn write_generation_hashes(name: &str, hashes: &[(String, String)]) -> anyhow::Result<()> {
     let dir = Path::new(CACHE_DIR).join("hashes");
-    crate::core::cache_dir::ensure_cache_dir(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir_under(Path::new(CACHE_DIR), &dir)?;
     let lines: Vec<String> = hashes.iter().map(|(p, h)| format!("{p}\t{h}")).collect();
     fs::write(dir.join(format!("{name}.output_hashes")), lines.join("\n"))?;
     Ok(())

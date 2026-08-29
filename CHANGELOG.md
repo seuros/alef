@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(cache): guarantee that `.alef/` itself carries a `CACHEDIR.TAG`, not only the cache
+  directories nested inside it. Several sites created a child such as `.alef/<crate>/` and tagged
+  only that child, so on a run that created a child first the root was left untagged. External
+  catalogues probe for a tag *directly inside* the directory they are examining -- a tag found
+  higher up is deliberately not accepted, since that would let one tag license everything beneath
+  it -- so an untagged root is invisible to them, silently and in a way that looks identical to a
+  tree that was never alef's.
+
 - fix(python,ruby,r): stop declaring foreign cfg-excluded enum variants in the PyO3, Magnus and
   extendr bindings. All three consulted `enum_variant_declaration` in their conversion arms but
   never in their declarations, so a variant the compiled dependency can never produce stayed

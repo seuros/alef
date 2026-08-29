@@ -212,7 +212,7 @@ pub fn mark_generation_in_progress(base_dir: &Path, crate_name: &str) -> anyhow:
     super::validate_cache_crate_name(crate_name)?;
     let path = generation_in_progress_marker_path(base_dir, crate_name);
     if let Some(parent) = path.parent() {
-        crate::core::cache_dir::ensure_cache_dir(parent)?;
+        crate::core::cache_dir::ensure_cache_dir_under(&base_dir.join(super::CACHE_DIR), parent)?;
     }
     std::fs::write(path, GENERATION_IN_PROGRESS_MARKER_CONTENT)?;
     Ok(())

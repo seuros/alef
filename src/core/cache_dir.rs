@@ -53,6 +53,20 @@ pub fn ensure_cache_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Create `root` and every cache directory beneath it named by `descendant`, tagging `root`
+/// itself as well as the leaf.
+///
+/// External tooling identifies an alef cache by finding a `CACHEDIR.TAG` *directly inside* the
+/// directory it is looking at -- a reader that stops at the first tag at or above a candidate
+/// would let one tag high in a tree license everything beneath it, so conforming catalogues probe
+/// the exact directory instead. Tagging only the leaf therefore leaves `.alef/` itself unproven on
+/// any run that happens to create a child first, which is silent and looks identical to a tree
+/// that was never alef's. ~keep
+pub fn ensure_cache_dir_under(root: &Path, descendant: &Path) -> io::Result<()> {
+    ensure_cache_dir(root)?;
+    ensure_cache_dir(descendant)
+}
+
 /// Idempotently ensure `dir` -- which must already exist -- carries a valid `CACHEDIR.TAG`,
 /// without creating `dir` itself. Split out purely so [`ensure_cache_dir`]'s own doc can stay
 /// focused on the create-then-tag contract every caller actually depends on.
@@ -109,6 +123,54 @@ fn has_valid_signature(content: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// External catalogues identify an alef cache by probing for a `CACHEDIR.TAG` *directly
+    /// inside* the directory they are looking at -- they deliberately do not accept a tag found
+    /// higher up, because that would let one tag license every directory beneath it. So a nested
+    /// cache directory being tagged says nothing about its root, and a root left untagged is
+    /// invisible in exactly the silent, safe-looking direction. ~keep
+    #[test]
+    fn ensure_cache_dir_under_tags_the_root_as_well_as_the_leaf() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let root = base.path().join(".alef");
+        let leaf = root.join("sample_crate").join("hashes");
+
+        ensure_cache_dir_under(&root, &leaf).expect("root and leaf are created");
+
+        for dir in [&root, &leaf] {
+            let tag = dir.join(TAG_FILE_NAME);
+            let first_line = std::fs::read_to_string(&tag)
+                .unwrap_or_else(|error| panic!("no tag at {}: {error}", dir.display()))
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            assert_eq!(
+                first_line,
+                SIGNATURE_LINE,
+                "the tag at {} must carry the exact signature",
+                dir.display()
+            );
+        }
+    }
+
+    /// Control: tagging only a leaf must leave its root untagged, which is the state the helper
+    /// above exists to prevent. Without this the test above would pass just as well if
+    /// `ensure_cache_dir` had always tagged ancestors. ~keep
+    #[test]
+    fn ensure_cache_dir_alone_does_not_tag_the_parent() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let root = base.path().join(".alef");
+        let leaf = root.join("sample_crate");
+
+        ensure_cache_dir(&leaf).expect("leaf is created");
+
+        assert!(leaf.join(TAG_FILE_NAME).is_file(), "the leaf itself must be tagged");
+        assert!(
+            !root.join(TAG_FILE_NAME).exists(),
+            "ensure_cache_dir must tag only the directory it is given"
+        );
+    }
     use super::*;
 
     #[test]
