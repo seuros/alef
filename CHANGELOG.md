@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(snippets): tag the snippet scratch root's parent rather than the scratch root itself. The
+  scratch sweep deletes every entry under that root once it passes the abandonment threshold, so a
+  `CACHEDIR.TAG` written there was created, swept, and rewritten on every run. A tag on the parent
+  already excludes everything beneath it.
+
 - fix(gleam): stop declaring foreign cfg-gated enum variants the Rustler NIF this binding shims
   can never produce. `emit_enum` now filters through `enum_variant_declaration`, the same
   authority Dart's mirror and the Rustler declaration already consult.

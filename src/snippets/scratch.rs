@@ -141,8 +141,19 @@ impl ScratchDir {
     }
 
     fn in_root(root: &Path) -> Result<Self> {
-        crate::core::cache_dir::ensure_cache_dir(root)
-            .map_err(|error| Error::Other(format!("creating snippet scratch root {}: {error}", root.display())))?;
+        // ~keep Tag the scratch root's PARENT, never the scratch root itself. `purge_scratch_root_entries`
+        // deletes every entry under the scratch root that is older than the abandonment threshold, and a
+        // `CACHEDIR.TAG` written here is exactly such an entry -- it would be written, aged out, swept, and
+        // rewritten on every run. The parent is an ordinary cache directory the sweep never enumerates, and
+        // a tag there already excludes everything below it, because a conforming reader stops recursing at
+        // the first tag it meets.
+        match root.parent() {
+            Some(parent) => crate::core::cache_dir::ensure_cache_dir(parent)
+                .and_then(|()| std::fs::create_dir_all(root))
+                .map_err(|error| Error::Other(format!("creating snippet scratch root {}: {error}", root.display())))?,
+            None => std::fs::create_dir_all(root)
+                .map_err(|error| Error::Other(format!("creating snippet scratch root {}: {error}", root.display())))?,
+        }
         let inner = tempfile::Builder::new()
             .prefix(SCRATCH_PREFIX)
             .tempdir_in(root)
