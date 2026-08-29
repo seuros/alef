@@ -130,24 +130,20 @@ fn run_python_clippy(tree: &EmittedTree) -> LaneOutcome {
     run_tool(CARGO.program, CARGO.check_args, &python_crate_dir(tree))
 }
 
-/// Sabotage 1, the E0004 shape: drop the `_ => Default::default(),` catch-all from `impl
-/// From<Swatch> for foreign_core::Swatch` (binding -> core). The wrapper's own `Swatch::Spot`
-/// variant is still real and constructible (pyo3 declares it unconditionally), so removing the
-/// only arm that could ever handle it leaves the match genuinely non-exhaustive.
-fn drop_binding_to_core_catch_all(tree: &EmittedTree) {
+/// Sabotage 1, the E0004 shape: drop a compiled variant arm from the binding-to-core conversion.
+fn drop_binding_to_core_variant_arm(tree: &EmittedTree) {
     let path = python_lib_rs(tree);
     let source = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let (start, end) = impl_block_range(&source, "impl From<Swatch> for foreign_core::Swatch {");
     let block = &source[start..end];
+    let target = "Swatch::Accent => Self::Accent,";
     assert!(
-        block.lines().any(|line| line.trim() == "_ => Default::default(),"),
-        "the binding-to-core block has no catch-all to remove, so this sabotage cannot prove \
-         anything -- either the fix regressed in the other direction already, or the block shape \
-         changed:\n{block}"
+        block.lines().any(|line| line.trim() == target),
+        "the binding-to-core block has no Accent arm to remove: {block}"
     );
     let sabotaged_block: String = block
         .lines()
-        .filter(|line| line.trim() != "_ => Default::default(),")
+        .filter(|line| line.trim() != target)
         .collect::<Vec<_>>()
         .join("\n");
     let sabotaged = format!("{}{sabotaged_block}{}", &source[..start], &source[end..]);
@@ -182,7 +178,7 @@ fn add_redundant_core_to_binding_catch_all(tree: &EmittedTree) {
 
 #[test]
 #[ignore = "compiles the emitted pyo3 crate; run via the CI gate job"]
-fn clippy_lane_catches_a_missing_foreign_cfg_wrapper_catch_all() {
+fn clippy_lane_catches_a_missing_binding_to_core_variant_arm() {
     resolve_tools(&[&CARGO]);
     let clean = emit_tree(Sabotage::None);
     let control = run_python_clippy(&clean);
@@ -193,13 +189,12 @@ fn clippy_lane_catches_a_missing_foreign_cfg_wrapper_catch_all() {
     );
 
     let sabotaged = emit_tree(Sabotage::None);
-    drop_binding_to_core_catch_all(&sabotaged);
+    drop_binding_to_core_variant_arm(&sabotaged);
     let outcome = run_python_clippy(&sabotaged);
     assert!(
         !outcome.passed,
-        "dropping the binding-to-core catch-all for a foreign cfg-gated variant proven \
-         unreachable did not fail `cargo clippy`, so this lane is not examining the emitted \
-         pyo3 conversion -- alef commit f9795aea9's fix may have regressed"
+        "dropping a compiled binding-to-core variant arm did not fail `cargo clippy`, so this \
+         lane is not examining the emitted pyo3 conversion"
     );
     assert!(
         outcome.output.contains("E0004") || outcome.output.contains("non-exhaustive"),
