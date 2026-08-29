@@ -62,7 +62,7 @@ pub fn write_scaffold_files_report(
 ) -> anyhow::Result<WriteReport> {
     let report = scaffold::write_scaffold_files_report(files, base_dir, overwrite)?;
     super::version_lockfiles::relock_lockfiles_beside_changed_manifests(&report.changed_paths);
-    super::version_lockfiles::relock_dart_lockfiles_beside_generated_manifests(files, base_dir);
+    super::version_lockfiles::relock_dart_lockfiles_beside_generated_manifests(files, base_dir, &report.changed_paths);
     Ok(report)
 }
 

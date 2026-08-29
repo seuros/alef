@@ -242,3 +242,83 @@ fn check_release_lock_freshness_passes_a_resolvable_lock() {
         "a lock that resolves must be reported clean: {outcome:?}"
     );
 }
+
+#[test]
+fn clean_dart_lock_does_not_invoke_a_resolver() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_file(
+        root,
+        "packages/dart/pubspec.yaml",
+        "name: generated_binding\nversion: 0.1.0\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
+    );
+    write_file(
+        root,
+        "e2e/dart/pubspec.yaml",
+        "name: e2e_dart\nversion: 0.1.0\ndependencies:\n  generated_binding:\n    path: ../../packages/dart\n",
+    );
+    write_file(
+        root,
+        "e2e/dart/pubspec.lock",
+        "packages:\n  generated_binding:\n    dependency: direct main\n    description:\n      path: ../../packages/dart\n      relative: true\n    source: path\n    version: \"0.1.0\"\n",
+    );
+    let files = [GeneratedFile {
+        path: PathBuf::from("e2e/dart/pubspec.yaml"),
+        content: std::fs::read_to_string(root.join("e2e/dart/pubspec.yaml")).expect("pubspec"),
+        generated_header: true,
+    }];
+    let mut calls = 0;
+    relock_dart_lockfiles_with(&files, root, &HashSet::new(), |_, _| {
+        calls += 1;
+        Ok(CargoStatus::success())
+    });
+    assert_eq!(
+        calls, 0,
+        "a byte-stable manifest with a satisfying lock must do no resolver work"
+    );
+}
+
+#[test]
+fn dart_lock_detects_a_stale_exact_pin_from_a_path_dependency() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_file(
+        root,
+        "packages/dart/pubspec.yaml",
+        "name: generated_binding\nversion: 0.1.0\ndependencies:\n  flutter_rust_bridge: 2.13.0\n",
+    );
+    write_file(
+        root,
+        "e2e/dart/pubspec.yaml",
+        "name: e2e_dart\nversion: 0.1.0\ndependencies:\n  generated_binding:\n    path: ../../packages/dart\n",
+    );
+    write_file(
+        root,
+        "e2e/dart/pubspec.lock",
+        "packages:\n  generated_binding:\n    version: \"0.1.0\"\n  flutter_rust_bridge:\n    version: \"2.12.0\"\n",
+    );
+    assert!(
+        dart_lock_has_stale_declared_pin(&root.join("e2e/dart")),
+        "the unchanged e2e manifest must notice its path dependency's changed exact FRB pin"
+    );
+    write_file(
+        root,
+        "e2e/dart/pubspec.lock",
+        "packages:\n  generated_binding:\n    version: \"0.1.0\"\n  flutter_rust_bridge:\n    version: \"2.13.0\"\n",
+    );
+    assert!(!dart_lock_has_stale_declared_pin(&root.join("e2e/dart")));
+}
+
+#[test]
+fn dart_relock_retries_online_after_offline_resolution_failure() {
+    let mut modes = Vec::new();
+    let outcome = attempt_dart_relock_with(|mode| {
+        modes.push(mode);
+        Ok(match mode {
+            DartRelockMode::Offline => CargoStatus::failed(Some(69)),
+            DartRelockMode::Online => CargoStatus::success(),
+        })
+    });
+    assert_eq!(outcome.expect("online fallback succeeds"), DartRelockMode::Online);
+    assert_eq!(modes, vec![DartRelockMode::Offline, DartRelockMode::Online]);
+}

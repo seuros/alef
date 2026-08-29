@@ -121,47 +121,208 @@ pub(super) fn relock_lockfiles_beside_changed_manifests(changed_paths: &HashSet<
 }
 
 /// ~keep A generated Dart e2e manifest can stay byte-identical while its generated path
-/// dependency changes its exact transitive pins. Refresh every existing sibling lock whenever
-/// that manifest is in the emitted set; changed-path filtering cannot see this dependency edge.
-pub(super) fn relock_dart_lockfiles_beside_generated_manifests(files: &[GeneratedFile], base_dir: &Path) {
+/// dependency changes an exact transitive pin. Refresh when the manifest changed or its lock no
+/// longer satisfies a declared pin; changed-path filtering alone cannot see this dependency edge.
+pub(super) fn relock_dart_lockfiles_beside_generated_manifests(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+    changed_paths: &HashSet<PathBuf>,
+) {
+    relock_dart_lockfiles_with(files, base_dir, changed_paths, |directory, mode| {
+        std::process::Command::new("dart")
+            .args(dart_relock_args(mode))
+            .current_dir(directory)
+            .status()
+            .map(CargoStatus::from_exit_status)
+    });
+}
+
+fn relock_dart_lockfiles_with<F>(files: &[GeneratedFile], base_dir: &Path, changed_paths: &HashSet<PathBuf>, mut run: F)
+where
+    F: FnMut(&Path, DartRelockMode) -> std::io::Result<CargoStatus>,
+{
     let directories: HashSet<PathBuf> = files
         .iter()
         .filter(|file| file.path.file_name().and_then(|name| name.to_str()) == Some("pubspec.yaml"))
         .filter_map(|file| base_dir.join(&file.path).parent().map(Path::to_path_buf))
         .filter(|directory| directory.join("pubspec.lock").is_file())
+        .filter(|directory| {
+            changed_paths.contains(&directory.join("pubspec.yaml")) || dart_lock_has_stale_declared_pin(directory)
+        })
         .collect();
 
     for directory in directories {
         info!(directory = %directory.display(), "Relocking Dart dependencies for generated pubspec");
-        let offline = std::process::Command::new("dart")
-            .args(["pub", "get", "--offline"])
-            .current_dir(&directory)
-            .status();
-        match offline {
-            Ok(status) if status.success() => continue,
-            Err(error) => {
-                warn!(directory = %directory.display(), %error, "could not run dart pub get; pubspec.lock may be stale");
-                continue;
-            }
-            Ok(_) => {}
-        }
-        match std::process::Command::new("dart")
-            .args(["pub", "get"])
-            .current_dir(&directory)
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => warn!(
+        match attempt_dart_relock_with(|mode| run(&directory, mode)) {
+            Ok(DartRelockMode::Offline) => {}
+            Ok(DartRelockMode::Online) => info!(
                 directory = %directory.display(),
-                code = ?status.code(),
-                "dart pub get failed offline and online; pubspec.lock may be stale"
+                "Relocked Dart dependencies online after the offline attempt failed"
             ),
-            Err(error) => warn!(
+            Err(DartRelockFailure::OfflineCommand(error)) => {
+                warn!(directory = %directory.display(), %error, "could not run dart pub get; pubspec.lock may be stale");
+            }
+            Err(DartRelockFailure::OnlineCommand { offline_code, error }) => warn!(
                 directory = %directory.display(),
+                ?offline_code,
                 %error,
                 "dart pub get failed offline and the online retry could not start; pubspec.lock may be stale"
             ),
+            Err(DartRelockFailure::BothResolvers {
+                offline_code,
+                online_code,
+            }) => warn!(
+                directory = %directory.display(),
+                ?offline_code,
+                ?online_code,
+                "dart pub get failed offline and online; pubspec.lock may be stale"
+            ),
         }
+    }
+}
+
+fn dart_lock_has_stale_declared_pin(directory: &Path) -> bool {
+    let Ok(lock_text) = std::fs::read_to_string(directory.join("pubspec.lock")) else {
+        return false;
+    };
+    let Ok(lock) = serde_yaml::from_str::<serde_yaml::Value>(&lock_text) else {
+        return false;
+    };
+    let Some(packages) = lock.get("packages").and_then(serde_yaml::Value::as_mapping) else {
+        return false;
+    };
+    declared_dart_pins(&directory.join("pubspec.yaml"), &mut HashSet::new())
+        .into_iter()
+        .any(|(name, requirement)| {
+            let locked = packages
+                .get(serde_yaml::Value::from(name))
+                .and_then(|package| package.get("version"))
+                .and_then(serde_yaml::Value::as_str);
+            locked.is_none_or(|version| !dart_version_matches(&requirement, version))
+        })
+}
+
+fn declared_dart_pins(path: &Path, visited: &mut HashSet<PathBuf>) -> Vec<(String, String)> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical) {
+        return Vec::new();
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(document) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut pins = Vec::new();
+    for bucket in ["dependencies", "dev_dependencies"] {
+        append_dart_dependency_pins(&document, bucket, path, visited, &mut pins);
+    }
+    pins
+}
+
+fn append_dart_dependency_pins(
+    document: &serde_yaml::Value,
+    bucket: &str,
+    manifest: &Path,
+    visited: &mut HashSet<PathBuf>,
+    pins: &mut Vec<(String, String)>,
+) {
+    let Some(dependencies) = document.get(bucket).and_then(serde_yaml::Value::as_mapping) else {
+        return;
+    };
+    for (name, specification) in dependencies {
+        let Some(name) = name.as_str() else {
+            continue;
+        };
+        if let Some(requirement) = specification.as_str() {
+            if requirement != "any" {
+                pins.push((name.to_string(), requirement.to_string()));
+            }
+            continue;
+        }
+        append_dart_path_dependency_pins(name, specification, manifest, visited, pins);
+    }
+}
+
+fn append_dart_path_dependency_pins(
+    name: &str,
+    specification: &serde_yaml::Value,
+    manifest: &Path,
+    visited: &mut HashSet<PathBuf>,
+    pins: &mut Vec<(String, String)>,
+) {
+    let Some(relative) = specification.get("path").and_then(serde_yaml::Value::as_str) else {
+        return;
+    };
+    let dependency_manifest = manifest
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(relative)
+        .join("pubspec.yaml");
+    if let Ok(dependency_text) = std::fs::read_to_string(&dependency_manifest)
+        && let Ok(dependency) = serde_yaml::from_str::<serde_yaml::Value>(&dependency_text)
+        && let Some(version) = dependency.get("version").and_then(serde_yaml::Value::as_str)
+    {
+        pins.push((name.to_string(), version.to_string()));
+    }
+    pins.extend(declared_dart_pins(&dependency_manifest, visited));
+}
+
+fn dart_version_matches(requirement: &str, locked: &str) -> bool {
+    let Ok(locked) = semver::Version::parse(locked) else {
+        return false;
+    };
+    if let Ok(exact) = semver::Version::parse(requirement) {
+        return exact == locked;
+    }
+    semver::VersionReq::parse(requirement).map_or(true, |constraint| constraint.matches(&locked))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DartRelockMode {
+    Offline,
+    Online,
+}
+
+#[derive(Debug)]
+enum DartRelockFailure {
+    OfflineCommand(std::io::Error),
+    OnlineCommand {
+        offline_code: Option<i32>,
+        error: std::io::Error,
+    },
+    BothResolvers {
+        offline_code: Option<i32>,
+        online_code: Option<i32>,
+    },
+}
+
+fn attempt_dart_relock_with<F>(mut run: F) -> Result<DartRelockMode, DartRelockFailure>
+where
+    F: FnMut(DartRelockMode) -> std::io::Result<CargoStatus>,
+{
+    let offline = run(DartRelockMode::Offline).map_err(DartRelockFailure::OfflineCommand)?;
+    if offline.successful {
+        return Ok(DartRelockMode::Offline);
+    }
+    let online = run(DartRelockMode::Online).map_err(|error| DartRelockFailure::OnlineCommand {
+        offline_code: offline.code,
+        error,
+    })?;
+    if online.successful {
+        Ok(DartRelockMode::Online)
+    } else {
+        Err(DartRelockFailure::BothResolvers {
+            offline_code: offline.code,
+            online_code: online.code,
+        })
+    }
+}
+
+fn dart_relock_args(mode: DartRelockMode) -> &'static [&'static str] {
+    match mode {
+        DartRelockMode::Offline => &["pub", "get", "--offline"],
+        DartRelockMode::Online => &["pub", "get"],
     }
 }
 
