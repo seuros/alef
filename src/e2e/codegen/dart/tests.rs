@@ -453,6 +453,15 @@ fn dart_test_file_emits_wrapper_for_call_config_trait_argument() {
     );
     assert!(output.contains("Future<TestTraitDartImpl> _createTestStubRegisterBackendWrapper()"));
     assert!(output.contains("await _createTestStubRegisterBackendWrapper()"));
+    assert_eq!(
+        output.matches("import 'package:samplecli/samplecli.dart'").count(),
+        1,
+        "the broad package import already exposes TestTrait; a second show-import is redundant:\n{output}"
+    );
+    assert!(
+        !output.contains("package:samplecli/samplecli.dart' show TestTrait"),
+        "a redundant show-import triggers duplicate_import in dart analyze:\n{output}"
+    );
 }
 
 #[test]

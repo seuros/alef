@@ -266,6 +266,86 @@ mod is_empty_branch_tests {
 }
 
 #[cfg(test)]
+mod not_empty_nullability_tests {
+    use super::render_assertion_dart;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(field: &str, optional_fields: &[&str]) -> String {
+        let optional = optional_fields.iter().map(|field| (*field).to_string()).collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion_dart(&mut out, &assertion, "result", false, &resolver);
+        out
+    }
+
+    #[test]
+    fn non_optional_scalar_does_not_emit_an_unnecessary_null_aware_call() {
+        assert_eq!(
+            render("chunks[0].content", &[]),
+            "    expect(result.chunks[0].content.toString(), isNotEmpty);\n"
+        );
+    }
+
+    #[test]
+    fn optional_scalar_keeps_its_null_aware_call() {
+        assert_eq!(
+            render("metadata", &["metadata"]),
+            "    expect(result.metadata?.toString(), isNotEmpty);\n"
+        );
+    }
+
+    #[test]
+    fn non_optional_leaf_after_optional_parent_does_not_add_a_second_null_aware_call() {
+        assert_eq!(
+            render("summary.text", &["summary"]),
+            "    expect(result.summary?.text.toString(), isNotEmpty);\n"
+        );
+    }
+
+    #[test]
+    fn emitted_not_empty_calls_are_analyzer_clean_and_the_warning_check_is_not_vacuous() {
+        if std::process::Command::new("dart").arg("--version").output().is_err() {
+            return;
+        }
+        let assertions = [render("chunks[0].content", &[]), render("summary.text", &["summary"])].join("");
+        let source = format!(
+            "class Chunk {{ final String content; Chunk(this.content); }}\nclass Summary {{ final String text; Summary(this.text); }}\nclass Result {{ final List<Chunk> chunks; final Summary? summary; Result(this.chunks, this.summary); }}\nObject get isNotEmpty => Object();\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final result = Result([Chunk('content')], Summary('summary'));\n{assertions}}}\n"
+        );
+        let analyze = |source: &str| {
+            let temporary = tempfile::tempdir().expect("temporary Dart project");
+            std::fs::write(temporary.path().join("not_empty.dart"), source).expect("write Dart source");
+            std::process::Command::new("dart")
+                .args(["analyze", "--fatal-infos", "--fatal-warnings", "not_empty.dart"])
+                .current_dir(temporary.path())
+                .status()
+                .expect("run Dart analyzer")
+        };
+        assert!(
+            analyze(&source).success(),
+            "generated assertions emitted warnings:\n{source}"
+        );
+        let sabotaged = source.replace("content.toString()", "content?.toString()");
+        assert!(
+            !analyze(&sabotaged).success(),
+            "analyzer accepted the unnecessary null-aware call; warning check was vacuous"
+        );
+    }
+}
+
+#[cfg(test)]
 mod enum_wire_value_assertion_tests {
     use super::render_assertion_dart;
     use crate::e2e::field_access::FieldResolver;
@@ -351,9 +431,11 @@ mod tagged_union_assertion_tests {
     use std::collections::{HashMap, HashSet};
 
     fn field(name: &str, ty: TypeRef) -> FieldDef {
+        let optional = matches!(ty, TypeRef::Optional(_));
         FieldDef {
             name: name.to_string(),
             ty,
+            optional,
             ..FieldDef::default()
         }
     }
@@ -385,20 +467,40 @@ mod tagged_union_assertion_tests {
                 name: "HtmlMetadata".to_string(),
                 fields: vec![
                     field("title", TypeRef::String),
-                    field("headers", TypeRef::Vec(Box::new(TypeRef::String))),
+                    field(
+                        "headers",
+                        TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
+                    ),
+                    field("detail", TypeRef::Named("DetailUnion".to_string())),
                 ],
                 ..TypeDef::default()
             },
+            TypeDef {
+                name: "StatsMetadata".to_string(),
+                fields: vec![field("count", TypeRef::Primitive(crate::core::ir::PrimitiveType::U32))],
+                ..TypeDef::default()
+            },
         ];
-        let enums = vec![EnumDef {
-            name: "FormatMetadata".to_string(),
-            variants: vec![EnumVariant {
-                name: "Html".to_string(),
-                fields: vec![field("field0", TypeRef::Named("HtmlMetadata".to_string()))],
-                ..EnumVariant::default()
-            }],
-            ..EnumDef::default()
-        }];
+        let enums = vec![
+            EnumDef {
+                name: "FormatMetadata".to_string(),
+                variants: vec![EnumVariant {
+                    name: "Html".to_string(),
+                    fields: vec![field("field0", TypeRef::Named("HtmlMetadata".to_string()))],
+                    ..EnumVariant::default()
+                }],
+                ..EnumDef::default()
+            },
+            EnumDef {
+                name: "DetailUnion".to_string(),
+                variants: vec![EnumVariant {
+                    name: "Stats".to_string(),
+                    fields: vec![field("field0", TypeRef::Named("StatsMetadata".to_string()))],
+                    ..EnumVariant::default()
+                }],
+                ..EnumDef::default()
+            },
+        ];
         let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&types);
         FieldResolver::new(
             &HashMap::new(),
@@ -452,7 +554,21 @@ mod tagged_union_assertion_tests {
         });
         assert_eq!(
             out,
-            "    expect((result.results[0].metadata.format as FormatMetadata_Html).field0.headers.length, greaterThanOrEqualTo(2));\n"
+            "    expect((result.results[0].metadata.format as FormatMetadata_Html).field0.headers?.length ?? 0, greaterThanOrEqualTo(2));\n"
+        );
+    }
+
+    #[test]
+    fn equals_narrows_each_freezed_union_in_a_two_crossing_path() {
+        let out = render(Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].metadata.format.html.detail.stats.count".to_string()),
+            value: Some(serde_json::json!(3)),
+            ..Assertion::default()
+        });
+        assert_eq!(
+            out,
+            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.detail as DetailUnion_Stats).field0.count, equals(3));\n"
         );
     }
 
@@ -504,18 +620,24 @@ mod tagged_union_assertion_tests {
                 value: Some(serde_json::json!(2)),
                 ..Assertion::default()
             },
+            Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("results[0].metadata.format.html.detail.stats.count".to_string()),
+                value: Some(serde_json::json!(3)),
+                ..Assertion::default()
+            },
         ]
         .into_iter()
         .map(render)
         .collect::<String>();
         let source = format!(
-            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass HtmlMetadata {{ final String title; final List<String> headers; HtmlMetadata(this.title, this.headers); }}\nclass Metadata {{ final FormatMetadata? format; Metadata(this.format); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b']))))]);\n{assertions}}}\n"
+            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass DetailUnion {{}}\nclass DetailUnion_Stats extends DetailUnion {{ final StatsMetadata field0; DetailUnion_Stats(this.field0); }}\nclass StatsMetadata {{ final int count; StatsMetadata(this.count); }}\nclass HtmlMetadata {{ final String title; final List<String>? headers; final DetailUnion detail; HtmlMetadata(this.title, this.headers, this.detail); }}\nclass Metadata {{ final FormatMetadata? format; Metadata(this.format); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b'], DetailUnion_Stats(StatsMetadata(3))))))]);\n{assertions}}}\n"
         );
         assert!(
             dart_analyze(&source).success(),
             "generated union assertion did not analyze:\n{source}"
         );
-        let sabotaged = source.replace("FormatMetadata_Html).field0", "MissingVariant).field0");
+        let sabotaged = source.replace("DetailUnion_Stats).field0", "MissingVariant).field0");
         assert!(
             !dart_analyze(&sabotaged).success(),
             "Dart analyzer accepted a nonexistent union subtype; compile check was vacuous"

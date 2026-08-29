@@ -155,7 +155,16 @@ pub(super) fn type_ref_is_display_safe(ty: &TypeRef) -> bool {
 /// positively confirms the leaf is optional on the type the path reaches. Mirrors
 /// `ir_collection::is_collection_path`.
 pub(super) fn is_optional_path(map: &IrResultFieldMap, path: &str) -> bool {
-    let Some((owner, leaf)) = walk_to_owner(map, path) else {
+    let Some(root) = map.root_type.as_deref() else {
+        return false;
+    };
+    is_optional_path_from(map, root, path)
+}
+
+/// Walk `path` from a known IR owner instead of the call result root. Tagged-union renderers use
+/// this after narrowing a variant to its payload type. ~keep
+pub(super) fn is_optional_path_from(map: &IrResultFieldMap, root: &str, path: &str) -> bool {
+    let Some((owner, leaf)) = walk_to_owner_from(map, root, path) else {
         return false;
     };
     map.optional_fields
@@ -312,6 +321,10 @@ pub(super) fn path_crosses_unwalkable_field(map: &IrResultFieldMap, path: &str) 
 /// not recognize as a field on the type reached so far.
 fn walk_to_owner<'a>(map: &'a IrResultFieldMap, path: &str) -> Option<(&'a str, String)> {
     let root = map.root_type.as_deref()?;
+    walk_to_owner_from(map, root, path)
+}
+
+fn walk_to_owner_from<'a>(map: &'a IrResultFieldMap, root: &'a str, path: &str) -> Option<(&'a str, String)> {
     let segments = parse_path(path);
     let (last, prefix) = segments.split_last()?;
 

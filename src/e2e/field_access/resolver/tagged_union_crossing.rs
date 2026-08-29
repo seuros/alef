@@ -27,10 +27,20 @@ impl FieldResolver {
     /// Split an IR-declared tagged-union traversal into its enum field, variant, and leaf.
     /// Unlike [`Self::tagged_union_split`], this does not depend on `fields_method_calls`.
     pub fn ir_tagged_union_split(&self, fixture_field: &str) -> Option<(String, String, String, String)> {
+        let root = self.ir_enum_map.root_type.as_deref()?;
+        self.ir_tagged_union_split_from(root, fixture_field)
+    }
+
+    /// Split a tagged-union traversal relative to a concrete payload owner. ~keep
+    pub fn ir_tagged_union_split_from(
+        &self,
+        root: &str,
+        fixture_field: &str,
+    ) -> Option<(String, String, String, String)> {
         let parts: Vec<&str> = fixture_field.split('.').collect();
         for index in 0..parts.len().saturating_sub(1) {
             let prefix = parts[..=index].join(".");
-            let Some(union_type) = self.ir_enum_type_name(&prefix) else {
+            let Some(union_type) = enum_type_at_path_from(&self.ir_enum_map, root, &prefix) else {
                 continue;
             };
             let variant = parts[index + 1].to_upper_camel_case();
@@ -50,11 +60,27 @@ impl FieldResolver {
         let Some(union_type) = self.ir_enum_type_name(union_field) else {
             return false;
         };
+        self.union_variant_field_is_collection_by_type(&union_type, variant, field)
+    }
+
+    /// Collection classification after the union type is already known from a recursive crossing.
+    pub fn union_variant_field_is_collection_by_type(&self, union_type: &str, variant: &str, field: &str) -> bool {
         let variant = variant.to_upper_camel_case();
-        let Some((_, payload_type)) = self.union_variant_payload(&union_type, &variant) else {
+        let Some((_, payload_type)) = self.union_variant_payload(union_type, &variant) else {
             return false;
         };
         is_collection_path_from(&self.ir_collection_map, payload_type, field)
+    }
+
+    /// Whether a field reached after narrowing a union variant is optional on its payload type.
+    pub fn union_variant_field_is_optional(&self, union_type: &str, variant: &str, field: &str) -> bool {
+        if field.is_empty() {
+            return false;
+        }
+        let Some((_, payload_type)) = self.union_variant_payload(union_type, variant) else {
+            return false;
+        };
+        super::super::ir_result_fields::is_optional_path_from(&self.ir_result_field_map, payload_type, field)
     }
 
     /// The left-to-right scan [`Self::tagged_union_split`] does, generalized with `absolute_prefix`
