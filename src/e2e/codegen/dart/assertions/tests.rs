@@ -341,3 +341,184 @@ mod enum_wire_value_assertion_tests {
         assert_eq!(out, "    expect(result.kind.wireValue, isNot(equals('Sequence')));\n");
     }
 }
+
+#[cfg(test)]
+mod tagged_union_assertion_tests {
+    use super::render_assertion_dart;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    fn resolver() -> FieldResolver {
+        let types = vec![
+            TypeDef {
+                name: "ExtractionResult".to_string(),
+                fields: vec![field(
+                    "results",
+                    TypeRef::Vec(Box::new(TypeRef::Named("ExtractedDocument".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "ExtractedDocument".to_string(),
+                fields: vec![field("metadata", TypeRef::Named("Metadata".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Metadata".to_string(),
+                fields: vec![field(
+                    "format",
+                    TypeRef::Optional(Box::new(TypeRef::Named("FormatMetadata".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "HtmlMetadata".to_string(),
+                fields: vec![
+                    field("title", TypeRef::String),
+                    field("headers", TypeRef::Vec(Box::new(TypeRef::String))),
+                ],
+                ..TypeDef::default()
+            },
+        ];
+        let enums = vec![EnumDef {
+            name: "FormatMetadata".to_string(),
+            variants: vec![EnumVariant {
+                name: "Html".to_string(),
+                fields: vec![field("field0", TypeRef::Named("HtmlMetadata".to_string()))],
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        }];
+        let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&types);
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_result_fields(
+            FieldResolver::ir_result_field_facts(&types, "dart"),
+            Some("ExtractionResult".to_string()),
+        )
+        .with_ir_enum_map(
+            FieldResolver::ir_enum_fields(&types, &enums),
+            Some("ExtractionResult".to_string()),
+        )
+        .with_ir_collection_map(
+            FieldResolver::ir_collection_fields(&types),
+            Some("ExtractionResult".to_string()),
+        )
+        .with_ir_fields(reachable, excluded, optional)
+    }
+
+    fn render(assertion: Assertion) -> String {
+        let mut out = String::new();
+        render_assertion_dart(&mut out, &assertion, "result", false, &resolver());
+        out
+    }
+
+    #[test]
+    fn equals_narrows_a_freezed_union_before_reading_its_payload() {
+        let out = render(Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].metadata.format.html.title".to_string()),
+            value: Some(serde_json::json!("Simple Table Test")),
+            ..Assertion::default()
+        });
+        assert_eq!(
+            out,
+            "    expect((result.results[0].metadata.format as FormatMetadata_Html).field0.title.toString(), equals('Simple Table Test'.toString()));\n"
+        );
+    }
+
+    #[test]
+    fn count_min_narrows_a_freezed_union_and_counts_the_payload_collection() {
+        let out = render(Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("results[0].metadata.format.html.headers".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        });
+        assert_eq!(
+            out,
+            "    expect((result.results[0].metadata.format as FormatMetadata_Html).field0.headers.length, greaterThanOrEqualTo(2));\n"
+        );
+    }
+
+    /// ~keep The old renderer only recognized consumer-configured method-call crossings. This
+    /// control keeps the fixture deliberately free of method-call metadata so the IR must fire.
+    #[test]
+    fn tagged_union_rendering_does_not_require_fields_method_calls_configuration() {
+        let out = render(Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].metadata.format.html.title".to_string()),
+            value: Some(serde_json::json!("title")),
+            ..Assertion::default()
+        });
+        assert!(
+            !out.contains(".format.html."),
+            "flat sealed-class access survived: {out}"
+        );
+        assert!(!out.contains("skipped"), "the meaningful assertion was skipped: {out}");
+    }
+
+    fn dart_analyze(source: &str) -> std::process::ExitStatus {
+        let temporary = tempfile::tempdir().expect("temporary Dart project");
+        let source_path = temporary.path().join("union_assertion.dart");
+        std::fs::write(&source_path, source).expect("write Dart source");
+        std::process::Command::new("dart")
+            .args(["analyze", "union_assertion.dart"])
+            .current_dir(temporary.path())
+            .status()
+            .expect("run Dart analyzer")
+    }
+
+    /// ~keep Compile the emitted expression against the actual Freezed concrete-subclass shape,
+    /// then sabotage its subtype name to prove the analyzer check observes this assertion.
+    #[test]
+    fn emitted_freezed_union_assertions_compile_and_the_type_check_is_not_vacuous() {
+        if std::process::Command::new("dart").arg("--version").output().is_err() {
+            return;
+        }
+        let assertions = [
+            Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("results[0].metadata.format.html.title".to_string()),
+                value: Some(serde_json::json!("Simple Table Test")),
+                ..Assertion::default()
+            },
+            Assertion {
+                assertion_type: "count_min".to_string(),
+                field: Some("results[0].metadata.format.html.headers".to_string()),
+                value: Some(serde_json::json!(2)),
+                ..Assertion::default()
+            },
+        ]
+        .into_iter()
+        .map(render)
+        .collect::<String>();
+        let source = format!(
+            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass HtmlMetadata {{ final String title; final List<String> headers; HtmlMetadata(this.title, this.headers); }}\nclass Metadata {{ final FormatMetadata? format; Metadata(this.format); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b']))))]);\n{assertions}}}\n"
+        );
+        assert!(
+            dart_analyze(&source).success(),
+            "generated union assertion did not analyze:\n{source}"
+        );
+        let sabotaged = source.replace("FormatMetadata_Html).field0", "MissingVariant).field0");
+        assert!(
+            !dart_analyze(&sabotaged).success(),
+            "Dart analyzer accepted a nonexistent union subtype; compile check was vacuous"
+        );
+    }
+}

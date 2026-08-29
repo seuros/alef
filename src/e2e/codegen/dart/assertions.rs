@@ -1,5 +1,5 @@
 use crate::e2e::codegen::assertion_type_skip::{
-    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+    AssertionTypeSkip, streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
@@ -45,6 +45,89 @@ pub(super) fn dart_format_value(val: &serde_json::Value) -> String {
     }
 }
 
+fn render_tagged_union_leaf_assertion(out: &mut String, assertion: &Assertion, field_expr: &str, is_collection: bool) {
+    let value = assertion.value.as_ref().map(dart_format_value);
+    match assertion.assertion_type.as_str() {
+        "equals" | "field_equals" if assertion.value.as_ref().is_some_and(serde_json::Value::is_string) => {
+            if let Some(value) = value {
+                let _ = writeln!(out, "    expect({field_expr}.toString(), equals({value}.toString()));");
+            }
+        }
+        "equals" | "field_equals" => {
+            if let Some(value) = value {
+                let _ = writeln!(out, "    expect({field_expr}, equals({value}));");
+            }
+        }
+        "contains" => {
+            if let Some(value) = value {
+                let _ = writeln!(out, "    expect({field_expr}, contains({value}));");
+            }
+        }
+        "contains_all" => {
+            for item in assertion.values.iter().flatten() {
+                let _ = writeln!(out, "    expect({field_expr}, contains({}));", dart_format_value(item));
+            }
+        }
+        "not_empty" if is_collection => {
+            let _ = writeln!(out, "    expect({field_expr}, isNotEmpty);");
+        }
+        "not_empty" => {
+            let _ = writeln!(out, "    expect({field_expr}.toString(), isNotEmpty);");
+        }
+        "count_equals" => {
+            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+                let _ = writeln!(out, "    expect({field_expr}.length, equals({count}));");
+            }
+        }
+        "count_min" | "min_length" => {
+            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+                let _ = writeln!(out, "    expect({field_expr}.length, greaterThanOrEqualTo({count}));");
+            }
+        }
+        "greater_than_or_equal" => {
+            if let Some(value) = value {
+                let _ = writeln!(out, "    expect({field_expr}, greaterThanOrEqualTo({value}));");
+            }
+        }
+        other => {
+            let reason = AssertionTypeSkip::DiscriminatedUnionAssertionTypeNotSupported.message(other);
+            let _ = writeln!(out, "    // skipped: {reason}");
+        }
+    }
+}
+
+fn try_render_tagged_union_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    field: &str,
+) -> bool {
+    let Some((prefix, union_type, variant, suffix)) = field_resolver.ir_tagged_union_split(field) else {
+        return false;
+    };
+    let Some((payload_field, _)) = field_resolver.union_variant_payload(&union_type, &variant) else {
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::CrossesTaggedUnionBoundaryInDart.message(field)
+        );
+        return true;
+    };
+    let container = field_resolver.accessor(&prefix, "dart", result_var);
+    let payload = field_to_dart_accessor(payload_field);
+    let suffix_accessor = field_to_dart_accessor(&suffix);
+    let variant_value = format!("({container} as {union_type}_{variant}).{payload}");
+    let field_expr = if suffix_accessor.is_empty() {
+        variant_value
+    } else {
+        format!("{variant_value}.{suffix_accessor}")
+    };
+    let is_collection = field_resolver.union_variant_field_is_collection(&prefix, &variant, &suffix);
+    render_tagged_union_leaf_assertion(out, assertion, &field_expr, is_collection);
+    true
+}
+
 /// Render a single fixture assertion as a Dart `package:test` `expect(...)` call.
 ///
 /// Field paths are converted per-segment to camelCase (FRB v2 convention) using
@@ -85,19 +168,21 @@ pub(super) fn render_assertion_dart(
         }
     }
 
-    // Skip assertions that traverse a tagged-union variant boundary. FRB exposes
-    // tagged unions like `FormatMetadata` as sealed classes whose variants are
-    // accessed via pattern matching (`switch (m) { case FormatMetadata_Excel ... }`)
-    // — there is no `.excel?` getter, so the fixture path cannot be expressed as
-    // a simple chained accessor without language-specific pattern-matching codegen.
-    if let Some(f) = assertion.field.as_deref()
-        && !f.is_empty()
-        && field_resolver.tagged_union_split(f).is_some()
+    if let Some(field) = assertion.field.as_deref()
+        && !field.is_empty()
+        && try_render_tagged_union_assertion(out, assertion, result_var, field_resolver, field)
+    {
+        return;
+    }
+
+    if let Some(field) = assertion.field.as_deref()
+        && !field.is_empty()
+        && field_resolver.tagged_union_split(field).is_some()
     {
         let _ = writeln!(
             out,
             "    // skipped: {}",
-            FieldSkip::CrossesTaggedUnionBoundaryInDart.message(f)
+            FieldSkip::CrossesTaggedUnionBoundaryInDart.message(field)
         );
         return;
     }
