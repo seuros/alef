@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refresh Alef-managed Ruby development-gem constraints in existing Gemfiles
+  while preserving consumer-added development dependencies.
 - Resolve Node stream item types from explicit recipes or matching adapters, then
   derive strict event discriminant predicates from the item enum IR.
 - Generate Dart package-level JSON decoders for serde enums and use them for

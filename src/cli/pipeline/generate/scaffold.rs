@@ -220,6 +220,9 @@ pub fn write_scaffold_files_report(
         }
         let is_jar_file = super::binary::is_base64_binary_output(&full_path);
         let is_poly_merge_target = file.path == Path::new(POLY_CONFIG) && full_path.exists();
+        let is_ruby_gemfile_merge_target = file.path.file_name().is_some_and(|name| name == "Gemfile")
+            && file.content.contains("gem \"rb_sys\"")
+            && full_path.exists();
 
         if is_jar_file {
             let binary_content = super::binary::decode_base64_binary(&full_path, &file.content)?;
@@ -262,6 +265,10 @@ pub fn write_scaffold_files_report(
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
             merge_managed_toml(&existing, &file.content, base_dir, &file.path)
                 .with_context(|| format!("failed to merge existing {}", full_path.display()))?
+        } else if is_ruby_gemfile_merge_target {
+            let existing = std::fs::read_to_string(&full_path)
+                .with_context(|| format!("failed to read existing {}", full_path.display()))?;
+            merge_ruby_gemfile(&existing, &file.content)
         } else {
             if file.path == Path::new(POLY_CONFIG) {
                 // Brand-new merge target (nothing on disk to merge with yet): still
@@ -301,7 +308,7 @@ pub fn write_scaffold_files_report(
                 // that created them. ~keep
                 continue;
             }
-            if !is_poly_merge_target {
+            if !is_poly_merge_target && !is_ruby_gemfile_merge_target {
                 // Content-driven marker detection is checked first, on every extension,
                 // not only markable ones: a backend can self-mark inside `content` on an
                 // extension `marker_comment_style` has no comment syntax for at all (docs
@@ -589,6 +596,59 @@ pub fn write_scaffold_files_report(
     // which is how `alef all` came to report the scaffold phase's refusals while silently omitting
     // every binding-phase one. Callers accumulate with `absorb_unwritten` and report once. ~keep
     Ok(report)
+}
+
+fn merge_ruby_gemfile(existing: &str, generated: &str) -> String {
+    let managed: Vec<(&str, &str)> = generated
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let name = trimmed
+                .strip_prefix("gem \"")
+                .and_then(|rest| rest.split_once('"'))
+                .map(|(name, _)| name)?;
+            Some((name, trimmed))
+        })
+        .collect();
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let mut missing = Vec::new();
+    for (name, generated_line) in managed {
+        let double = format!("gem \"{name}\"");
+        let single = format!("gem '{name}'");
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.trim_start().starts_with(&double) || line.trim_start().starts_with(&single))
+        {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            *line = format!("{indent}{generated_line}");
+        } else {
+            missing.push(format!("  {generated_line}"));
+        }
+    }
+    if !missing.is_empty() {
+        let insert_at = lines
+            .iter()
+            .position(|line| line.trim() == "group :development do")
+            .and_then(|start| {
+                lines
+                    .iter()
+                    .enumerate()
+                    .skip(start + 1)
+                    .find(|(_, line)| line.trim() == "end")
+                    .map(|(index, _)| index)
+            });
+        if let Some(index) = insert_at {
+            lines.splice(index..index, missing);
+        } else {
+            lines.push(String::new());
+            lines.push("group :development do".to_string());
+            lines.extend(missing);
+            lines.push("end".to_string());
+        }
+    }
+    let mut merged = lines.join("\n");
+    merged.push('\n');
+    merged
 }
 
 /// Repo-root poly config, emitted by the scaffold pass.
@@ -996,6 +1056,35 @@ fn normalize_poly_config(full_path: &Path, base_dir: &Path) {
 #[cfg(test)]
 mod merge_managed_toml_tests {
     use super::*;
+
+    #[test]
+    fn ruby_gemfile_refreshes_managed_constraints_and_preserves_extras() {
+        let existing = r#"source "https://rubygems.org"
+
+gemspec
+
+group :development do
+  gem "rb_sys", ">= 0.9", "< 0.9.128"
+  gem "debug", "~> 1.9"
+end
+"#;
+        let generated = r#"source "https://rubygems.org"
+
+gemspec
+
+group :development do
+  gem "rake-compiler", "~> 1.3"
+  gem "rb_sys", ">= 0.9.130"
+end
+"#;
+
+        let merged = merge_ruby_gemfile(existing, generated);
+
+        assert!(merged.contains("gem \"rb_sys\", \">= 0.9.130\""), "{merged}");
+        assert!(!merged.contains("< 0.9.128"), "{merged}");
+        assert!(merged.contains("gem \"debug\", \"~> 1.9\""), "{merged}");
+        assert!(merged.contains("gem \"rake-compiler\", \"~> 1.3\""), "{merged}");
+    }
 
     fn exclude_values(merged: &str) -> Vec<String> {
         let doc = merged
