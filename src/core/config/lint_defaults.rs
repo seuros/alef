@@ -1,6 +1,6 @@
 use super::extras::Language;
 use super::output::{LintConfig, StringOrVec};
-use super::tools::{LangContext, append_paths, require_tool, wrap_command as wrap};
+use super::tools::{LangContext, append_paths, require_ruby_bundler, require_tool, wrap_command as wrap};
 
 /// Return the default lint configuration for a language.
 ///
@@ -63,26 +63,26 @@ pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) 
             typecheck: None,
         },
         Language::Ruby => {
-            // `bundle install` before rubocop so the gem (and its plugins) are
+            // `ruby -S bundle install` before rubocop so the gem (and its plugins) are
             // present — lets consumer repos drop the identical `[crates.lint.ruby]`
             // override and rely on this default.
-            let before_cmd = wrap(format!("cd {output_dir} && bundle install"), ctx.run_wrapper);
+            let before_cmd = wrap(format!("cd {output_dir} && ruby -S bundle install"), ctx.run_wrapper);
             let format_cmd = wrap(
                 append_paths(
-                    format!("cd {output_dir} && bundle exec rubocop -A ."),
+                    format!("cd {output_dir} && ruby -S bundle exec rubocop -A ."),
                     ctx.extra_lint_paths,
                 ),
                 ctx.run_wrapper,
             );
             let check_cmd = wrap(
                 append_paths(
-                    format!("cd {output_dir} && bundle exec rubocop ."),
+                    format!("cd {output_dir} && ruby -S bundle exec rubocop ."),
                     ctx.extra_lint_paths,
                 ),
                 ctx.run_wrapper,
             );
             LintConfig {
-                precondition: Some(require_tool("bundle")),
+                precondition: Some(require_ruby_bundler()),
                 before: Some(StringOrVec::Single(before_cmd)),
                 format: Some(StringOrVec::Single(format_cmd)),
                 check: Some(StringOrVec::Single(check_cmd)),
@@ -686,14 +686,34 @@ mod tests {
     #[test]
     fn ruby_default_runs_bundle_install_before() {
         let c = cfg(Language::Ruby, "packages/ruby");
+        assert_eq!(
+            c.precondition.as_deref(),
+            Some("command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1")
+        );
         let before = c
             .before
             .expect("ruby default should install gems first")
             .commands()
             .join(" ");
         assert!(
-            before.contains("bundle install"),
-            "ruby before should run bundle install, got: {before}"
+            before.contains("ruby -S bundle install"),
+            "ruby before should resolve Bundler through the active Ruby, got: {before}"
+        );
+    }
+
+    #[test]
+    fn ruby_defaults_resolve_bundler_through_the_active_ruby() {
+        let config = cfg(Language::Ruby, "packages/ruby");
+        let format = config.format.expect("ruby format command").commands().join(" ");
+        let check = config.check.expect("ruby check command").commands().join(" ");
+
+        assert!(
+            format.contains("ruby -S bundle exec rubocop -A ."),
+            "ruby format must resolve Bundler through the active Ruby: {format}"
+        );
+        assert!(
+            check.contains("ruby -S bundle exec rubocop ."),
+            "ruby lint must resolve Bundler through the active Ruby: {check}"
         );
     }
 

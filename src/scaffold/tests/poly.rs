@@ -165,8 +165,8 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
     // single `poly lint .` invokes it once over its package, respecting the
     // tool's native config.
     for (table, cmd) in [
-        ("[hooks.pre-commit.commands.rubocop]", "bundle exec rubocop"),
-        ("[hooks.pre-commit.commands.steep]", "bundle exec steep check"),
+        ("[hooks.pre-commit.commands.rubocop]", "ruby -S bundle exec rubocop"),
+        ("[hooks.pre-commit.commands.steep]", "ruby -S bundle exec steep check"),
         ("[hooks.pre-commit.commands.golangci-lint]", "golangci-lint run ./..."),
         ("[hooks.pre-commit.commands.checkstyle]", "mvn -q checkstyle:check"),
         ("[hooks.pre-commit.commands.dart-analyze]", "dart analyze"),

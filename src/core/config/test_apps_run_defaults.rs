@@ -1,6 +1,6 @@
 use super::extras::Language;
 use super::output::{StringOrVec, TestAppRunConfig};
-use super::tools::{LangContext, require_tool};
+use super::tools::{LangContext, require_ruby_bundler, require_tool};
 
 /// Strip a leading package-manager version-constraint prefix (`^`, `~`, `>`,
 /// `<`, `=`) from a version string, returning the bare version. A concrete
@@ -79,10 +79,10 @@ pub fn default_test_apps_run_config(
             }
         }
         Language::Ruby => TestAppRunConfig {
-            precondition: Some(require_tool("bundle")),
+            precondition: Some(require_ruby_bundler()),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/ruby && bundle install && bundle exec rspec"
+                "cd {test_apps_dir}/ruby && ruby -S bundle install && ruby -S bundle exec rspec"
             ))),
         },
         Language::Php => {
@@ -419,9 +419,15 @@ mod tests {
     fn ruby_runs_bundle_rspec() {
         let c = cfg(Language::Ruby, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
-        assert_eq!(c.precondition.as_deref(), Some("command -v bundle >/dev/null 2>&1"));
+        assert_eq!(
+            c.precondition.as_deref(),
+            Some("command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1")
+        );
         assert!(run.contains("cd test_apps/ruby"), "got: {run}");
-        assert!(run.contains("bundle install && bundle exec rspec"), "got: {run}");
+        assert!(
+            run.contains("ruby -S bundle install && ruby -S bundle exec rspec"),
+            "got: {run}"
+        );
     }
 
     #[test]

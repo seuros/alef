@@ -126,6 +126,11 @@ pub fn require_tools(tools: &[&str]) -> String {
     tools.iter().map(|t| require_tool(t)).collect::<Vec<_>>().join(" && ")
 }
 
+/// Require the selected Ruby interpreter to resolve its own Bundler executable. ~keep
+pub fn require_ruby_bundler() -> String {
+    format!("{} && ruby -S bundle --version >/dev/null 2>&1", require_tool("ruby"))
+}
+
 impl ToolsConfig {
     /// Resolved Python package manager (defaults to `uv` when unset).
     pub fn python_pm(&self) -> &str {
@@ -204,6 +209,14 @@ mod tests {
     #[test]
     fn require_tool_emits_command_v() {
         assert_eq!(require_tool("ruff"), "command -v ruff >/dev/null 2>&1");
+    }
+
+    #[test]
+    fn ruby_bundler_precondition_checks_the_active_interpreter() {
+        assert_eq!(
+            require_ruby_bundler(),
+            "command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1"
+        );
     }
 
     #[test]
