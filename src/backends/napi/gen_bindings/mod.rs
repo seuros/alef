@@ -560,13 +560,11 @@ impl Backend for NapiBackend {
         }
         let mut emitted_enum_binding_to_core: AHashSet<String> = AHashSet::new();
         for e in &api.enums {
-            let has_data_variants = e.variants.iter().any(|v| !v.fields.is_empty());
-            // Mirrors `enums::gen_enum`'s gate: internal tagging is always an object, even for
-            // all-unit variants, so the binding<->core conversion must go through the tagged-enum
-            // templates rather than the plain-enum match. A default (externally tagged) enum with
-            // a payload variant is routed the same way — see `enums::gen_enum`. (~keep)
-            let is_tagged_data_enum = e.serde_tag.is_some() || (has_data_variants && !e.serde_untagged);
-            let is_untagged_data_enum = e.serde_untagged && has_data_variants;
+            // Asks `enums::is_tagged_data_enum`/`is_untagged_data_enum` -- the same authority
+            // `enums::gen_enum` routes through -- so the binding<->core conversion always matches
+            // whichever shape the compiled `#[napi]` type actually is. (~keep)
+            let is_tagged_data_enum = enums::is_tagged_data_enum(e);
+            let is_untagged_data_enum = enums::is_untagged_data_enum(e);
             if is_tagged_data_enum {
                 builder.add_item(&methods::gen_tagged_enum_binding_to_core(
                     e,
@@ -630,10 +628,9 @@ impl Backend for NapiBackend {
             .map(|typ| typ.name.clone())
             .collect();
         for enum_def in api.enums.iter() {
-            // Mirrors `enums::gen_enum`'s gate (~keep)
-            let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-            let is_tagged_data_enum = enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged);
-            if !is_tagged_data_enum {
+            // Asks `enums::is_tagged_data_enum` -- the same authority `enums::gen_enum` routes
+            // through. (~keep)
+            if !enums::is_tagged_data_enum(enum_def) {
                 continue;
             }
             for variant in &enum_def.variants {
@@ -695,12 +692,9 @@ impl Backend for NapiBackend {
                 collect_enum_names(&field.ty, &mut field_enums);
                 for enum_name in field_enums {
                     if let Some(enum_def) = api.enums.iter().find(|e| e.name == enum_name) {
-                        let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-                        // Mirrors `enums::gen_enum`'s gate (~keep)
-                        if enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged) {
-                            continue;
-                        }
-                        if enum_def.serde_untagged && has_data_variants {
+                        // Asks `enums::is_tagged_data_enum`/`is_untagged_data_enum` -- the same
+                        // authority `enums::gen_enum` routes through. (~keep)
+                        if enums::is_tagged_data_enum(enum_def) || enums::is_untagged_data_enum(enum_def) {
                             continue;
                         }
                         if !emitted_enum_binding_to_core.contains(&enum_def.name)

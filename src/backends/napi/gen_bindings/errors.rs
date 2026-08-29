@@ -290,10 +290,16 @@ pub(super) fn gen_dts(
                 lines.push("}".to_string());
             }
             Decl::Enum(e) => {
-                // Internal tagging always produces an object at the wire level, even when every
-                // variant is a unit variant (`{"kind":"A"}`), so the gate must not require a
-                // data-bearing variant. (~keep)
-                let is_data_enum = e.serde_tag.is_some();
+                // `enums::is_tagged_data_enum` is the SAME authority `gen_enum` (the compiled
+                // `#[napi]` type that actually executes at runtime) routes through. Re-deriving
+                // this as `e.serde_tag.is_some()` here previously missed the case `gen_enum` also
+                // treats as a tagged object: a default (externally tagged, no
+                // `#[serde(tag/content/untagged)]`) enum that carries a payload variant -- that
+                // combination has no `serde_tag`, so the old check declared it `export declare
+                // enum Foo { ... }` while the compiled struct behind it was `{ type, ...fields }`
+                // -- a `.d.ts` and a runtime shape for the same type that disagreed. Asking the
+                // shared predicate instead of re-deriving it is what keeps them in lockstep. ~keep
+                let is_data_enum = enums::is_tagged_data_enum(e);
                 // Same host/foreign verdict `enums::gen_enum` reaches for the emitted Rust enum,
                 // from the same authority, so the overlay and the wrapper agree on which crate
                 // owns a cfg-gated variant's feature. ~keep

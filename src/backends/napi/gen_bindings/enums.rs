@@ -121,16 +121,9 @@ pub(super) fn declared_string_enum_variants<'a>(
     is_host_enum: bool,
     configured_features: Option<&std::collections::HashSet<&str>>,
 ) -> Option<Vec<(&'a EnumVariant, String)>> {
-    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    // Internal tagging is always an object, even for all-unit variants — mirrors `gen_enum`'s
-    // `is_tagged_data_enum` gate. (~keep)
-    if enum_def.serde_tag.is_some() {
-        return None;
-    }
-    if enum_def.serde_untagged && has_data_variants {
-        return None;
-    }
-    if has_data_variants || enum_def.variants.is_empty() {
+    // Asks the same `is_tagged_data_enum`/`is_untagged_data_enum` authority `gen_enum` routes
+    // through, so a string enum is only claimed here when `gen_enum` actually emits one. (~keep)
+    if is_tagged_data_enum(enum_def) || is_untagged_data_enum(enum_def) || enum_def.variants.is_empty() {
         return None;
     }
     let case = napi_string_enum_case(enum_def);
@@ -209,6 +202,36 @@ fn napi_convert_case(case: &str) -> Option<convert_case::Case<'static>> {
     }
 }
 
+/// Whether this enum's napi/wire shape is an internally-tagged object (`{ type: "...", ... }`)
+/// rather than a plain `#[napi(string_enum)]`: either it is explicitly `#[serde(tag = "...")]`,
+/// or a variant carries data and the enum is not `#[serde(untagged)]`. Internal tagging always
+/// produces an object on the wire (`{"kind":"A"}` for a unit variant), so it must route to the
+/// object emitter even when no variant carries fields. A default (externally tagged, no
+/// `#[serde(tag/content/untagged)]`) enum that *does* carry a payload variant (e.g.
+/// `Custom(String)`) has no `serde_tag` either, but a `#[napi(string_enum)]` can only hold unit
+/// variants -- routing it there would silently drop the payload. Route any data-carrying enum
+/// through the same tagged-object emitter, defaulting the discriminant field to "type" like the
+/// explicitly tagged case already does.
+///
+/// This is the single authority for that verdict: [`gen_enum`] (the compiled `#[napi]` struct
+/// that actually executes at runtime), the binding<->core conversion emitters in `mod.rs`, and
+/// `errors::gen_dts` (the declared `.d.ts` shape) all call this instead of re-deriving the
+/// condition, so the runtime struct and the TypeScript declaration for the same enum can never
+/// disagree about which shape it takes. ~keep
+pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
+    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged)
+}
+
+/// Whether this enum's wire shape is `#[serde(untagged)]` with at least one data-carrying
+/// variant -- routed through `gen_untagged_data_enum_as_value_wrapper` instead of a plain string
+/// enum or the tagged-object emitter. Same single-authority relationship as
+/// [`is_tagged_data_enum`]. ~keep
+pub(super) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
+    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    enum_def.serde_untagged && has_data_variants
+}
+
 pub(super) fn gen_enum(
     enum_def: &EnumDef,
     prefix: &str,
@@ -216,22 +239,11 @@ pub(super) fn gen_enum(
     core_import: &str,
     configured_features: Option<&std::collections::HashSet<&str>>,
 ) -> String {
-    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    // Internal tagging always produces an object on the wire (`{"kind":"A"}` for a unit variant),
-    // so it must route to the object emitter even when no variant carries fields. A default
-    // (externally tagged, no `#[serde(tag/content/untagged)]`) enum that *does* carry a payload
-    // variant (e.g. `Custom(String)`) has no `serde_tag` either, but a `#[napi(string_enum)]`
-    // can only hold unit variants — routing it there silently dropped the payload. Route any
-    // data-carrying enum through the same tagged-object emitter, defaulting the discriminant
-    // field to "type" like the explicitly tagged case already does. ~keep
-    let is_tagged_data_enum = enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged);
-    let is_untagged_data_enum = enum_def.serde_untagged && has_data_variants;
-
-    if is_tagged_data_enum {
+    if is_tagged_data_enum(enum_def) {
         return gen_tagged_enum_as_object(enum_def, prefix, has_serde);
     }
 
-    if is_untagged_data_enum {
+    if is_untagged_data_enum(enum_def) {
         return gen_untagged_data_enum_as_value_wrapper(enum_def, prefix);
     }
 
@@ -404,16 +416,18 @@ pub(super) fn gen_untagged_data_enum_as_value_wrapper(enum_def: &EnumDef, prefix
 /// ```rust,ignore
 /// #[napi(object)]
 /// struct JsAuthConfig {
-///     #[napi(js_name = "kind")]
-///     pub kind_tag: String,
+///     #[napi(js_name = "type")]
+///     pub type_tag: String,
 ///     pub username: Option<String>,
 ///     pub password: Option<String>,
 ///     pub token: Option<String>,
 /// }
 /// ```
 ///
-/// The discriminant field is always named "kind" in TypeScript (via js_name),
-/// regardless of the Rust serde tag attribute, for consistency across bindings.
+/// The discriminant field's TypeScript name (`js_name`) is the Rust `#[serde(tag = "...")]`
+/// value verbatim, or `"type"` when the enum has no explicit tag -- see `tag_field` below. The
+/// Rust field is always named `{tag_field}_tag` (`type_tag` in the default case above, `role_tag`
+/// for `#[serde(tag = "role")]`) to avoid colliding with a same-named data field.
 ///
 /// For tagged enums where every non-empty variant is a single-tuple field with a Named type
 /// (e.g. `FormatMetadata`), a `#[napi]` impl block is additionally emitted with per-variant
@@ -669,3 +683,6 @@ mod tests;
 
 #[cfg(test)]
 mod default_impl_cfg_tests;
+
+#[cfg(test)]
+mod dts_shape_parity_tests;

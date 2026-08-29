@@ -1,4 +1,5 @@
 use super::NapiBackend;
+use super::enums::is_tagged_data_enum;
 use super::methods::{gen_tagged_enum_binding_to_core, gen_tagged_enum_core_to_binding};
 use crate::core::backend::Backend;
 use crate::core::config::Language;
@@ -90,12 +91,11 @@ fn plain_data_enum_in_input_type_struct_gets_binding_to_core_impl() {
     assert!(has_data_variants, "AuthHeaderFormat should have data variants");
 
     // Pin the routing decision this test's isolation depends on: napi's own pipeline treats
-    // this exact shape as a tagged data enum (broadened gate, see `enums::gen_enum`) and
-    // never reaches the lossy helpers exercised below.
-    let pipeline_routes_as_tagged =
-        auth_format_enum.serde_tag.is_some() || (has_data_variants && !auth_format_enum.serde_untagged);
+    // this exact shape as a tagged data enum (`enums::is_tagged_data_enum`, the single authority
+    // `gen_enum` and `errors::gen_dts` both route through) and never reaches the lossy helpers
+    // exercised below.
     assert!(
-        pipeline_routes_as_tagged,
+        is_tagged_data_enum(&auth_format_enum),
         "napi's pipeline must treat a default-tagged data enum as a tagged data enum, \
          routing it away from the data-discarding helpers this test exercises directly"
     );
