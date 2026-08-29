@@ -1,47 +1,72 @@
 //! Enum code generators for the Magnus (Ruby) backend, including serde type helpers and variant constructors.
 
-use crate::core::ir::{EnumDef, FieldDef, TypeRef};
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
+use std::collections::HashSet;
 
 /// Generate a Magnus enum definition with IntoValue and TryConvert impls.
 /// Unit-variant enums are represented as Ruby Symbols for ergonomic Ruby usage.
-pub fn gen_enum(enum_def: &EnumDef) -> String {
-    let has_data = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    let first_variant = enum_def.variants.first().map(|v| v.name.as_str()).unwrap_or("Default");
-
-    // Find the variant marked with #[default], or fall back to first_variant
-    let default_variant = enum_def
+///
+/// `configured_features` is this binding's own configured feature set (see
+/// `ConversionConfig::configured_features`'s doc comment), threaded through to
+/// [`enum_variant_declaration`] -- the same authority `gen_enum_from_binding_to_core_cfg`/
+/// `gen_enum_from_core_to_binding_cfg` already consult for this enum's conversion arms (see
+/// `magnus_conv_config` in `gen_bindings::mod`) -- so a FOREIGN cfg-gated variant this binding's
+/// own feature set proves unreachable is never declared here either, matching
+/// `backends::rustler::gen_bindings::types::gen_enum`. Only the Keep/Drop verdict is used, never
+/// the `cfg` a `Keep` carries: like Rustler, a kept variant is always declared unconditionally
+/// with no per-variant `#[cfg(...)]` on the declaration -- `enum_variant_declaration` never
+/// resolves a host-owned gate to `Drop`, so a host-owned variant is always kept regardless. ~keep
+pub fn gen_enum(enum_def: &EnumDef, core_import: &str, configured_features: Option<&[String]>) -> String {
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_variants: Vec<&EnumVariant> = enum_def
         .variants
         .iter()
+        .filter(|v| {
+            !matches!(
+                enum_variant_declaration(v, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
+
+    let has_data = declared_variants.iter().any(|v| !v.fields.is_empty());
+    let first_variant = declared_variants.first().map(|v| v.name.as_str()).unwrap_or("Default");
+
+    // Find the declared variant marked with #[default], or fall back to the first declared
+    // variant -- never a variant this declaration itself dropped as unreachable.
+    let default = declared_variants
+        .iter()
         .find(|v| v.is_default)
-        .map(|v| v.name.as_str())
-        .unwrap_or(first_variant);
+        .or(declared_variants.first());
+    let default_variant = default.map(|v| v.name.as_str()).unwrap_or(first_variant);
 
     // variant). When `#[default]` selects a unit variant (e.g. `PageAction::Scrape`)
     let first_variant_default = if has_data {
-        let default = enum_def
-            .variants
-            .iter()
-            .find(|v| v.is_default)
-            .unwrap_or_else(|| enum_def.variants.first().unwrap());
-        if default.fields.is_empty() {
-            String::new()
-        } else if emits_tuple_variant(enum_def, default) {
-            let field_defaults: Vec<&str> = default.fields.iter().map(|_| "Default::default()").collect();
-            format!("({})", field_defaults.join(", "))
-        } else {
-            let field_defaults: Vec<String> = default
-                .fields
-                .iter()
-                .map(|f| format!("{}: Default::default()", f.name))
-                .collect();
-            format!(" {{ {} }}", field_defaults.join(", "))
+        match default {
+            Some(default) if !default.fields.is_empty() => {
+                if emits_tuple_variant(enum_def, default) {
+                    let field_defaults: Vec<&str> = default.fields.iter().map(|_| "Default::default()").collect();
+                    format!("({})", field_defaults.join(", "))
+                } else {
+                    let field_defaults: Vec<String> = default
+                        .fields
+                        .iter()
+                        .map(|f| format!("{}: Default::default()", f.name))
+                        .collect();
+                    format!(" {{ {} }}", field_defaults.join(", "))
+                }
+            }
+            _ => String::new(),
         }
     } else {
         String::new()
     };
 
-    let variants: Vec<minijinja::Value> = enum_def
-        .variants
+    let variants: Vec<minijinja::Value> = declared_variants
         .iter()
         .map(|variant| {
             let fields: Vec<minijinja::Value> = variant

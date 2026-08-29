@@ -341,7 +341,7 @@ fn flat_data_enum_discriminator_is_consistent_across_struct_and_from_impls() {
         ..Default::default()
     };
 
-    let struct_src = gen_extendr_flat_data_enum_struct(&default_enum, &backend, &cfg);
+    let struct_src = gen_extendr_flat_data_enum_struct(&default_enum, &backend, &cfg, None);
     assert!(
         struct_src.contains("pub r#type: String"),
         "no explicit serde_tag should fall back to the generic `type` discriminator, not a \
@@ -364,7 +364,7 @@ fn flat_data_enum_discriminator_is_consistent_across_struct_and_from_impls() {
         serde_tag: Some("kind".to_string()),
         ..default_enum
     };
-    let tagged_struct_src = gen_extendr_flat_data_enum_struct(&tagged_enum, &backend, &cfg);
+    let tagged_struct_src = gen_extendr_flat_data_enum_struct(&tagged_enum, &backend, &cfg, None);
     assert!(
         tagged_struct_src.contains("pub kind: String"),
         "an explicit serde_tag must be used verbatim as the discriminator field name; got:\n{tagged_struct_src}"

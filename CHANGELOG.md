@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(python,ruby,r): stop declaring foreign cfg-excluded enum variants in the PyO3, Magnus and
+  extendr bindings. All three consulted `enum_variant_declaration` in their conversion arms but
+  never in their declarations, so a variant the compiled dependency can never produce stayed
+  visible in the generated API.
+- fix(r): drop a foreign cfg-excluded variant from extendr's flat data-enum lowering, where it
+  survived as a struct field and an unconditional match arm rather than as a variant -- invisible
+  to any variant-list filtering.
+
 - fix(python-e2e): make the streaming assertion accessors subscript-aware for
   `python_output = "typed-dict"` crates, closing the gap 0.75.0's TypedDict fix deliberately left
   in `streaming_assertions::accessors`. Covers `stream_content`, `stream_complete`, `tool_calls`

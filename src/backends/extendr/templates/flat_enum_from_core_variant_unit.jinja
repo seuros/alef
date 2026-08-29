@@ -1,1 +1,2 @@
-            {{ core_path }}::{{ vname }} => Self { {{ disc_ident }}: "{{ wire }}".to_string(), ..Default::default() },
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            {{ core_path }}::{{ vname }} => Self { {{ disc_ident }}: "{{ wire }}".to_string(), ..Default::default() },

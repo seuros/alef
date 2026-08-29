@@ -253,3 +253,38 @@ fn default_variant_selection_skips_a_variant_dropped_from_the_declaration() {
         "the Default impl must fall back to a variant the declaration actually keeps, got:\n{out}"
     );
 }
+
+/// Cross-backend regression control: the same `RoutingStrategy`/`Primary`/`Secondary`/`Extra`
+/// fixture exercised end to end for PyO3 (`backends::pyo3::gen_bindings::cfg_variant_e2e_tests`),
+/// Magnus (`backends::magnus::gen_bindings::cfg_variant_e2e_tests`), and extendr
+/// (`backends::extendr::gen_bindings::tests::declaration_cfg`) as part of teaching those three
+/// backends' own declarations to consult `enum_variant_declaration`. None of that work touched
+/// this file or any other Rustler source -- Rustler's own `gen_enum` already had this fix (see
+/// this file's module doc). This test proves Rustler's declaration is exactly what it was before:
+/// the excluded variant dropped, the two retained variants declared, unconditionally with no
+/// per-variant `#[cfg(...)]` attribute on the declaration itself (Rustler's derive macros can't
+/// safely carry one -- see this file's module doc and `gen_enum`'s own doc comment).
+#[test]
+fn cross_backend_routing_strategy_fixture_declaration_unchanged() {
+    let en = EnumDef {
+        name: "RoutingStrategy".to_string(),
+        rust_path: "dep_crate::RoutingStrategy".to_string(),
+        variants: vec![
+            unit_variant("Primary", None),
+            unit_variant("Secondary", None),
+            unit_variant("Extra", Some(r#"feature = "extra-tier""#)),
+        ],
+        ..Default::default()
+    };
+
+    let out = gen_enum(&en, "SampleCrate", &ApiSurface::default(), "mylib", Some(&[]));
+    assert!(
+        out.contains(&declared_line("Primary")) && out.contains(&declared_line("Secondary")),
+        "the two retained variants must still be declared, got:\n{out}"
+    );
+    assert!(
+        !out.contains("Extra") && !out.contains("#[cfg("),
+        "the excluded variant must be absent and no #[cfg(...)] attribute forwarded onto the \
+         declaration itself, got:\n{out}"
+    );
+}

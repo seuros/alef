@@ -73,11 +73,12 @@ pub(super) fn gen_from_binding_to_core(
         .collect();
 
     // This match is over the BINDING enum extendr itself declares (`generators::gen_enum`, used
-    // whenever this bespoke module is reached), which keeps a foreign cfg-gated variant
-    // unconditionally regardless of `configured_features` -- so `declaration_may_drop_variant` is
-    // `false` here, unlike the core->binding direction below. See
+    // whenever this bespoke module is reached). That declaration now drops a FOREIGN cfg-gated
+    // variant this binding's own `configured_features` proves unreachable -- the same verdict
+    // `enum_variant_declaration` computes -- so `declaration_may_drop_variant` is `true` here,
+    // matching the core->binding direction below. See
     // `ConversionConfig::declaration_drops_unreachable_foreign_variants`'s doc comment. ~keep
-    let catch_all = catch_all(enum_def, is_host_enum, configured_features, false).then(|| {
+    let catch_all = catch_all(enum_def, is_host_enum, configured_features, true).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_binding_to_core_catch_all.jinja",
             minijinja::context! {},
@@ -123,7 +124,8 @@ pub(super) fn gen_from_core_to_binding(
 
     // This match is over the real CORE type -- a shape extendr does not declare and cannot
     // influence, so `configured_features`' proof is already the complete answer and
-    // `declaration_may_drop_variant` stays `true`, unlike the binding->core direction above. ~keep
+    // `declaration_may_drop_variant` is `true` here too, matching the binding->core direction
+    // above now that `generators::gen_enum` also drops a proven-unreachable foreign variant. ~keep
     let catch_all = catch_all(enum_def, is_host_enum, configured_features, true).then(|| {
         crate::backends::extendr::template_env::render(
             "enum_from_core_to_binding_catch_all.jinja",

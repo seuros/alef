@@ -207,20 +207,16 @@ fn foreign_owned_cfg_gated_variant_drops_arm_and_cfg_forward_in_both_directions(
     );
 }
 
-/// THE E0004 REGRESSION this task fixes: `enum_conversion_needs_catch_all_for_features` used to
-/// resolve the SAME verdict for both conversion directions from one undifferentiated
-/// `configured_features` proof. That proof is only the complete answer for the core->binding
-/// direction (`gen_from_core_to_binding`, matching the real CORE type -- a shape extendr does not
-/// declare, so `configured_features` proving the dependency's own variant unreachable really does
-/// make the match exhaustive without a catch-all). The binding->core direction
-/// (`gen_from_binding_to_core`) matches the BINDING enum extendr itself declares
-/// (`codegen::generators::enums::gen_enum`), which keeps a foreign cfg-gated variant
-/// UNCONDITIONALLY regardless of `configured_features` -- so dropping its catch-all on the same
-/// proof left a real gap: `error[E0004]: non-exhaustive patterns` on
-/// `impl From<External> for foreign_crate::External`. Calling the two generators directly (rather
-/// than through the full `ExtendrBackend` pipeline) keeps each direction's output unambiguous. ~keep
+/// `generators::gen_enum` (the BINDING enum extendr itself declares whenever this bespoke module
+/// is reached) now drops a FOREIGN cfg-gated variant this binding's own `configured_features`
+/// proves unreachable, the same verdict `enum_variant_declaration` computes -- so
+/// `gen_from_binding_to_core`'s `declaration_may_drop_variant` flipped from `false` to `true` to
+/// match, and both conversion directions now agree: a proven-unreachable foreign variant leaves
+/// neither direction's match needing a catch-all, since neither the declared BINDING type nor the
+/// real CORE type carries it any more. Calling the two generators directly (rather than through
+/// the full `ExtendrBackend` pipeline) keeps each direction's output unambiguous. ~keep
 #[test]
-fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_core_to_binding_catch_all_but_keeps_binding_to_core() {
+fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_catch_all_in_both_directions() {
     let enum_def = EnumDef {
         name: "External".to_string(),
         rust_path: "foreign_crate::External".to_string(),
@@ -255,16 +251,61 @@ fn foreign_owned_cfg_gated_variant_proven_unreachable_drops_core_to_binding_catc
     );
 
     assert!(
-        binding_to_core.contains("_ => Self::default(),"),
-        "the binding->core match is over the BINDING enum extendr itself declares, which keeps a \
-         foreign cfg-gated variant unconditionally regardless of configured features -- omitting \
-         the catch-all here is error[E0004]: non-exhaustive patterns, got:\n{binding_to_core}"
+        !binding_to_core.contains("_ => Self::default(),"),
+        "the binding->core match is over the BINDING enum extendr itself declares, which now \
+         drops a proven-unreachable foreign variant just like the declaration does -- keeping the \
+         catch-all here is an unreachable pattern under -D warnings, got:\n{binding_to_core}"
     );
     assert!(
         !core_to_binding.contains("_ => Self::default(),"),
         "the core->binding match is over the real core type, which this binding's own configured \
          feature set proves lacks the variant -- a catch-all there is an unreachable pattern under \
          -D warnings, got:\n{core_to_binding}"
+    );
+}
+
+/// Positive control for the test above: when the gating feature IS configured (so the foreign
+/// variant is NOT proven unreachable), the declaration still keeps `Bar` unconditionally
+/// (`enum_variant_declaration` only drops a PROVEN-unreachable foreign variant), so both
+/// directions must keep their catch-all -- otherwise the fix would have overcorrected into "never
+/// emit a catch-all," trading one build failure (unreachable pattern) for another (non-exhaustive
+/// match).
+#[test]
+fn foreign_owned_cfg_gated_variant_not_proven_unreachable_keeps_catch_all_in_both_directions() {
+    let enum_def = EnumDef {
+        name: "External".to_string(),
+        rust_path: "foreign_crate::External".to_string(),
+        variants: vec![
+            gated_variant("Foo", None),
+            gated_variant("Bar", Some(r#"feature = "extra""#)),
+        ],
+        ..Default::default()
+    };
+    let type_paths = std::collections::HashMap::new();
+    let configured_features: Option<&[String]> = Some(&["extra".to_string()]);
+
+    let binding_to_core = super::super::enum_conversions::gen_from_binding_to_core(
+        &enum_def,
+        "test_lib",
+        &type_paths,
+        configured_features,
+    );
+    let core_to_binding = super::super::enum_conversions::gen_from_core_to_binding(
+        &enum_def,
+        "test_lib",
+        &type_paths,
+        configured_features,
+    );
+
+    assert!(
+        !binding_to_core.contains("Bar") && !core_to_binding.contains("Bar"),
+        "a foreign crate's cfg-gated variant must not be named anywhere in the conversion output:\n\
+         binding->core:\n{binding_to_core}\ncore->binding:\n{core_to_binding}"
+    );
+    assert!(
+        binding_to_core.contains("_ => Self::default(),") && core_to_binding.contains("_ => Self::default(),"),
+        "a foreign cfg-gated variant that is NOT proven unreachable must keep the catch-all in \
+         both directions, got:\nbinding->core:\n{binding_to_core}\ncore->binding:\n{core_to_binding}"
     );
 }
 

@@ -368,7 +368,11 @@ impl Backend for MagnusBackend {
 
         for enum_def in &api.enums {
             if !is_reserved_enum(&enum_def.name) && !exclude_types.contains(enum_def.name.as_str()) {
-                builder.add_item(&classes::gen_enum(enum_def));
+                builder.add_item(&classes::gen_enum(
+                    enum_def,
+                    &core_import,
+                    Some(enabled_features.as_slice()),
+                ));
                 if enum_def.serde_tag.is_none() {
                     let constructors = classes::gen_data_enum_variant_constructors(enum_def);
                     if !constructors.is_empty() {
@@ -534,6 +538,14 @@ impl Backend for MagnusBackend {
             map_flatten_to_string: true,
             exclude_types: &absent_named_types,
             configured_features: Some(enabled_features.as_slice()),
+            // `classes::gen_enum` (Magnus's own enum declaration below) now drops a FOREIGN
+            // cfg-gated variant this binding's own feature set proves unreachable, so the
+            // binding->core catch-all decision must know the declaration can leave a gap-free
+            // match on its own -- mirroring NAPI, the only other backend that sets this. Every
+            // enum (unit and data alike) reaches both `classes::gen_enum` and this
+            // `magnus_conv_config` (`binding_enums_have_data: true` above), so the flag's scope
+            // matches exactly. ~keep
+            declaration_drops_unreachable_foreign_variants: true,
             ..Default::default()
         };
         for e in &api.enums {

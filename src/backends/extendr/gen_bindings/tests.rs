@@ -114,6 +114,7 @@ fn make_api_surface() -> ApiSurface {
 
 mod bridges;
 mod cfg_functions;
+mod declaration_cfg;
 mod determinism;
 mod enum_conversions_cfg;
 mod trait_bridge;

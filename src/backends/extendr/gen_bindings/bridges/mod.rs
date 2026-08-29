@@ -1,10 +1,13 @@
 use crate::backends::extendr::template_env;
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::generators::RustBindingConfig;
 use crate::codegen::generators::trait_bridge::BridgeFieldMatch;
 use crate::codegen::naming::wire_variant_value;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FunctionDef, TypeRef};
 use ahash::AHashSet;
+use std::collections::HashSet;
 
 /// Resolve the fully-qualified core path for an enum.
 ///
@@ -326,6 +329,47 @@ pub(super) fn gen_extendr_bridge_field_function(
     )
 }
 
+/// Whether a flat-data-enum's per-variant CONVERSION arm should be emitted, and the
+/// `#[cfg(...)]` guard (if any) to attach to it.
+///
+/// A tuple-payload enum can lower to this flat struct-with-discriminator representation instead
+/// of a real Rust enum (see [`is_flat_data_enum`]); its `From` impls match variant names or a
+/// discriminator string, not real enum patterns, so an excluded variant surviving here is
+/// invisible to `codegen::conversions::enums`' variant-list filtering entirely -- the exact
+/// second shape alef-task's Dart/Elixir fix (alef #534/#536) uncovered and warned would recur. A
+/// FOREIGN cfg-gated variant is dropped unconditionally, mirroring
+/// `enum_conversions::emit_cfg_gated_arm` (this generated crate can never declare a dependency's
+/// own feature as its own Cargo feature); the struct's own catch-all
+/// (`flat_enum_from_core_impl_catch_all.jinja` / `flat_enum_from_binding_impl_footer.jinja`)
+/// already covers the gap, so no `configured_features` proof is needed for the arm itself the
+/// way [`gen_extendr_flat_data_enum_struct`]'s FIELD-level filtering needs one. A host-owned
+/// gated variant keeps its arm under a matching `#[cfg(...)]` guard, exactly like extendr's own
+/// non-flat `enum_conversions.rs`. ~keep
+fn flat_variant_conversion_guard<'a>(
+    enum_def: &EnumDef,
+    variant: &'a EnumVariant,
+    is_host_enum: bool,
+    direction: &str,
+) -> Option<Option<&'a str>> {
+    match variant.cfg.as_deref() {
+        None => Some(None),
+        Some(cfg) if is_host_enum => Some(Some(cfg)),
+        Some(cfg) => {
+            tracing::debug!(
+                enum_name = %enum_def.name,
+                enum_rust_path = %enum_def.rust_path,
+                variant_name = %variant.name,
+                cfg = cfg,
+                direction = direction,
+                "dropping extendr flat-data-enum conversion match arm for a foreign-crate variant \
+                 behind a #[cfg(...)] this generated crate cannot declare as a Cargo feature; the \
+                 variant is unreachable from this conversion"
+            );
+            None
+        }
+    }
+}
+
 /// Generate a flat Rust struct for a data enum with all-tuple variants.
 ///
 /// The struct has a discriminator field (from `serde_tag`, defaulting to `"type"` --
@@ -336,12 +380,22 @@ pub(super) fn gen_extendr_bridge_field_function(
 /// `#[derive(Default)]` is required so `From` impls can use `..Default::default()`.
 /// `serde::Serialize`/`Deserialize` are required so the JSON bridge produces and consumes
 /// the nested representation.
+///
+/// `configured_features` is this binding's own configured feature set, threaded through to
+/// [`enum_variant_declaration`] so a FOREIGN cfg-gated variant this binding's own feature set
+/// proves unreachable does not get a field here either -- the tuple-payload analog of every other
+/// declaration this task fixed to consult the same authority. See
+/// [`flat_variant_conversion_guard`] for the matching fix on the `From` impls below.
 pub(super) fn gen_extendr_flat_data_enum_struct(
     enum_def: &EnumDef,
     mapper: &dyn TypeMapper,
     cfg: &RustBindingConfig,
+    configured_features: Option<&[String]>,
 ) -> String {
     let name = &enum_def.name;
+    let is_host_enum = is_host_owned_rust_path(cfg.core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
     let discriminator = flat_data_enum_discriminator(enum_def);
     let mut out = String::with_capacity(1024);
 
@@ -377,6 +431,16 @@ pub(super) fn gen_extendr_flat_data_enum_struct(
     ));
 
     for variant in &enum_def.variants {
+        if matches!(
+            enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+            VariantDeclaration::Drop
+        ) {
+            // A FOREIGN cfg-gated variant this binding's own feature set proves unreachable is
+            // never a real payload the compiled dependency can produce, so the field it would
+            // otherwise carry must not exist either -- matching every other declaration this
+            // task threads `enum_variant_declaration` through. ~keep
+            continue;
+        }
         if !variant.fields.is_empty()
             && variant.is_tuple
             && let Some(first_field) = variant.fields.first()
@@ -409,6 +473,7 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     let core_path = enum_core_path(enum_def, core_import);
     let discriminator = flat_data_enum_discriminator(enum_def);
     let disc_ident = crate::core::keywords::rust_raw_ident(discriminator);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -420,6 +485,9 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     ));
 
     for variant in &enum_def.variants {
+        let Some(variant_cfg) = flat_variant_conversion_guard(enum_def, variant, is_host_enum, "from_core") else {
+            continue;
+        };
         let field_name = heck::AsSnakeCase(variant.name.as_str()).to_string();
         let wire_name = wire_variant_value(
             &variant.name,
@@ -434,6 +502,7 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
                     vname => &variant.name,
                     disc_ident => &disc_ident,
                     wire => &wire_name,
+                    cfg => variant_cfg,
                 },
             ));
         } else if variant.is_tuple {
@@ -460,6 +529,7 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
                     wire => &wire_name,
                     fname => &field_name,
                     expr => &data_expr,
+                    cfg => variant_cfg,
                 },
             ));
         } else {
@@ -470,6 +540,7 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
                     vname => &variant.name,
                     disc_ident => &disc_ident,
                     wire => &wire_name,
+                    cfg => variant_cfg,
                 },
             ));
         }
@@ -492,6 +563,7 @@ pub(super) fn gen_extendr_flat_data_enum_to_core(enum_def: &EnumDef, core_import
     let core_path = enum_core_path(enum_def, core_import);
     let discriminator = flat_data_enum_discriminator(enum_def);
     let disc_ident = crate::core::keywords::rust_raw_ident(discriminator);
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -504,6 +576,10 @@ pub(super) fn gen_extendr_flat_data_enum_to_core(enum_def: &EnumDef, core_import
     ));
 
     for variant in &enum_def.variants {
+        let Some(variant_cfg) = flat_variant_conversion_guard(enum_def, variant, is_host_enum, "binding_to_core")
+        else {
+            continue;
+        };
         let field_name = heck::AsSnakeCase(variant.name.as_str()).to_string();
         let wire_name = wire_variant_value(
             &variant.name,
@@ -516,6 +592,7 @@ pub(super) fn gen_extendr_flat_data_enum_to_core(enum_def: &EnumDef, core_import
                 minijinja::context! {
                     wire => &wire_name,
                     vname => &variant.name,
+                    cfg => variant_cfg,
                 },
             ));
         } else if variant.is_tuple {
@@ -525,6 +602,7 @@ pub(super) fn gen_extendr_flat_data_enum_to_core(enum_def: &EnumDef, core_import
                     wire => &wire_name,
                     vname => &variant.name,
                     fname => &field_name,
+                    cfg => variant_cfg,
                 },
             ));
         }

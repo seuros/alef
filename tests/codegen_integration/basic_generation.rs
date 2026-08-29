@@ -43,7 +43,7 @@ fn test_gen_enum_produces_enum_with_variants() {
     let enum_def = simple_enum_def();
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(
         result.contains("pub enum OutputFormat"),
@@ -66,7 +66,7 @@ fn test_gen_enum_produces_default_impl() {
     let enum_def = simple_enum_def();
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(
         result.contains("#[default]"),

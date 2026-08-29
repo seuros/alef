@@ -564,7 +564,7 @@ impl Backend for Pyo3Backend {
                     builder.add_item(&opaque_helpers::emit_inner_default_impl(&e.name));
                 }
             } else {
-                builder.add_item(&generators::gen_enum(e, &cfg));
+                builder.add_item(&generators::gen_enum(e, &cfg, Some(enabled_features.as_slice())));
             }
         }
         for f in &api.functions {
@@ -718,6 +718,15 @@ impl Backend for Pyo3Backend {
             opaque_types: Some(&conversion_opaque_set),
             never_skip_cfg_field_names: &never_skip_cfg_field_names,
             configured_features: Some(enabled_features.as_slice()),
+            // `generators::gen_enum` (the fieldless-enum wrapper declaration below) now drops a
+            // FOREIGN cfg-gated variant this binding's own feature set proves unreachable, so the
+            // binding->core catch-all decision must know the declaration can leave a gap-free
+            // match on its own -- mirroring NAPI, the only other backend that sets this. Scoped
+            // correctly: this flag only affects `gen_enum_from_binding_to_core_cfg`, and pyo3
+            // reaches that only for the same fieldless enums `generators::gen_enum` declares (data
+            // enums use the struct-wrapper path below instead, which never calls either function).
+            // ~keep
+            declaration_drops_unreachable_foreign_variants: true,
             ..Default::default()
         };
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {

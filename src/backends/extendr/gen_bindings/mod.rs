@@ -447,7 +447,12 @@ impl Backend for ExtendrBackend {
         for e in enums_for_struct_emission {
             if bridges::is_flat_data_enum(e) {
                 // The #[extendr] attribute registers it as a class; the impl block satisfies
-                let flat_struct = bridges::gen_extendr_flat_data_enum_struct(e, self, &cfg);
+                let flat_struct = bridges::gen_extendr_flat_data_enum_struct(
+                    e,
+                    self,
+                    &cfg,
+                    Some(configured_enum_features.as_slice()),
+                );
                 builder.add_item(&format!("#[extendr]\n{flat_struct}"));
                 builder.add_item(&format!("#[extendr]\nimpl {} {{}}", e.name));
             } else if bridges::is_json_passthrough_data_enum(e) {
@@ -457,7 +462,11 @@ impl Backend for ExtendrBackend {
                     &core_import,
                 ));
             } else {
-                builder.add_item(&generators::gen_enum(e, &cfg));
+                builder.add_item(&generators::gen_enum(
+                    e,
+                    &cfg,
+                    Some(configured_enum_features.as_slice()),
+                ));
             }
         }
 

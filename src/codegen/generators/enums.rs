@@ -1,9 +1,11 @@
 use super::dto_coercion::{coercible_field_init, coercible_payload};
 use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::generators::RustBindingConfig;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{EnumDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 use ahash::AHashSet;
+use std::collections::HashSet;
 
 /// Returns true if any variant of the enum has data fields.
 /// These enums cannot be represented as flat integer enums in bindings.
@@ -461,7 +463,18 @@ fn apply_rename_all(name: &str, rule: &str) -> String {
 }
 
 /// Generate an enum.
-pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
+///
+/// `configured_features` is this binding's own configured feature set (see
+/// `ConversionConfig::configured_features`'s doc comment): threaded through to
+/// [`enum_variant_declaration`](crate::codegen::conversions::enum_variant_declaration), the same
+/// authority every conversion arm for this enum already consults, so a FOREIGN cfg-gated variant
+/// this binding's own feature set proves unreachable is never declared here either -- matching
+/// `backends::rustler::gen_bindings::types::gen_enum`, which resolved the identical blind spot for
+/// Rustler's own NIF declaration. Only the Keep/Drop verdict is used, never the `cfg` a `Keep`
+/// carries: like Rustler, a variant this call keeps is always declared unconditionally, with no
+/// per-variant `#[cfg(...)]` forwarded onto the declaration -- `enum_variant_declaration` never
+/// resolves a host-owned gate to `Drop`, so a host-owned variant is always kept regardless. ~keep
+pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig, configured_features: Option<&[String]>) -> String {
     let mut derives: Vec<&str> = cfg.enum_derives.to_vec();
     derives.push("Default");
     derives.push("serde::Serialize");
@@ -470,16 +483,36 @@ pub fn gen_enum(enum_def: &EnumDef, cfg: &RustBindingConfig) -> String {
     // Detect PyO3 context so we can rename all variants via #[pyo3(name = "UPPER_SNAKE_CASE")].
     let is_pyo3 = cfg.enum_attrs.iter().any(|a| a.contains("pyclass"));
 
-    // Determine which variant carries #[default].
-    // #[default] attribute); fall back to the first variant when none is explicitly marked.
-    let default_idx = enum_def.variants.iter().position(|v| v.is_default).unwrap_or(0);
-
-    let serde_rename_all = enum_def.serde_rename_all.as_deref().unwrap_or("");
-    let variants: Vec<_> = enum_def
+    let is_host_enum = is_host_owned_rust_path(cfg.core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared: Vec<(usize, &EnumVariant)> = enum_def
         .variants
         .iter()
         .enumerate()
+        .filter(|(_, v)| {
+            !matches!(
+                enum_variant_declaration(v, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
+
+    // Determine which variant carries #[default], among the ones actually declared -- falling
+    // back to the first declared variant when none is explicitly marked, or when the marked one
+    // was itself dropped as a provably-unreachable foreign variant.
+    let default_idx = declared
+        .iter()
+        .find(|(_, v)| v.is_default)
+        .or_else(|| declared.first())
+        .map(|(idx, _)| *idx)
+        .unwrap_or(0);
+
+    let serde_rename_all = enum_def.serde_rename_all.as_deref().unwrap_or("");
+    let variants: Vec<_> = declared
+        .iter()
         .map(|(idx, v)| {
+            let idx = *idx;
             // In pyo3 context every variant gets #[pyo3(name = "UPPER_SNAKE_CASE")] so the
             let pyo3_name = if is_pyo3 {
                 to_pyo3_screaming(&v.name)
@@ -704,5 +737,7 @@ pub(crate) fn write_pyo3_serde_tag_getter(out: &mut String, tag_field: &str) {
 
 #[cfg(test)]
 mod cfg_gate_tests;
+#[cfg(test)]
+mod declaration_cfg_tests;
 #[cfg(test)]
 mod tests;

@@ -110,7 +110,7 @@ fn test_gen_enum_with_single_variant_uses_discriminant_zero() {
     };
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(result.contains("pub enum Single {"), "should have enum declaration");
     assert!(result.contains("Only = 0"), "single variant has discriminant 0");
@@ -119,7 +119,7 @@ fn test_gen_enum_with_single_variant_uses_discriminant_zero() {
     let attrs = vec!["pyclass(eq, eq_int)"];
     let mut pyo3_cfg = default_cfg();
     pyo3_cfg.enum_attrs = &attrs;
-    let pyo3_result = gen_enum(&enum_def, &pyo3_cfg);
+    let pyo3_result = gen_enum(&enum_def, &pyo3_cfg, None);
     assert!(!pyo3_result.contains("match s_lower.as_str()"), "{pyo3_result}");
     assert!(!pyo3_result.contains("match n"), "{pyo3_result}");
     // A single variant needs one comparison, not a `match`. The discriminant test rides the
@@ -134,7 +134,7 @@ fn test_gen_enum_with_enum_attrs() {
     let attrs = vec!["repr(u8)"];
     cfg.enum_attrs = &attrs;
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(result.contains("#[repr(u8)]"), "should include enum attrs");
 }
@@ -144,7 +144,7 @@ fn test_gen_enum_always_derives_serde() {
     let enum_def = simple_enum_def();
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(result.contains("serde::Serialize"), "should always derive Serialize");
     assert!(
@@ -230,7 +230,7 @@ fn test_gen_enum_discriminant_increments_correctly() {
     };
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(result.contains("Active = 0"), "first variant = 0");
     assert!(result.contains("Inactive = 1"), "second variant = 1");
@@ -307,7 +307,7 @@ fn test_gen_enum_with_pyo3_pyclass_attr_emits_upper_snake_case_for_all_variants(
     let attrs = ["pyclass(eq, eq_int)"];
     cfg.enum_attrs = &attrs;
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(
         result.contains("#[pyo3(name = \"NONE\")]"),
@@ -360,7 +360,7 @@ fn test_gen_enum_without_pyclass_does_not_rename_python_keywords() {
     };
     let cfg = default_cfg();
 
-    let result = gen_enum(&enum_def, &cfg);
+    let result = gen_enum(&enum_def, &cfg, None);
 
     assert!(
         !result.contains("#[pyo3(name ="),

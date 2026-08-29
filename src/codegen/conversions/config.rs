@@ -193,15 +193,17 @@ pub struct ConversionConfig<'a> {
     /// `configured_features`' proof about that dependency is already the complete, correct answer
     /// there regardless of what any binding declaration does.
     ///
-    /// NAPI is the only backend whose enum declaration
-    /// (`backends::napi::gen_bindings::enums::gen_enum`) calls `enum_variant_declaration` with
-    /// `Some(configured_features)` and therefore genuinely drops the variant -- every other
-    /// backend's wrapper declaration (pyo3's flat/data enum bodies, magnus, rustler, dart, and
-    /// wasm's foreign-variant branch of `enum_variant_declaration_without_cfg_attribute`) keeps a
-    /// foreign cfg-gated variant unconditionally, ignoring `configured_features` entirely, so for
-    /// them the binding_to_core catch-all is required whenever such a variant exists no matter
-    /// what `configured_features` proves. Defaults to `false` (the safe direction: emit the
-    /// catch-all). Only NAPI sets this `true`. ~keep
+    /// NAPI (`backends::napi::gen_bindings::enums::gen_enum`), PyO3's fieldless-enum declaration,
+    /// and Magnus's own declaration all call `enum_variant_declaration` and therefore genuinely
+    /// drop the variant -- as do Rustler's and Dart's mirror declarations, fixed the same way but
+    /// outside this module's `ConversionConfig` flow entirely. PyO3's data-enum bodies (a struct
+    /// wrapper with no per-variant declaration to drop) and wasm's foreign-variant branch of
+    /// `enum_variant_declaration_without_cfg_attribute` still keep a foreign cfg-gated variant
+    /// unconditionally, ignoring `configured_features` entirely, so for them the binding_to_core
+    /// catch-all is required whenever such a variant exists no matter what `configured_features`
+    /// proves. Defaults to `false` (the safe direction: emit the catch-all) -- set it `true` only
+    /// when the paired declaration this `ConversionConfig` feeds has actually been taught to
+    /// drop, as pyo3's and magnus's own construction sites now do. ~keep
     pub declaration_drops_unreachable_foreign_variants: bool,
 }
 

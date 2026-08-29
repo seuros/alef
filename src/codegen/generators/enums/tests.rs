@@ -702,6 +702,7 @@ fn gen_pyo3_multi_variant_enum_new_parses_as_rust() {
             ],
         ),
         &cfg,
+        None,
     );
 
     let wrapped = format!("{generated}\n");
@@ -716,7 +717,11 @@ fn gen_pyo3_multi_variant_enum_new_parses_as_rust() {
 #[test]
 fn gen_pyo3_unit_enum_emits_string_methods() {
     let cfg = pyo3_unit_enum_config();
-    let generated = gen_enum(&enum_def("StructureKind", vec![variant("Function", Vec::new())]), &cfg);
+    let generated = gen_enum(
+        &enum_def("StructureKind", vec![variant("Function", Vec::new())]),
+        &cfg,
+        None,
+    );
     assert!(
         generated.contains("fn __str__(&self) -> PyResult<String>"),
         "{generated}"
