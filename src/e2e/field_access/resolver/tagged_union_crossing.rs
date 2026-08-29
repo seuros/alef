@@ -38,6 +38,12 @@ impl FieldResolver {
         fixture_field: &str,
     ) -> Option<(String, String, String, String)> {
         let parts: Vec<&str> = fixture_field.split('.').collect();
+        if let Some(first) = parts.first() {
+            let variant = first.to_upper_camel_case();
+            if self.union_variant_payload(root, &variant).is_some() {
+                return Some((String::new(), root.to_string(), variant, parts[1..].join(".")));
+            }
+        }
         for index in 0..parts.len().saturating_sub(1) {
             let prefix = parts[..=index].join(".");
             let Some(union_type) = enum_type_at_path_from(&self.ir_enum_map, root, &prefix) else {
@@ -81,6 +87,11 @@ impl FieldResolver {
             return false;
         };
         super::super::ir_result_fields::is_optional_path_from(&self.ir_result_field_map, payload_type, field)
+    }
+
+    /// Whether `path`'s leaf is optional when walking from a known payload owner.
+    pub fn ir_field_is_optional_from(&self, root: &str, path: &str) -> bool {
+        super::super::ir_result_fields::is_optional_path_from(&self.ir_result_field_map, root, path)
     }
 
     /// The left-to-right scan [`Self::tagged_union_split`] does, generalized with `absolute_prefix`

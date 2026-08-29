@@ -115,6 +115,23 @@ fn render_tagged_union_numeric_assertion(out: &mut String, assertion: &Assertion
     }
 }
 
+fn dart_payload_accessor(field_resolver: &FieldResolver, owner: &str, path: &str) -> String {
+    let segments: Vec<&str> = path.split('.').filter(|segment| !segment.is_empty()).collect();
+    let mut accessor = String::new();
+    for (index, segment) in segments.iter().enumerate() {
+        if index > 0 {
+            let prefix = segments[..index].join(".");
+            accessor.push_str(if field_resolver.ir_field_is_optional_from(owner, &prefix) {
+                "?."
+            } else {
+                "."
+            });
+        }
+        accessor.push_str(&field_to_dart_accessor(segment));
+    }
+    accessor
+}
+
 fn narrow_tagged_union_expression(
     field_resolver: &FieldResolver,
     container: String,
@@ -130,7 +147,7 @@ fn narrow_tagged_union_expression(
     let Some((prefix, next_union, next_variant, next_suffix)) =
         field_resolver.ir_tagged_union_split_from(payload_type, &suffix)
     else {
-        let accessor = field_to_dart_accessor(&suffix);
+        let accessor = dart_payload_accessor(field_resolver, payload_type, &suffix);
         let expression = if accessor.is_empty() {
             narrowed
         } else {
@@ -138,7 +155,12 @@ fn narrow_tagged_union_expression(
         };
         return Some((expression, union_type, variant, suffix));
     };
-    let next_container = format!("{narrowed}.{}", field_to_dart_accessor(&prefix));
+    let prefix_accessor = dart_payload_accessor(field_resolver, payload_type, &prefix);
+    let next_container = if prefix_accessor.is_empty() {
+        narrowed
+    } else {
+        format!("{narrowed}.{prefix_accessor}")
+    };
     narrow_tagged_union_expression(field_resolver, next_container, next_union, next_variant, next_suffix)
 }
 

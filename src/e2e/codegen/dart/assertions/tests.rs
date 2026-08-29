@@ -457,10 +457,13 @@ mod tagged_union_assertion_tests {
             },
             TypeDef {
                 name: "Metadata".to_string(),
-                fields: vec![field(
-                    "format",
-                    TypeRef::Optional(Box::new(TypeRef::Named("FormatMetadata".to_string()))),
-                )],
+                fields: vec![
+                    field(
+                        "format",
+                        TypeRef::Optional(Box::new(TypeRef::Named("FormatMetadata".to_string()))),
+                    ),
+                    field("direct", TypeRef::Named("DirectOuter".to_string())),
+                ],
                 ..TypeDef::default()
             },
             TypeDef {
@@ -472,7 +475,16 @@ mod tagged_union_assertion_tests {
                         TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
                     ),
                     field("detail", TypeRef::Named("DetailUnion".to_string())),
+                    field(
+                        "details",
+                        TypeRef::Optional(Box::new(TypeRef::Named("Details".to_string()))),
+                    ),
                 ],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Details".to_string(),
+                fields: vec![field("kind", TypeRef::Named("DetailUnion".to_string()))],
                 ..TypeDef::default()
             },
             TypeDef {
@@ -495,6 +507,24 @@ mod tagged_union_assertion_tests {
                 name: "DetailUnion".to_string(),
                 variants: vec![EnumVariant {
                     name: "Stats".to_string(),
+                    fields: vec![field("field0", TypeRef::Named("StatsMetadata".to_string()))],
+                    ..EnumVariant::default()
+                }],
+                ..EnumDef::default()
+            },
+            EnumDef {
+                name: "DirectOuter".to_string(),
+                variants: vec![EnumVariant {
+                    name: "Wrapped".to_string(),
+                    fields: vec![field("field0", TypeRef::Named("DirectInner".to_string()))],
+                    ..EnumVariant::default()
+                }],
+                ..EnumDef::default()
+            },
+            EnumDef {
+                name: "DirectInner".to_string(),
+                variants: vec![EnumVariant {
+                    name: "Value".to_string(),
                     fields: vec![field("field0", TypeRef::Named("StatsMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
@@ -572,6 +602,34 @@ mod tagged_union_assertion_tests {
         );
     }
 
+    #[test]
+    fn nested_union_access_uses_null_navigation_for_an_optional_intermediate_struct() {
+        let out = render(Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].metadata.format.html.details.kind.stats.count".to_string()),
+            value: Some(serde_json::json!(3)),
+            ..Assertion::default()
+        });
+        assert_eq!(
+            out,
+            "    expect(((result.results[0].metadata.format as FormatMetadata_Html).field0.details?.kind as DetailUnion_Stats).field0.count, equals(3));\n"
+        );
+    }
+
+    #[test]
+    fn directly_nested_union_payload_narrows_the_inner_union() {
+        let out = render(Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].metadata.direct.wrapped.value.count".to_string()),
+            value: Some(serde_json::json!(3)),
+            ..Assertion::default()
+        });
+        assert_eq!(
+            out,
+            "    expect(((result.results[0].metadata.direct as DirectOuter_Wrapped).field0 as DirectInner_Value).field0.count, equals(3));\n"
+        );
+    }
+
     /// ~keep The old renderer only recognized consumer-configured method-call crossings. This
     /// control keeps the fixture deliberately free of method-call metadata so the IR must fire.
     #[test]
@@ -626,21 +684,38 @@ mod tagged_union_assertion_tests {
                 value: Some(serde_json::json!(3)),
                 ..Assertion::default()
             },
+            Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("results[0].metadata.format.html.details.kind.stats.count".to_string()),
+                value: Some(serde_json::json!(3)),
+                ..Assertion::default()
+            },
+            Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("results[0].metadata.direct.wrapped.value.count".to_string()),
+                value: Some(serde_json::json!(3)),
+                ..Assertion::default()
+            },
         ]
         .into_iter()
         .map(render)
         .collect::<String>();
         let source = format!(
-            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass DetailUnion {{}}\nclass DetailUnion_Stats extends DetailUnion {{ final StatsMetadata field0; DetailUnion_Stats(this.field0); }}\nclass StatsMetadata {{ final int count; StatsMetadata(this.count); }}\nclass HtmlMetadata {{ final String title; final List<String>? headers; final DetailUnion detail; HtmlMetadata(this.title, this.headers, this.detail); }}\nclass Metadata {{ final FormatMetadata? format; Metadata(this.format); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b'], DetailUnion_Stats(StatsMetadata(3))))))]);\n{assertions}}}\n"
+            "class FormatMetadata {{}}\nclass FormatMetadata_Html extends FormatMetadata {{ final HtmlMetadata field0; FormatMetadata_Html(this.field0); }}\nclass DetailUnion {{}}\nclass DetailUnion_Stats extends DetailUnion {{ final StatsMetadata field0; DetailUnion_Stats(this.field0); }}\nclass DirectOuter {{}}\nclass DirectOuter_Wrapped extends DirectOuter {{ final DirectInner field0; DirectOuter_Wrapped(this.field0); }}\nclass DirectInner {{}}\nclass DirectInner_Value extends DirectInner {{ final StatsMetadata field0; DirectInner_Value(this.field0); }}\nclass StatsMetadata {{ final int count; StatsMetadata(this.count); }}\nclass Details {{ final DetailUnion kind; Details(this.kind); }}\nclass HtmlMetadata {{ final String title; final List<String>? headers; final DetailUnion detail; final Details? details; HtmlMetadata(this.title, this.headers, this.detail, this.details); }}\nclass Metadata {{ final FormatMetadata? format; final DirectOuter direct; Metadata(this.format, this.direct); }}\nclass Document {{ final Metadata metadata; Document(this.metadata); }}\nclass Result {{ final List<Document> results; Result(this.results); }}\nObject equals(Object? value) => value!;\nObject greaterThanOrEqualTo(Object? value) => value!;\nvoid expect(Object? actual, Object? matcher) {{}}\nvoid main() {{ final stats = StatsMetadata(3); final result = Result([Document(Metadata(FormatMetadata_Html(HtmlMetadata('Simple Table Test', ['a', 'b'], DetailUnion_Stats(stats), Details(DetailUnion_Stats(stats)))), DirectOuter_Wrapped(DirectInner_Value(stats))))]);\n{assertions}}}\n"
         );
         assert!(
             dart_analyze(&source).success(),
             "generated union assertion did not analyze:\n{source}"
         );
-        let sabotaged = source.replace("DetailUnion_Stats).field0", "MissingVariant).field0");
+        let sabotaged = source.replace("DirectInner_Value).field0", "MissingVariant).field0");
         assert!(
             !dart_analyze(&sabotaged).success(),
             "Dart analyzer accepted a nonexistent union subtype; compile check was vacuous"
+        );
+        let unsafe_optional = source.replace("details?.kind", "details.kind");
+        assert!(
+            !dart_analyze(&unsafe_optional).success(),
+            "Dart analyzer accepted an unguarded optional intermediate; nullability check was vacuous"
         );
     }
 }
