@@ -6,6 +6,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::collections::{HashMap, HashSet};
 
+use super::enum_variant_access;
 use super::values::json_to_ruby;
 
 mod chunks_synthetic;
@@ -81,24 +82,29 @@ pub(super) fn render_assertion(
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct attribute accesses on the result.
     if let Some(f) = &assertion.field {
-        // Skip enum variant accessors (metadata.format.excel etc.) — Magnus serializes
-        // FormatMetadata to JSON, so variants are unavailable in Ruby
-        if f.contains("metadata.format.") && f.contains(".") {
-            out.push_str(&format!(
-                "    # skipped: {}\n",
-                FieldSkip::EnumVariantAccessorNotAvailableInRuby.message(f)
-            ));
-            return;
-        }
-
-        // For metadata.format (enum, serialized to Hash), skip since the serialization
-        // format differs between languages and doesn't preserve Display formatting
-        if f == "metadata.format" {
-            out.push_str(&format!(
-                "    # skipped: {}\n",
-                FieldSkip::EnumSerializationDiffersInRuby.message(f)
-            ));
-            return;
+        // Magnus lowers any data-carrying enum to a plain Ruby Hash (see
+        // `enum_variant_access`'s module doc), so a path that steps into one has no native
+        // accessor and a path that lands exactly on one can't be compared as a string. Derived
+        // from the crate's own IR — which enum the field resolves to, and whether that enum's
+        // Ruby lowering has data — never from the field's own name, so a hash-serialized enum
+        // under any other name skips the same way and a field that only shares a name with one
+        // does not. ~keep
+        match enum_variant_access::classify(field_resolver, f) {
+            enum_variant_access::RubyEnumAccess::VariantAccessorUnavailable => {
+                out.push_str(&format!(
+                    "    # skipped: {}\n",
+                    FieldSkip::EnumVariantAccessorNotAvailableInRuby.message(f)
+                ));
+                return;
+            }
+            enum_variant_access::RubyEnumAccess::SerializedAsHash => {
+                out.push_str(&format!(
+                    "    # skipped: {}\n",
+                    FieldSkip::EnumSerializationDiffersInRuby.message(f)
+                ));
+                return;
+            }
+            enum_variant_access::RubyEnumAccess::Available => {}
         }
 
         match f.as_str() {

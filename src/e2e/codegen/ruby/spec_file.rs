@@ -114,6 +114,7 @@ pub(super) fn render_spec_file(
             )
             .with_enum_fields(e2e_config.effective_fields_enum(fixture_call).clone())
             .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
+            .with_ruby_hash_serialized_enum_names(super::enum_variant_access::hash_serialized_enum_names(enums))
             .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
             let field_resolver = &fixture_call_resolver;
             let fixture_call_overrides = fixture_call.overrides.get("ruby");

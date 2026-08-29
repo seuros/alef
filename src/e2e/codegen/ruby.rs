@@ -233,6 +233,7 @@ impl E2eCodegen for RubyCodegen {
 
 mod args;
 mod assertions;
+mod enum_variant_access;
 mod examples;
 mod http;
 mod project;

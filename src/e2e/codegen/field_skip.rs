@@ -210,17 +210,25 @@ field_skip_variants! {
     /// `enum_magnus.rs.jinja` template ALREADY generates a native per-variant accessor —
     /// `impl {{ enum_name }} { pub fn {{ variant.snake_name }}(&self) -> Option<&T> { .. } }` —
     /// for every internally-tagged (`serde_tag.is_some()`) data enum's single-field tuple
-    /// variants. Magnus is a general-purpose Ruby binding library with no restriction on
-    /// registering arbitrary instance methods (see the sibling `data_enum_variant_constructor_
-    /// registrations`, which registers real Ruby singleton methods for the OTHER data-enum
-    /// shape). The generated accessor is simply never wired to the Ruby class:
-    /// `functions/module_init.rs`'s only enum-registration loop explicitly
-    /// `continue`s past every enum with `serde_tag.is_some()` (it registers constructors for the
-    /// externally-tagged sibling instead), so the accessor is unreachable dead code today, not a
-    /// property Ruby's type system or magnus's FFI model forbids. `GeneratorGap`, not
-    /// `LanguageLimitation`: a future alef release that registers the already-generated method
-    /// (and clones the payload rather than borrowing it, so `Option<T>: IntoValue` applies)
-    /// closes this gap; no fixture or `alef.toml` edit can, so it is not an `AuthoringGap` either.
+    /// variants, and a SEPARATE, already-wired path exists too:
+    /// `gen_bindings::tagged_enums::gen_tagged_enum_ruby_classes` emits a pure-Ruby marker module
+    /// plus per-variant `Data.define` classes with typed field accessors and a
+    /// `ClassName.from_hash(hash)` dispatcher into the `.rb` wrapper for this exact enum shape.
+    /// Neither is reachable from a plain field-path accessor today: the Rust-side method is never
+    /// registered (`functions/module_init.rs`'s only enum-registration loop `continue`s past
+    /// every enum with `serde_tag.is_some()`, registering constructors for the externally-tagged
+    /// sibling instead) — and, unlike the sibling `data_enum_variant_constructor_registrations`
+    /// shape, registering it as an INSTANCE method the way `variant_snake` is shaped would stay
+    /// unreachable even after fixing that: `impl magnus::IntoValue for {{ enum_name }}`'s
+    /// `has_data` branch unconditionally serializes through `serde_json::to_value` into a plain
+    /// Ruby `Hash`, for every `has_data` enum regardless of `serde_tag` — the type is never
+    /// `#[magnus::wrap]`/`TypedData`-backed, so no Ruby object ever crosses the boundary as a
+    /// member of a class an instance `method!` registration could dispatch to. The Ruby-native
+    /// `from_hash` path does not have that problem (it operates on the Hash directly), but
+    /// nothing routes a field-path accessor through it. `GeneratorGap`, not `LanguageLimitation`:
+    /// alef could close this by teaching the e2e accessor renderer to emit
+    /// `ClassName.from_hash(...)` for a path crossing one of these enums; no fixture or
+    /// `alef.toml` edit can, so it is not an `AuthoringGap` either.
     EnumVariantAccessorNotAvailableInRuby: GeneratorGap => (
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
@@ -256,7 +264,7 @@ field_skip_variants! {
         "enum variant accessor ",
         " not yet spellable in PHP (flat-class properties keep their snake_case name)",
     ),
-    /// ~keep Reworded from `metadata.format enum field serialization differs in Ruby`, which named
+    /// ~keep Reworded from a fixed string ("enum field serialization differs in Ruby") that named
     /// no quoted field and so was structurally uncountable — the strict gate could never have seen
     /// it whatever patterns it matched. The reason is unchanged; only the field is now named.
     EnumSerializationDiffersInRuby: LanguageLimitation => ("field ", " enum serialization differs in Ruby"),
@@ -480,10 +488,10 @@ mod tests {
     #[test]
     fn every_variant_round_trips_through_extract() {
         for variant in FieldSkip::ALL {
-            let rendered = format!("    // skipped: {}", variant.message("metadata.format.excel"));
+            let rendered = format!("    // skipped: {}", variant.message("outer.inner.leaf"));
             assert_eq!(
                 FieldSkip::extract(&rendered),
-                Some("metadata.format.excel"),
+                Some("outer.inner.leaf"),
                 "variant {variant:?} rendered `{rendered}` but the gate did not recognise it"
             );
         }

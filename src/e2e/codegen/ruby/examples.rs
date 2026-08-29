@@ -951,17 +951,25 @@ mod inert_example_refusal_tests {
         let _ = take_inert_examples();
         let fixture = fixture_with(
             "void_all_skipped",
-            vec![assertion("equals", "metadata.format.excel", serde_json::json!("x"))],
+            vec![assertion("equals", "keywords", serde_json::json!("x"))],
         );
 
         let out = render_plain(&fixture, &resolver_knowing(&["content"]), true);
 
+        // The fixture field moved to `keywords` when the hash-serialized-enum classifier became
+        // IR-backed: with no IR wired into this bare resolver the enum path can no longer refuse,
+        // so this fixture now skips via the availability oracle instead. That routes to a
+        // different -- and stronger -- failable expectation than the void fallback: alef emits a
+        // deliberately-failing `unresolved_assertion` rather than merely asserting no raise. The
+        // invariant under test is unchanged (an all-skipped example must still be able to fail);
+        // only which branch supplies it moved. The enum-accessor path is covered by the IR-backed
+        // tests in `ruby/enum_variant_access.rs`. ~keep
         assert!(
-            out.contains("expect { SampleCrate.process() }.not_to raise_error"),
-            "a void call with nothing else to assert must still assert it did not raise, got:\n{out}"
+            out.contains("expect(unresolved_assertion).to be_nil"),
+            "an all-skipped example must still carry an expectation that can fail, got:\n{out}"
         );
         assert!(
-            out.contains("enum variant accessor 'metadata.format.excel' not available on Ruby"),
+            out.contains("field 'keywords' not available on Ruby ProcessingResult"),
             "the marker must survive beside the fallback, got:\n{out}"
         );
         assert!(

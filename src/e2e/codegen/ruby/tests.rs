@@ -127,38 +127,11 @@ mod chunk_heading_context_tests {
         );
     }
 
-    /// Negative control for the fix above: a field that genuinely cannot be reached the same
-    /// way in Ruby still skips. Magnus's `IntoValue` for a data enum serializes it via
-    /// `serde_json::to_value` into a plain Hash (`enum_magnus.rs.jinja`), so a variant accessor
-    /// like `.excel` has no Ruby method to call — this skip has a real, checkable cause, unlike
-    /// the heading-context one that used to fire unconditionally.
-    #[test]
-    fn enum_variant_accessor_still_skips_because_ruby_serializes_it_to_a_hash() {
-        let out = render("metadata.format.excel", "equals", Some(serde_json::json!("Excel")));
-        assert!(out.contains("# skipped:"), "got: {out}");
-        assert!(
-            out.contains("enum variant accessor 'metadata.format.excel' not available on Ruby (serialized to Hash)"),
-            "got: {out}"
-        );
-    }
-
-    /// The skip must classify as a `GeneratorGap`, not a `LanguageLimitation`:
-    /// `backends::magnus::gen_bindings::classes::gen_enum` already generates a native per-variant
-    /// accessor method for this exact enum shape (internally tagged, single-field tuple variant);
-    /// it is simply never registered with the Ruby class in `module_init.rs`. That is alef's own
-    /// unfinished wiring, not a boundary Ruby or magnus forbids crossing — see
-    /// `field_skip::tests::the_load_bearing_classifications_are_pinned` for the full evidence.
-    #[test]
-    fn enum_variant_accessor_skip_is_a_generator_gap_not_a_language_limitation() {
-        use crate::e2e::codegen::field_skip::{FieldSkip, SkipClass};
-
-        let out = render("metadata.format.excel", "equals", Some(serde_json::json!("Excel")));
-        assert_eq!(
-            FieldSkip::extract_classified(&out).map(|(field, skip)| (field, skip.class())),
-            Some(("metadata.format.excel", SkipClass::GeneratorGap)),
-            "got: {out}"
-        );
-    }
+    // The negative-control "enum variant accessor still skips because Ruby serializes it to a
+    // Hash" coverage (and its GeneratorGap-classification sibling) moved to
+    // `enum_variant_access.rs`, which now derives the skip from a real IR fixture instead of the
+    // bare `FieldResolver::new(...)` this module's `render` helper builds — the classification is
+    // IR-driven, so it needs an actual enum in scope to exercise, not just a field name. ~keep
 }
 
 #[cfg(test)]
