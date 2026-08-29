@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.74.0] - 2026-08-29
+
 ### Fixed
 
 - fix(e2e,typescript): route an assertion that crosses a tagged-union variant boundary through the recorded skip funnel instead of emitting a dotted accessor that cannot compile. The TypeScript resolver was built with an empty method-calls set where eight sibling backends pass `effective_fields_method_calls`, so `tagged_union_split` never saw a declared crossing and the raw path reached napi's flattened `#[napi(object)]` enum -- which has no variant member at all -- as `TS2339`. Nothing in the repo observed this: there are no node or wasm e2e snapshots, and no fixture declares `fields_method_calls`.
