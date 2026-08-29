@@ -178,7 +178,7 @@ mod collection_tests {
     }
 
     #[test]
-    fn xberg_html_headers_resolve_through_batch_and_tagged_union_ownership() {
+    fn nested_headers_resolve_through_batch_and_tagged_union_ownership() {
         let types = vec![
             TypeDef {
                 name: "ExtractionResult".to_string(),
