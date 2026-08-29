@@ -25,6 +25,13 @@ pub fn generate(
     config_path: &Path,
     write_cache: bool,
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
+    // Report against the extracted source surface, then project the documentation used by every
+    // backend so it cannot advertise a foreign cfg-only variant that none of them emit. ~keep
+    crate::codegen::foreign_cfg_variants::warn_foreign_cfg_gated_variants(api, config, languages);
+    let projected_api = crate::codegen::foreign_cfg_variants::project_docs_without_unreachable_foreign_variants(
+        api, config, languages,
+    )?;
+    let api = &projected_api;
     let validated_api = validate_generation_api(api, config, languages)?;
 
     // Every host-language backend derives its error dispatch from the same explicit
@@ -40,12 +47,6 @@ pub fn generate(
             lang
         );
     }
-
-    // Once for the run, before the per-language loop: a foreign cfg-gated enum variant is dropped
-    // by every Rust-emitting backend and in both conversion directions, and reporting it from each
-    // of those fifteen sites restated one fact up to fifteen times per variant on every clean
-    // regen. The sites keep the detail at DEBUG. ~keep
-    crate::codegen::foreign_cfg_variants::warn_foreign_cfg_gated_variants(api, config, languages);
 
     let ir_json = serde_json::to_string(api)?;
     let mut config_toml =
@@ -148,7 +149,10 @@ pub fn generate_stubs(
     config: &ResolvedCrateConfig,
     languages: &[Language],
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
-    let validated_api = validate_generation_api(api, config, languages)?;
+    let projected_api = crate::codegen::foreign_cfg_variants::project_docs_without_unreachable_foreign_variants(
+        api, config, languages,
+    )?;
+    let validated_api = validate_generation_api(&projected_api, config, languages)?;
 
     let results: Vec<(Language, Vec<GeneratedFile>)> = languages
         .par_iter()
@@ -174,7 +178,10 @@ pub fn generate_service_api(
     config: &ResolvedCrateConfig,
     languages: &[Language],
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
-    let validated_api = validate_generation_api(api, config, languages)?;
+    let projected_api = crate::codegen::foreign_cfg_variants::project_docs_without_unreachable_foreign_variants(
+        api, config, languages,
+    )?;
+    let validated_api = validate_generation_api(&projected_api, config, languages)?;
     let api = validated_api.api();
 
     if api.services.is_empty() {
@@ -276,7 +283,10 @@ pub fn generate_public_api(
     languages: &[Language],
     config_path: &Path,
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
-    let validated_api = validate_generation_api(api, config, languages)?;
+    let projected_api = crate::codegen::foreign_cfg_variants::project_docs_without_unreachable_foreign_variants(
+        api, config, languages,
+    )?;
+    let validated_api = validate_generation_api(&projected_api, config, languages)?;
 
     let results: Vec<(Language, Vec<GeneratedFile>)> = languages
         .par_iter()

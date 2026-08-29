@@ -30,6 +30,104 @@ use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 
+fn universally_dropped_variant_references(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+) -> BTreeSet<String> {
+    let host_crates = host_crate_spellings(api, config, languages);
+    if host_crates.is_empty() {
+        return BTreeSet::new();
+    }
+
+    api.enums
+        .iter()
+        .filter(|enum_def| {
+            host_crates
+                .iter()
+                .all(|host_crate| !is_host_owned_rust_path(host_crate, &enum_def.rust_path))
+        })
+        .flat_map(|enum_def| {
+            enum_def
+                .variants
+                .iter()
+                .filter(|variant| variant.cfg.is_some())
+                .flat_map(|variant| {
+                    [
+                        format!("{}::{}", enum_def.name, variant.name),
+                        format!("{}.{}", enum_def.name, variant.name),
+                    ]
+                })
+        })
+        .collect()
+}
+
+fn strip_unreachable_variant_doc_lines(value: &mut serde_json::Value, references: &BTreeSet<String>) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                strip_unreachable_variant_doc_lines(value, references);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (name, value) in fields {
+                if name == "doc"
+                    && let serde_json::Value::String(doc) = value
+                {
+                    *doc = doc
+                        .split('\n')
+                        .filter(|line| {
+                            !references
+                                .iter()
+                                .any(|reference| contains_complete_variant_reference(line, reference))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                } else {
+                    strip_unreachable_variant_doc_lines(value, references);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn contains_complete_variant_reference(line: &str, reference: &str) -> bool {
+    line.match_indices(reference).any(|(start, _)| {
+        let end = start + reference.len();
+        let left_is_identifier = line[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|character| character.is_alphanumeric() || character == '_');
+        let right_is_identifier = line[end..]
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_alphanumeric() || character == '_');
+        !left_is_identifier && !right_is_identifier
+    })
+}
+
+/// Clone the extracted surface for generation while removing source-doc lines that advertise an
+/// enum variant every requested backend necessarily omits.
+///
+/// The source IR remains intact for diagnostics and provenance. The projection is deliberately
+/// limited to a variant whose enum is foreign under every requested backend's ownership spelling;
+/// a mixed run where even one backend can expose the variant keeps the source documentation. ~keep
+pub fn project_docs_without_unreachable_foreign_variants(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+) -> anyhow::Result<ApiSurface> {
+    let references = universally_dropped_variant_references(api, config, languages);
+    if references.is_empty() {
+        return Ok(api.clone());
+    }
+
+    let mut value = serde_json::to_value(api)?;
+    strip_unreachable_variant_doc_lines(&mut value, &references);
+    Ok(serde_json::from_value(value)?)
+}
+
 /// Every spelling of "the host crate" that a requested language's generator will classify enum
 /// ownership against.
 ///

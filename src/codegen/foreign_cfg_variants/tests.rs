@@ -1,7 +1,7 @@
 use super::*;
 use crate::codegen::conversions::ConversionConfig;
 use crate::core::config::NewAlefConfig;
-use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 
 const HOST_CRATE: &str = "test-lib";
 const HOST_IMPORT: &str = "test_lib";
@@ -250,5 +250,45 @@ fn host_crate_spellings_follow_each_backends_own_derivation() {
         spellings,
         BTreeSet::from([HOST_IMPORT.to_string(), "facade".to_string()]),
         "Swift's bridge asks against the crate name, PHP's against core_import"
+    );
+}
+
+#[test]
+fn generated_docs_do_not_advertise_a_variant_every_backend_drops() {
+    let mut api = surface(foreign_enum(vec![http_variant(), gated_variant(GATED_VARIANT)]));
+    api.types.push(TypeDef {
+        name: "ClientOptions".to_string(),
+        rust_path: format!("{HOST_IMPORT}::ClientOptions"),
+        fields: vec![FieldDef {
+            name: "transport".to_string(),
+            ty: TypeRef::Named("Transport".to_string()),
+            doc: "Which transport to use.\n- `Transport::Http` is always available.\n- `Transport::WebSocket` requires the dependency feature.\n- `AdvancedTransport::WebSocket` remains available."
+                .to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let projected =
+        project_docs_without_unreachable_foreign_variants(&api, &config_for(&FAN_OUT_LANGUAGES), &FAN_OUT_LANGUAGES)
+            .expect("project generated docs");
+    let doc = &projected.types[0].fields[0].doc;
+
+    assert!(
+        doc.contains("Transport::Http"),
+        "reachable variant docs must survive: {doc}"
+    );
+    assert!(
+        !doc.lines()
+            .any(|line| line == "- `Transport::WebSocket` requires the dependency feature."),
+        "generated docs must not advertise a variant omitted from every binding: {doc}"
+    );
+    assert!(
+        doc.contains("AdvancedTransport::WebSocket"),
+        "a longer, unrelated enum name must not be treated as the dropped reference: {doc}"
+    );
+    assert!(
+        api.types[0].fields[0].doc.contains("Transport::WebSocket"),
+        "the extracted source IR must remain unchanged"
     );
 }
