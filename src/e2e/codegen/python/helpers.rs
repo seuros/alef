@@ -222,9 +222,81 @@ pub(super) fn python_method_helper_import(method_name: &str) -> Option<String> {
     }
 }
 
+/// Strip one redundant enclosing `(...)` pair from `expr`, for use when `expr` is about to be
+/// placed in call-argument position (e.g. the sole content between a call's own parens, as in
+/// `len({expr})`).
+///
+/// A field accessor built from an `Optional` narrowing crossing (`render_python_with_optionals`)
+/// already carries its own enclosing parens: `(result.markdown.content if result.markdown else
+/// None)`. Those parens are load-bearing where the accessor is embedded in a larger expression
+/// whose own grammar would otherwise bind past the ternary (`{expr}.startswith(x)`, `{expr} is
+/// not None`, ...), but they are pure noise once wrapped in a call's own delimiters — a call's
+/// parens already draw that boundary, so `len((EXPR))` and `len(EXPR)` parse identically and only
+/// the first trips ruff `UP034`. Call-argument position is exactly the one context where
+/// stripping is always safe regardless of what `expr` itself contains, so this is applied there
+/// and nowhere else — the receiver of a method call (`{expr}.startswith(...)`) is NOT call-
+/// argument position (it's the thing before the dot) and must keep its parens. ~keep
+///
+/// Only strips a pair that both wraps the ENTIRE string and matches (the leading `(` closes
+/// exactly at the trailing `)`, not before) — `(a) + (b)` starts with `(` and ends with `)` but
+/// is two separate groups, not one redundant enclosing pair, so it is returned unchanged.
+pub(super) fn strip_redundant_call_arg_parens(expr: &str) -> &str {
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return expr;
+    }
+    let mut depth: i32 = 0;
+    for (index, ch) in expr.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    // The opening paren closed before the string's last character — the outer
+                    // '(' / ')' are not one matching pair enclosing the whole expression.
+                    return if index == expr.len() - 1 {
+                        &expr[1..expr.len() - 1]
+                    } else {
+                        expr
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+    expr
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_redundant_call_arg_parens_strips_a_narrowing_ternarys_enclosing_parens() {
+        assert_eq!(
+            strip_redundant_call_arg_parens("(result.markdown.content if result.markdown else None)"),
+            "result.markdown.content if result.markdown else None"
+        );
+    }
+
+    #[test]
+    fn strip_redundant_call_arg_parens_leaves_an_unparenthesized_expression_untouched() {
+        assert_eq!(
+            strip_redundant_call_arg_parens("result.status_code"),
+            "result.status_code"
+        );
+    }
+
+    #[test]
+    fn strip_redundant_call_arg_parens_leaves_two_separate_groups_untouched() {
+        assert_eq!(strip_redundant_call_arg_parens("(a) + (b)"), "(a) + (b)");
+    }
+
+    #[test]
+    fn strip_redundant_call_arg_parens_leaves_a_bare_parenthesized_tuple_element_untouched() {
+        // A single parenthesized call, not a redundant wrap: `(x)(y)` — the outer '(' closes
+        // before the string's end, so this must not be mistaken for one enclosing pair.
+        assert_eq!(strip_redundant_call_arg_parens("(x)(y)"), "(x)(y)");
+    }
 
     #[test]
     fn classify_bytes_value_html_is_inline() {

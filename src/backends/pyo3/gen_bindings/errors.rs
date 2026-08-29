@@ -13,7 +13,14 @@ use ahash::AHashSet;
 /// source of truth for the config-vs-native-return split: `gen_init_py` uses it to route imports,
 /// and the data-enum variant-constructor generator uses it to decide which `Named` payload fields
 /// must be coerced (a native-return type stays compiled, so no coercion is needed or wanted).
-pub(super) fn is_dataclass_backed_config(
+///
+/// `pub(crate)` (not `pub(super)`) because `crate::e2e::field_access::python_typeddict` also
+/// calls this directly: `typ.is_return_type && is_dataclass_backed_config(..)` is the exact
+/// condition under which `options.py` emits `typ` as a `TypedDict` (subscript access) rather
+/// than an attribute-access class, and the python e2e generator asks this function for that
+/// answer instead of carrying its own copy of the rule (see the `two-generators-disagree`
+/// skill — a duplicated copy is exactly the defect shape it warns about). ~keep
+pub(crate) fn is_dataclass_backed_config(
     typ: &TypeDef,
     output_style: PythonDtoStyle,
     reexported_names: &AHashSet<&str>,

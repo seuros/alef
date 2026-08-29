@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(python-e2e): render subscript access (`result["field"]`) instead of attribute access for
+  fields owned by a type the pyo3 backend emits as a `TypedDict` (`[workspace.dto]
+  python_output = "typed-dict"`), fixing `AttributeError: 'dict' object has no attribute '...'`
+  in generated e2e tests. The classification is asked directly of the pyo3 backend's own
+  predicate, so a nested field whose own type is not a `TypedDict` correctly keeps attribute
+  access.
+- fix(python-e2e): drop the redundant enclosing parentheses around an `Optional`-narrowing
+  accessor when it lands as the sole argument to `len(...)`/`hasattr(...)`, fixing ruff `UP034`
+  findings in generated `not_empty`/`min_length`/`max_length`/`count_min`/`count_equals`
+  assertions.
 - fix(java): resolve streaming-adapter request DTOs in doc snippets the same way the generated e2e
   test does, so a streaming call's snippet passes the typed request -- and, for an `owner_type`
   adapter, dispatches on the owner-handle instance -- instead of the flat scalar-argument shape

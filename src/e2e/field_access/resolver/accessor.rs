@@ -112,7 +112,9 @@ impl FieldResolver {
             "php" if !self.php_getter_map.is_empty() => {
                 render_php_with_getters(&segments, result_var, &self.php_getter_map, &self.optional_fields)
             }
-            "python" => render_python_with_optionals(&segments, result_var, &self.optional_fields),
+            "python" => {
+                render_python_with_optionals(&segments, result_var, &self.optional_fields, &self.python_typeddict_map)
+            }
             _ => render_accessor(&segments, language, result_var),
         }
     }

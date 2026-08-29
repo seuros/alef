@@ -63,6 +63,16 @@ pub(super) fn render_test_function(
         "python",
         crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
     );
+    // Anchor the IR-derived `TypedDict`-vs-attribute-access classification the same way: the
+    // pyo3 backend's own predicate (`is_dataclass_backed_config`, via `python_typeddict_fields`)
+    // decides subscript vs. attribute access per owner type, so the python e2e renderer can only
+    // ever agree with what `options.py` actually emits. Purely additive against a resolver built
+    // before this map existed: an empty/default map leaves every path on attribute access. ~keep
+    let reexported_types: &[String] = config
+        .python
+        .as_ref()
+        .map(|p| p.reexported_types.as_slice())
+        .unwrap_or(&[]);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -72,6 +82,10 @@ pub(super) fn render_test_function(
     )
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
+    .with_python_typeddict_map(
+        FieldResolver::python_typeddict_fields(type_defs, config.dto.python_output_style(), reexported_types),
+        call_root_type.clone(),
+    )
     .with_ir_result_fields(
         FieldResolver::ir_result_field_facts(type_defs, "python"),
         call_root_type,

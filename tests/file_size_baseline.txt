@@ -53,7 +53,6 @@ src/e2e/codegen/go/tests.rs 1397
 src/e2e/codegen/java/assertions.rs 1352
 src/e2e/codegen/kotlin/test_method.rs 1167
 src/e2e/codegen/kotlin/tests.rs 1241
-src/e2e/codegen/python/assertions.rs 1027
 src/e2e/codegen/python/mod.rs 1373
 src/e2e/codegen/python/test_file.rs 1066
 src/e2e/codegen/r/assertions.rs 1049

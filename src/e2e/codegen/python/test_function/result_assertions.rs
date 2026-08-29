@@ -8,7 +8,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
 use super::super::assertions::render_assertion;
-use super::super::helpers::resolve_assert_enum_fields;
+use super::super::helpers::{resolve_assert_enum_fields, strip_redundant_call_arg_parens};
 use super::super::json::value_to_python_string;
 
 /// True when `body` contains at least one line that is not blank and not a
@@ -200,19 +200,25 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
         return;
     };
 
+    // Defensive, matching the same fix at the `FieldResolver`-backed assertion sites
+    // (`python/assertion.jinja`'s `not_empty`/`min_length`/etc.): a `StreamingFieldResolver`
+    // accessor is hand-rolled per field today and never itself produces an enclosing-paren-
+    // wrapped ternary, but should one gain optional-narrowing in the future, stripping here
+    // keeps `len(expr)` from turning into ruff-`UP034`-flagged `len((expr))`. No-op otherwise. ~keep
+    let expr_arg = strip_redundant_call_arg_parens(&expr);
     match assertion.assertion_type.as_str() {
         "count_min" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({expr}) >= {n}");
+                let _ = writeln!(out, "    assert len({expr_arg}) >= {n}");
             }
         }
         "count_equals" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let _ = writeln!(out, "    assert len({expr}) == {n}");
+                let _ = writeln!(out, "    assert len({expr_arg}) == {n}");
             }
         }
         "equals" => {
@@ -229,9 +235,12 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
         "not_empty" => {
             // Bare truthiness would reject a legitimate 0/0.0/False. Only sized values
             // carry an emptiness notion; everything else just has to be present.
+            // `expr_arg` (not `expr`) inside `hasattr`/`len`: both are call-argument position,
+            // where an enclosing paren pair would be redundant; `expr` itself keeps its parens
+            // before `is not None`, where they're load-bearing.
             let _ = writeln!(
                 out,
-                "    assert {expr} is not None and (not hasattr({expr}, \"__len__\") or len({expr}) > 0)"
+                "    assert {expr} is not None and (not hasattr({expr_arg}, \"__len__\") or len({expr_arg}) > 0)"
             );
         }
         "is_empty" => {

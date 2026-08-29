@@ -11,14 +11,15 @@ mod leaf_anchor;
 mod optional_renderers;
 mod parse;
 mod python_renderer;
+mod python_typeddict;
 mod renderers;
 mod resolver;
 mod types;
 
 pub use leaf_anchor::LeafAnchor;
 pub use types::{
-    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, StringyField,
-    StringyFieldKind, SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, PythonTypedDictMap,
+    StringyField, StringyFieldKind, SwiftFirstClassMap,
 };
 
 #[cfg(test)]

@@ -1,8 +1,10 @@
 use super::super::ir_collection::build_ir_collection_map;
 use super::super::ir_enum::build_ir_enum_map;
 use super::super::ir_result_fields::{OptionalityRule, build_ir_result_field_map, is_optional_path};
+use super::super::python_typeddict::build_python_typeddict_map;
 use super::super::types::{
-    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, PythonTypedDictMap,
+    SwiftFirstClassMap,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -99,6 +101,7 @@ impl FieldResolver {
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
+            python_typeddict_map: PythonTypedDictMap::default(),
         }
     }
 
@@ -136,6 +139,7 @@ impl FieldResolver {
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
+            python_typeddict_map: PythonTypedDictMap::default(),
         }
     }
 
@@ -183,6 +187,7 @@ impl FieldResolver {
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
+            python_typeddict_map: PythonTypedDictMap::default(),
         }
     }
 
@@ -236,6 +241,7 @@ impl FieldResolver {
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
+            python_typeddict_map: PythonTypedDictMap::default(),
         }
     }
 
@@ -273,6 +279,7 @@ impl FieldResolver {
             ir_collection_map: IrCollectionMap::default(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
+            python_typeddict_map: PythonTypedDictMap::default(),
         }
     }
 
@@ -351,6 +358,39 @@ impl FieldResolver {
     pub fn with_ir_collection_map(mut self, mut map: IrCollectionMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_collection_map = map;
+        self
+    }
+
+    /// Compute the Python `TypedDict`-membership classification for
+    /// [`Self::with_python_typeddict_map`], mirroring [`Self::ir_collection_fields`]'s "compute
+    /// once from the crate's IR" shape. The returned map has no `root_type` set yet —
+    /// `with_python_typeddict_map` anchors it to the specific call being rendered.
+    ///
+    /// `output_style` and `reexported_types` come straight from the crate's resolved config
+    /// (`config.dto.python_output_style()` and `config.python.reexported_types`) — the same two
+    /// facts `crate::backends::pyo3::gen_bindings::errors::is_dataclass_backed_config` itself
+    /// consults, so this can only ever agree with what the pyo3 backend actually emits.
+    pub fn python_typeddict_fields(
+        type_defs: &[crate::core::ir::TypeDef],
+        output_style: crate::core::config::PythonDtoStyle,
+        reexported_types: &[String],
+    ) -> PythonTypedDictMap {
+        build_python_typeddict_map(type_defs, output_style, reexported_types)
+    }
+
+    /// Attach the Python `TypedDict` classification to this resolver, anchored at `root_type` —
+    /// the IR type name backing the current call's result variable, if resolved.
+    ///
+    /// `map` should come from [`Self::python_typeddict_fields`], computed once per crate IR and
+    /// reused across calls; only `root_type` varies per call. `render_python_with_optionals`
+    /// consults this to decide subscript (`result["field"]`) vs. attribute (`result.field`)
+    /// access at each link of the chain — see [`super::super::types::PythonTypedDictMap`] for
+    /// why the classification has to be anchored per-type rather than answered from a bare field
+    /// name. A `None`/empty map leaves every path on attribute access, exactly the behaviour
+    /// before this map existed. ~keep
+    pub fn with_python_typeddict_map(mut self, mut map: PythonTypedDictMap, root_type: Option<String>) -> Self {
+        map.root_type = root_type;
+        self.python_typeddict_map = map;
         self
     }
 

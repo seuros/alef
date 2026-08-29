@@ -135,6 +135,11 @@ pub struct FieldResolver {
     /// site now has to opt into by passing this flag at construction rather than reimplementing
     /// its own check.
     pub(super) result_is_byte_payload: bool,
+    /// Per-type Python `TypedDict`-vs-attribute-access classification, populated by the Python
+    /// e2e codegen. When empty, [`PythonTypedDictMap::is_typeddict`] answers `false` for every
+    /// type, which is exactly the pre-existing behaviour (attribute access everywhere) for any
+    /// resolver built before this map existed.
+    pub(super) python_typeddict_map: PythonTypedDictMap,
 }
 
 /// IR field facts keyed by owner type and anchored at the type a specific call returns, so a
@@ -432,6 +437,60 @@ impl SwiftFirstClassMap {
     /// `None` if the type has no recorded stringy fields.
     pub fn stringy_fields(&self, type_name: &str) -> Option<&[StringyField]> {
         self.stringy_fields_by_type.get(type_name).map(Vec::as_slice)
+    }
+}
+
+/// Python `TypedDict`-vs-attribute-access classification + chain-resolution metadata.
+///
+/// The pyo3 backend emits two flavors of return-type public spelling (see
+/// `crate::backends::pyo3::gen_bindings::errors::is_dataclass_backed_config`):
+///
+/// * **`TypedDict`** — `class Foo(TypedDict, total=False): bar: int`. At runtime this is a plain
+///   `dict`, so fields are accessed with `result["bar"]`.
+/// * Every other shape (`@dataclass`, `pydantic.BaseModel`, `msgspec.Struct`, or the compiled
+///   native `#[pyclass]`) — fields are accessed with `result.bar`.
+///
+/// The renderer needs per-segment dispatch because a path can traverse both: a `TypedDict`
+/// return type can nest a field whose own type stays a native `#[pyclass]` (e.g. that nested
+/// type is not itself `is_return_type`), and at that point subsequent segments must switch back
+/// to `.field` access — mirroring `SwiftFirstClassMap`'s first-class/opaque dispatch exactly,
+/// one level of indirection removed (TypedDict/attribute instead of property/method-call).
+///
+/// * `typeddict_types` — set of TypeDef names whose binding is a `TypedDict`. Membership = "use
+///   subscript access for fields on this type".
+/// * `field_types[type_name][field_name]` — the IR-resolved `Named` type that `field_name`
+///   traverses into (seeing through `Option`/`Vec`, matching `ir_enum`/`ir_collection`).
+/// * `root_type` — the IR type name backing the result variable.
+#[derive(Debug, Clone, Default)]
+pub struct PythonTypedDictMap {
+    pub typeddict_types: HashSet<String>,
+    pub field_types: HashMap<String, HashMap<String, String>>,
+    pub root_type: Option<String>,
+}
+
+impl PythonTypedDictMap {
+    /// True when fields on `type_name` should be accessed via subscript (`result["field"]`)
+    /// rather than attribute (`result.field`). `None` (unknown owner, e.g. the root type could
+    /// not be resolved, or a path segment advanced past a type the IR never described) defaults
+    /// to `false` — attribute access, the pre-existing behaviour for every path before this map
+    /// existed, and still correct for the common case (dataclass / native pyclass).
+    pub fn is_typeddict(&self, type_name: Option<&str>) -> bool {
+        match type_name {
+            Some(t) => self.typeddict_types.contains(t),
+            None => false,
+        }
+    }
+
+    /// Returns the IR `Named` type that `field_name` traverses into for the next chain segment,
+    /// or `None` if the field is terminal/scalar/unknown.
+    pub fn advance(&self, owner_type: Option<&str>, field_name: &str) -> Option<String> {
+        let owner = owner_type?;
+        self.field_types.get(owner).and_then(|m| m.get(field_name).cloned())
+    }
+
+    /// True when no per-type information is recorded.
+    pub fn is_empty(&self) -> bool {
+        self.typeddict_types.is_empty() && self.field_types.is_empty()
     }
 }
 
