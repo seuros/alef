@@ -107,6 +107,80 @@ fn node_tagged_enum_variant_nests_payload_under_synthesized_field() {
     );
 }
 
+#[test]
+fn node_tagged_enum_struct_variant_uses_configured_discriminant() {
+    let enums = [EnumDef {
+        name: "AuditEvent".into(),
+        serde_tag: Some("event_type".into()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Created".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "identifier".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"event_type": "Created", "identifier": "42"})
+            .as_object()
+            .expect("object"),
+        "AuditEvent",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &[],
+        &enums,
+        "",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert_eq!(
+        expression,
+        "{ event_type: \"Created\", identifier: \"42\" } as AuditEvent"
+    );
+}
+
+#[test]
+fn node_tagged_enum_struct_variant_uses_default_discriminant() {
+    let enums = [EnumDef {
+        name: "AuditEvent".into(),
+        serde_tag: Some("type".into()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Created".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "identifier".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"type": "Created", "identifier": "42"})
+            .as_object()
+            .expect("object"),
+        "AuditEvent",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &[],
+        &enums,
+        "",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert!(expression.contains("type: \"Created\""), "{expression}");
+    assert!(!expression.contains("kind:"), "{expression}");
+}
+
 /// The real cross-generator guard for the E3 message-shape defect: builds the snippet
 /// object literal with the same `ts_builder_expression` the e2e generator uses, generates
 /// the `.d.ts` union type with the exact production function napi's backend calls

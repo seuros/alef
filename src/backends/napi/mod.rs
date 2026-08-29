@@ -6,6 +6,7 @@ pub mod trait_bridge;
 mod type_map;
 
 pub use gen_bindings::NapiBackend;
+pub(crate) use gen_bindings::enums::tagged_enum_discriminant_js_name;
 /// Re-exported so the TypeScript e2e snippet generator's tests can typecheck a generated
 /// snippet against the exact `.d.ts` union type this function produces, rather than a
 /// hand-guessed copy of it. See `internal_tagged_union_dts_lines`'s doc comment for why this

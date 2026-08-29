@@ -65,6 +65,10 @@ pub(super) fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &En
     tagged_enum_field_js_name(variant, field)
 }
 
+pub(crate) fn tagged_enum_discriminant_js_name(enum_def: &EnumDef) -> &str {
+    enum_def.serde_tag.as_deref().unwrap_or("type")
+}
+
 /// Collect synthesized variant-data field names emitted on the binding struct for tagged enums
 /// where a variant carries a single-tuple Named field. These are the per-variant optional
 /// properties (e.g. `excel: Option<JsExcelMetadata>`) added on top of the discriminator and
@@ -436,7 +440,7 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
     use crate::codegen::type_mapper::TypeMapper;
     let mapper = NapiMapper::new(prefix.to_string());
 
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = tagged_enum_discriminant_js_name(enum_def);
     let ts_discriminant = tag_field;
 
     let derive = if has_serde {

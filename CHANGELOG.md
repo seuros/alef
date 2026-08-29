@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Derive generated Node e2e tagged-enum discriminant keys from the same N-API
+  resolver that declares the binding surface.
+
 ## [0.77.0] - 2026-08-29
 
 ### Added

@@ -128,16 +128,11 @@ fn build_node_tagged_enum_variant_literal(
 
 /// Pre-process a JSON value so that napi-rs (node) binding can deserialize it.
 ///
-/// The napi-rs backend always emits `#[napi(js_name = "kind")]` for the
-/// discriminant field of every tagged-data enum, regardless of the original
-/// Rust `#[serde(tag = "...")]` attribute. For example, `Message` has
-/// `#[serde(tag = "role")]`, but `JsMessage.role_tag` is exposed to
-/// TypeScript as `"kind"`. A fixture that sends `{ role: "user" }` causes
-/// napi-rs to return `Error: Missing field 'kind'`.
+/// The napi-rs backend exposes a tagged-data enum's discriminant under the
+/// configured serde tag, defaulting to `type`.
 ///
-/// This function walks the JSON tree and renames any serde_tag key to
-/// `"kind"` when the key's value is a string that matches a known variant
-/// of the corresponding tagged-data enum. Renaming is limited to exact
+/// This function walks the JSON tree and preserves a serde tag when its value
+/// is a string that matches a known variant of the corresponding enum. Matching is limited to exact
 /// variant matches so that plain struct fields that happen to share the
 /// same key name as a serde_tag (e.g. `type: "function"` on
 /// `ChatCompletionTool` where "function" is not a `ContentPart` variant)
@@ -391,7 +386,11 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             enums
                 .iter()
                 .find(|e| e.name == ir_name && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
-                .and_then(|e| e.serde_tag.as_deref())
+                .and_then(|e| {
+                    e.serde_tag
+                        .as_deref()
+                        .map(|tag| (tag, crate::backends::napi::tagged_enum_discriminant_js_name(e)))
+                })
         } else {
             None
         };
@@ -414,10 +413,10 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         refuse_undeclared_json_keys(obj, type_name, type_defs, site);
         for (key, val) in obj {
             let field_pointer = json_pointer_child(pointer, key);
-            // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
+            // Map the serde tag through the same resolver that declares the NAPI field.
             let js_key = if lang == "node" {
                 match serde_tag_for_this_type {
-                    Some(tag) if key == tag => "kind".to_string(),
+                    Some((tag, js_name)) if key == tag => js_name.to_string(),
                     _ => node_field_public_key(owner_type, key),
                 }
             } else {
