@@ -36,6 +36,8 @@ mod render;
 mod result_enum_import_invariant_tests;
 mod snippet;
 #[cfg(test)]
+mod stream_adapter_item_tests;
+#[cfg(test)]
 mod tagged_union_wiring_tests;
 mod test_case;
 #[cfg(test)]

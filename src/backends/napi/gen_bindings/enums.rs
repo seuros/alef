@@ -69,6 +69,13 @@ pub(crate) fn tagged_enum_discriminant_js_name(enum_def: &EnumDef) -> &str {
     enum_def.serde_tag.as_deref().unwrap_or("type")
 }
 
+pub(crate) fn string_enum_variant_js_value(enum_def: &EnumDef, variant_name: &str) -> Option<String> {
+    declared_string_enum_variants(enum_def, false, None)?
+        .into_iter()
+        .find(|(variant, _)| variant.name == variant_name)
+        .map(|(_, value)| value)
+}
+
 /// Collect synthesized variant-data field names emitted on the binding struct for tagged enums
 /// where a variant carries a single-tuple Named field. These are the per-variant optional
 /// properties (e.g. `excel: Option<JsExcelMetadata>`) added on top of the discriminator and

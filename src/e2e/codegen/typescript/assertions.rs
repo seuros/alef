@@ -480,6 +480,16 @@ fn node_stream_event_variant_accessor(
         _ => return None,
     };
     let variant = enum_def.variants.iter().find(|variant| variant.name == variant_name)?;
+    if let Some(value) = crate::backends::napi::string_enum_variant_js_value(enum_def, variant_name) {
+        let value = serde_json::to_string(&value).ok()?;
+        return Some(format!(
+            "{chunks_var}.some((event: {}) => event === {value})",
+            enum_def.name
+        ));
+    }
+    if !crate::backends::napi::is_tagged_data_enum(enum_def) {
+        return None;
+    }
     let tag_field = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
     let tag_value = crate::codegen::naming::wire_variant_value(
         &variant.name,

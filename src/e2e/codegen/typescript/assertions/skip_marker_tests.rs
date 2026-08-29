@@ -73,6 +73,53 @@ fn configured_stream_item_type_emits_event_variant_assertion() {
     assert!(!out.contains("skipped:"), "{out}");
 }
 
+#[test]
+fn string_enum_stream_event_compares_the_event_value() {
+    let item_enum = crate::core::ir::EnumDef {
+        name: "WorkflowEvent".into(),
+        serde_rename_all: Some("snake_case".into()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Page".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let (out, handled) = render_streaming_with_item_enum("is_true", "stream.has_page_event", None, Some(&item_enum));
+    assert!(handled);
+    assert!(
+        out.contains("chunks.some((event: WorkflowEvent) => event === \"page\")"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("event["),
+        "string enums have no discriminator property: {out}"
+    );
+}
+
+#[test]
+fn untagged_data_enum_stream_event_is_explicitly_skipped() {
+    let item_enum = crate::core::ir::EnumDef {
+        name: "WorkflowEvent".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Page".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "_0".into(),
+                ty: crate::core::ir::TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let (out, handled) = render_streaming_with_item_enum("is_true", "stream.has_page_event", None, Some(&item_enum));
+    assert!(handled);
+    assert_eq!(
+        FieldSkip::extract_classified(out.trim_end()),
+        Some(("stream.has_page_event", FieldSkip::StreamingAssertionOnUnsupportedField))
+    );
+}
+
 fn field_verdicts(body: &str) -> Vec<SkipVerdict> {
     let _ = take_skip_records();
     fail_on_unavailable_field_markers(body, "node", "stream_smoke", &[]);
