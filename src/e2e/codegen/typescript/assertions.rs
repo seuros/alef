@@ -1,14 +1,14 @@
 //! Assertion rendering for TypeScript e2e tests.
 
 use crate::e2e::codegen::assertion_recipes::chunks_result_var;
-use crate::e2e::codegen::assertion_type_skip::{
-    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
-};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
 use super::json::json_to_js;
+
+#[path = "assertions/streaming.rs"]
+mod streaming;
 
 /// Render a single assertion into the test body.
 #[allow(clippy::too_many_arguments)]
@@ -367,151 +367,10 @@ fn render_synthetic_field_assertion(
         // field on the synchronous result struct and must flow through normal
         // accessor resolution (e.g. `result.chunks`).
         f if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) => {
-            // lang is always "node" or "wasm" here; both use the same JS expressions.
-            let node_event_expr =
-                streaming_item_enum.and_then(|enum_def| node_stream_event_variant_accessor(f, "chunks", enum_def));
-            if let Some(expr) = node_event_expr.or_else(|| {
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "node", "chunks")
-            }) {
-                match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!(
-                                "    expect({expr}.length).toBeGreaterThanOrEqual({js_val});\n"
-                            ));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({expr}.length).toBe({js_val});\n"));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    "equals" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({expr}).toBe({js_val});\n"));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    "not_empty" => {
-                        out.push_str(&crate::e2e::template_env::render(
-                            "typescript/assertion.jinja",
-                            minijinja::context! {
-                                assertion_type => "not_empty",
-                                field_expr => expr.clone(),
-                                field_is_optional => false,
-                            },
-                        ));
-                    }
-                    "is_empty" => {
-                        out.push_str(&format!("    expect({expr}).toBeFalsy();\n"));
-                    }
-                    "is_true" => {
-                        out.push_str(&format!("    expect({expr}).toBe(true);\n"));
-                    }
-                    "is_false" => {
-                        out.push_str(&format!("    expect({expr}).toBe(false);\n"));
-                    }
-                    "greater_than" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({expr}).toBeGreaterThan({js_val});\n"));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    "greater_than_or_equal" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({expr}).toBeGreaterThanOrEqual({js_val});\n"));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    "contains" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({expr}).toContain({js_val});\n"));
-                        } else {
-                            push_streaming_value_skip(out, field, assertion);
-                        }
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "{}\n",
-                            streaming_assertion_type_skip_line("    ", "//", field, &assertion.assertion_type)
-                        ));
-                    }
-                }
-            } else {
-                // ~keep `accessor` returns `None` for reachable inputs — every `stream.has_*_event`
-                // predicate does, since this call supplies no item type, and `wasm` has no
-                // streaming at all — and this branch used to be absent: the arm still reported
-                // "handled" (`true`) while emitting nothing, so the assertion vanished with no line
-                // for `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the
-                // gap, so it is counted, never fatal.
-                out.push_str(&format!(
-                    "    // skipped: {}\n",
-                    FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
-                ));
-            }
-            true
+            streaming::render(out, assertion, f, streaming_item_enum)
         }
         _ => false,
     }
-}
-
-fn node_stream_event_variant_accessor(
-    field: &str,
-    chunks_var: &str,
-    enum_def: &crate::core::ir::EnumDef,
-) -> Option<String> {
-    let variant_name = match field {
-        "stream.has_page_event" => "Page",
-        "stream.has_error_event" => "Error",
-        "stream.has_complete_event" => "Complete",
-        _ => return None,
-    };
-    let variant = enum_def.variants.iter().find(|variant| variant.name == variant_name)?;
-    if let Some(value) = crate::backends::napi::string_enum_variant_js_value(enum_def, variant_name) {
-        let value = serde_json::to_string(&value).ok()?;
-        return Some(format!(
-            "{chunks_var}.some((event: {}) => event === {value})",
-            enum_def.name
-        ));
-    }
-    if !crate::backends::napi::is_tagged_data_enum(enum_def) {
-        return None;
-    }
-    let tag_field = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
-    let tag_value = crate::codegen::naming::wire_variant_value(
-        &variant.name,
-        variant.serde_rename.as_deref(),
-        enum_def.serde_rename_all.as_deref(),
-    );
-    let tag_field = serde_json::to_string(tag_field).ok()?;
-    let tag_value = serde_json::to_string(&tag_value).ok()?;
-    Some(format!(
-        "{chunks_var}.some((event: {}) => event[{tag_field}] === {tag_value})",
-        enum_def.name
-    ))
-}
-
-/// ~keep Every value-taking streaming arm above narrowed on `assertion.value` and emitted nothing
-/// when it was absent, so the assertion disappeared with no line for any funnel to count. One
-/// helper keeps the six call sites on the single registered wording.
-fn push_streaming_value_skip(out: &mut String, field: &str, assertion: &Assertion) {
-    out.push_str(&format!(
-        "{}\n",
-        streaming_assertion_value_skip_line("    ", "//", field, &assertion.assertion_type)
-    ));
 }
 
 fn emit_bool_assertion(out: &mut String, pred: &str, assertion_type: &str, field: &str) {

@@ -18,6 +18,8 @@ mod cargo_sort_order_tests;
 mod cfg_variant_e2e_tests;
 mod conversions;
 mod enum_conversions;
+#[cfg(test)]
+mod enum_conversions_runtime_tests;
 mod helpers;
 mod mirror;
 mod mirror_conversions;

@@ -773,46 +773,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generated_json_decoder_returns_error_for_excluded_variant_at_runtime() {
-        let en = EnumDef {
-            name: "WorkflowStep".to_string(),
-            rust_path: "mylib::WorkflowStep".to_string(),
-            has_serde: true,
-            variants: vec![make_unit_variant("Ready", None)],
-            excluded_variants: vec![make_unit_variant("Internal", None)],
-            ..Default::default()
-        };
-        let mut generated = String::new();
-        emit_from_impl_for_enum(&mut generated, &en, "mylib", None);
-        super::super::opaque::emit_enum_from_json_fn(&mut generated, &en, "mylib");
-        let generated = generated.replace("#[frb]\n", "");
-        let source = format!(
-            "mod mylib {{\n    #[derive(serde::Deserialize)]\n    pub enum WorkflowStep {{ Ready, Internal }}\n}}\n\n#[derive(Debug, PartialEq)]\nenum WorkflowStep {{ Ready }}\n\n{generated}\nfn main() {{\n    let result = create_workflow_step_from_json(\"\\\"Internal\\\"\".to_string());\n    assert_eq!(result, Err(\"WorkflowStep contains a variant unavailable in the Dart binding\".to_string()));\n}}\n"
-        );
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir(temp.path().join("src")).expect("create src");
-        std::fs::write(
-            temp.path().join("Cargo.toml"),
-            "[package]\nname = \"dart-decoder-runtime\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\n",
-        )
-        .expect("write manifest");
-        std::fs::write(temp.path().join("src/main.rs"), source).expect("write generated bridge source");
-        let output = std::process::Command::new("cargo")
-            .args(["run", "--quiet"])
-            .env("CARGO_TARGET_DIR", temp.path().join("target"))
-            .current_dir(temp.path())
-            .output()
-            .expect("run generated bridge crate");
-
-        assert!(
-            output.status.success(),
-            "generated bridge crate must compile and return Err without panicking:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
     /// The regression this task fixes: a whole enum gated behind a Cargo feature (`EnumDef::cfg`,
     /// as opposed to a single variant's cfg) carries that gate through to both `impl From<...>`
     /// blocks, which name the host path directly. Before the fix, `source_cfg` was passed to the
