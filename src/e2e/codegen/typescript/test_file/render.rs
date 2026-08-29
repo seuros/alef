@@ -203,6 +203,18 @@ pub fn render_test_file(
     // per-call override is absent.
     let mut all_options_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut all_nested_types: std::collections::HashMap<String, String> = nested_types.clone();
+    // Unlike `referenced_enums` (filled by the emitter as it writes each request-side
+    // `EnumType.Member`, see `builders::enum_member_reference`), this set is derived purely from
+    // `result_enum_fields` config, never from what an assertion body actually names. That is safe
+    // only because no TypeScript/WASM assertion path ever emits a class-name reference for a
+    // result-side enum field, config-derived or IR-derived: `render_wasm_enum_assertion` compares
+    // the field against the plain wire-format string (`expect(result.kind).toBe("uri")`), and its
+    // `enum_class` parameter is intentionally unused (`_enum_class`). There is no body reference
+    // this parallel derivation could ever fail to cover, because the renderer that would produce
+    // one does not exist on this path. Pinned by
+    // `result_enum_import_invariant_tests::wasm_result_enum_field_assertion_never_references_the_configured_class`;
+    // if a future change makes an assertion reference the class by name, route it through
+    // `referenced_enums` the way the request-side builders do, rather than trusting this set. ~keep
     let mut all_result_enum_classes: std::collections::BTreeSet<String> =
         result_enum_fields.values().cloned().collect();
     if let Some(opts) = options_type {
