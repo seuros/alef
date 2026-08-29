@@ -1,12 +1,14 @@
 use crate::backends::rustler::template_env;
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::doc_emission::doc_first_paragraph_joined;
 use crate::codegen::shared::binding_fields;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{TypeDef, TypeRef};
+use crate::core::ir::{EnumVariant, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use heck::ToSnakeCase;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::context::emit_elixir_doc_attr;
 use super::json_values::{
@@ -369,7 +371,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module(
     enum_def: &crate::core::ir::EnumDef,
     app_module: &str,
 ) -> String {
-    gen_elixir_enum_module_with_known_types(enum_def, app_module, &AHashSet::new())
+    // No `core_import`/`configured_features` context here; `""` reads as host-owned (permissive,
+    // per `is_host_owned_rust_path`'s own doc) and `None` reads as "unknown", so
+    // `enum_variant_declaration` never drops anything -- this test-only wrapper is a pure
+    // pass-through of every declared variant, matching its behavior before cfg filtering existed. ~keep
+    gen_elixir_enum_module_with_known_types(enum_def, app_module, &AHashSet::new(), "", None)
 }
 
 /// Whether `enum_def`'s data variants all carry a single tuple field of a Named type -- the
@@ -409,10 +415,23 @@ fn escape_elixir_string_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// `core_import`/`configured_features` decide which variants this Elixir-facing module
+/// documents and exposes, via the same [`enum_variant_declaration`] authority
+/// `gen_bindings::types::gen_enum` (this crate's own NIF declaration, `gen_bindings/types.rs`)
+/// already consults: a FOREIGN cfg-gated variant this binding's own configured feature set
+/// proves unreachable is dropped from the `@type`, the per-atom accessor, and the `wire_value/1`
+/// dispatch alike -- never just documented as absent while still being reachable. Before this fix
+/// this module always documented and exposed every variant regardless of `configured_features`
+/// while the NIF declaration (once fixed) and the conversions already dropped the unreachable
+/// ones: an Elixir caller could reference an atom the NIF layer can never actually produce or
+/// accept. A host-owned cfg-gated variant is still always kept, matching every other backend's
+/// declaration surface. ~keep
 pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_known_types(
     enum_def: &crate::core::ir::EnumDef,
     app_module: &str,
     known_types: &AHashSet<String>,
+    core_import: &str,
+    configured_features: Option<&[String]>,
 ) -> String {
     let mut out = String::with_capacity(256);
 
@@ -430,11 +449,24 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
     }
     out.push('\n');
 
-    let is_simple = enum_def.variants.iter().all(|v| v.fields.is_empty());
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_variants: Vec<&EnumVariant> = enum_def
+        .variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
+
+    let is_simple = declared_variants.iter().all(|v| v.fields.is_empty());
 
     if is_simple {
-        let atom_arms: Vec<String> = enum_def
-            .variants
+        let atom_arms: Vec<String> = declared_variants
             .iter()
             .map(|v| {
                 let atom_value = match v.serde_rename.as_deref() {
@@ -481,7 +513,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
         }
         out.push('\n');
 
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             let safe_name = elixir_safe_param_name(&snake_name);
             let attr_name = elixir_safe_attr_name(&safe_name);
@@ -499,7 +531,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             ));
         }
         out.push('\n');
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             let safe_name = elixir_safe_param_name(&snake_name);
             let attr_name = elixir_safe_attr_name(&safe_name);
@@ -520,7 +552,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             "elixir_enum_wire_value_header.jinja",
             minijinja::context! {},
         ));
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             // The runtime atom Rustler actually produces is always
             // `pascal_to_snake(variant.name)` -- serde_rename never influences it (serde and
             // rustler attributes are independent proc macros over the same variant; see
@@ -555,7 +587,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
         // -- both are computed once, here, from the same function so the doc and the runtime
         // dispatch cannot disagree on the key name. ~keep
         let struct_type_discriminator = elixir_safe_atom(flat_data_enum_discriminator(enum_def));
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             let variant_atom = format!(":{}", elixir_safe_atom(&snake_name));
             let type_name = elixir_safe_type_name(&elixir_safe_param_name(&snake_name));
@@ -634,7 +666,16 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             }
         }
 
-        let constructors = crate::codegen::generators::collect_all_variant_constructors(enum_def);
+        // `collect_all_variant_constructors` is a backend-agnostic helper with no cfg awareness
+        // of its own (it filters only on shape: data-carrying, non-tuple, not
+        // `binding_excluded`); restrict its output to the names `declared_variants` above
+        // already resolved as present, so a dropped foreign cfg-gated variant does not get a
+        // constructor function here either. ~keep
+        let declared_variant_names: HashSet<&str> = declared_variants.iter().map(|v| v.name.as_str()).collect();
+        let constructors: Vec<_> = crate::codegen::generators::collect_all_variant_constructors(enum_def)
+            .into_iter()
+            .filter(|ctor| declared_variant_names.contains(ctor.variant_name))
+            .collect();
         if !constructors.is_empty() {
             out.push('\n');
             for ctor in &constructors {
@@ -671,7 +712,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             "elixir_enum_wire_value_header.jinja",
             minijinja::context! {},
         ));
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             // The runtime atom Rustler actually produces is always
             // `pascal_to_snake(variant.name)` -- serde_rename never influences it (serde and
             // rustler attributes are independent proc macros over the same variant; see
@@ -727,3 +768,6 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
     ));
     out
 }
+
+#[cfg(test)]
+mod enum_module_cfg_tests;

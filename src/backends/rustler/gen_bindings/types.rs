@@ -1,6 +1,8 @@
 use crate::backends::rustler::template_env;
 use crate::codegen::cfg::is_host_owned_rust_path;
-use crate::codegen::conversions::enum_conversion_needs_catch_all_for_features;
+use crate::codegen::conversions::{
+    VariantDeclaration, enum_conversion_needs_catch_all_for_features, enum_variant_declaration,
+};
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
@@ -218,7 +220,17 @@ fn variant_wire_name(variant: &crate::core::ir::EnumVariant, enum_def: &EnumDef)
 /// Example: Shape enum with Excel(ExcelMetadata) → struct with `type: String` and
 /// `excel: Option<ExcelMetadata>`, with other optional fields (see
 /// [`super::helpers::flat_data_enum_discriminator`] for the `"type"` fallback name).
-fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
+/// `declared_variants` must be the SAME filtered list `gen_enum` (the caller) already computed
+/// via `enum_variant_declaration` -- not re-derived here -- so the flat `NifStruct` this function
+/// declares can never disagree with the `NifUnitEnum`/`NifTaggedEnum` declaration the sibling
+/// branches emit for the same cfg-gated-variant question. Before this fix this function read
+/// `enum_def.variants` directly and had no cfg awareness at all: a foreign cfg-gated variant this
+/// binding's own configured feature set proves unreachable still got its own `pub {name}:
+/// Option<T>` field on the struct -- an Elixir caller could set that key in the map handed to the
+/// NIF and it would silently decode as a value the real conversion (`rustler_flat_variant_kept`
+/// in this file's `From` impls) never produces, the same declaration/conversion mismatch the
+/// unit/tagged branches had. ~keep
+fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str, declared_variants: &[&EnumVariant]) -> String {
     let name = &enum_def.name;
     let mut out = String::with_capacity(1024);
 
@@ -240,7 +252,7 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
         },
     ));
 
-    for variant in &enum_def.variants {
+    for variant in declared_variants {
         if !variant.fields.is_empty()
             && variant.is_tuple
             && let Some(first_field) = variant.fields.first()
@@ -270,7 +282,7 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
         },
     ));
 
-    for variant in &enum_def.variants {
+    for variant in declared_variants {
         if !variant.fields.is_empty() && variant.is_tuple {
             let field_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             out.push_str(&template_env::render(
@@ -517,16 +529,47 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
 /// `#[expect(clippy::large_enum_variant, ...)]` -- see
 /// [`crate::codegen::enum_variant_size::enum_should_expect_large_variant_lint`] for the
 /// heuristic and why it must stay conservative about emitting the attribute (alef #545).
-pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str, api: &ApiSurface) -> String {
+///
+/// `core_import`/`configured_features` decide which variants this NIF declaration keeps, via
+/// the same [`enum_variant_declaration`] authority every conversion arm below (and every other
+/// Rust-emitting backend's own wrapper declaration) already consults: a FOREIGN cfg-gated
+/// variant this binding's own configured feature set proves unreachable is dropped from the
+/// declaration itself, not just from the `From` impls. Before this fix the declaration always
+/// kept every variant regardless of `configured_features` while the conversions already dropped
+/// the unreachable ones -- an Elixir caller could pass an atom the NIF decoder never actually
+/// matches, decoding as `badarg` instead of failing to compile. A host-owned cfg-gated variant is
+/// still always kept (`enum_variant_declaration` never resolves a host-owned gate to `Drop`),
+/// matching every other backend's declaration surface. ~keep
+pub(super) fn gen_enum(
+    enum_def: &EnumDef,
+    module_prefix: &str,
+    api: &ApiSurface,
+    core_import: &str,
+    configured_features: Option<&[String]>,
+) -> String {
     let name = &enum_def.name;
     let mut out = String::with_capacity(512);
+
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let configured_features_set: Option<std::collections::HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_variants: Vec<&EnumVariant> = enum_def
+        .variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
 
     let has_data = enum_def.variants.iter().any(|v| !v.fields.is_empty());
 
     let use_flat_struct = super::helpers::is_flat_data_enum(enum_def);
 
     if use_flat_struct {
-        return gen_rustler_flat_data_enum(enum_def, module_prefix);
+        return gen_rustler_flat_data_enum(enum_def, module_prefix, &declared_variants);
     }
 
     if has_data {
@@ -557,7 +600,7 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str, api: &ApiSurface
                 name => name,
             },
         ));
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             if variant.fields.is_empty() {
                 out.push_str(&template_env::render(
                     "nif_tagged_enum_variant_unit.jinja",
@@ -615,7 +658,7 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str, api: &ApiSurface
                 name => name,
             },
         ));
-        for variant in &enum_def.variants {
+        for variant in &declared_variants {
             out.push_str(&template_env::render(
                 "nif_enum_variant.jinja",
                 minijinja::context! {
@@ -626,11 +669,11 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str, api: &ApiSurface
         out.push_str("}\n");
     }
 
-    let default_variant = enum_def
-        .variants
+    let default_variant = declared_variants
         .iter()
         .find(|v| v.is_default)
-        .or_else(|| enum_def.variants.first());
+        .or_else(|| declared_variants.first())
+        .copied();
     if let Some(dv) = default_variant {
         out.push_str(&template_env::render(
             "nif_enum_default_header.jinja",
@@ -761,5 +804,7 @@ pub(super) fn gen_rustler_wrap_return(
 
 #[cfg(test)]
 mod cfg_gate_tests;
+#[cfg(test)]
+mod gen_enum_declaration_cfg_tests;
 #[cfg(test)]
 mod tests;

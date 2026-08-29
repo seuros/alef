@@ -18,6 +18,7 @@ pub(super) struct PublicFileContext<'a> {
     pub(super) exclude_functions: &'a AHashSet<String>,
     pub(super) exclude_types: &'a AHashSet<&'a str>,
     pub(super) opaque_types: &'a AHashSet<String>,
+    pub(super) configured_features: &'a [String],
 }
 
 pub(super) fn generated_module_files(
@@ -217,7 +218,13 @@ fn push_enum_module_files(
 ) {
     let known_type_names: AHashSet<String> = api.types.iter().map(|typ| typ.name.clone()).collect();
     for enum_def in &api.enums {
-        let enum_content = gen_elixir_enum_module_with_known_types(enum_def, context.app_module, &known_type_names);
+        let enum_content = gen_elixir_enum_module_with_known_types(
+            enum_def,
+            context.app_module,
+            &known_type_names,
+            context.crate_name,
+            Some(context.configured_features),
+        );
         let file_name = format!("{}.ex", enum_def.name.to_snake_case());
         files.push(GeneratedFile {
             path: PathBuf::from(output_dir)

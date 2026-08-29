@@ -198,7 +198,7 @@ fn data_enum() -> EnumDef {
 /// Unit enums must still lower to NifUnitEnum (atoms on the Elixir side).
 #[test]
 fn test_gen_enum_unit_uses_nif_unit_enum() {
-    let result = gen_enum(&unit_enum(), "SampleCrate", &ApiSurface::default());
+    let result = gen_enum(&unit_enum(), "SampleCrate", &ApiSurface::default(), "mylib", None);
     assert!(
         result.contains("NifUnitEnum"),
         "unit enum should use NifUnitEnum; got:\n{result}"
@@ -214,7 +214,7 @@ fn test_gen_enum_unit_uses_nif_unit_enum() {
 /// Data enums must lower to NifTaggedEnum and preserve all variant fields.
 #[test]
 fn test_gen_enum_data_uses_nif_tagged_enum() {
-    let result = gen_enum(&data_enum(), "SampleCrate", &ApiSurface::default());
+    let result = gen_enum(&data_enum(), "SampleCrate", &ApiSurface::default(), "mylib", None);
     assert!(
         result.contains("NifTaggedEnum"),
         "data enum should use NifTaggedEnum; got:\n{result}"
@@ -352,7 +352,7 @@ fn gen_enum_emits_expect_for_genuinely_oversized_variant() {
     let mut api = ApiSurface::default();
     api.types.push(heavy_config_type());
 
-    let result = gen_enum(&enum_with_one_oversized_struct_variant(), "SampleCrate", &api);
+    let result = gen_enum(&enum_with_one_oversized_struct_variant(), "SampleCrate", &api, "mylib", None);
 
     assert!(
         result.contains("#[expect(clippy::large_enum_variant, reason ="),
@@ -377,7 +377,7 @@ fn gen_enum_emits_expect_for_genuinely_oversized_variant() {
 fn gen_enum_does_not_emit_expect_for_similarly_sized_variants() {
     let api = ApiSurface::default();
 
-    let result = gen_enum(&enum_with_similarly_sized_struct_variant(), "SampleCrate", &api);
+    let result = gen_enum(&enum_with_similarly_sized_struct_variant(), "SampleCrate", &api, "mylib", None);
 
     assert!(
         result.contains("NifTaggedEnum"),
@@ -396,7 +396,7 @@ fn data_enum_emits_adjacent_serde_representation() {
     enum_def.serde_tag = Some("type".to_string());
     enum_def.serde_content = Some("output".to_string());
 
-    let result = gen_enum(&enum_def, "SampleCrate", &ApiSurface::default());
+    let result = gen_enum(&enum_def, "SampleCrate", &ApiSurface::default(), "mylib", None);
 
     assert!(result.contains(r#"#[serde(tag = "type", content = "output""#));
 }
@@ -496,7 +496,7 @@ fn test_gen_enum_tuple_named_uses_nif_struct() {
         version: Default::default(),
     };
 
-    let result = gen_enum(&format_enum, "SampleCrate", &ApiSurface::default());
+    let result = gen_enum(&format_enum, "SampleCrate", &ApiSurface::default(), "mylib", None);
     assert!(
         result.contains("NifStruct"),
         "tuple data enum with named types should use NifStruct; got:\n{result}"

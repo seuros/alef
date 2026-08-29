@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(dart): drop a foreign cfg-excluded enum variant from the FRB mirror declaration, its
+  `.wireValue` extension, and both conversion catch-all decisions, instead of exposing a variant
+  the compiled dependency can never produce.
+- fix(elixir): drop a foreign cfg-excluded enum variant from the Rustler NIF declaration
+  (`NifUnitEnum`/`NifTaggedEnum`), from the flat `NifStruct` shape a tuple-payload enum lowers to,
+  and from the generated `.ex` module's `@type`, accessors and `wire_value/1`, instead of exposing
+  an atom the NIF layer can never produce or accept.
+
 - fix(scaffold): exclude `schemas/**` from the scaffolded consumer `poly.toml`, matching alef's own
   repository configuration. `alef all`'s whole-tree `poly fmt --fix` pass was reshaping a vendored
   `alef.schema.json` after `alef schema` wrote it, leaving alef's own formatter and its own

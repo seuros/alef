@@ -1,3 +1,5 @@
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::shared::binding_fields;
 use crate::core::ir::{EnumDef, ErrorDef, FieldDef, PrimitiveType, TypeDef, TypeRef};
 
@@ -81,9 +83,44 @@ pub(crate) fn emit_mirror_struct(out: &mut String, ty: &TypeDef, source_crate_na
     ));
 }
 
-pub(crate) fn emit_mirror_enum(out: &mut String, en: &EnumDef) {
+pub(crate) fn emit_mirror_enum(
+    out: &mut String,
+    en: &EnumDef,
+    source_crate_name: &str,
+    configured_features: Option<&[String]>,
+) {
     use crate::backends::dart::template_env;
-    let all_unit = en.variants.iter().all(|v| v.fields.iter().all(|f| f.binding_excluded));
+
+    // A variant merged in from a foreign `[[crates.source_crates]]` crate can only ever be
+    // declared here if this binding's own configured feature set does NOT prove it unreachable
+    // -- the same `enum_variant_declaration` authority every conversion arm in
+    // `enum_conversions.rs` and every other backend's own wrapper declaration already consults
+    // (`codegen::conversions::enums::enum_variant_declaration`'s doc comment names the exact
+    // defect two independently-written declaration/conversion answers caused). Before this fix
+    // this mirror always declared every variant regardless of `configured_features`, so a Dart
+    // caller could construct a value the real dependency build never compiles in, and passing it
+    // back into Rust hit the `mirror -> core` catch-all's `unreachable!()` -- the round-trip
+    // failure the consumer's audit reported. A HOST-owned cfg-gated variant still resolves to
+    // `Keep` unconditionally here (matching every other backend's declaration surface); this
+    // mirror has no per-variant `#[cfg(...)]` template, so a host-owned gate's `Keep{cfg:
+    // Some(_)}` and `Keep{cfg: None}` render identically -- only `Drop` changes anything. ~keep
+    let is_host_enum = is_host_owned_rust_path(source_crate_name, &en.rust_path);
+    let configured_features_set: Option<std::collections::HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_variants: Vec<&crate::core::ir::EnumVariant> = en
+        .variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
+
+    let all_unit = declared_variants
+        .iter()
+        .all(|v| v.fields.iter().all(|f| f.binding_excluded));
     emit_rust_doc(&en.doc, "", out);
     out.push_str(&template_env::render(
         "rust_mirror_enum_attribute.jinja",
@@ -99,7 +136,7 @@ pub(crate) fn emit_mirror_enum(out: &mut String, en: &EnumDef) {
         },
     ));
     if all_unit {
-        for variant in &en.variants {
+        for variant in &declared_variants {
             emit_rust_doc(&variant.doc, "    ", out);
             out.push_str(&template_env::render(
                 "rust_mirror_enum_unit_variant.jinja",
@@ -109,7 +146,7 @@ pub(crate) fn emit_mirror_enum(out: &mut String, en: &EnumDef) {
             ));
         }
     } else {
-        for variant in &en.variants {
+        for variant in &declared_variants {
             let visible_fields: Vec<&_> = variant.fields.iter().filter(|f| !f.binding_excluded).collect();
             if visible_fields.is_empty() {
                 emit_rust_doc(&variant.doc, "    ", out);

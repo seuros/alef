@@ -206,7 +206,13 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let mut enums_for_emission: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
     enums_for_emission.sort_by(|a, b| a.name.cmp(&b.name));
     for enum_def in enums_for_emission {
-        builder.add_item(&gen_enum(enum_def, &module_prefix, api));
+        builder.add_item(&gen_enum(
+            enum_def,
+            &module_prefix,
+            api,
+            &core_import,
+            Some(enabled_features.as_slice()),
+        ));
     }
 
     let default_types: AHashSet<String> = api

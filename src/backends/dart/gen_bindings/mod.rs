@@ -75,6 +75,8 @@ impl Backend for DartBackend {
             .unwrap_or_default();
 
         let dart_wire_enums = wire_value::flat_wire_enums(&api.enums, &exclude_types);
+        let dart_source_crate_name = config.name.replace('-', "_");
+        let dart_configured_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Dart);
 
         let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&api.functions);
         let visible_functions: Vec<&FunctionDef> = deduped_functions
@@ -141,7 +143,12 @@ impl Backend for DartBackend {
                 }
             }
 
-            wire_value::emit_wire_value_extensions(&dart_wire_enums, &mut body);
+            wire_value::emit_wire_value_extensions(
+                &dart_wire_enums,
+                &dart_source_crate_name,
+                Some(dart_configured_features.as_slice()),
+                &mut body,
+            );
         }
 
         // Whenever a typed-list name shows up anywhere in the body — either as a

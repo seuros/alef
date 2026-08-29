@@ -18,6 +18,8 @@ use heck::ToLowerCamelCase;
 
 use crate::backends::dart::ident::dart_safe_ident;
 use crate::backends::dart::template_env;
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::naming::wire_variant_value;
 use crate::core::ir::EnumDef;
 
@@ -41,11 +43,33 @@ pub(super) fn flat_wire_enums<'a>(enums: &'a [EnumDef], exclude_types: &HashSet<
 }
 
 /// Append a `{{Enum}}WireValue` extension exposing `.wireValue` for every enum in `enums`.
-pub(super) fn emit_wire_value_extensions(enums: &[&EnumDef], out: &mut String) {
+///
+/// Must filter variants exactly like `gen_rust_crate::mirror::emit_mirror_enum`: this extension
+/// is written against the plain Dart `enum` FRB derives FROM that mirror declaration, so a
+/// foreign cfg-gated variant `configured_features` proves unreachable -- and that the mirror
+/// therefore no longer declares -- has no corresponding Dart enum member here either. Emitting
+/// `.wireValue` for it anyway referenced `SomeEnum.droppedVariant`, a member the FRB-derived Dart
+/// enum no longer has: not merely a documentation gap but a Dart compile error. Asking the same
+/// `enum_variant_declaration` authority the mirror now consults keeps the two in lockstep. ~keep
+pub(super) fn emit_wire_value_extensions(
+    enums: &[&EnumDef],
+    source_crate_name: &str,
+    configured_features: Option<&[String]>,
+    out: &mut String,
+) {
+    let configured_features_set: Option<HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
     for en in enums {
+        let is_host_enum = is_host_owned_rust_path(source_crate_name, &en.rust_path);
         let variants: Vec<minijinja::Value> = en
             .variants
             .iter()
+            .filter(|v| {
+                !matches!(
+                    enum_variant_declaration(v, is_host_enum, configured_features_set.as_ref()),
+                    VariantDeclaration::Drop
+                )
+            })
             .map(|v| {
                 let vname = dart_safe_ident(&v.name.to_lower_camel_case());
                 let wire = escape_dart_string(&wire_variant_value(
@@ -143,7 +167,7 @@ mod tests {
         )];
         let refs: Vec<&EnumDef> = enums.iter().collect();
         let mut out = String::new();
-        emit_wire_value_extensions(&refs, &mut out);
+        emit_wire_value_extensions(&refs, "mylib", Some(&[]), &mut out);
         assert!(
             out.contains("extension DataNodeKindWireValue on DataNodeKind {"),
             "got: {out}"
@@ -164,8 +188,60 @@ mod tests {
         let enums = [en];
         let refs: Vec<&EnumDef> = enums.iter().collect();
         let mut out = String::new();
-        emit_wire_value_extensions(&refs, &mut out);
+        emit_wire_value_extensions(&refs, "mylib", Some(&[]), &mut out);
         assert!(out.contains("return 'in-progress';"), "got: {out}");
         assert!(out.contains("return 'finished';"), "got: {out}");
+    }
+
+    fn unit_variant_with_cfg(name: &str, cfg: Option<&str>) -> EnumVariant {
+        EnumVariant {
+            cfg: cfg.map(str::to_string),
+            ..unit_variant(name)
+        }
+    }
+
+    /// The Dart compile-error consequence this module exists to prevent: once
+    /// `gen_rust_crate::mirror::emit_mirror_enum` drops a foreign cfg-gated variant proven
+    /// unreachable, this extension must drop it too -- an unfiltered `.wireValue` clause would
+    /// reference a Dart enum member FRB no longer derives. The control half (feature configured)
+    /// proves the drop is conditional on `configured_features`, not unconditional on being
+    /// foreign-owned.
+    #[test]
+    fn emit_wire_value_extensions_drops_foreign_variant_proven_unreachable_keeps_when_active() {
+        fn sync_mode() -> EnumDef {
+            let mut en = flat_enum(
+                "SyncMode",
+                vec![
+                    unit_variant_with_cfg("Manual", None),
+                    unit_variant_with_cfg("Automatic", None),
+                    unit_variant_with_cfg("Testkit", Some(r#"feature = "testkit""#)),
+                ],
+            );
+            en.rust_path = "dep_crate::SyncMode".to_string();
+            en
+        }
+
+        let excluded = [sync_mode()];
+        let refs: Vec<&EnumDef> = excluded.iter().collect();
+        let mut out = String::new();
+        emit_wire_value_extensions(&refs, "mylib", Some(&[]), &mut out);
+        assert!(
+            out.contains("case SyncMode.manual:") && out.contains("case SyncMode.automatic:"),
+            "the two always-present variants must still get wire-value clauses, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Testkit") && !out.contains("testkit"),
+            "the excluded variant must not appear anywhere in the extension, got:\n{out}"
+        );
+
+        let active = [sync_mode()];
+        let refs_active: Vec<&EnumDef> = active.iter().collect();
+        let mut out_active = String::new();
+        let active_features = vec!["testkit".to_string()];
+        emit_wire_value_extensions(&refs_active, "mylib", Some(&active_features), &mut out_active);
+        assert!(
+            out_active.contains("case SyncMode.testkit:") && out_active.contains("return 'Testkit';"),
+            "with \"testkit\" configured, the wire-value clause must be present, got:\n{out_active}"
+        );
     }
 }

@@ -27,6 +27,8 @@ pub(super) fn generate_public_api(
     let app_module = app_name.to_pascal_case();
     let native_mod = format!("{app_module}.Native");
     let crate_name = config.name.replace('-', "_");
+    let elixir_lang = crate::core::config::Language::Elixir;
+    let enabled_features = crate::codegen::cfg::enabled_features_for_language(config, elixir_lang);
 
     let elixir_config = config.elixir.as_ref();
     let exclude_functions: AHashSet<String> = elixir_config
@@ -74,6 +76,7 @@ pub(super) fn generate_public_api(
             exclude_functions: &exclude_functions,
             exclude_types: &exclude_types,
             opaque_types: &opaque_types,
+            configured_features: &enabled_features,
         },
     );
 

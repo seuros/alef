@@ -361,7 +361,7 @@ fn test_gen_elixir_enum_module_resolves_known_payload_types() {
     let mut known_types = AHashSet::new();
     known_types.insert("PdfMetadata".to_string());
 
-    let result = gen_elixir_enum_module_with_known_types(&format_enum, "SampleCrate", &known_types);
+    let result = gen_elixir_enum_module_with_known_types(&format_enum, "SampleCrate", &known_types, "mylib", None);
 
     assert!(
         result.contains("SampleCrate.PdfMetadata.t()"),

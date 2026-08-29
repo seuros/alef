@@ -365,7 +365,7 @@ fn emit_lib_rs(
         .filter(|e| !exclude_types.contains(&e.name) && !e.binding_excluded)
     {
         content.push('\n');
-        emit_mirror_enum(&mut content, en);
+        emit_mirror_enum(&mut content, en, source_crate_name, Some(configured_features.as_slice()));
     }
 
     // class for each error. The `impl` block with `#[frb]` methods surfaces introspection
