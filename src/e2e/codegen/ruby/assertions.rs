@@ -81,16 +81,16 @@ pub(super) fn render_assertion(
     }
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct attribute accesses on the result.
+    let mut enum_variant_field_expr = None;
     if let Some(f) = &assertion.field {
+        enum_variant_field_expr = enum_variant_access::variant_field_accessor(field_resolver, f, result_var);
         // Magnus lowers any data-carrying enum to a plain Ruby Hash (see
-        // `enum_variant_access`'s module doc), so a path that steps into one has no native
-        // accessor and a path that lands exactly on one can't be compared as a string. Derived
-        // from the crate's own IR — which enum the field resolves to, and whether that enum's
-        // Ruby lowering has data — never from the field's own name, so a hash-serialized enum
-        // under any other name skips the same way and a field that only shares a name with one
-        // does not. ~keep
+        // `enum_variant_access`'s module doc). A single field under a proven single-payload
+        // variant is reachable as a Symbol-keyed Hash entry; every richer traversal keeps the
+        // explicit gap marker. Both decisions come from the crate's IR, never a field-name
+        // special case. ~keep
         match enum_variant_access::classify(field_resolver, f) {
-            enum_variant_access::RubyEnumAccess::VariantAccessorUnavailable => {
+            enum_variant_access::RubyEnumAccess::VariantAccessorUnavailable if enum_variant_field_expr.is_none() => {
                 out.push_str(&format!(
                     "    # skipped: {}\n",
                     FieldSkip::EnumVariantAccessorNotAvailableInRuby.message(f)
@@ -104,7 +104,8 @@ pub(super) fn render_assertion(
                 ));
                 return;
             }
-            enum_variant_access::RubyEnumAccess::Available => {}
+            enum_variant_access::RubyEnumAccess::VariantAccessorUnavailable
+            | enum_variant_access::RubyEnumAccess::Available => {}
         }
 
         match f.as_str() {
@@ -210,6 +211,7 @@ pub(super) fn render_assertion(
     // Skip assertions on fields that don't exist on the result type.
     if let Some(f) = &assertion.field
         && !f.is_empty()
+        && enum_variant_field_expr.is_none()
         && !field_resolver.is_valid_for_result(f)
     {
         out.push_str(&format!(
@@ -294,8 +296,9 @@ pub(super) fn render_assertion(
     // result_is_simple: treat the result itself as the content string, but only
     // when there is no explicit field (or the field is "content"). Count/length
     // assertions on named fields (e.g. "warnings") must still walk the field path.
-    let field_expr = match &assertion.field {
-        Some(f) if !f.is_empty() && (!result_is_simple || !f.eq_ignore_ascii_case("content")) => {
+    let field_expr = match (&assertion.field, enum_variant_field_expr) {
+        (_, Some(expr)) => expr,
+        (Some(f), None) if !f.is_empty() && (!result_is_simple || !f.eq_ignore_ascii_case("content")) => {
             field_resolver.accessor(f, "ruby", result_var)
         }
         _ => result_var.to_string(),

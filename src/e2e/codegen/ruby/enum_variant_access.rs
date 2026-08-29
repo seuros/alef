@@ -21,6 +21,8 @@
 
 use std::collections::HashSet;
 
+use heck::ToUpperCamelCase;
+
 use crate::core::ir::EnumDef;
 use crate::e2e::field_access::FieldResolver;
 
@@ -69,6 +71,39 @@ pub(super) fn classify(field_resolver: &FieldResolver, field: &str) -> RubyEnumA
         }
     }
     RubyEnumAccess::Available
+}
+
+/// Render the one Ruby-accessible tagged-enum payload shape Alef can prove from the IR: a path
+/// crosses a known single-payload variant and names one plain field serialized into the enum's
+/// Symbol-keyed Hash. Serde's internally-tagged newtype representation flattens that payload
+/// field beside the discriminator, so the variant segment has no runtime Hash level to render.
+/// Unsupported/nested/indexed suffixes return `None` and retain the explicit generator-gap skip.
+pub(super) fn variant_field_accessor(field_resolver: &FieldResolver, field: &str, result_var: &str) -> Option<String> {
+    let resolved = field_resolver.resolve(field);
+    let segments: Vec<&str> = resolved.split('.').collect();
+    for enum_index in 1..segments.len().saturating_sub(1) {
+        let prefix = segments[..enum_index].join(".");
+        if field_resolver.ruby_enum_serialized_as_hash(&prefix) != Some(true) {
+            continue;
+        }
+
+        let variant = segments[enum_index];
+        let [payload_field] = segments.get(enum_index + 1..)? else {
+            return None;
+        };
+        if !payload_field
+            .chars()
+            .all(|character| character == '_' || character.is_ascii_alphanumeric())
+        {
+            return None;
+        }
+        let enum_type = field_resolver.ir_enum_type_name(&prefix)?;
+        field_resolver.union_variant_payload(&enum_type, &variant.to_upper_camel_case())?;
+
+        let enum_hash = field_resolver.accessor(&prefix, "ruby", result_var);
+        return Some(format!("{enum_hash}.fetch(:{payload_field})"));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -120,6 +155,11 @@ mod tests {
                 fields: vec![field("format", TypeRef::String)],
                 ..TypeDef::default()
             },
+            TypeDef {
+                name: "SpreadsheetDetails".to_string(),
+                fields: vec![field("sheet_count", TypeRef::Primitive(PrimitiveType::U32))],
+                ..TypeDef::default()
+            },
         ];
         let enums = vec![
             EnumDef {
@@ -128,7 +168,7 @@ mod tests {
                 variants: vec![EnumVariant {
                     name: "Spreadsheet".to_string(),
                     is_tuple: true,
-                    fields: vec![field("_0", TypeRef::Primitive(PrimitiveType::U32))],
+                    fields: vec![field("_0", named("SpreadsheetDetails"))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -164,7 +204,7 @@ mod tests {
     /// proving the condition is the enum's own IR-derived lowering, not the field's name.
     #[test]
     fn a_variant_path_through_a_hash_serialized_enum_is_refused_under_any_name() {
-        let out = classify(&resolver(), "summary.encoding.sheet_count");
+        let out = classify(&resolver(), "summary.encoding.spreadsheet.sheet_count");
         assert_eq!(out, RubyEnumAccess::VariantAccessorUnavailable);
     }
 
@@ -206,7 +246,7 @@ mod tests {
             &std::collections::HashSet::new(),
         );
         assert_eq!(
-            classify(&resolver, "summary.encoding.sheet_count"),
+            classify(&resolver, "summary.encoding.spreadsheet.sheet_count"),
             RubyEnumAccess::Available
         );
         assert_eq!(classify(&resolver, "metadata.format"), RubyEnumAccess::Available);
@@ -251,32 +291,22 @@ mod tests {
 
     /// End to end through `render_assertion` itself (not just `classify`), under a field name
     /// that is nothing like the old literal `metadata.format` — proving the real entry point, not
-    /// just the classifier in isolation, is name-agnostic.
+    /// just the classifier in isolation, reaches the flattened Symbol-keyed Hash payload.
     #[test]
-    fn render_assertion_emits_the_variant_accessor_skip_for_a_neutral_field_name() {
-        let out = render("summary.encoding.sheet_count");
-        assert!(out.contains("# skipped:"), "got: {out}");
+    fn render_assertion_reaches_a_hash_serialized_variant_field_under_any_name() {
+        let out = render("summary.encoding.spreadsheet.sheet_count");
         assert!(
-            out.contains(
-                "enum variant accessor 'summary.encoding.sheet_count' not available on Ruby (serialized to Hash)"
-            ),
+            out.contains("result.summary.encoding.fetch(:sheet_count)"),
             "got: {out}"
         );
+        assert!(!out.contains("# skipped:"), "got: {out}");
     }
 
-    /// The skip must classify as a `GeneratorGap`, not a `LanguageLimitation` — see
-    /// `field_skip::FieldSkip::EnumVariantAccessorNotAvailableInRuby`'s doc for why the
-    /// already-generated Rust-side accessor is dead code today rather than a real boundary Ruby
-    /// or Magnus forbids crossing.
+    /// A supported single-field payload is executable and therefore absent from the skip ledger.
     #[test]
-    fn render_assertion_skip_is_a_generator_gap_not_a_language_limitation() {
-        use crate::e2e::codegen::field_skip::{FieldSkip, SkipClass};
-
-        let out = render("summary.encoding.sheet_count");
-        assert_eq!(
-            FieldSkip::extract_classified(&out).map(|(field, skip)| (field, skip.class())),
-            Some(("summary.encoding.sheet_count", SkipClass::GeneratorGap)),
-            "got: {out}"
-        );
+    fn render_assertion_supported_variant_field_has_no_skip_classification() {
+        use crate::e2e::codegen::field_skip::FieldSkip;
+        let out = render("summary.encoding.spreadsheet.sheet_count");
+        assert_eq!(FieldSkip::extract_classified(&out), None, "got: {out}");
     }
 }

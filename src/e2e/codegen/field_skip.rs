@@ -205,30 +205,11 @@ field_skip_variants! {
         "array element field ",
         " not yet supported in Gleam e2e",
     ),
-    /// ~keep The wording says "serialized to Hash", but that is not a permanent property of
-    /// Ruby/magnus: `backends::magnus::gen_bindings::classes::gen_enum`'s
-    /// `enum_magnus.rs.jinja` template ALREADY generates a native per-variant accessor —
-    /// `impl {{ enum_name }} { pub fn {{ variant.snake_name }}(&self) -> Option<&T> { .. } }` —
-    /// for every internally-tagged (`serde_tag.is_some()`) data enum's single-field tuple
-    /// variants, and a SEPARATE, already-wired path exists too:
-    /// `gen_bindings::tagged_enums::gen_tagged_enum_ruby_classes` emits a pure-Ruby marker module
-    /// plus per-variant `Data.define` classes with typed field accessors and a
-    /// `ClassName.from_hash(hash)` dispatcher into the `.rb` wrapper for this exact enum shape.
-    /// Neither is reachable from a plain field-path accessor today: the Rust-side method is never
-    /// registered (`functions/module_init.rs`'s only enum-registration loop `continue`s past
-    /// every enum with `serde_tag.is_some()`, registering constructors for the externally-tagged
-    /// sibling instead) — and, unlike the sibling `data_enum_variant_constructor_registrations`
-    /// shape, registering it as an INSTANCE method the way `variant_snake` is shaped would stay
-    /// unreachable even after fixing that: `impl magnus::IntoValue for {{ enum_name }}`'s
-    /// `has_data` branch unconditionally serializes through `serde_json::to_value` into a plain
-    /// Ruby `Hash`, for every `has_data` enum regardless of `serde_tag` — the type is never
-    /// `#[magnus::wrap]`/`TypedData`-backed, so no Ruby object ever crosses the boundary as a
-    /// member of a class an instance `method!` registration could dispatch to. The Ruby-native
-    /// `from_hash` path does not have that problem (it operates on the Hash directly), but
-    /// nothing routes a field-path accessor through it. `GeneratorGap`, not `LanguageLimitation`:
-    /// alef could close this by teaching the e2e accessor renderer to emit
-    /// `ClassName.from_hash(...)` for a path crossing one of these enums; no fixture or
-    /// `alef.toml` edit can, so it is not an `AuthoringGap` either.
+    /// ~keep Magnus serializes every data-carrying enum through `serde_json::Value` into a
+    /// Symbol-keyed Ruby `Hash`. The Ruby e2e renderer reaches a proven single field beneath a
+    /// single-payload variant directly in that flattened Hash. This marker remains for richer
+    /// suffixes (nested/indexed payload traversal) that the renderer deliberately cannot spell;
+    /// those are Alef generator debt, never a fixture or `alef.toml` authoring error.
     EnumVariantAccessorNotAvailableInRuby: GeneratorGap => (
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
