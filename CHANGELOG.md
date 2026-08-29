@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-08-30
+
+### Fixed
+
+- Emit Python optional-keyword helper types only where constructor unpacking uses them, avoiding
+  unused declarations while preserving precise Pyrefly types.
+- Run generated Ruby Bundler commands through the active Ruby interpreter, preventing mixed-ABI
+  native-extension failures when multiple Ruby installations are present.
+- Generate valid Dart assertions for nested tagged-union payloads, including nullable intermediate
+  structs and enum payloads that require a second narrowing cast, without analyzer warnings.
+- Refresh stale generated Dart lock files, including exact pins reached through local path
+  dependencies, while leaving current lock files untouched and avoiding unnecessary resolution.
+
 ## [0.78.0] - 2026-08-29
 
 ### Fixed
