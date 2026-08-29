@@ -210,11 +210,21 @@ fn non_cfg_variants_have_no_cfg_attribute() {
         .filter(|l| l.contains(r#"#[cfg(feature = "heic")]"#))
         .count();
     assert_eq!(
-        cfg_count, 1,
-        "Expected exactly 1 occurrence of #[cfg(feature = \"heic\")]: \
-         the From<Core> arm that references the upstream variant. \
+        cfg_count, 2,
+        "Expected exactly 2 occurrences of #[cfg(feature = \"heic\")]: \
+         the From<Core> arm and fallible decoder-helper arm that reference the upstream variant. \
          Found {cfg_count}:\n{lib_rs}",
     );
+    let lines: Vec<_> = lib_rs.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.contains(r#"#[cfg(feature = "heic")]"#) {
+            let guarded = lines.get(index + 1).copied().unwrap_or_default();
+            assert!(
+                guarded.contains("ImageOutputFormat::Heif"),
+                "cfg attributes must guard only the Heif conversion paths, not Native or Jpeg: {guarded}"
+            );
+        }
+    }
 }
 
 #[test]
