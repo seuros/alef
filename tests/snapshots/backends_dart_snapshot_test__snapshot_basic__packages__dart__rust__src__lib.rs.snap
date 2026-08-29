@@ -66,6 +66,16 @@ impl From<demo::Status> for Status {
         }
     }
 }
+fn try_convert_status_from_core(value: demo::Status) -> Result<Status, String> {
+    let representable = match &value {
+        demo::Status::Active => true,
+        demo::Status::Inactive => true,
+    };
+    if !representable {
+        return Err("Status contains a variant unavailable in the Dart binding".to_string());
+    }
+    Ok(Status::from(value))
+}
 
 // From<T> for SourceT conversions (mirror-to-core direction).
 // Used in bridge functions for types with sanitized fields, and by
