@@ -21,13 +21,54 @@ pub(crate) use post_build::{languages_have_post_build_steps, languages_with_post
 /// header still fails the run (it describes an ABI the source no longer has, which no flag makes
 /// safe), while a missing one degrades to the warning `check_ffi_header_freshness` already emits
 /// for that case. ~keep
+///
+/// The FFI header refresh runs BEFORE `run_required_post_builds`, not after -- even though the
+/// refresh only does anything on the one path where this ordering matters. A stale header makes
+/// `ensure_ffi_header_freshness` run `cargo build` for the `-ffi` crate (with
+/// `ALEF_EXPORT_GENERATED_HEADERS=1`), and that build also drops a fresh cdylib in
+/// `target/debug/`. `PostBuildStep::StageFfiLibrary` (Go/Java/C#'s post-build step) copies
+/// whichever cdylib is already on disk into each binding's native-library directory, so staging
+/// before the refresh copies whatever was there BEFORE this run's own rebuild -- the artifact
+/// this run just produced would sit unstaged until some LATER run happened to find the header
+/// already fresh and never rebuild it again. Refreshing first closes that gap.
+///
+/// This reordering can never make a release build stage a debug artifact: this whole function is
+/// reachable only from `alef generate`/`alef all` (never from `alef build`), the refresh above
+/// always builds debug, and `StageFfiLibrary` runs here under
+/// [`crate::cli::pipeline::StagingProfile::NoBuildRequested`] either way --
+/// `stage_ffi_preferring_release` always prefers a release artifact already on disk over any
+/// debug artifact, so a real release build a prior `alef build --release` left behind is never
+/// displaced by this run's debug-only refresh, in either order.
+///
+/// Header-refresh failure must not skip every other language's post-build the way an early
+/// `return` used to: `run_required_post_builds` isolates one language's post-build failure from
+/// every other's, and gating the whole post-build pass on an unrelated header check would undo
+/// that. The two results are therefore captured independently, via [`refresh_ffi_header`] and
+/// [`run_required_post_builds`], and combined by [`combine_artifact_results`] rather than
+/// short-circuited with `?`. ~keep
 pub(crate) fn complete_generated_artifacts(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
     base_dir: &std::path::Path,
     compile: crate::core::backend::CompilePolicy,
 ) -> Result<()> {
-    run_required_post_builds(languages, config, base_dir, compile)?;
+    let header_result = refresh_ffi_header(languages, config, base_dir, compile);
+    let post_build_result = run_required_post_builds(languages, config, base_dir, compile);
+    combine_artifact_results(header_result, post_build_result)
+}
+
+/// Check, and unless this is a generation-only run refresh, the FFI header's freshness --
+/// `Ok(())` with no work done when `languages` has no `ffi` entry at all.
+///
+/// Split out of [`complete_generated_artifacts`] so its result can be captured independently of
+/// `run_required_post_builds`'s -- see that function's doc for why the two must not gate each
+/// other. ~keep
+fn refresh_ffi_header(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+    compile: crate::core::backend::CompilePolicy,
+) -> Result<()> {
     if !languages.contains(&crate::core::config::Language::Ffi) {
         return Ok(());
     }
@@ -49,6 +90,24 @@ pub(crate) fn complete_generated_artifacts(
             false,
         )
     })
+}
+
+/// Combine the FFI-header and post-build outcomes without letting either mask the other.
+///
+/// `complete_generated_artifacts` only returns one `Result`, so a run where the header refresh
+/// failed AND some language's post-build also failed must still surface both -- discarding the
+/// post-build side (as a plain `header_result.and(post_build_result)` would, since `and` drops
+/// an `Err` on the left as soon as the right is also `Err`) would silently hide a genuine
+/// post-build failure the moment the header also happened to be stale. ~keep
+fn combine_artifact_results(header_result: Result<()>, post_build_result: Result<()>) -> Result<()> {
+    match (header_result, post_build_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(post_build_error)) => Err(post_build_error),
+        (Err(header_error), Ok(())) => Err(header_error),
+        (Err(header_error), Err(post_build_error)) => {
+            Err(header_error.context(format!("post-build also failed: {post_build_error:#}")))
+        }
+    }
 }
 
 /// Returns true when every freshly generated file already matches the file on disk,
@@ -808,5 +867,7 @@ pub(crate) fn verify_walk(base_dir: &std::path::Path) -> anyhow::Result<Vec<Stal
     Ok(stale_among(&collect_alef_hashes(base_dir)))
 }
 
+#[cfg(all(test, unix))]
+mod complete_generated_artifacts_staging_order_tests;
 #[cfg(test)]
 mod tests;

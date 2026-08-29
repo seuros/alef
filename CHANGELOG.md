@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(cli): run `alef generate`/`alef all`'s FFI header refresh before
+  `PostBuildStep::StageFfiLibrary` staging, so a rebuild triggered by a stale cbindgen header
+  stages its own fresh cdylib instead of leaving it unstaged until a later run.
+
 ## [0.76.0] - 2026-08-29
 
 ### Added
