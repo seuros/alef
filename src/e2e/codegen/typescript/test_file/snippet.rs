@@ -241,11 +241,22 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             }
         }
         if !seeds.is_empty() {
+            // No override `nested_types` map is threaded into this walk: unlike
+            // `render_test_file`, this path already sweeps every `type_defs` entry against
+            // `referenced_code` below (the struct-typed twin of the enum sweep just above), so a
+            // class reachable only through an override-introduced edge (e.g. `SsrfPolicy`
+            // reached through an `AuthConfig` an override alone names) is still caught by that
+            // sweep even though this BFS cannot follow the override edge to find it. ~keep
             imports.extend(
-                collect_transitive_nested_types_for_wasm(&seeds, type_defs, wasm_type_prefix)
-                    .into_iter()
-                    .map(|name| import_name(&name))
-                    .filter(|name| references_identifier(&referenced_code, name)),
+                collect_transitive_nested_types_for_wasm(
+                    &seeds,
+                    type_defs,
+                    wasm_type_prefix,
+                    &std::collections::HashMap::new(),
+                )
+                .into_iter()
+                .map(|name| import_name(&name))
+                .filter(|name| references_identifier(&referenced_code, name)),
             );
         }
     }

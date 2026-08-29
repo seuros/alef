@@ -49,6 +49,8 @@ mod wasm_enum_import_tests;
 #[cfg(test)]
 mod wasm_enum_member_agreement_tests;
 #[cfg(test)]
+mod wasm_handle_config_transitive_import_tests;
+#[cfg(test)]
 mod wasm_optional_chain_tests;
 #[cfg(test)]
 mod wasm_options_type_import_prefix_tests;

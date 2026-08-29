@@ -307,7 +307,19 @@ pub fn render_test_file(
     // test fails at runtime with `ReferenceError: WasmFunctionDefinition
     // is not defined`. The BFS uses a seen-set to terminate on cycles.
     if lang == "wasm" {
-        let derived_all = collect_transitive_nested_types_for_wasm(&all_options_types, type_defs, wasm_type_prefix);
+        // `all_nested_types` is, by this point, the union of every call override's
+        // `nested_types` seen across this file's fixtures (merged in by the per-fixture loop
+        // above) plus the file-level default — exactly the override map the emitter itself
+        // consults at every recursion depth. Passing it lets the BFS follow an
+        // override-introduced edge (a fixture-authoring key with no direct IR-field
+        // correspondence) the same way the body's own construction does, instead of being
+        // limited to real `type_defs` struct fields alone. ~keep
+        let derived_all = collect_transitive_nested_types_for_wasm(
+            &all_options_types,
+            type_defs,
+            wasm_type_prefix,
+            &all_nested_types,
+        );
         // `derived_all` is a set of class names (not field-name keyed — two
         // distinct classes can share a field name, see the comment on
         // `collect_transitive_nested_types_for_wasm`). `all_nested_types` is

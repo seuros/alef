@@ -52,16 +52,36 @@ pub(in crate::e2e::codegen::typescript::test_file) fn wasm_class_name(ir_type_na
 /// class names is both correct and order-independent. Keep this a `BTreeSet`
 /// (not `HashSet`) — the generated `e2e/` output is byte-compared by CI, so
 /// iteration order must be deterministic.
+///
+/// `override_nested_types` is the raw `[[crates.e2e.call.overrides.<lang>]].nested_types`
+/// call-override map, merged over the IR-derived fields at every BFS step — the same merge
+/// `ts_builder_expression_inner` performs at every
+/// recursion depth via its own `effective_nested_types` (see `handle_values.rs`'s
+/// `HandleConfigContext::nested_types` doc, which threads the identical raw map unchanged to
+/// every depth for the same reason). A fixture author's override key is not required to name a
+/// field the IR actually declares on the owning struct — that's the point of the override,
+/// covering a case the IR shape does not fit — so a class reachable ONLY through an
+/// override-introduced key (e.g. `nested_types.auth = "WasmAuthConfig"` naming a field the IR
+/// has no `auth`-typed entry for) was never visited by a walk that consulted `type_defs` alone.
+/// Anything reachable ONLY beyond that edge — a further-nested class the override's own target
+/// type *does* declare as a real IR field (e.g. `AuthConfig.ssrf: SsrfPolicy`) — was built into
+/// the body by the emitter's own recursion but never reached by this collector, and therefore
+/// never imported: `ReferenceError: WasmSsrfPolicy is not defined` at runtime, surviving even a
+/// correctly-configured `nested_types.auth` entry because that entry names the WRONG hop. ~keep
 pub(in crate::e2e::codegen::typescript::test_file) fn collect_transitive_nested_types_for_wasm(
     seed_wasm_types: &std::collections::BTreeSet<String>,
     type_defs: &[TypeDef],
     wasm_type_prefix: &str,
+    override_nested_types: &std::collections::HashMap<String, String>,
 ) -> std::collections::BTreeSet<String> {
     let mut result: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut queue: Vec<String> = seed_wasm_types.iter().cloned().collect();
     let mut seen: std::collections::HashSet<String> = queue.iter().cloned().collect();
     while let Some(wasm_type) = queue.pop() {
-        let derived = derive_nested_types_for_wasm(&wasm_type, type_defs, wasm_type_prefix);
+        let mut derived = derive_nested_types_for_wasm(&wasm_type, type_defs, wasm_type_prefix);
+        for (key, value) in override_nested_types {
+            derived.insert(key.clone(), value.clone());
+        }
         for v in derived.into_values() {
             if seen.insert(v.clone()) {
                 queue.push(v.clone());

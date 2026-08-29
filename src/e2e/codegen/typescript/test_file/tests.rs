@@ -176,7 +176,7 @@ fn collect_transitive_nested_types_walks_two_levels_deep() {
 
     let mut seeds = std::collections::BTreeSet::new();
     seeds.insert("WasmChatRequest".to_string());
-    let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm");
+    let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm", &Default::default());
 
     // `derived` is a `BTreeSet<String>` of wasm class names (not a field-name
     // keyed map) — see the doc comment on `collect_transitive_nested_types_for_wasm`
@@ -271,7 +271,7 @@ fn collect_transitive_nested_types_terminates_on_cycles() {
     );
     let mut seeds = std::collections::BTreeSet::new();
     seeds.insert("WasmRecursive".to_string());
-    let derived = collect_transitive_nested_types_for_wasm(&seeds, &[recursive], "Wasm");
+    let derived = collect_transitive_nested_types_for_wasm(&seeds, &[recursive], "Wasm", &Default::default());
     // `derived` is a set of class names; the self-referential field's class
     // (WasmRecursive) must appear exactly once despite the cycle.
     assert_eq!(derived.len(), 1);
@@ -313,7 +313,7 @@ fn collect_transitive_nested_types_keeps_both_classes_on_field_name_collision() 
     let mut seeds = std::collections::BTreeSet::new();
     seeds.insert("WasmTesseractConfig".to_string());
     seeds.insert("WasmConversionOptions".to_string());
-    let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm");
+    let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm", &Default::default());
 
     assert!(
         derived.contains("WasmImagePreprocessingConfig"),
