@@ -302,6 +302,29 @@ fn should_keep_the_kwargs_unpack_when_options_defaults_the_field_to_none() {
 }
 
 #[test]
+fn should_not_emit_optional_kwarg_helper_when_nested_converter_owns_the_call_site() {
+    let theme = TypeDef {
+        name: "Theme".to_string(),
+        rust_path: "test_lib::Theme".to_string(),
+        has_default: true,
+        ..Default::default()
+    };
+    let api = surface(vec![function_default_field("theme", "Theme")], Vec::new(), vec![theme]);
+    let (facade, _stub) = render_facade_and_stub(&api);
+    let helper_name = "_optional_layout_spec_theme";
+
+    assert_eq!(
+        constructor_call_arguments(&facade),
+        vec!["theme=_to_rust_theme(value.theme)".to_string()],
+        "the nested converter owns the constructor argument:\n{facade}"
+    );
+    assert!(
+        !facade.contains(helper_name),
+        "a helper with no call site is dead generated code:\n{facade}"
+    );
+}
+
+#[test]
 fn mixed_optional_primitive_defaults_use_heterogeneous_kwarg_helper() {
     let fields = [
         ("minimum_score", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64)),

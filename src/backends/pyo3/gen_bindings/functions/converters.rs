@@ -1,7 +1,9 @@
 use crate::codegen::shared::binding_fields;
 use crate::core::ir::{TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::ToSnakeCase;
+
+use super::optional_kwargs::emit_optional_kwarg_helper;
 
 type OptionsFieldBridges<'a> = AHashMap<&'a str, (&'a str, &'a str, Option<&'a str>)>;
 
@@ -76,6 +78,8 @@ pub(super) fn emit_converters(
 
         let is_typeddict = options_return_types.contains(type_name);
         let is_reexported = reexported_names.contains(type_name.as_str());
+        let helpers_insert_pos = out.len();
+        let mut optional_kwarg_helpers = String::new();
 
         // The same per-type `rename_fields` lookup `gen_stubs/classes.rs::gen_type_init_stub`
         // builds before calling `resolve_param_ident` -- keeping both call sites' `config_renames`
@@ -96,29 +100,6 @@ pub(super) fn emit_converters(
         } else {
             Some(&config_renames)
         };
-
-        let optional_default_fields: Vec<_> = binding_fields(&typ.fields)
-            .filter(|field| field.cfg.as_deref().is_none_or(cfg_present_for_pyo3))
-            .filter(|field| {
-                let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
-                defers_to_rust_default(field) && !is_optional && field_defaults.admits_none(field)
-            })
-            .collect();
-        for field in &optional_default_fields {
-            let parameter_name = crate::backends::pyo3::gen_bindings::constructors::resolve_param_ident(
-                &field.name,
-                field.serde_rename.as_ref(),
-                config_renames_ref,
-            );
-            let parameter_name = parameter_name.strip_prefix("r#").unwrap_or(&parameter_name);
-            let helper_name = format!("_optional_{}_{}", snake, field.name.to_snake_case());
-            let kwargs_name = format!("_{}{}Kwargs", type_name, field.name.to_pascal_case());
-            let value_type = optional_kwarg_python_type(&field.ty);
-            out.push_str(&format!(
-                "class {kwargs_name}(TypedDict, total=False):\n    {parameter_name}: {value_type}\n\n\n\
-                 def {helper_name}(value: {value_type} | None) -> {kwargs_name}:\n    return {{}} if value is None else {{\"{parameter_name}\": value}}\n\n\n"
-            ));
-        }
 
         // `name` is a raw Rust field name, but what is being read here is the *emitted* Python
         // attribute / TypedDict key, and both of those are already escaped (`types.rs` and
@@ -535,13 +516,26 @@ pub(super) fn emit_converters(
                                 },
                             ));
                         } else if defers_to_rust_default(field) && field_defaults.admits_none(field) {
+                            let parameter_name = crate::backends::pyo3::gen_bindings::constructors::resolve_param_ident(
+                                &field.name,
+                                field.serde_rename.as_ref(),
+                                config_renames_ref,
+                            );
+                            let parameter_name = parameter_name.strip_prefix("r#").unwrap_or(&parameter_name);
+                            let helper_name = emit_optional_kwarg_helper(
+                                &mut optional_kwarg_helpers,
+                                type_name,
+                                &snake,
+                                field,
+                                parameter_name,
+                            );
                             out.push_str(&crate::backends::pyo3::template_env::render(
                                 "simple_enum_dict_coerce_optional_default.jinja",
                                 minijinja::context! {
                                     name => &field.name,
                                     enum_name => nested_name,
                                     accessor => &accessor,
-                                    helper_name => format!("_optional_{}_{}", snake, field.name.to_snake_case()),
+                                    helper_name => helper_name,
                                 },
                             ));
                         } else {
@@ -706,13 +700,15 @@ pub(super) fn emit_converters(
             // disagree with that widening for exactly the non-`Named` shapes. ~keep
             if defers_to_rust_default(field) && !is_optional && field_defaults.admits_none(field) {
                 let raw_field_accessor = field_access(&field.name);
+                let helper_name =
+                    emit_optional_kwarg_helper(&mut optional_kwarg_helpers, type_name, &snake, field, &pyo3_param_name);
                 out.push_str(&crate::backends::pyo3::template_env::render(
                     "field_kwarg_optional_default.jinja",
                     minijinja::context! {
                         name => &pyo3_param_name,
                         raw_accessor => &raw_field_accessor,
                         final_accessor => &final_accessor,
-                        helper_name => format!("_optional_{}_{}", snake, field.name.to_snake_case()),
+                        helper_name => helper_name,
                     },
                 ));
             } else {
@@ -727,20 +723,7 @@ pub(super) fn emit_converters(
         }
 
         out.push_str("    )\n\n\n");
-    }
-}
-
-fn optional_kwarg_python_type(ty: &TypeRef) -> String {
-    match ty {
-        TypeRef::Named(name) => format!("_rust.{name}"),
-        TypeRef::Vec(inner) => format!("list[{}]", optional_kwarg_python_type(inner)),
-        TypeRef::Map(key, value) => format!(
-            "dict[{}, {}]",
-            optional_kwarg_python_type(key),
-            optional_kwarg_python_type(value)
-        ),
-        TypeRef::Optional(inner) => optional_kwarg_python_type(inner),
-        other => crate::backends::pyo3::type_map::python_type(other),
+        out.insert_str(helpers_insert_pos, &optional_kwarg_helpers);
     }
 }
 

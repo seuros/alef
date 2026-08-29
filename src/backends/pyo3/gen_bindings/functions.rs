@@ -4,6 +4,7 @@ mod async_wrappers;
 mod converters;
 mod function_wrappers;
 mod helper_type_mapping;
+mod optional_kwargs;
 mod orchestration;
 mod return_error;
 mod signature_params;

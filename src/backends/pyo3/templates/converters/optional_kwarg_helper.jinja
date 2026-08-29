@@ -1,0 +1,6 @@
+class {{ kwargs_name }}(TypedDict, total=False):
+    {{ parameter_name }}: {{ value_type }}
+
+
+def {{ helper_name }}(value: {{ value_type }} | None) -> {{ kwargs_name }}:
+    return {} if value is None else {"{{ parameter_name }}": value}

@@ -242,6 +242,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/converters/typeddict_splat_return.jinja"),
     ),
     (
+        "converters/optional_kwarg_helper.jinja",
+        include_str!("templates/converters/optional_kwarg_helper.jinja"),
+    ),
+    (
         "data_enum_vec_coerce.jinja",
         include_str!("templates/data_enum_vec_coerce.jinja"),
     ),
