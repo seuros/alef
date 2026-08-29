@@ -7,11 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-08-29
+
+### Added
+
+- Add generated Node and Python lock-file freshness checks to `generate`, `all`, and `verify`,
+  including retry handling when a package manager temporarily holds the lock.
+- Diagnose stale `uv.lock` files beside generated Python projects.
+
 ### Fixed
 
-- fix(cli): run `alef generate`/`alef all`'s FFI header refresh before
-  `PostBuildStep::StageFfiLibrary` staging, so a rebuild triggered by a stale cbindgen header
-  stages its own fresh cdylib instead of leaving it unstaged until a later run.
+- Refresh generated FFI headers before staging native libraries, so a build triggered by a stale
+  header stages the library produced by that same run.
+- Make release verification retry transient Node relock failures and reject unresolved lock drift.
+- Point drifted create-once scaffold files at the correct repair workflow, and derive `verify`'s
+  final sign-off from the drift findings it actually reported.
+- Drop foreign cfg-gated enum variants and their constructors from generated language surfaces.
+- Dispatch every generated C# error path to its declared per-variant exception type.
+- Resolve flattened Go adapter parameters from the adapter signature rather than the unflattened
+  source function.
+- Keep generated streaming and discriminated-union assertions visible or explicitly skipped,
+  including Python typed-dictionary access and Ruby classification.
+- Import WebAssembly option and class types that are reachable through generated bodies or
+  override edges.
+- Make strict fixture diagnostics identify the shared field oracle and derive error-field
+  reachability from the IR method surface.
+- Assert declared Python exception classes instead of matching error-message substrings, and
+  resolve Python element access from the element type that owns the field.
+- Derive Ruby hash-serialized enum skips from IR metadata and require a compatible `rb-sys`
+  version.
+- Validate generated Ruby enum assertions against the declared variant value instead of merely
+  checking that the enum is present.
+- Resolve generated C# and Kotlin collection-count assertions through tagged-union ownership in
+  the Rust IR, including collection fields reached through batch results.
+- Retry generated nested Rust lock-file updates with registry access when the offline Cargo index
+  cannot satisfy a newly generated dependency constraint.
+- Keep N-API TypeScript enum declarations aligned with the generated runtime representation.
+- Carry generated Dart snippet helpers into the files that call them.
 
 ## [0.76.0] - 2026-08-29
 
