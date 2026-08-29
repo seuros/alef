@@ -424,7 +424,9 @@ pub(super) fn emit_from_impl_for_enum(
         minijinja::context! {},
     ));
 
-    emit_fallible_from_core_enum(out, en, &core_ty, is_host_enum, configured_features);
+    if en.has_serde {
+        emit_fallible_from_core_enum(out, en, &core_ty, is_host_enum, configured_features);
+    }
 }
 
 pub(super) fn fallible_from_core_fn_name(enum_name: &str) -> String {
@@ -731,6 +733,7 @@ mod tests {
         let en = EnumDef {
             name: "WorkflowStep".to_string(),
             rust_path: "mylib::WorkflowStep".to_string(),
+            has_serde: true,
             variants: vec![make_unit_variant("Ready", None)],
             excluded_variants: vec![excluded],
             ..Default::default()
@@ -750,6 +753,23 @@ mod tests {
             out.matches("_ => false").count(),
             0,
             "fully enumerated variants must not emit an unreachable catch-all: {out}"
+        );
+    }
+
+    #[test]
+    fn non_serde_enum_omits_unused_fallible_from_core_helper() {
+        let en = EnumDef {
+            name: "Status".to_string(),
+            rust_path: "mylib::Status".to_string(),
+            variants: vec![make_unit_variant("Ready", None)],
+            ..Default::default()
+        };
+        let mut out = String::new();
+        emit_from_impl_for_enum(&mut out, &en, "mylib", None);
+
+        assert!(
+            !out.contains("try_convert_status_from_core"),
+            "non-serde enums have no decoder caller: {out}"
         );
     }
 
