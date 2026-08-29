@@ -5,16 +5,41 @@ use std::path::Path;
 /// Ordinary scaffold seeds are create-once, but an emitted Ruby Gemfile must refresh Alef's
 /// managed gem constraints without deleting consumer additions. Identifying that exception before
 /// the generic skip and ownership guards lets normal, non-clean generation converge it. ~keep
-pub(super) fn is_merge_target(file: &GeneratedFile, full_path: &Path) -> bool {
-    file.path.file_name().is_some_and(|name| name == "Gemfile")
-        && file.content.contains("gem \"rb_sys\"")
-        && full_path.exists()
+pub(super) struct MergeCandidate<'a> {
+    file: &'a GeneratedFile,
+    full_path: &'a Path,
+    is_target: bool,
 }
 
-pub(super) fn merge_file(file: &GeneratedFile, full_path: &Path) -> anyhow::Result<String> {
-    let existing = std::fs::read_to_string(full_path)
-        .with_context(|| format!("failed to read existing {}", full_path.display()))?;
-    Ok(merge(&existing, &file.content))
+impl<'a> MergeCandidate<'a> {
+    pub(super) fn new(file: &'a GeneratedFile, full_path: &'a Path) -> Self {
+        let is_target = file.path.file_name().is_some_and(|name| name == "Gemfile")
+            && file.content.contains("gem \"rb_sys\"")
+            && full_path.exists();
+        Self {
+            file,
+            full_path,
+            is_target,
+        }
+    }
+
+    pub(super) fn is_target(&self) -> bool {
+        self.is_target
+    }
+
+    pub(super) fn should_skip_scaffold(&self, overwrite: bool) -> bool {
+        !overwrite
+            && !self.file.generated_header
+            && self.full_path.exists()
+            && !crate::cli::cache::is_alef_derived_output(self.full_path)
+            && !self.is_target()
+    }
+
+    pub(super) fn merge_file(&self) -> anyhow::Result<String> {
+        let existing = std::fs::read_to_string(self.full_path)
+            .with_context(|| format!("failed to read existing {}", self.full_path.display()))?;
+        Ok(merge(&existing, &self.file.content))
+    }
 }
 
 pub(super) fn merge(existing: &str, generated: &str) -> String {

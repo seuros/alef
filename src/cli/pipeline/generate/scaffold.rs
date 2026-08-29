@@ -212,13 +212,8 @@ pub fn write_scaffold_files_report(
         if super::user_owned::skip_declared_existing(&declared, base_dir, &full_path, &mut report) {
             continue;
         }
-        let is_ruby_gemfile_merge_target = ruby_gemfile::is_merge_target(file, &full_path);
-        let can_skip = !overwrite
-            && !file.generated_header
-            && full_path.exists()
-            && !crate::cli::cache::is_alef_derived_output(&full_path)
-            && !is_ruby_gemfile_merge_target;
-        if can_skip {
+        let ruby_gemfile = ruby_gemfile::MergeCandidate::new(file, &full_path);
+        if ruby_gemfile.should_skip_scaffold(overwrite) {
             report.expected_paths.insert(full_path.clone());
             debug!("  skipped (already exists): {}", full_path.display());
             continue;
@@ -266,8 +261,8 @@ pub fn write_scaffold_files_report(
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
             merge_managed_toml(&existing, &file.content, base_dir, &file.path)
                 .with_context(|| format!("failed to merge existing {}", full_path.display()))?
-        } else if is_ruby_gemfile_merge_target {
-            ruby_gemfile::merge_file(file, &full_path)?
+        } else if ruby_gemfile.is_target() {
+            ruby_gemfile.merge_file()?
         } else {
             if file.path == Path::new(POLY_CONFIG) {
                 // Brand-new merge target (nothing on disk to merge with yet): still
@@ -307,7 +302,7 @@ pub fn write_scaffold_files_report(
                 // that created them. ~keep
                 continue;
             }
-            if !is_poly_merge_target && !is_ruby_gemfile_merge_target {
+            if !is_poly_merge_target && !ruby_gemfile.is_target() {
                 // Content-driven marker detection is checked first, on every extension,
                 // not only markable ones: a backend can self-mark inside `content` on an
                 // extension `marker_comment_style` has no comment syntax for at all (docs
