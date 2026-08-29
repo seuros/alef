@@ -645,7 +645,6 @@ fn cfg_shape_enum_with_rust_path(rust_path: &str) -> EnumDef {
 /// against the (correctly) narrower wrapper `enum` `gen_enum` renders alongside it.
 #[test]
 fn variant_constructors_drop_foreign_cfg_gated_variant() {
-    // core_import ("crate") does not prefix-match rust_path ("dep_crate::Shape") -> FOREIGN.
     let def = cfg_shape_enum_with_rust_path("dep_crate::Shape");
 
     // `Some(&[])` is load-bearing, not `None`: a foreign cfg-gated variant is only DROPPED once
@@ -666,7 +665,6 @@ fn variant_constructors_drop_foreign_cfg_gated_variant() {
 /// never resolves a host-owned gate to `Drop`.
 #[test]
 fn variant_constructors_keep_host_owned_cfg_gated_variant() {
-    // core_import ("crate") DOES prefix-match rust_path ("crate::Shape") -> host-owned.
     let def = cfg_shape_enum_with_rust_path("crate::Shape");
 
     let code = gen_data_enum_variant_constructors(&def, "crate", None);

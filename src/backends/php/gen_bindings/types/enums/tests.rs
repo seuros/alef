@@ -379,7 +379,6 @@ mod variant_constructor_tests {
         let mut def = cfg_shape_enum(r#"feature = "extra-shapes""#);
         def.rust_path = "crate::Shape".to_string();
         let empty = AHashSet::new();
-        // core_import ("crate") now DOES prefix-match rust_path ("crate::Shape"): host-owned.
         let code = gen_flat_data_enum_variant_constructors(&def, &mapper(), &empty, &empty, &empty, "crate");
 
         assert_eq!(

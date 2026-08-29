@@ -209,7 +209,6 @@ fn drops_schema_const_for_foreign_cfg_gated_only_consumer() {
     let api = surface(vec![cfg], vec![gated]);
     let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
 
-    // core_import ("host_crate") does not prefix-match rust_path ("crate::ModelType") -> FOREIGN.
     let generated = gen_wire_schema_consts(&api, &coercible, "host_crate");
 
     assert!(
@@ -231,7 +230,6 @@ fn keeps_schema_const_for_host_owned_cfg_gated_consumer() {
     let api = surface(vec![cfg], vec![gated]);
     let coercible: AHashSet<&str> = ["RunConfig"].into_iter().collect();
 
-    // core_import ("crate") DOES prefix-match rust_path ("crate::ModelType") -> host-owned.
     let generated = gen_wire_schema_consts(&api, &coercible, "crate");
 
     assert!(!generated.is_empty(), "{generated}");

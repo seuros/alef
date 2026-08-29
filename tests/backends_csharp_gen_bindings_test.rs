@@ -846,17 +846,23 @@ fn test_error_helper_preserves_base_error_acronym_class_name() {
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();
-    let wrapper = files
+    // 0.77.0 moved last-error dispatch out of the converter and onto the fallback exception
+    // class's `FromLastError`, so every throw site funnels through one dispatcher. The invariant
+    // under test is unchanged -- the acronym-preserving class name -- only its home moved, so
+    // this locates the dispatcher by its own marker rather than by a file name. ~keep
+    let dispatcher = files
         .iter()
-        .find(|file| file.path.ends_with("TestConverter.cs"))
-        .unwrap();
+        .find(|file| file.content.contains("internal static Exception FromLastError"))
+        .expect("a generated file must carry the FromLastError dispatcher");
 
     assert!(
-        wrapper
+        dispatcher
             .content
-            .contains("if (code == 2) return new GraphQLErrorException(message);")
+            .contains("if (code == 2) return new GraphQLErrorException(message);"),
+        "{}",
+        dispatcher.content
     );
-    assert!(!wrapper.content.contains("GraphQlErrorException"));
+    assert!(!dispatcher.content.contains("GraphQlErrorException"));
 }
 
 /// Regression for a Java-class bug ported to C#: FFI code 1 is the infrastructure
@@ -903,22 +909,23 @@ fn test_invalid_input_variant_does_not_hijack_ffi_conversion_error_code() {
     };
 
     let files = backend.generate_bindings(&api, &config).unwrap();
-    let wrapper = files
+    // See the note on the acronym test: dispatch now lives on `FromLastError`, not the converter.
+    let dispatcher = files
         .iter()
-        .find(|file| file.path.ends_with("TestConverter.cs"))
-        .unwrap();
+        .find(|file| file.content.contains("internal static Exception FromLastError"))
+        .expect("a generated file must carry the FromLastError dispatcher");
 
     assert!(
-        !wrapper.content.contains("code == 1"),
+        !dispatcher.content.contains("code == 1"),
         "FFI code 1 (ALEF_FFI_CONVERSION_ERROR) must not be special-cased to a user variant: {}",
-        wrapper.content
+        dispatcher.content
     );
     assert!(
-        wrapper
+        dispatcher
             .content
             .contains("if (message.StartsWith(\"invalid input:\")) return new InvalidInputException(message);"),
         "InvalidInput must dispatch by message prefix like every other variant: {}",
-        wrapper.content
+        dispatcher.content
     );
 }
 
