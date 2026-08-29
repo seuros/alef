@@ -7,6 +7,9 @@ use anyhow::Context as _;
 use std::path::Path;
 use tracing::{debug, warn};
 
+#[path = "ruby_gemfile.rs"]
+mod ruby_gemfile;
+
 /// Generate scaffold files for given languages.
 ///
 /// After the built-in scaffold generators run, each registered extension gets a
@@ -204,14 +207,7 @@ pub fn write_scaffold_files_report(
         if super::user_owned::skip_declared_existing(&declared, base_dir, &full_path, &mut report) {
             continue;
         }
-        let is_ruby_gemfile_merge_target = file.path.file_name().is_some_and(|name| name == "Gemfile")
-            && file.content.contains("gem \"rb_sys\"")
-            && full_path.exists();
-        // `can_skip` runs BEFORE the ownership guard and consults no ownership signal at all, so a
-        // path alef demonstrably owns is still skipped outright by every `overwrite: false` writer.
-        // That is harmless for a file a human may grow past a placeholder -- which is what
-        // create-once exists for -- and wrong for pure derived output, whose whole contract is that
-        // alef replaces it wholesale. ~keep
+        let is_ruby_gemfile_merge_target = ruby_gemfile::is_merge_target(file, &full_path);
         let can_skip = !overwrite
             && !file.generated_header
             && full_path.exists()
@@ -266,9 +262,7 @@ pub fn write_scaffold_files_report(
             merge_managed_toml(&existing, &file.content, base_dir, &file.path)
                 .with_context(|| format!("failed to merge existing {}", full_path.display()))?
         } else if is_ruby_gemfile_merge_target {
-            let existing = std::fs::read_to_string(&full_path)
-                .with_context(|| format!("failed to read existing {}", full_path.display()))?;
-            merge_ruby_gemfile(&existing, &file.content)
+            ruby_gemfile::merge_file(file, &full_path)?
         } else {
             if file.path == Path::new(POLY_CONFIG) {
                 // Brand-new merge target (nothing on disk to merge with yet): still
@@ -596,52 +590,6 @@ pub fn write_scaffold_files_report(
     // which is how `alef all` came to report the scaffold phase's refusals while silently omitting
     // every binding-phase one. Callers accumulate with `absorb_unwritten` and report once. ~keep
     Ok(report)
-}
-
-fn merge_ruby_gemfile(existing: &str, generated: &str) -> String {
-    let managed: Vec<(&str, &str)> = generated
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let name = trimmed
-                .strip_prefix("gem \"")
-                .and_then(|rest| rest.split_once('"'))
-                .map(|(name, _)| name)?;
-            Some((name, trimmed))
-        })
-        .collect();
-    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
-    let mut missing = Vec::new();
-    for (name, generated_line) in managed {
-        let double = format!("gem \"{name}\"");
-        let single = format!("gem '{name}'");
-        if let Some(line) = lines
-            .iter_mut()
-            .find(|line| line.trim_start().starts_with(&double) || line.trim_start().starts_with(&single))
-        {
-            let indent = &line[..line.len() - line.trim_start().len()];
-            *line = format!("{indent}{generated_line}");
-        } else {
-            missing.push(format!("  {generated_line}"));
-        }
-    }
-    if !missing.is_empty() {
-        let insert_at = lines
-            .iter()
-            .position(|line| line.trim() == "group :development do")
-            .map(|start| start + 1);
-        if let Some(index) = insert_at {
-            lines.splice(index..index, missing);
-        } else {
-            lines.push(String::new());
-            lines.push("group :development do".to_string());
-            lines.extend(missing);
-            lines.push("end".to_string());
-        }
-    }
-    let mut merged = lines.join("\n");
-    merged.push('\n');
-    merged
 }
 
 /// Repo-root poly config, emitted by the scaffold pass.
@@ -1049,76 +997,6 @@ fn normalize_poly_config(full_path: &Path, base_dir: &Path) {
 #[cfg(test)]
 mod merge_managed_toml_tests {
     use super::*;
-
-    #[test]
-    fn ruby_gemfile_refreshes_managed_constraints_and_preserves_extras() {
-        let existing = r#"source "https://rubygems.org"
-
-gemspec
-
-group :development do
-  gem "rb_sys", ">= 0.9", "< 0.9.128"
-  gem "debug", "~> 1.9"
-end
-"#;
-        let generated = r#"source "https://rubygems.org"
-
-gemspec
-
-group :development do
-  gem "rake-compiler", "~> 1.3"
-  gem "rb_sys", ">= 0.9.130"
-end
-"#;
-
-        let merged = merge_ruby_gemfile(existing, generated);
-
-        assert!(merged.contains("gem \"rb_sys\", \">= 0.9.130\""), "{merged}");
-        assert!(!merged.contains("< 0.9.128"), "{merged}");
-        assert!(merged.contains("gem \"debug\", \"~> 1.9\""), "{merged}");
-        assert!(merged.contains("gem \"rake-compiler\", \"~> 1.3\""), "{merged}");
-    }
-
-    #[test]
-    fn ruby_gemfile_inserts_missing_gem_after_nested_development_block() {
-        let existing = "group :development do\n  platforms :mri do\n    gem \"debug\"\n  end\nend\n";
-        let generated = "group :development do\n  gem \"rb_sys\", \">= 0.9.130\"\nend\n";
-
-        let merged = merge_ruby_gemfile(existing, generated);
-
-        assert!(
-            merged.starts_with("group :development do\n  gem \"rb_sys\", \">= 0.9.130\"\n  platforms :mri do"),
-            "managed gems must be inserted before nested blocks in the development group: {merged}"
-        );
-    }
-
-    #[test]
-    fn normal_scaffold_run_refreshes_emitted_ruby_gemfile() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("packages/ruby/Gemfile");
-        std::fs::create_dir_all(path.parent().expect("Gemfile parent")).expect("create parent");
-        std::fs::write(
-            &path,
-            "source \"https://rubygems.org\"\n\ngemspec\n\ngroup :development do\n  gem \"rb_sys\", \">= 0.9\", \"< 0.9.128\"\n  gem \"debug\", \"~> 1.9\"\nend\n",
-        )
-        .expect("write stale Gemfile");
-        let file = GeneratedFile {
-            path: std::path::PathBuf::from("packages/ruby/Gemfile"),
-            content: "source \"https://rubygems.org\"\n\ngemspec\n\ngroup :development do\n  gem \"rake-compiler\", \"~> 1.3\"\n  gem \"rb_sys\", \">= 0.9.130\"\nend\n".to_string(),
-            generated_header: false,
-        };
-
-        let report = write_scaffold_files_report(&[file], temp.path(), false).expect("normal scaffold write");
-        let refreshed = std::fs::read_to_string(path).expect("read refreshed Gemfile");
-
-        assert_eq!(
-            report.changed_count(),
-            1,
-            "normal generation must refresh the emitted Gemfile"
-        );
-        assert!(refreshed.contains("gem \"rb_sys\", \">= 0.9.130\""), "{refreshed}");
-        assert!(refreshed.contains("gem \"debug\", \"~> 1.9\""), "{refreshed}");
-    }
 
     fn exclude_values(merged: &str) -> Vec<String> {
         let doc = merged
