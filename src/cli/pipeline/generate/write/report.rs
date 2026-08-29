@@ -65,6 +65,26 @@ pub struct WriteReport {
     /// Reported rather than silent for the same reason `refused_paths` is: a run that wrote
     /// nothing because 17 paths were declared must say so. See [`report_user_owned_skips`]. ~keep
     pub user_owned_paths: std::collections::BTreeSet<std::path::PathBuf>,
+    /// The subset of [`Self::refused_paths`] that
+    /// [`crate::cli::commands::adopt::is_create_once_seed`] classifies as a create-once seed --
+    /// the identical predicate `alef adopt` gates `--clobber-create-once-seeds` on, asked by the
+    /// guard at the moment it refuses rather than re-derived here.
+    ///
+    /// THE DEFECT this closes: before this field existed, every refused write was reported under
+    /// one heading -- "content DIFFERS ... stale until adopted or deleted" -- and pointed at
+    /// `alef adopt <path>` regardless of whether that path was a create-once seed. For a seed,
+    /// `alef adopt --write` then refused the exact remedy this warning printed, naming a flag
+    /// (`--clobber-create-once-seeds`) the warning never mentioned. Measured in a consumer repo:
+    /// 13 of 17 refused writes were create-once seeds (`*.csproj`, `pubspec.yaml`, `mix.exs`,
+    /// `go.mod`, `pom.xml`, `build.gradle.kts`, `gradle-wrapper.properties`, `package.json`,
+    /// `Gemfile`, `Package.swift`, `build.zig`, `build.zig.zon`), and the two subsystems also
+    /// disagreed about which direction was dangerous: this warning implied inaction was the
+    /// risk ("stale until adopted"), while `alef adopt` correctly treats ADOPTION as the risk --
+    /// the on-disk copy has almost certainly grown past alef's placeholder, and adopting consents
+    /// to alef replacing it on the next overwriting regen. [`report_refused_writes`] now reports
+    /// this subset separately, in `adopt`'s own words, instead of asserting the opposite of what
+    /// `alef adopt` says about the same path. ~keep
+    pub refused_create_once_paths: std::collections::BTreeSet<std::path::PathBuf>,
 }
 
 impl WriteReport {
@@ -92,28 +112,45 @@ impl WriteReport {
         self.user_owned_paths.len()
     }
 
+    /// How many refused writes are create-once seeds -- see [`Self::refused_create_once_paths`].
+    pub fn refused_create_once_count(&self) -> usize {
+        self.refused_create_once_paths.len()
+    }
+
     /// Record a refused write whose withheld content is known to differ from the bytes on
     /// disk.
     ///
     /// For the branches where no comparison is needed to know the answer: a binary target the
     /// guard reached only after an exact byte comparison already failed, and a text target
     /// whose existing bytes are not valid UTF-8 at all (alef's prepared output always is, so
-    /// they cannot be equal, and the file cannot be compared to say anything narrower). ~keep
-    pub fn refuse_drifted(&mut self, path: &Path) {
+    /// they cannot be equal, and the file cannot be compared to say anything narrower).
+    ///
+    /// `create_once` is the caller's own answer from
+    /// [`crate::cli::commands::adopt::is_create_once_seed`] on the `GeneratedFile` being
+    /// refused -- passed in rather than re-derived here, because this module has no access to
+    /// the original file once the caller is down to a path and prepared bytes. ~keep
+    pub fn refuse_drifted(&mut self, path: &Path, create_once: bool) {
         self.refused_paths.insert(path.to_path_buf());
         self.refused_drifted_paths.insert(path.to_path_buf());
+        if create_once {
+            self.refused_create_once_paths.insert(path.to_path_buf());
+        }
     }
 
     /// Record a refused text write, classifying it against the bytes already on disk.
     ///
     /// `existing` is `None` when the file could not be read as text, which classifies as
-    /// drifted for the reason [`Self::refuse_drifted`]'s doc gives. ~keep
-    pub fn refuse_text(&mut self, path: &Path, existing: Option<&str>, generated: &str) {
+    /// drifted for the reason [`Self::refuse_drifted`]'s doc gives. `create_once` is threaded
+    /// through to it for the same reason. ~keep
+    pub fn refuse_text(&mut self, path: &Path, existing: Option<&str>, generated: &str, create_once: bool) {
         match existing {
             Some(existing) if matches_alef_output(path, existing, generated) => {
                 self.refused_paths.insert(path.to_path_buf());
+                if create_once {
+                    self.refused_create_once_paths.insert(path.to_path_buf());
+                }
             }
-            _ => self.refuse_drifted(path),
+            _ => self.refuse_drifted(path, create_once),
         }
     }
 
@@ -140,6 +177,8 @@ impl WriteReport {
         self.refused_drifted_paths
             .extend(other.refused_drifted_paths.iter().cloned());
         self.user_owned_paths.extend(other.user_owned_paths.iter().cloned());
+        self.refused_create_once_paths
+            .extend(other.refused_create_once_paths.iter().cloned());
     }
 }
 
@@ -198,41 +237,94 @@ pub(crate) fn matches_alef_output(path: &Path, existing: &str, generated: &str) 
 /// as it stays frozen, and no rerun changes that. Reporting both as one number is what made a
 /// stale, version-bearing generated file indistinguishable from an up-to-date one -- see
 /// [`WriteReport::refused_drifted_paths`] for the measured incident. ~keep
+///
+/// A create-once seed ([`WriteReport::refused_create_once_paths`]) is reported in its own block,
+/// never folded into the ADOPTABLE tally above and never told to run `alef adopt <path>`.
+///
+/// THE DEFECT this closes: before the split, every refusal -- seed or not -- was reported under
+/// the ADOPTABLE wording above and pointed at the same `alef adopt <path>` remedy. Measured in a
+/// consumer repo: 13 of 17 refused writes were create-once seeds (`*.csproj`, `pubspec.yaml`,
+/// `mix.exs`, `go.mod`, `pom.xml`, `build.gradle.kts`, `gradle-wrapper.properties`,
+/// `package.json`, `Gemfile`, `Package.swift`, `build.zig`, `build.zig.zon`), and `alef adopt`
+/// refused every one of them by design, naming a flag (`--clobber-create-once-seeds`) this
+/// warning never mentioned -- an operator following the printed remedy hit a wall every time.
+///
+/// The two blocks also disagree on purpose about which direction is dangerous, because the
+/// files themselves are different: the ADOPTABLE block is right that inaction leaves stale
+/// content frozen, because alef would happily own and correct those paths once adopted. For a
+/// seed, adoption is the risk instead -- the on-disk copy has almost certainly grown past
+/// alef's placeholder, and adopting consents to alef replacing it wholesale on the next
+/// overwriting regen. The seed block below says exactly that, in the same words
+/// `commands::adopt::batch::adopt_target` already warns with when it blocks the identical path,
+/// so this report and that refusal can never assert opposite things about the same file. ~keep
 pub fn report_refused_writes(report: &WriteReport) {
     if report.refused_paths.is_empty() {
         return;
     }
-    let mut paths: Vec<&std::path::PathBuf> = report.refused_paths.iter().collect();
-    paths.sort();
-    warn!(
-        "{} file(s) were NOT written, {} of them holding content that DIFFERS from what alef \
-         would now generate: each already exists, carries no alef provenance marker, and \
-         alef has no durable record of owning it. This will not resolve on its own — the marker can \
-         only be written by writing the file, which is exactly what the guard declines. The \
-         differing ones are stale for as long as they stay frozen, and a file whose content is \
-         derived from the release version is the case that bites, because a stale copy stays \
-         plausible. Review the \
-         diff for each and adopt the ones alef should own with `alef adopt <path>`. At migration \
-         scale, `alef adopt <glob>` previews the whole set and `alef adopt <glob> --converged-only \
-         --write` clears every file that already matches generated output, leaving the drifted \
-         ones for you to read one at a time. If these are \
-         formats that cannot carry a marker (package.json, *.jar) and this is a fresh clone or a CI \
-         checkout, check whether .alef-ownership.toml was committed — that file is where their \
-         ownership is recorded. Do NOT hand-add the marker line: a refusal can be protecting a \
-         deliberate hand-edit, and stamping it blind re-enables exactly the clobbering the guard \
-         exists to prevent.",
-        paths.len(),
-        report.refused_drifted_paths.len()
-    );
-    for path in paths {
-        if report.refused_drifted_paths.contains(path) {
+    let mut adoptable: Vec<&std::path::PathBuf> = report
+        .refused_paths
+        .iter()
+        .filter(|path| !report.refused_create_once_paths.contains(*path))
+        .collect();
+    adoptable.sort();
+    if !adoptable.is_empty() {
+        let drifted_count = adoptable
+            .iter()
+            .filter(|path| report.refused_drifted_paths.contains(**path))
+            .count();
+        warn!(
+            "{} file(s) were NOT written, {} of them holding content that DIFFERS from what alef \
+             would now generate: each already exists, carries no alef provenance marker, and \
+             alef has no durable record of owning it. This will not resolve on its own — the marker can \
+             only be written by writing the file, which is exactly what the guard declines. The \
+             differing ones are stale for as long as they stay frozen, and a file whose content is \
+             derived from the release version is the case that bites, because a stale copy stays \
+             plausible. Review the \
+             diff for each and adopt the ones alef should own with `alef adopt <path>`. At migration \
+             scale, `alef adopt <glob>` previews the whole set and `alef adopt <glob> --converged-only \
+             --write` clears every file that already matches generated output, leaving the drifted \
+             ones for you to read one at a time. If these are \
+             formats that cannot carry a marker (package.json, *.jar) and this is a fresh clone or a CI \
+             checkout, check whether .alef-ownership.toml was committed — that file is where their \
+             ownership is recorded. Do NOT hand-add the marker line: a refusal can be protecting a \
+             deliberate hand-edit, and stamping it blind re-enables exactly the clobbering the guard \
+             exists to prevent.",
+            adoptable.len(),
+            drifted_count
+        );
+        for path in adoptable {
+            if report.refused_drifted_paths.contains(path) {
+                warn!(
+                    "  not written, content DIFFERS (stale until adopted or deleted): {}",
+                    path.display()
+                );
+            } else {
+                warn!(
+                    "  not written, content already matches generated output: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    if !report.refused_create_once_paths.is_empty() {
+        let mut seeds: Vec<&std::path::PathBuf> = report.refused_create_once_paths.iter().collect();
+        seeds.sort();
+        warn!(
+            "{} file(s) were NOT written because they are create-once seeds: alef emits each of \
+             these paths only when absent and never rewrites them again, so a plain `alef \
+             generate` already leaves them untouched on every later run -- this is not drift, and \
+             nothing here needs fixing. Do NOT run `alef adopt` on these: alef emits a path like \
+             this only once, so the on-disk copy has almost certainly grown past alef's \
+             placeholder, and adopting consents to alef replacing its contents wholesale on the \
+             next overwriting regen (an `alef version` sync, `alef all --clobber-create-once-seeds`). \
+             `alef adopt --write` already refuses every one of these by design, unless \
+             `--clobber-create-once-seeds` is passed -- a flag whose own help text calls it \
+             dangerous.",
+            seeds.len()
+        );
+        for path in seeds {
             warn!(
-                "  not written, content DIFFERS (stale until adopted or deleted): {}",
-                path.display()
-            );
-        } else {
-            warn!(
-                "  not written, content already matches generated output: {}",
+                "  create-once seed, not rewritten (this is expected): {}",
                 path.display()
             );
         }

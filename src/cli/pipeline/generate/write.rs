@@ -509,9 +509,15 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
 /// committed record (unmarkable) from the run that first wrote it. ~keep
 pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<WriteReport> {
     let declared = super::user_owned::declared_user_owned(base_dir)?;
-    let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
+    // Third tuple element is whether `file` is a create-once seed under
+    // `crate::cli::commands::adopt::is_create_once_seed` -- computed here, from the original
+    // `GeneratedFile`, because that predicate is unreachable once this loop is down to prepared
+    // bytes. Asked rather than re-derived, so a refusal this report carries and `alef adopt`'s
+    // own refusal of the same path can never disagree about which one it is. ~keep
+    let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
         let full_path = base_dir.join(&file.path);
+        let create_once = crate::cli::commands::adopt::is_create_once_seed(file);
         let (content, is_text) = if super::binary::is_base64_binary_output(&full_path) {
             (super::binary::decode_base64_binary(&full_path, &file.content)?, false)
         } else {
@@ -539,7 +545,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             };
             (normalized.into_bytes(), true)
         };
-        if let Some((existing, _)) = prepared.get(&full_path) {
+        if let Some((existing, _, _)) = prepared.get(&full_path) {
             anyhow::ensure!(
                 existing == &content,
                 "multiple generators emitted different content for {}",
@@ -547,7 +553,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             );
             continue;
         }
-        prepared.insert(full_path, (content, is_text));
+        prepared.insert(full_path, (content, is_text, create_once));
     }
     let dirs: std::collections::BTreeSet<_> = prepared
         .keys()
@@ -561,14 +567,23 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     let refused_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
     let user_owned_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
     let refused_drifted_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let refused_create_once_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
     // `existing` is the disk bytes the caller has already read, or `None` when the file could
     // not be read as text at all. Classified here rather than by a later pass because this is
-    // the only place both sides are in hand -- see `WriteReport::refused_drifted_paths`. ~keep
-    let refuse = |path: &Path, existing: Option<&str>, generated: &str| {
+    // the only place both sides are in hand -- see `WriteReport::refused_drifted_paths`.
+    // `create_once` is looked up from `prepared` (computed above, from the original
+    // `GeneratedFile`) rather than re-derived, for the same reason. ~keep
+    let refuse = |path: &Path, existing: Option<&str>, generated: &str, create_once: bool| {
         refused_paths
             .lock()
             .expect("refused-path mutex poisoned")
             .insert(path.to_path_buf());
+        if create_once {
+            refused_create_once_paths
+                .lock()
+                .expect("refused-create-once-path mutex poisoned")
+                .insert(path.to_path_buf());
+        }
         if !existing.is_some_and(|existing| matches_alef_output(path, existing, generated)) {
             refused_drifted_paths
                 .lock()
@@ -578,7 +593,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     };
     prepared
         .par_iter()
-        .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
+        .try_for_each(|(full_path, (content, is_text, create_once))| -> anyhow::Result<()> {
             // Ahead of every other branch, and unconditional. The declaration outranks the
             // marker, the ownership record, `generated_header` and the content comparison
             // alike -- it is the consuming repository stating authorship, which is the fact
@@ -604,7 +619,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              leaving it untouched",
                             full_path.display()
                         );
-                        refuse(full_path, None, normalized);
+                        refuse(full_path, None, normalized, *create_once);
                         return Ok(());
                     };
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
@@ -656,7 +671,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                                 full_path.display()
                             ),
                         }
-                        refuse(full_path, Some(existing.as_str()), normalized);
+                        refuse(full_path, Some(existing.as_str()), normalized, *create_once);
                         return Ok(());
                     }
                 }
@@ -688,7 +703,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                         );
                         // A binary reaches this branch only after an exact byte comparison
                         // already failed above, so no text classification applies. ~keep
-                        refuse(full_path, None, "");
+                        refuse(full_path, None, "", *create_once);
                         return Ok(());
                     }
                 }
@@ -717,6 +732,9 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             .into_inner()
             .expect("refused-drifted-path mutex poisoned"),
         user_owned_paths: user_owned_paths.into_inner().expect("user-owned-path mutex poisoned"),
+        refused_create_once_paths: refused_create_once_paths
+            .into_inner()
+            .expect("refused-create-once-path mutex poisoned"),
     })
 }
 

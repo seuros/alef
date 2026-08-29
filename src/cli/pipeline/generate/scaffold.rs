@@ -197,6 +197,10 @@ pub fn write_scaffold_files_report(
     }
     for file in prepared.into_values() {
         let full_path = base_dir.join(&file.path);
+        // Asked once per file, not re-derived at each refusal site below: the identical
+        // predicate `alef adopt` gates `--clobber-create-once-seeds` on, so a refusal this
+        // guard reports and adopt's own refusal of the same path can never disagree. ~keep
+        let create_once = crate::cli::commands::adopt::is_create_once_seed(file);
         if super::user_owned::skip_declared_existing(&declared, base_dir, &full_path, &mut report) {
             continue;
         }
@@ -236,7 +240,7 @@ pub fn write_scaffold_files_report(
                 // Counted like any other refusal: a binary target cannot carry a marker, so
                 // it is permanently part of the residue and must not be silently omitted
                 // from the number that reports it. ~keep
-                report.refuse_drifted(&full_path);
+                report.refuse_drifted(&full_path, create_once);
                 continue;
             }
             report.expected_paths.insert(full_path.clone());
@@ -355,7 +359,7 @@ pub fn write_scaffold_files_report(
                             full_path.display()
                         ),
                     }
-                    report.refuse_text(&full_path, existing_text.as_deref(), &normalized);
+                    report.refuse_text(&full_path, existing_text.as_deref(), &normalized, create_once);
                     continue;
                 }
             }

@@ -98,11 +98,13 @@ fn the_refusal_report_states_how_many_of_the_withheld_writes_had_different_conte
         std::path::Path::new("/repo/stale.sh"),
         Some("VERSION=1.2.1\n"),
         "VERSION=1.4.2\n",
+        false,
     );
     report.refuse_text(
         std::path::Path::new("/repo/settled.sh"),
         Some("VERSION=1.4.2\n"),
         "VERSION=1.4.2\n",
+        false,
     );
 
     super::report_refused_writes(&report);
@@ -130,7 +132,7 @@ fn the_refusal_report_states_how_many_of_the_withheld_writes_had_different_conte
 #[test]
 fn a_refusal_with_no_readable_existing_content_counts_as_drifted() {
     let mut report = super::WriteReport::default();
-    report.refuse_text(std::path::Path::new("/repo/opaque.bin"), None, "text output\n");
+    report.refuse_text(std::path::Path::new("/repo/opaque.bin"), None, "text output\n", false);
 
     assert_eq!(report.refused_count(), 1);
     assert_eq!(report.refused_drifted_count(), 1);
@@ -143,7 +145,7 @@ fn a_refusal_with_no_readable_existing_content_counts_as_drifted() {
 #[test]
 fn absorbing_another_phase_carries_its_drifted_subset_too() {
     let mut phase = super::WriteReport::default();
-    phase.refuse_drifted(std::path::Path::new("/repo/a.rs"));
+    phase.refuse_drifted(std::path::Path::new("/repo/a.rs"), false);
     let mut run = super::WriteReport::default();
 
     run.absorb_unwritten(&phase);
@@ -154,5 +156,107 @@ fn absorbing_another_phase_carries_its_drifted_subset_too() {
         1,
         "folding the total while dropping the drifted subset would report the refusal and lose \
          the only fact that makes it actionable"
+    );
+}
+
+/// THE MEASURED DEFECT: `write_files_report` refused a create-once seed (`generated_header:
+/// false`, no marker on disk) exactly like any other unmarked path, so `refused_create_once_paths`
+/// stayed empty for it -- the guard had the original `GeneratedFile` in hand and never asked
+/// `commands::adopt::is_create_once_seed`. Fixed by computing `create_once` from that same
+/// `GeneratedFile` while it is still in scope (see `write_files_report`'s `prepared` map) and
+/// carrying it through to every `refuse(...)` call, the same way `write_scaffold_files_report`
+/// now does. ~keep
+#[test]
+fn write_files_report_classifies_an_unmarked_seed_as_create_once() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path();
+    std::fs::write(base.join("go.mod"), "module example\n\ngo 1.20\n").expect("seed");
+
+    let report = write_one(base, generated("go.mod", "module example\n\ngo 1.22\n", false));
+
+    assert_eq!(report.refused_count(), 1, "the unmarked seed must still be refused");
+    assert!(
+        report.refused_create_once_paths.contains(&base.join("go.mod")),
+        "a generated_header: false path is exactly what \
+         `commands::adopt::is_create_once_seed` classifies as a create-once seed, and the guard \
+         must agree"
+    );
+}
+
+/// THE MEASURED DEFECT, end to end: `alef generate` reported a create-once seed under the same
+/// ADOPTABLE heading as a genuinely adoptable frozen file, both pointed at `alef adopt <path>` --
+/// and `alef adopt` refused the seed by design, naming a flag
+/// (`--clobber-create-once-seeds`) this warning never mentioned. Measured in a consumer repo: 13
+/// of 17 refused writes were create-once seeds (`*.csproj`, `pubspec.yaml`, `mix.exs`, `go.mod`,
+/// `pom.xml`, `build.gradle.kts`, `gradle-wrapper.properties`, `package.json`, `Gemfile`,
+/// `Package.swift`, `build.zig`, `build.zig.zon`).
+///
+/// Both assertions matter together: a fix that only removed the seed from the ADOPTABLE list
+/// without still stating its count would silently drop it from the report altogether, which is
+/// the one shape `report_refused_writes` may never take -- see
+/// `WriteReport::refused_create_once_paths`'s doc for why the count survives the heading split. ~keep
+#[test]
+#[traced_test]
+fn a_create_once_seed_refusal_is_never_folded_into_the_adoptable_block() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path();
+    std::fs::write(base.join("go.mod"), "module example\n\ngo 1.20\n").expect("seed");
+    std::fs::write(
+        base.join("Widget.java"),
+        "final class Widget { String v = \"1.2.1\"; }\n",
+    )
+    .expect("adoptable");
+
+    let report = super::write_files_report(
+        &[
+            (
+                Language::Go,
+                vec![generated("go.mod", "module example\n\ngo 1.22\n", false)],
+            ),
+            (
+                Language::Java,
+                vec![generated(
+                    "Widget.java",
+                    "final class Widget { String v = \"1.4.2\"; }\n",
+                    true,
+                )],
+            ),
+        ],
+        base,
+    )
+    .expect("write");
+    let seed_path = base.join("go.mod").display().to_string();
+    let adoptable_path = base.join("Widget.java").display().to_string();
+
+    super::report_refused_writes(&report);
+
+    // PRESENT in the count: the seed is not dropped, just reclassified.
+    assert!(
+        logs_contain("1 file(s) were NOT written because they are create-once seeds"),
+        "the seed must still be counted -- dropping it silently is the one regression a fix here \
+         must never reintroduce"
+    );
+    assert!(
+        logs_contain(&format!(
+            "create-once seed, not rewritten (this is expected): {seed_path}"
+        )),
+        "and named, the same way `bin_cli::helpers::frozen::unmarked_create_once_seeds` names it \
+         in `alef verify`'s coverage report"
+    );
+    // ABSENT from the adoptable report: the seed's per-path line under the ADOPTABLE heading
+    // must never appear, and the ADOPTABLE tally must count only the genuinely adoptable file.
+    assert!(
+        logs_contain("1 file(s) were NOT written, 1 of them holding content that DIFFERS"),
+        "the ADOPTABLE tally must count Widget.java alone -- a seed folded back in would read \
+         \"2 file(s)\" here, silently reintroducing the defect"
+    );
+    assert!(
+        !logs_contain(&format!("stale until adopted or deleted): {seed_path}")),
+        "a create-once seed must never appear in the ADOPTABLE per-path list, and must never be \
+         pointed at `alef adopt <path>` -- `alef adopt` refuses it by design"
+    );
+    assert!(
+        logs_contain(&format!("stale until adopted or deleted): {adoptable_path}")),
+        "control: the genuinely adoptable file must still be named there"
     );
 }

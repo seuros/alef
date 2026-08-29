@@ -291,15 +291,21 @@ impl AdoptReport {
 /// sides ask instead, and its doc carries the admission criteria a candidate has to
 /// satisfy before it is added. ~keep
 ///
-/// `pub(crate)` so [`crate::bin_cli::helpers::frozen::frozen_managed_paths`] can classify
-/// a frozen path by the identical predicate this module gates
-/// `--clobber-create-once-seeds` on, rather than re-deriving its own notion of "seed".
-/// Before that sharing, `alef verify` reported every frozen create-once seed under the
-/// same heading and the same "run `alef adopt <path>`" remedy as a genuinely adoptable
-/// frozen file -- a remedy `alef adopt --write` then refused outright for every seed,
-/// naming a flag verify never mentioned. Two components computing the same fact
-/// independently is this codebase's most common defect shape; a single predicate both
-/// sides call is the fix, not a second copy kept in step by hand. ~keep
+/// `pub(crate)` so every other site that needs to know whether a path is a seed asks this
+/// predicate rather than re-deriving its own notion of "seed":
+/// [`crate::bin_cli::helpers::frozen::frozen_managed_paths`] (`alef verify`'s frozen-file
+/// report), and the write guards themselves --
+/// `crate::cli::pipeline::generate::write::write_files_report` and
+/// `crate::cli::pipeline::generate::scaffold::write_scaffold_files_report`, both of which
+/// call this while the original `GeneratedFile` is still in scope and carry the answer
+/// through to [`crate::cli::pipeline::generate::write::WriteReport::refused_create_once_paths`].
+/// Before the write guards asked this predicate, `alef generate`/`alef all` reported every
+/// refused write -- seed or not -- under the same heading and the same "run `alef adopt
+/// <path>`" remedy, which `alef adopt --write` then refused outright for every seed, naming
+/// a flag that warning never mentioned; measured in a consumer repo at 13 of 17 refused
+/// writes. Two components computing the same fact independently is this codebase's most
+/// common defect shape; a single predicate every site calls is the fix, not a second copy
+/// kept in step by hand. ~keep
 pub(crate) fn is_create_once_seed(file: &crate::core::backend::GeneratedFile) -> bool {
     !file.carries_alef_marker() && !crate::cli::cache::is_alef_derived_output(&file.path)
 }
