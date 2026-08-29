@@ -128,3 +128,59 @@ fn write_scaffold_files_report_does_not_touch_a_lockfile_whose_manifest_did_not_
         "a Cargo.lock beside a manifest this run never wrote must be left byte-for-byte untouched"
     );
 }
+
+fn dart_pubspec_file(path: &str) -> GeneratedFile {
+    GeneratedFile {
+        path: PathBuf::from(path),
+        content: "name: e2e_dart\nversion: 0.1.0\npublish_to: none\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\ndependencies:\n  generated_binding:\n    path: ../../packages/dart\n".to_string(),
+        generated_header: true,
+    }
+}
+
+fn write_dart_dependency_manifest(path: &std::path::Path, version: &str) {
+    std::fs::create_dir_all(path.parent().expect("dependency manifest parent")).expect("mkdir dependency");
+    std::fs::write(
+        path,
+        format!("name: generated_binding\nversion: {version}\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n"),
+    )
+    .expect("write dependency pubspec");
+}
+
+/// ~keep An e2e Dart lock records the version of its path dependency. That dependency's emitted
+/// pubspec can change while `e2e/dart/pubspec.yaml` stays byte-identical, so refresh must key on
+/// the generated manifest being in scope, not only on the manifest appearing in changed_paths.
+#[test]
+fn write_scaffold_files_report_refreshes_dart_lock_when_path_dependency_changes() {
+    if std::process::Command::new("dart").arg("--version").output().is_err() {
+        return;
+    }
+    let temporary = tempfile::tempdir().expect("tempdir");
+    let base = temporary.path();
+    let dependency_manifest = base.join("packages/dart/pubspec.yaml");
+    let e2e_manifest = "e2e/dart/pubspec.yaml";
+    write_dart_dependency_manifest(&dependency_manifest, OLD_VERSION);
+    write_scaffold_files_report(&[dart_pubspec_file(e2e_manifest)], base, false).expect("initial scaffold");
+    let status = std::process::Command::new("dart")
+        .args(["pub", "get", "--offline"])
+        .current_dir(base.join("e2e/dart"))
+        .status()
+        .expect("seed Dart lock");
+    assert!(status.success(), "initial dart pub get failed");
+
+    write_dart_dependency_manifest(&dependency_manifest, NEW_VERSION);
+    let report = write_scaffold_files_report(&[dart_pubspec_file(e2e_manifest)], base, false).expect("repeat scaffold");
+    assert!(
+        !report.changed_paths.contains(&base.join(e2e_manifest)),
+        "the generated pubspec must remain byte-identical so this test exercises path-dependency relocking"
+    );
+
+    let lock = std::fs::read_to_string(base.join("e2e/dart/pubspec.lock")).expect("read Dart lock");
+    assert!(
+        lock.contains(&format!("version: \"{NEW_VERSION}\"")),
+        "the path dependency changed behind a stable generated pubspec, but its lock stayed stale:\n{lock}"
+    );
+    assert!(
+        !lock.contains(&format!("version: \"{OLD_VERSION}\"")),
+        "stale pin survived:\n{lock}"
+    );
+}

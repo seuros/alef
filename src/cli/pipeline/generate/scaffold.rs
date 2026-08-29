@@ -96,6 +96,7 @@ pub fn reconcile_managed_scaffold_manifests(
     // be called here too, or a manifest `alef generate` regenerates (as opposed to `alef
     // build`/`alef all`) would never get its sibling Cargo.lock refreshed. ~keep
     super::super::version_lockfiles::relock_lockfiles_beside_changed_manifests(&report.changed_paths);
+    super::super::version_lockfiles::relock_dart_lockfiles_beside_generated_manifests(&manifests, base_dir);
     Ok(report)
 }
 

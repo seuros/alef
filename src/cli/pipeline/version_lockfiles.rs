@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::cli::commands::version_manifests::discover_cargo_locks;
 use crate::cli::git::tracked_paths_under;
+use crate::core::backend::GeneratedFile;
 
 use super::collect_alef_headered_paths;
 use super::lock_freshness::{StaleLockFinding, stale_lock_findings};
@@ -116,6 +117,51 @@ pub(super) fn relock_lockfiles_beside_changed_manifests(changed_paths: &HashSet<
         }
         info!("Relocking {} after its generated manifest changed", lock_path.display());
         relock_one(dir, &lock_path);
+    }
+}
+
+/// ~keep A generated Dart e2e manifest can stay byte-identical while its generated path
+/// dependency changes its exact transitive pins. Refresh every existing sibling lock whenever
+/// that manifest is in the emitted set; changed-path filtering cannot see this dependency edge.
+pub(super) fn relock_dart_lockfiles_beside_generated_manifests(files: &[GeneratedFile], base_dir: &Path) {
+    let directories: HashSet<PathBuf> = files
+        .iter()
+        .filter(|file| file.path.file_name().and_then(|name| name.to_str()) == Some("pubspec.yaml"))
+        .filter_map(|file| base_dir.join(&file.path).parent().map(Path::to_path_buf))
+        .filter(|directory| directory.join("pubspec.lock").is_file())
+        .collect();
+
+    for directory in directories {
+        info!(directory = %directory.display(), "Relocking Dart dependencies for generated pubspec");
+        let offline = std::process::Command::new("dart")
+            .args(["pub", "get", "--offline"])
+            .current_dir(&directory)
+            .status();
+        match offline {
+            Ok(status) if status.success() => continue,
+            Err(error) => {
+                warn!(directory = %directory.display(), %error, "could not run dart pub get; pubspec.lock may be stale");
+                continue;
+            }
+            Ok(_) => {}
+        }
+        match std::process::Command::new("dart")
+            .args(["pub", "get"])
+            .current_dir(&directory)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => warn!(
+                directory = %directory.display(),
+                code = ?status.code(),
+                "dart pub get failed offline and online; pubspec.lock may be stale"
+            ),
+            Err(error) => warn!(
+                directory = %directory.display(),
+                %error,
+                "dart pub get failed offline and the online retry could not start; pubspec.lock may be stale"
+            ),
+        }
     }
 }
 
