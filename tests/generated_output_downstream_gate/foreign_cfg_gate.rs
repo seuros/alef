@@ -3,22 +3,12 @@
 //! `[[crates.source_crates]].roots`, not declared in `toolkit` itself), under a feature set that
 //! proves the variant unreachable.
 //!
-//! alef commit `f9795aea9` fixed exactly this shape: a wrapper backend (pyo3, magnus, rustler,
-//! dart, wasm) declares every variant of its own wrapper enum unconditionally -- including a
-//! foreign cfg-gated one -- regardless of whether this binding's own configured feature set
-//! proves the real dependency's copy of that variant unreachable. Before the fix, proving the
-//! variant unreachable ALSO suppressed the binding-to-core match's catch-all, even though the
-//! match is over the WRAPPER type (which still has the variant) rather than the real core type
-//! (which does not) -- a real, constructible wrapper value with no arm to handle it:
-//! `error[E0004]: non-exhaustive patterns`. Every existing regression test for this fix
-//! (`src/backends/pyo3/gen_bindings/cfg_variant_e2e_tests.rs`,
-//! `tests/codegen_enum_binding_to_core_exhaustive_match.rs`) asserts on generated TEXT --
-//! `.contains("_ => Default::default(),")` -- never on whether the text actually compiles. This
-//! module is the compile-level proof `generated_output_downstream_gate.rs`'s own doc calls the
-//! whole point of that file: "the tools run against alef instead of the emitted tree" is not the
-//! failure mode here, but "the fixture never contained the shape at all" is exactly as vacuous,
-//! and until this module landed, nothing in the emitted fixture ever declared a foreign
-//! cfg-gated enum variant.
+//! Alef drops foreign cfg-gated variants when the configured feature set proves them unreachable.
+//! This module first compiles that clean emitted shape, then proves the gate is sensitive to both
+//! conversion directions: one sabotage removes the reachable `Accent` arm from the wrapper-to-core
+//! match, and the other adds an unreachable catch-all to the exhaustive core-to-wrapper match.
+//! The expected `non_exhaustive_patterns` and `unreachable_patterns` diagnostics demonstrate that
+//! the gate is compiling the generated code and examining the intended match blocks. ~keep
 //!
 //! Fixture text lives in `fixture.rs` (`FOREIGN_CRATE_CARGO_TOML`, `FOREIGN_CRATE_SOURCE`, the
 //! `[[crates.source_crates]]` / `[crates.extra_dependencies]` entries in `FIXTURE_ALEF_TOML`, and

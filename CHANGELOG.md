@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-08-29
+
 ### Fixed
 
 - Dart enum JSON decoding now returns an error for variants unavailable in the binding instead of panicking.
