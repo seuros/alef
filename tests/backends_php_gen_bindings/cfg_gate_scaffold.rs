@@ -7,7 +7,7 @@ use alef::scaffold::scaffold;
 /// facade methods are now always emitted unconditionally (never cfg-gated — ext-php-rs's
 /// `#[php_impl]` derive can't tolerate a cfg'd-out method), the underlying core feature(s) those
 /// methods depend on must be required unconditionally on the core dependency line, and must NOT
-/// be declared as a togglable `[features]` entry on the php crate — a declared feature that no
+/// be declared as a toggleable `[features]` entry on the php crate — a declared feature that no
 /// generated code actually gates is its own defect.
 #[test]
 fn php_cargo_toml_requires_function_gated_core_features_unconditionally_and_never_declares_them_as_toggles() {
@@ -57,7 +57,7 @@ extension_name = "demo_crate"
     );
     assert!(
         !content.contains(r#"tokenizer = ["demo-crate/tokenizer"]"#),
-        "function-gated feature must not be declared as a togglable php-crate feature, got:\n{content}"
+        "function-gated feature must not be declared as a toggleable php-crate feature, got:\n{content}"
     );
     assert!(
         !content.contains("default = [\"tokenizer\"]"),

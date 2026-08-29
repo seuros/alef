@@ -942,42 +942,6 @@ mod inert_example_refusal_tests {
         assert_eq!(take_inert_examples().len(), 1);
     }
 
-    /// A `returns_void` call binds no `result`, so `test_function.jinja`'s
-    /// `expect(result).not_to be_nil` fallback has no subject. It gets the other honest, failable
-    /// expectation instead — "the call does not raise" — rather than an example with no `expect`
-    /// at all. The skip marker naming what could not run must survive beside it.
-    #[test]
-    fn a_void_call_whose_assertions_all_skip_still_gets_a_failable_expectation() {
-        let _ = take_inert_examples();
-        let fixture = fixture_with(
-            "void_all_skipped",
-            vec![assertion("equals", "keywords", serde_json::json!("x"))],
-        );
-
-        let out = render_plain(&fixture, &resolver_knowing(&["content"]), true);
-
-        // The fixture field moved to `keywords` when the hash-serialized-enum classifier became
-        // IR-backed: with no IR wired into this bare resolver the enum path can no longer refuse,
-        // so this fixture now skips via the availability oracle instead. That routes to a
-        // different -- and stronger -- failable expectation than the void fallback: alef emits a
-        // deliberately-failing `unresolved_assertion` rather than merely asserting no raise. The
-        // invariant under test is unchanged (an all-skipped example must still be able to fail);
-        // only which branch supplies it moved. The enum-accessor path is covered by the IR-backed
-        // tests in `ruby/enum_variant_access.rs`. ~keep
-        assert!(
-            out.contains("expect(unresolved_assertion).to be_nil"),
-            "an all-skipped example must still carry an expectation that can fail, got:\n{out}"
-        );
-        assert!(
-            out.contains("field 'keywords' not available on Ruby ProcessingResult"),
-            "the marker must survive beside the fallback, got:\n{out}"
-        );
-        assert!(
-            take_inert_examples().is_empty(),
-            "an example that still asserts something is not a refusal"
-        );
-    }
-
     /// A streaming fixture that declares `not_error` and nothing else renderable must keep driving
     /// the stream — refusing it would delete the one real check it carries. The drive is wrapped
     /// so that check becomes a visible expectation rather than an implicit one.

@@ -17,7 +17,7 @@
 //! (any variant with at least one field, tagged or not) always serializes through
 //! `serde_json::to_value` into a plain Ruby `Hash` (see `enum_magnus.rs.jinja`'s `IntoValue` impl
 //! for the `has_data` branch); a unit-variant-only enum always becomes a `Symbol`. There is no
-//! third, member-ful shape the way PHP's flat `#[php_class]` is.
+//! third, member-bearing shape the way PHP's flat `#[php_class]` is.
 
 use std::collections::HashSet;
 

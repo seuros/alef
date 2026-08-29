@@ -436,7 +436,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         // `#[cfg]`-gated *body* itself would have compiled. So facade methods are always
         // emitted; `scaffold_php_cargo` (src/scaffold/languages/php.rs) compensates by requiring
         // each function's underlying core feature(s) unconditionally on the core dependency
-        // line, instead of exposing them as togglable `[features]` on the php crate. ~keep
+        // line, instead of exposing them as toggleable `[features]` on the php crate. ~keep
         let mut method_items: Vec<String> = Vec::new();
         for func in included_functions {
             if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {

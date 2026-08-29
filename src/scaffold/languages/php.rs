@@ -108,7 +108,7 @@ fn php_function_gated_core_features_to_add(api: &ApiSurface, config: &ResolvedCr
 /// Every feature name referenced by any top-level function's `cfg` predicate, flattened —
 /// unlike [`php_function_gated_core_features_to_add`], this includes names that turned out to
 /// already be satisfied (e.g. `tower`/`tokenizer` when the core dependency line already requests
-/// `full`). Used only to keep `cfg_forwarding` from declaring these as togglable php-crate
+/// `full`). Used only to keep `cfg_forwarding` from declaring these as toggleable php-crate
 /// `[features]`: PHP never gates a function by cfg (see `rust_bindings.rs::generate_bindings`),
 /// so none of these names should appear there regardless of whether anything needed adding for
 /// them. ~keep
@@ -220,7 +220,7 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
     // `#[php_impl]` derive references every method by identifier in its registration array
     // regardless of `#[cfg]`, so a cfg'd-out method breaks the build). Their underlying core
     // features must therefore be required unconditionally on the core dependency line rather
-    // than exposed as togglable php-crate `[features]` — a togglable feature that no generated
+    // than exposed as toggleable php-crate `[features]` — a toggleable feature that no generated
     // code actually gates is a defect (see `cfg_forwarding` below, which excludes these names).
     // `core_features_to_add` is deliberately *not* the flat union of every name a function's cfg
     // mentions: an `any(A, B)` predicate only needs A or B, and here A (`native-http`) is already

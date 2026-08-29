@@ -18,7 +18,7 @@
 //! Separately, `render_dot_access` answered nothing about `TypedDict` return types either: a
 //! `[workspace.dto] python_output = "typed-dict"` crate's return type is a plain `dict` at
 //! runtime (`TypedDict` is a type-checking fiction only), so `.field` on it is
-//! `AttributeError: 'dict' object has no attribute 'field'`. [`render_python_accessor`] walks
+//! `AttributeError: 'dict' object has no attribute 'field'`. `render_python_accessor` walks
 //! `segments` with a "current owner type" cursor (mirroring `render_swift_with_first_class_map`)
 //! and consults [`PythonTypedDictMap::is_typeddict`] at each link to pick `["field"]` vs.
 //! `.field` — asking the pyo3 backend's own predicate for the answer rather than re-deriving it.
@@ -113,7 +113,7 @@ fn render_python_with_optionals_from_owner(
 /// The IR type that owns the ELEMENTS of `array_segments` — e.g. `"SampleItem"` for a
 /// `structure: Vec<SampleItem>` field — walking `typeddict_map.field_types` from
 /// `typeddict_map.root_type` through every segment of the array field's own path, exactly the
-/// way [`render_python_accessor`]'s cursor advances. `None` under the same "IR cannot judge"
+/// way `render_python_accessor`'s cursor advances. `None` under the same "IR cannot judge"
 /// conditions [`PythonTypedDictMap::advance`] answers `None` for: an unresolved root, or a
 /// segment the map never recorded a traversal edge for. [`PythonTypedDictMap::is_typeddict`]
 /// treats `None` as "attribute access", the correct default for an opaque/native `#[pyclass]`
@@ -144,11 +144,12 @@ pub(super) fn python_element_owner_type(
 /// on a `TypedDict` result and descends into a field whose own type is not itself emitted as a
 /// `TypedDict` correctly switches back to attribute access at that link, and does not need a
 /// special case: the cursor just stops finding `is_typeddict(current_type) == true` for it.
+#[cfg(test)]
 pub(super) fn render_python_accessor(segments: &[PathSegment], result_var: &str, map: &PythonTypedDictMap) -> String {
     render_python_accessor_from_owner(segments, result_var, map, map.root_type.clone())
 }
 
-/// [`render_python_accessor`], but starting the owner-type cursor at `owner_type` instead of
+/// `render_python_accessor`, but starting the owner-type cursor at `owner_type` instead of
 /// `map.root_type` — see the module doc and [`python_element_owner_type`] for why an
 /// element-anchored path needs a different starting owner.
 fn render_python_accessor_from_owner(

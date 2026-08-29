@@ -236,6 +236,8 @@ mod assertions;
 mod enum_variant_access;
 mod examples;
 mod http;
+#[cfg(test)]
+mod inert_void_example_tests;
 mod project;
 mod snippet;
 mod spec_file;

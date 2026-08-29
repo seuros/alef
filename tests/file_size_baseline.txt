@@ -56,7 +56,6 @@ src/e2e/codegen/kotlin/tests.rs 1241
 src/e2e/codegen/python/mod.rs 1373
 src/e2e/codegen/python/test_file.rs 1066
 src/e2e/codegen/r/assertions.rs 1049
-src/e2e/codegen/ruby/examples.rs 1027
 src/e2e/codegen/rust/assertions.rs 1613
 src/e2e/codegen/rust/http.rs 1065
 src/e2e/codegen/swift/assertions.rs 1075
