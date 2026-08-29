@@ -204,6 +204,9 @@ pub fn write_scaffold_files_report(
         if super::user_owned::skip_declared_existing(&declared, base_dir, &full_path, &mut report) {
             continue;
         }
+        let is_ruby_gemfile_merge_target = file.path.file_name().is_some_and(|name| name == "Gemfile")
+            && file.content.contains("gem \"rb_sys\"")
+            && full_path.exists();
         // `can_skip` runs BEFORE the ownership guard and consults no ownership signal at all, so a
         // path alef demonstrably owns is still skipped outright by every `overwrite: false` writer.
         // That is harmless for a file a human may grow past a placeholder -- which is what
@@ -212,7 +215,8 @@ pub fn write_scaffold_files_report(
         let can_skip = !overwrite
             && !file.generated_header
             && full_path.exists()
-            && !crate::cli::cache::is_alef_derived_output(&full_path);
+            && !crate::cli::cache::is_alef_derived_output(&full_path)
+            && !is_ruby_gemfile_merge_target;
         if can_skip {
             report.expected_paths.insert(full_path.clone());
             debug!("  skipped (already exists): {}", full_path.display());
@@ -220,10 +224,6 @@ pub fn write_scaffold_files_report(
         }
         let is_jar_file = super::binary::is_base64_binary_output(&full_path);
         let is_poly_merge_target = file.path == Path::new(POLY_CONFIG) && full_path.exists();
-        let is_ruby_gemfile_merge_target = file.path.file_name().is_some_and(|name| name == "Gemfile")
-            && file.content.contains("gem \"rb_sys\"")
-            && full_path.exists();
-
         if is_jar_file {
             let binary_content = super::binary::decode_base64_binary(&full_path, &file.content)?;
             let existing_binary = std::fs::read(&full_path).ok();
@@ -1084,6 +1084,34 @@ end
         assert!(!merged.contains("< 0.9.128"), "{merged}");
         assert!(merged.contains("gem \"debug\", \"~> 1.9\""), "{merged}");
         assert!(merged.contains("gem \"rake-compiler\", \"~> 1.3\""), "{merged}");
+    }
+
+    #[test]
+    fn normal_scaffold_run_refreshes_emitted_ruby_gemfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("packages/ruby/Gemfile");
+        std::fs::create_dir_all(path.parent().expect("Gemfile parent")).expect("create parent");
+        std::fs::write(
+            &path,
+            "source \"https://rubygems.org\"\n\ngemspec\n\ngroup :development do\n  gem \"rb_sys\", \">= 0.9\", \"< 0.9.128\"\n  gem \"debug\", \"~> 1.9\"\nend\n",
+        )
+        .expect("write stale Gemfile");
+        let file = GeneratedFile {
+            path: std::path::PathBuf::from("packages/ruby/Gemfile"),
+            content: "source \"https://rubygems.org\"\n\ngemspec\n\ngroup :development do\n  gem \"rake-compiler\", \"~> 1.3\"\n  gem \"rb_sys\", \">= 0.9.130\"\nend\n".to_string(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[file], temp.path(), false).expect("normal scaffold write");
+        let refreshed = std::fs::read_to_string(path).expect("read refreshed Gemfile");
+
+        assert_eq!(
+            report.changed_count(),
+            1,
+            "normal generation must refresh the emitted Gemfile"
+        );
+        assert!(refreshed.contains("gem \"rb_sys\", \">= 0.9.130\""), "{refreshed}");
+        assert!(refreshed.contains("gem \"debug\", \"~> 1.9\""), "{refreshed}");
     }
 
     fn exclude_values(merged: &str) -> Vec<String> {
