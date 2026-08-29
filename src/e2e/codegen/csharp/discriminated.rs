@@ -2,70 +2,13 @@
 
 use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
 use crate::e2e::escape::escape_csharp;
+use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToUpperCamelCase;
 use std::fmt::Write as FmtWrite;
+use std::hash::{Hash, Hasher};
 
 use super::json_to_csharp;
-
-/// Detect if a field path accesses a discriminated union variant in C#.
-/// Pattern: `metadata.format.<variant_name>.<field_name>`
-/// Returns: Some((accessor, variant_name, inner_field)) if matched, otherwise None
-pub(super) fn parse_discriminated_union_access(field: &str) -> Option<(String, String, String)> {
-    // Strip a leading list-index prefix (e.g. "results[0].") so both single-result
-    // (`metadata.format.excel.sheet_count`) and list-result
-    // (`results[0].metadata.format.excel.sheet_count`) field paths are recognized.
-    let field = field.split_once("].").map(|(_, rest)| rest).unwrap_or(field);
-    let parts: Vec<&str> = field.split('.').collect();
-    if parts.len() >= 3 && parts.len() <= 4 {
-        // Check if this is metadata.format.{variant}.{field} pattern
-        if parts[0] == "metadata" && parts[1] == "format" {
-            let variant_name = parts[2];
-            // Known C# discriminated union variants (lowercase in fixture paths)
-            let known_variants = [
-                "pdf",
-                "docx",
-                "excel",
-                "email",
-                "pptx",
-                "archive",
-                "image",
-                "xml",
-                "text",
-                "html",
-                "ocr",
-                "csv",
-                "bibtex",
-                "citation",
-                "fiction_book",
-                "dbf",
-                "jats",
-                "epub",
-                "pst",
-                "code",
-            ];
-            if known_variants.contains(&variant_name) {
-                let variant_pascal = variant_name.to_upper_camel_case();
-                if parts.len() == 4 {
-                    let inner_field = parts[3];
-                    return Some((
-                        format!("result.Metadata.Format! as FormatMetadata.{}", variant_pascal),
-                        variant_pascal,
-                        inner_field.to_string(),
-                    ));
-                } else if parts.len() == 3 {
-                    // Just accessing the variant itself (no inner field)
-                    return Some((
-                        format!("result.Metadata.Format! as FormatMetadata.{}", variant_pascal),
-                        variant_pascal,
-                        String::new(),
-                    ));
-                }
-            }
-        }
-    }
-    None
-}
 
 /// Render an assertion against a discriminated union variant's inner field.
 /// `variant_var` is the unwrapped union variant (e.g., `variant` from pattern match).
@@ -169,6 +112,46 @@ fn render_unsupported_assertion(out: &mut String, assertion: &Assertion) {
     let _ = writeln!(out, "            // skipped: {reason}");
 }
 
+pub(super) fn try_render_generic_union_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field_resolver: &FieldResolver,
+    result_var: &str,
+    field: &str,
+    assert_enum_fields: &std::collections::HashMap<String, String>,
+) -> bool {
+    let Some((prefix, union_type, variant, suffix)) = field_resolver.ir_tagged_union_split(field) else {
+        return false;
+    };
+    if field_resolver.union_variant_payload(&union_type, &variant).is_none() {
+        render_unsupported_assertion(out, assertion);
+        return true;
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    field.hash(&mut hasher);
+    let variant_var = format!("variant_{:08x}", hasher.finish() as u32);
+    let container = field_resolver.accessor(&prefix, "csharp", result_var);
+    let field_is_collection = field_resolver.union_variant_field_is_collection(&prefix, &variant, &suffix);
+    let _ = writeln!(out, "        if ({container} is {union_type}.{variant} {variant_var})");
+    let _ = writeln!(out, "        {{");
+    render_discriminated_union_assertion(
+        out,
+        assertion,
+        &variant_var,
+        &suffix,
+        field_is_collection,
+        false,
+        assert_enum_fields,
+    );
+    let _ = writeln!(out, "        }}");
+    let _ = writeln!(out, "        else");
+    let _ = writeln!(out, "        {{");
+    let _ = writeln!(out, "            Assert.Fail(\"Expected {variant} variant\");");
+    let _ = writeln!(out, "        }}");
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,11 +184,22 @@ mod tests {
         ];
         let enums = vec![EnumDef {
             name: "DetailUnion".to_string(),
-            variants: vec![EnumVariant {
-                name: "Web".to_string(),
-                fields: vec![field("payload", TypeRef::Named("WebPayload".to_string()))],
-                ..EnumVariant::default()
-            }],
+            variants: vec![
+                EnumVariant {
+                    name: "Web".to_string(),
+                    fields: vec![field("payload", TypeRef::Named("WebPayload".to_string()))],
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "Empty".to_string(),
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "Pair".to_string(),
+                    fields: vec![field("left", TypeRef::String), field("right", TypeRef::String)],
+                    ..EnumVariant::default()
+                },
+            ],
             ..EnumDef::default()
         }];
         FieldResolver::new(
@@ -222,6 +216,65 @@ mod tests {
         .with_ir_collection_map(
             FieldResolver::ir_collection_fields(&types),
             Some("Envelope".to_string()),
+        )
+    }
+
+    fn xberg_html_resolver() -> FieldResolver {
+        let types = vec![
+            TypeDef {
+                name: "ExtractionResult".to_string(),
+                fields: vec![field(
+                    "results",
+                    TypeRef::Vec(Box::new(TypeRef::Named("ExtractedDocument".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "ExtractedDocument".to_string(),
+                fields: vec![field("metadata", TypeRef::Named("Metadata".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Metadata".to_string(),
+                fields: vec![field("format", TypeRef::Named("FormatMetadata".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "HtmlMetadata".to_string(),
+                fields: vec![field(
+                    "headers",
+                    TypeRef::Vec(Box::new(TypeRef::Named("HeaderMetadata".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "HeaderMetadata".to_string(),
+                ..TypeDef::default()
+            },
+        ];
+        let enums = vec![EnumDef {
+            name: "FormatMetadata".to_string(),
+            variants: vec![EnumVariant {
+                name: "Html".to_string(),
+                fields: vec![field("value", TypeRef::Named("HtmlMetadata".to_string()))],
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        }];
+        FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .with_ir_enum_map(
+            FieldResolver::ir_enum_fields(&types, &enums),
+            Some("ExtractionResult".to_string()),
+        )
+        .with_ir_collection_map(
+            FieldResolver::ir_collection_fields(&types),
+            Some("ExtractionResult".to_string()),
         )
     }
 
@@ -274,5 +327,81 @@ mod tests {
             out,
             "            // skipped: assertion type 'count_min' not yet supported for discriminated union fields\n"
         );
+    }
+
+    #[test]
+    fn count_min_uses_ir_tagged_union_path_without_named_parser() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.web.entries".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            "details.web.entries",
+            &std::collections::HashMap::new(),
+        ));
+        assert!(out.contains("DetailUnion.Web"));
+        assert!(out.contains("Value.Entries?.Count ?? 0"));
+        assert!(!out.contains("skipped:"));
+    }
+
+    #[test]
+    fn xberg_html_headers_count_min_uses_the_ir_union_owner() {
+        let field = "results[0].metadata.format.html.headers";
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &xberg_html_resolver(),
+            "result",
+            field,
+            &std::collections::HashMap::new(),
+        ));
+        assert!(out.contains("result.Results[0].Metadata.Format is FormatMetadata.Html"));
+        assert!(out.contains("Value.Headers?.Count ?? 0) >= 2"));
+        assert!(!out.contains("skipped:"));
+    }
+
+    #[test]
+    fn unsupported_union_shapes_stay_registered_skips() {
+        for field in [
+            "details.unknown.entries",
+            "details.empty.entries",
+            "details.pair.entries",
+            "details.web.entries.value",
+            "details.web.entries[0]",
+        ] {
+            let assertion = Assertion {
+                assertion_type: "count_min".to_string(),
+                field: Some(field.to_string()),
+                value: Some(serde_json::json!(2)),
+                ..Assertion::default()
+            };
+            let mut out = String::new();
+
+            assert!(try_render_generic_union_assertion(
+                &mut out,
+                &assertion,
+                &resolver(),
+                "result",
+                field,
+                &std::collections::HashMap::new(),
+            ));
+            assert!(out.contains("skipped: assertion type 'count_min' not yet supported"));
+        }
     }
 }

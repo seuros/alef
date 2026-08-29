@@ -24,10 +24,29 @@ use super::super::ir_enum::enum_type_at_path_from;
 use super::super::types::FieldResolver;
 
 impl FieldResolver {
+    /// Split an IR-declared tagged-union traversal into its enum field, variant, and leaf.
+    /// Unlike [`Self::tagged_union_split`], this does not depend on `fields_method_calls`.
+    pub fn ir_tagged_union_split(&self, fixture_field: &str) -> Option<(String, String, String, String)> {
+        let parts: Vec<&str> = fixture_field.split('.').collect();
+        for index in 0..parts.len().saturating_sub(1) {
+            let prefix = parts[..=index].join(".");
+            let Some(union_type) = self.ir_enum_type_name(&prefix) else {
+                continue;
+            };
+            let variant = parts[index + 1].to_upper_camel_case();
+            let suffix = parts[index + 2..].join(".");
+            return Some((prefix, union_type, variant, suffix));
+        }
+        None
+    }
+
     /// Whether a field reached after narrowing `union_field` to `variant` is collection-typed.
     /// The enum map resolves the concrete payload owner; the collection map then walks the
     /// remaining payload-relative path, so no backend or consumer field name participates. ~keep
     pub fn union_variant_field_is_collection(&self, union_field: &str, variant: &str, field: &str) -> bool {
+        if field.is_empty() || field.contains(['.', '[', ']']) {
+            return false;
+        }
         let Some(union_type) = self.ir_enum_type_name(union_field) else {
             return false;
         };
@@ -142,5 +161,95 @@ impl FieldResolver {
             .filter(|segment| !segment.is_empty())
             .collect::<Vec<_>>()
             .join(".")
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    #[test]
+    fn xberg_html_headers_resolve_through_batch_and_tagged_union_ownership() {
+        let types = vec![
+            TypeDef {
+                name: "ExtractionResult".to_string(),
+                fields: vec![field(
+                    "results",
+                    TypeRef::Vec(Box::new(TypeRef::Named("ExtractedDocument".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "ExtractedDocument".to_string(),
+                fields: vec![field("metadata", TypeRef::Named("Metadata".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Metadata".to_string(),
+                fields: vec![field(
+                    "format",
+                    TypeRef::Optional(Box::new(TypeRef::Named("FormatMetadata".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "HtmlMetadata".to_string(),
+                fields: vec![field(
+                    "headers",
+                    TypeRef::Vec(Box::new(TypeRef::Named("HeaderMetadata".to_string()))),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "HeaderMetadata".to_string(),
+                ..TypeDef::default()
+            },
+        ];
+        let enums = vec![EnumDef {
+            name: "FormatMetadata".to_string(),
+            variants: vec![EnumVariant {
+                name: "Html".to_string(),
+                fields: vec![field("value", TypeRef::Named("HtmlMetadata".to_string()))],
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        }];
+        let resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .with_ir_enum_map(
+            FieldResolver::ir_enum_fields(&types, &enums),
+            Some("ExtractionResult".to_string()),
+        )
+        .with_ir_collection_map(
+            FieldResolver::ir_collection_fields(&types),
+            Some("ExtractionResult".to_string()),
+        );
+
+        assert!(resolver.union_variant_field_is_collection("results[0].metadata.format", "html", "headers"));
+        assert_eq!(
+            resolver.ir_tagged_union_split("results[0].metadata.format.html.headers"),
+            Some((
+                "results[0].metadata.format".to_string(),
+                "FormatMetadata".to_string(),
+                "Html".to_string(),
+                "headers".to_string(),
+            ))
+        );
+        assert!(!resolver.union_variant_field_is_collection("results[0].metadata.format", "html", "headers[0]"));
+        assert!(!resolver.union_variant_field_is_collection("results[0].metadata.format", "html", "headers.name"));
     }
 }

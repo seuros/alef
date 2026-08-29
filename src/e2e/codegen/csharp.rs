@@ -996,7 +996,6 @@ mod visitor;
 
 use assertions::render_assertion;
 use declared_error_value::declared_error_value_check;
-use discriminated::{parse_discriminated_union_access, render_discriminated_union_assertion};
 use http::render_http_test_method;
 use project::{render_csproj, render_test_setup};
 use setup::build_args_and_setup;

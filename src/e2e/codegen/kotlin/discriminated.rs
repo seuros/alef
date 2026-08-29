@@ -254,18 +254,11 @@ pub(super) fn try_render_generic_union_assertion(
     kotlin_android_style: bool,
     f: &str,
 ) -> bool {
-    let Some((prefix, variant, suffix)) = field_resolver.tagged_union_split(f) else {
+    let Some((prefix, union_type, variant_pascal, suffix)) = field_resolver.ir_tagged_union_split(f) else {
         return false;
     };
-    let variant_pascal = variant.to_upper_camel_case();
-    let lowered = field_resolver.ir_enum_type_name(&prefix).and_then(|union_type| {
-        field_resolver
-            .union_variant_payload(&union_type, &variant_pascal)
-            .map(|(payload_field_name, payload_type)| {
-                (union_type, payload_field_name.to_string(), payload_type.to_string())
-            })
-    });
-    let Some((union_type, payload_field_name, payload_type)) = lowered else {
+    let Some((payload_field_name, payload_type)) = field_resolver.union_variant_payload(&union_type, &variant_pascal)
+    else {
         let _ = writeln!(
             out,
             "        // skipped: {}",
@@ -273,6 +266,8 @@ pub(super) fn try_render_generic_union_assertion(
         );
         return true;
     };
+    let payload_field_name = payload_field_name.to_string();
+    let payload_type = payload_type.to_string();
 
     let style = if kotlin_android_style {
         "kotlin_android"
@@ -336,11 +331,22 @@ mod tests {
         ];
         let enums = vec![EnumDef {
             name: "DetailUnion".to_string(),
-            variants: vec![EnumVariant {
-                name: "Web".to_string(),
-                fields: vec![field("payload", TypeRef::Named("WebPayload".to_string()))],
-                ..EnumVariant::default()
-            }],
+            variants: vec![
+                EnumVariant {
+                    name: "Web".to_string(),
+                    fields: vec![field("payload", TypeRef::Named("WebPayload".to_string()))],
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "Empty".to_string(),
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "Pair".to_string(),
+                    fields: vec![field("left", TypeRef::String), field("right", TypeRef::String)],
+                    ..EnumVariant::default()
+                },
+            ],
             ..EnumDef::default()
         }];
         FieldResolver::new(
@@ -407,5 +413,57 @@ mod tests {
             out,
             "                // skipped: assertion type 'count_min' not yet supported for discriminated union fields\n"
         );
+    }
+
+    #[test]
+    fn count_min_uses_ir_tagged_union_path_without_method_call_config() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.web.entries".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            true,
+            "details.web.entries",
+        ));
+        assert!(out.contains("DetailUnion.Web"));
+        assert!(out.contains("payload.entries!!.size >= 2"));
+        assert!(!out.contains("skipped:"));
+    }
+
+    #[test]
+    fn unsupported_union_shapes_stay_registered_skips() {
+        for field in [
+            "details.unknown.entries",
+            "details.empty.entries",
+            "details.pair.entries",
+            "details.web.entries.value",
+            "details.web.entries[0]",
+        ] {
+            let assertion = Assertion {
+                assertion_type: "count_min".to_string(),
+                field: Some(field.to_string()),
+                value: Some(serde_json::json!(2)),
+                ..Assertion::default()
+            };
+            let mut out = String::new();
+
+            assert!(try_render_generic_union_assertion(
+                &mut out,
+                &assertion,
+                &resolver(),
+                "result",
+                true,
+                field,
+            ));
+            assert!(out.contains("skipped:"));
+        }
     }
 }

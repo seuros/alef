@@ -8,9 +8,7 @@ use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
 use std::hash::{Hash, Hasher};
 
-use super::{
-    build_csharp_method_call, json_to_csharp, parse_discriminated_union_access, render_discriminated_union_assertion,
-};
+use super::{build_csharp_method_call, json_to_csharp};
 
 fn render_synthetic_bool_assertion(out: &mut String, field: &str, assertion_type: &str, pred: String) -> bool {
     let pred_type = match assertion_type {
@@ -331,74 +329,16 @@ pub(super) fn render_assertion(
         result_var.to_string()
     };
 
-    // Check if this is a discriminated union access (e.g., metadata.format.excel.sheet_count)
-    let is_discriminated_union = assertion
-        .field
-        .as_ref()
-        .is_some_and(|f| parse_discriminated_union_access(f).is_some());
-
-    // For discriminated union assertions, generate pattern-matching wrapper
-    if is_discriminated_union
-        && let Some((_, variant_name, inner_field)) = assertion
-            .field
-            .as_ref()
-            .and_then(|f| parse_discriminated_union_access(f))
-    {
-        // Use a unique variable name based on the field hash to avoid shadowing
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        inner_field.hash(&mut hasher);
-        let var_hash = format!("{:x}", hasher.finish());
-        let variant_var = format!("variant_{}", &var_hash[..8]);
-        // Resolve the discriminated-union container (`…Metadata.Format`) through the
-        // field resolver so list-result field paths (`results[0].metadata.format.…`)
-        // index into `.Results[0]` exactly like the flat-field assertions do, instead
-        // of hardcoding `{effective_result_var}.Metadata.Format` (which assumes the
-        // metadata lives on the top-level `ExtractionResult`, breaking batch results).
-        let container = assertion
-            .field
-            .as_ref()
-            .map(|f| {
-                let format_path = match f.find(".format") {
-                    Some(idx) => &f[..idx + ".format".len()],
-                    None => f.as_str(),
-                };
-                field_resolver.accessor(format_path, "csharp", &effective_result_var)
-            })
-            .unwrap_or_else(|| format!("{effective_result_var}.Metadata.Format"));
-        let format_path = assertion
-            .field
-            .as_deref()
-            .map(|field| match field.find(".format") {
-                Some(idx) => &field[..idx + ".format".len()],
-                None => field,
-            })
-            .unwrap_or_default();
-        let field_is_collection =
-            field_resolver.union_variant_field_is_collection(format_path, &variant_name, &inner_field);
-        let _ = writeln!(
-            out,
-            "        if ({container} is FormatMetadata.{} {})",
-            variant_name, variant_var
-        );
-        let _ = writeln!(out, "        {{");
-        render_discriminated_union_assertion(
+    if let Some(field) = assertion.field.as_deref().filter(|field| !field.is_empty())
+        && super::discriminated::try_render_generic_union_assertion(
             out,
             assertion,
-            &variant_var,
-            &inner_field,
-            field_is_collection,
-            result_is_vec,
+            field_resolver,
+            &effective_result_var,
+            field,
             assert_enum_fields,
-        );
-        let _ = writeln!(out, "        }}");
-        let _ = writeln!(out, "        else");
-        let _ = writeln!(out, "        {{");
-        let _ = writeln!(
-            out,
-            "            Assert.Fail(\"Expected {} format metadata\");",
-            variant_name.to_lowercase()
-        );
-        let _ = writeln!(out, "        }}");
+        )
+    {
         return;
     }
 
