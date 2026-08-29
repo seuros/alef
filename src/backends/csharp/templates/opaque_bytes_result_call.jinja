@@ -13,10 +13,7 @@
             {
                 if (rc != 0)
                 {
-                    var ec = NativeMethods.LastErrorCode();
-                    var ctxPtr = NativeMethods.LastErrorContext();
-                    var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-                    throw new {{ exception_name }}(ec, msg);
+                    throw {{ exception_name }}.FromLastError("Unknown error");
                 }
                 var result = new byte[(int)outLen];
                 System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);
@@ -40,10 +37,7 @@
         {
             if (rc != 0)
             {
-                var ec = NativeMethods.LastErrorCode();
-                var ctxPtr = NativeMethods.LastErrorContext();
-                var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-                throw new {{ exception_name }}(ec, msg);
+                throw {{ exception_name }}.FromLastError("Unknown error");
             }
             var result = new byte[(int)outLen];
             System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);

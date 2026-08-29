@@ -1,13 +1,4 @@
     private static Exception GetLastError()
     {
-        var code = NativeMethods.LastErrorCode();
-        var ctxPtr = NativeMethods.LastErrorContext();
-        var message = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-{% if has_base_error %}
-{% for line in variant_dispatch_lines %}
-{{ line }}
-{% endfor %}
-        if (code == 2) return new {{ base_exception_class }}(message);
-{% endif %}
-        return new {{ exception_name }}(code, message);
+        return {{ exception_name }}.FromLastError("Unknown error");
     }

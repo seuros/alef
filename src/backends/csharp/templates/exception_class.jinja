@@ -23,4 +23,24 @@ public class {{ class_name }} : Exception
     {
         Code = 0;
     }
+
+    /// <summary>
+    /// Builds the concrete exception for the FFI's current thread-local last-error state,
+    /// dispatching to the specific per-variant exception class when the message's prefix
+    /// identifies a known variant. Every throw site across the generated binding funnels
+    /// through here so a variant's identity is never lost to a bypassed dispatch.
+    /// </summary>
+    internal static Exception FromLastError(string fallbackMessage)
+    {
+        var code = NativeMethods.LastErrorCode();
+        var ctxPtr = NativeMethods.LastErrorContext();
+        var message = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? fallbackMessage;
+{% if has_base_error %}
+{% for line in variant_dispatch_lines %}
+{{ line }}
+{% endfor %}
+        if (code == 2) return new {{ base_exception_class }}(message);
+{% endif %}
+        return new {{ class_name }}(code, message);
+    }
 }

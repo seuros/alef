@@ -4,10 +4,7 @@
         var handle = NativeMethods.{{ native_method }}({{ call_args }});
         if (handle == 0)
         {
-            var ec = NativeMethods.LastErrorCode();
-            var ctxPtr = NativeMethods.LastErrorContext();
-            var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Create failed";
-            throw new {{ exception_name }}(ec, msg);
+            throw {{ exception_name }}.FromLastError("Create failed");
         }
         return new {{ class_name }}(handle);
     }

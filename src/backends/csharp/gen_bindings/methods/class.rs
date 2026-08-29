@@ -233,50 +233,16 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
         }
     }
 
-    let has_base_error = !api.errors.is_empty();
-    let (base_exception_class, variant_dispatch_lines) = if has_base_error {
-        let base_error = &api.errors[0];
-        let base_ex = format!("{}Exception", base_error.name);
-        // Every variant dispatches by message prefix here, `InvalidInput` included: the FFI
-        // layer's numeric code 1 is the infrastructure `ALEF_FFI_CONVERSION_ERROR`, not a slot
-        // reserved for a user variant that happens to share that name, and
-        // `ApiSurface::validate_error_taxonomy` forbids user `error_code`s below 100 — so no
-        // legitimate user variant can ever earn code 1. A prior version special-cased
-        // `code == 1` straight to `InvalidInputException`, which mislabeled every real
-        // conversion failure as that variant whenever an error enum happened to declare one. ~keep
-        let mut variants_with_prefix: Vec<(String, String)> = base_error
-            .variants
-            .iter()
-            .filter_map(|v| {
-                let template = v.message_template.as_deref()?;
-                let prefix_end = template.find('{').unwrap_or(template.len());
-                let prefix = template[..prefix_end].trim_end().to_string();
-                if prefix.is_empty() {
-                    return None;
-                }
-                Some((format!("{}Exception", v.name), prefix))
-            })
-            .collect();
-        variants_with_prefix.sort_by_key(|item| std::cmp::Reverse(item.1.len()));
-        let dispatch_lines: Vec<String> = variants_with_prefix
-            .into_iter()
-            .map(|(class, prefix)| {
-                let escaped_prefix = prefix.replace('\\', "\\\\").replace('"', "\\\"");
-                format!("        if (message.StartsWith(\"{escaped_prefix}\")) return new {class}(message);")
-            })
-            .collect();
-        (base_ex, dispatch_lines)
-    } else {
-        (String::new(), Vec::new())
-    };
-
+    // `GetLastError()` now just forwards to `{{ exception_name }}.FromLastError` — the single
+    // dispatcher `errors::compute_variant_dispatch` builds once, shared by every throw site in
+    // the binding, not only this wrapper class's own. The dispatch logic itself moved onto the
+    // exception class (see `errors::gen_exception_class`'s doc) precisely so opaque-handle types
+    // — separate C# classes that could never call this class's private `GetLastError()` — can
+    // reach the same dispatcher too.
     out.push_str(&render(
         "error_helper_method.jinja",
         Value::from_serialize(serde_json::json!({
             "exception_name": exception_name,
-            "has_base_error": has_base_error,
-            "base_exception_class": base_exception_class,
-            "variant_dispatch_lines": variant_dispatch_lines,
         })),
     ));
 

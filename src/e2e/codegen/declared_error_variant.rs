@@ -116,12 +116,19 @@ pub(crate) fn declared_variant<'a>(
 /// - `dart`: flutter_rust_bridge 2.x — the third-party generator alef's dart backend drives, not
 ///   alef's own code — decodes every Rust error as a raw `String`
 ///   (`e2e/codegen/dart/test_case.rs`'s own doc comment). Never substantiable.
-/// - `csharp`: `GetLastError()` dispatches to a `{Variant}Exception` by matching the live
-///   message's literal prefix against `ErrorVariant.message_template`
-///   (`backends/csharp/gen_bindings/methods/class.rs`), but opaque-handle and null-result throw
-///   sites bypass it and always throw the flat base exception. The e2e generator has no way to
-///   know, per fixture, which throw site a call takes, so treated as never reliably
-///   substantiable — alef's own generator code, just not wired everywhere yet.
+/// - `csharp`: every fallible throw site (regular method calls, opaque-handle constructors and
+///   factories, JSON-handle marshalling, null-result and last-error checks, streaming) now
+///   funnels through `{ExceptionClassName}.FromLastError`
+///   (`backends/csharp/templates/exception_class.jinja`), which dispatches to a `{Variant}Exception`
+///   by matching the live message's literal prefix against `ErrorVariant.message_template`
+///   (`backends/csharp/gen_bindings/errors.rs::compute_variant_dispatch`). Conditional on the
+///   variant having a non-empty message prefix to dispatch on — `variant_dispatch_prefix` is the
+///   single predicate both the generator and this classifier call, so the two can never disagree
+///   about which variants are wired. Trait-bridge registration/unregistration and the `[service]`
+///   scaffold's own error resolver are separate ABI shapes that still bypass the dispatcher
+///   (`trait_register_facade.jinja`, `trait_unregister_facade.jinja`,
+///   `service_class_header.jinja`'s `ResolveLastError`); no fixture in the measured census
+///   exercises those paths, but they are a known residual gap.
 /// - `php`: exactly one exception class exists for the whole extension
 ///   (`backends/php/gen_bindings/type_stubs.rs`, `class_name = extension_name.to_pascal_case()`),
 ///   even though ext-php-rs supports defining as many PHP exception classes as alef wants.
@@ -150,12 +157,13 @@ pub(crate) fn substantiates_variant_identity(lang: &str, variant: &ErrorVariant)
     match lang {
         "python" => true,
         "go" | "java" | "zig" => variant.error_code.is_some(),
+        "csharp" => crate::backends::csharp::gen_bindings::variant_dispatch_prefix(variant).is_some(),
         // `node`, not `typescript`: `TypeScriptCodegen::language_name()` returns `"node"` (it
         // covers both the NAPI/node and WASM targets via a shared `lang` parameter) — this is
         // the literal string every `classify(lang, ..)` call site in `typescript/` passes.
         // `"typescript"` here was dead: it never matched what the backend actually threads
         // through, so the wiring silently fell through to the `true` default below. ~keep
-        "c" | "dart" | "csharp" | "php" | "swift" | "ruby" | "elixir" | "gleam" | "r" | "node" => false,
+        "c" | "dart" | "php" | "swift" | "ruby" | "elixir" | "gleam" | "r" | "node" => false,
         _ => true,
     }
 }
@@ -218,6 +226,15 @@ mod tests {
         ErrorVariant {
             name: name.to_string(),
             error_code: code,
+            is_unit: true,
+            ..ErrorVariant::default()
+        }
+    }
+
+    fn variant_with_template(name: &str, message_template: Option<&str>) -> ErrorVariant {
+        ErrorVariant {
+            name: name.to_string(),
+            message_template: message_template.map(str::to_string),
             is_unit: true,
             ..ErrorVariant::default()
         }
@@ -380,16 +397,50 @@ mod tests {
     }
 
     #[test]
-    fn dart_swift_ruby_csharp_elixir_gleam_r_node_never_substantiate_a_known_variant() {
+    fn dart_swift_ruby_elixir_gleam_r_node_never_substantiate_a_known_variant() {
         let fixture = fixture_with("BadRequest");
         let errors = vec![error_def(vec![coded_variant("BadRequest", Some(200))])];
-        for lang in ["dart", "swift", "ruby", "csharp", "elixir", "gleam", "r", "node"] {
+        for lang in ["dart", "swift", "ruby", "elixir", "gleam", "r", "node"] {
             assert_eq!(
                 classify(lang, &fixture, &errors),
                 DeclaredErrorAssertion::Unsubstantiable("BadRequest"),
                 "{lang} must skip a known variant it cannot substantiate"
             );
         }
+    }
+
+    /// C# is conditional, mirroring Go/Java/Zig's `error_code` split but keyed on
+    /// `message_template` instead: `FromLastError` can only dispatch a variant to its own
+    /// `{Variant}Exception` when the variant's `#[error("...")]` template has a non-empty
+    /// literal prefix (`compute_variant_dispatch`, `variant_dispatch_prefix`) — a variant with
+    /// no template, or a template that opens directly on a `{placeholder}`, has nothing for
+    /// `message.StartsWith(...)` to match and falls through to the generic exception. A coded
+    /// `error_code` alone (as `dart_swift_ruby_elixir_gleam_r_node_never_substantiate_a_known_variant`
+    /// exercises above) does NOT make a C# variant substantiable — only the message template does.
+    #[test]
+    fn csharp_is_conditional_on_message_template_prefix() {
+        let fixture = fixture_with("Authentication");
+        let templated = vec![error_def(vec![variant_with_template(
+            "Authentication",
+            Some("Authentication failed: {reason}"),
+        )])];
+        let untemplated = vec![error_def(vec![variant_with_template("Authentication", None)])];
+        let placeholder_only = vec![error_def(vec![variant_with_template("Authentication", Some("{0}"))])];
+        assert_eq!(
+            classify("csharp", &fixture, &templated),
+            DeclaredErrorAssertion::Assert("Authentication"),
+            "a variant with a literal message prefix must be asserted"
+        );
+        assert_eq!(
+            classify("csharp", &fixture, &untemplated),
+            DeclaredErrorAssertion::Unsubstantiable("Authentication"),
+            "a variant with no message template must be skipped"
+        );
+        assert_eq!(
+            classify("csharp", &fixture, &placeholder_only),
+            DeclaredErrorAssertion::Unsubstantiable("Authentication"),
+            "a template with no literal prefix before its first placeholder must be skipped"
+        );
     }
 
     #[test]

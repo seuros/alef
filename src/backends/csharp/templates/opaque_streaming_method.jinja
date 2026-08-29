@@ -17,10 +17,7 @@
         var {{ request_param }}Handle = NativeMethods.{{ request_from_json }}({{ request_param }}Json);
         if ({{ request_param }}Handle == 0)
         {
-            var ec = NativeMethods.LastErrorCode();
-            var ctxPtr = NativeMethods.LastErrorContext();
-            var msg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "{{ request_from_json }} failed";
-            throw new {{ exception_name }}(ec, msg);
+            throw {{ exception_name }}.FromLastError("{{ request_from_json }} failed");
         }
         ulong streamHandle;
         using (var handleLease = BorrowHandle())
@@ -30,10 +27,7 @@
         if (streamHandle == 0)
         {
             NativeMethods.{{ request_free }}({{ request_param }}Handle);
-            var ec = NativeMethods.LastErrorCode();
-            var ctxPtr = NativeMethods.LastErrorContext();
-            var msg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-            throw new {{ exception_name }}(ec, msg);
+            throw {{ exception_name }}.FromLastError("Unknown error");
         }
         try
         {
@@ -43,12 +37,9 @@
                 var chunkHandle = NativeMethods.{{ next_native }}(streamHandle);
                 if (chunkHandle == 0)
                 {
-                    var ec = NativeMethods.LastErrorCode();
-                    if (ec != 0)
+                    if (NativeMethods.LastErrorCode() != 0)
                     {
-                        var ctxPtr = NativeMethods.LastErrorContext();
-                        var msg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-                        throw new {{ exception_name }}(ec, msg);
+                        throw {{ exception_name }}.FromLastError("Unknown error");
                     }
                     yield break;
                 }

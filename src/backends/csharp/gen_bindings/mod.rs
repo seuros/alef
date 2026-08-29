@@ -35,6 +35,10 @@ pub(super) struct StreamingMethodMeta {
 mod abi_parity_tests;
 pub(super) mod enums;
 pub(super) mod errors;
+// Re-exported at crate visibility (narrower than the module itself) so
+// `e2e::codegen::declared_error_variant::substantiates_variant_identity` can ask the exact same
+// question the generator's own dispatch-line builder asks — see that function's `~keep` doc.
+pub(crate) use errors::variant_dispatch_prefix;
 mod files;
 pub(super) mod functions;
 pub(super) mod marshalling;
@@ -347,7 +351,11 @@ impl Backend for CsharpBackend {
         {
             files.push(GeneratedFile {
                 path: base_path.join(format!("{}.cs", exception_class_name)),
-                content: strip_trailing_whitespace(&errors::gen_exception_class(&namespace, &exception_class_name)),
+                content: strip_trailing_whitespace(&errors::gen_exception_class(
+                    &namespace,
+                    &exception_class_name,
+                    &api.errors,
+                )),
                 generated_header: true,
             });
         }
