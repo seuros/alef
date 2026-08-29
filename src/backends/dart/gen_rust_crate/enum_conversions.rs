@@ -824,6 +824,7 @@ mod tests {
             name: "OcrMode".to_string(),
             rust_path: "mylib::thumbnails::OcrMode".to_string(),
             cfg: Some(r#"feature = "thumbnails""#.to_string()),
+            has_serde: true,
             variants: vec![make_unit_variant("Fast", None), make_unit_variant("Accurate", None)],
             ..Default::default()
         };
@@ -985,6 +986,7 @@ mod tests {
         let en = EnumDef {
             name: "ImageOutputFormat".to_string(),
             rust_path: "mylib::ImageOutputFormat".to_string(),
+            has_serde: true,
             variants: vec![
                 make_unit_variant("Jpeg", None),
                 make_unit_variant("Heif", Some(r#"feature = "heic""#)),
