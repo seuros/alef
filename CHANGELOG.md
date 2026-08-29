@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-08-29
+
 ### Added
 
 - feat(cache): write a [`CACHEDIR.TAG`](https://bford.info/cachedir/) into every directory alef
