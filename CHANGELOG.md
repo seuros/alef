@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(scaffold): correct the scaffolded Java `pom.xml`'s maven-javadoc-plugin parameter from the
+  unknown singular `failOnWarning` to the plugin's real plural `failOnWarnings`, so javadoc
+  warnings actually fail the build as the configuration intended instead of being silently
+  ignored by Maven's unbound-parameter handling.
+
 - fix(python-e2e): render subscript access (`result["field"]`) instead of attribute access for
   fields owned by a type the pyo3 backend emits as a `TypedDict` (`[workspace.dto]
   python_output = "typed-dict"`), fixing `AttributeError: 'dict' object has no attribute '...'`

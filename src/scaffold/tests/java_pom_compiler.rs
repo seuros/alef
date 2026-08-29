@@ -311,3 +311,104 @@ fn test_scaffold_java_javadoc_plugin_source_file_includes_prevent_test_source_le
          fix targets, not some other break; diagnostics:\n{broken_diagnostics}"
     );
 }
+
+/// Regression: Maven silently drops any `<configuration>` element it cannot bind to a mojo
+/// field instead of failing the build, so a misspelled parameter name looks identical to a
+/// working one in the rendered `pom.xml` — a plain string check on the tag name cannot tell a
+/// real parameter from a typo the plugin ignores. maven-javadoc-plugin's own parameter is
+/// plural, `failOnWarnings`; `failOnWarning` (singular) binds to nothing. Proven here against a
+/// genuine javadoc warning (a duplicated `@param` tag, which `javadoc` reports as `warning:`
+/// with exit status 0, independent of the `doclint` setting) run through the real, pinned
+/// `maven-javadoc-plugin` version: the pom as generated must turn that warning into a build
+/// failure, and reverting the tag name to the singular typo must reproduce the silent-ignore
+/// bug, i.e. `mvn javadoc:javadoc` exits 0 despite the identical warning. Skips when `mvn` is
+/// unavailable. ~keep
+#[test]
+fn test_scaffold_java_javadoc_plugin_fails_build_on_javadoc_warning() {
+    if crate::test_support::spawn_from_stable_dir("mvn")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    // Spawns real `mvn` against a shared repository directory; see
+    // `test_support::REAL_MVN_LOCK`'s doc for why this must be held for the whole test. ~keep
+    let _mvn_lock = crate::test_support::RealMvnGuard::acquire();
+    let maven_repo_local = format!(
+        "-Dmaven.repo.local={}",
+        crate::test_support::maven_local_repo_dir().display()
+    );
+
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+    let pom = files.iter().find(|f| f.path.ends_with("pom.xml")).unwrap();
+
+    let group_id = config.java_group_id();
+    let source_root = group_id.split('.').next().unwrap_or("dev");
+
+    let run_javadoc = |pom_content: &str| -> std::process::Output {
+        let project_dir = tempfile::tempdir().expect("temp project dir");
+        std::fs::write(project_dir.path().join("pom.xml"), pom_content).expect("write pom");
+
+        let package_dir = project_dir.path().join(source_root).join("scratchjavadocwarn");
+        std::fs::create_dir_all(&package_dir).expect("package dir");
+        // A duplicated @param tag is a genuine `javadoc` warning (not a doclint error), so it
+        // survives `<doclint>all,-missing</doclint>` and leaves the tool's own exit status 0 --
+        // only `failOnWarnings` can turn it into a build failure. Verified directly against
+        // `javadoc` output before writing this test.
+        std::fs::write(
+            package_dir.join("WarnSource.java"),
+            "package scratchjavadocwarn;\n\n\
+             /**\n * A binding class with a genuine javadoc warning.\n */\n\
+             public final class WarnSource {\n    \
+             /**\n     * Does something with a value.\n     \
+             * @param value the value\n     \
+             * @param value duplicate param tag -- javadoc reports this as a warning\n     */\n    \
+             public void doIt(int value) {\n    }\n}\n",
+        )
+        .expect("write warning source");
+
+        std::process::Command::new("mvn")
+            // Not `-o`: see the comment on the checkstyle bite test above -- same reason.
+            // -Dcheckstyle.skip=true: isolate the javadoc plugin's own behavior from the
+            // validate-phase checkstyle execution.
+            .args(["-q", "javadoc:javadoc", "-Dcheckstyle.skip=true", &maven_repo_local])
+            .current_dir(project_dir.path())
+            .output()
+            .expect("mvn runs")
+    };
+
+    let fixed_output = run_javadoc(&pom.content);
+    assert!(
+        !fixed_output.status.success(),
+        "with the correct failOnWarnings parameter, a real javadoc warning must fail the build; \
+         stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&fixed_output.stdout),
+        String::from_utf8_lossy(&fixed_output.stderr),
+    );
+
+    let javadoc_section = plugin_section(&pom.content, "maven-javadoc-plugin");
+    assert!(
+        javadoc_section.contains("<failOnWarnings>true</failOnWarnings>"),
+        "pom.xml must configure the plugin's real parameter name failOnWarnings (plural); \
+         block:\n{javadoc_section}"
+    );
+    let broken_pom = pom.content.replacen(
+        "<failOnWarnings>true</failOnWarnings>",
+        "<failOnWarning>true</failOnWarning>",
+        1,
+    );
+
+    let broken_output = run_javadoc(&broken_pom);
+    assert!(
+        broken_output.status.success(),
+        "reverting to the singular failOnWarning typo must reproduce the silent-ignore bug: \
+         Maven drops the unbound parameter and the same javadoc warning no longer fails the \
+         build; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&broken_output.stdout),
+        String::from_utf8_lossy(&broken_output.stderr),
+    );
+}

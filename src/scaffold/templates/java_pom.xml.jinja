@@ -232,7 +232,7 @@
         <version>${maven-javadoc-plugin.version}</version>
         <configuration>
           <doclint>all,-missing</doclint>
-          <failOnWarning>true</failOnWarning>
+          <failOnWarnings>true</failOnWarnings>
           <show>protected</show>
           <additionalOptions>--enable-preview</additionalOptions>
           <!-- sourcepath MUST match <sourceDirectory> above (which is
@@ -244,7 +244,7 @@
           <sourcepath>${project.basedir}</sourcepath>
           <!-- ...but a basedir sourcepath also sweeps in `src/test/java/`,
                whose test-scoped imports (JUnit, AssertJ) are not on the
-               javadoc classpath. With failOnWarning above, that turns any
+               javadoc classpath. With failOnWarnings above, that turns any
                consumer with Java tests into a hard `attach-javadocs`
                failure. Restrict to the same subtrees maven-source-plugin
                uses, so only publishable API sources are documented. ~keep -->

@@ -71,7 +71,7 @@ fn test_scaffold_java_checkstyle_plugin_excludes_alef_scratch_directory() {
 
 /// Regression: `<sourcepath>${project.basedir}</sourcepath>` makes javadoc walk the WHOLE
 /// project, including `src/test/java/`. Test sources import JUnit/AssertJ, which are
-/// test-scoped and therefore absent from the javadoc classpath, so with the `failOnWarning`
+/// test-scoped and therefore absent from the javadoc classpath, so with the `failOnWarnings`
 /// this pom also sets, `attach-javadocs` fails outright for any consumer that has Java tests
 /// (observed as a `maven-javadoc-plugin:jar (attach-javadocs)` failure over
 /// `packages/java/src/test/java/**`). maven-source-plugin already restricts itself the same
