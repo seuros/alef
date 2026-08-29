@@ -8,7 +8,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::ToUpperCamelCase;
 
-use super::assertions::render_assertion;
+use super::assertions::render_assertion_with_streaming_item_type;
 use super::json::{js_object_key, json_to_js, json_to_js_camel, json_to_js_multiline, snake_to_camel};
 use super::visitors::build_typescript_visitor;
 

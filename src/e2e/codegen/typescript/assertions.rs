@@ -12,7 +12,7 @@ use super::json::json_to_js;
 
 /// Render a single assertion into the test body.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_assertion(
+pub(super) fn render_assertion_with_streaming_item_type(
     out: &mut String,
     assertion: &Assertion,
     result_var: &str,
@@ -21,6 +21,7 @@ pub(super) fn render_assertion(
     result_enum_fields: &std::collections::HashMap<String, String>,
     lang: &str,
     is_streaming: bool,
+    streaming_item_type: Option<&str>,
     returns_void: bool,
     not_error_may_assert_presence: bool,
 ) {
@@ -106,7 +107,16 @@ pub(super) fn render_assertion(
             out.push_str(&format!("    // skipped: {reason}\n"));
             return;
         }
-        if render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming, field_resolver, lang) {
+        if render_synthetic_field_assertion(
+            out,
+            assertion,
+            result_var,
+            f,
+            is_streaming,
+            streaming_item_type,
+            field_resolver,
+            lang,
+        ) {
             return;
         }
     }
@@ -211,6 +221,35 @@ pub(super) fn render_assertion(
     );
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    result_is_simple: bool,
+    result_enum_fields: &std::collections::HashMap<String, String>,
+    lang: &str,
+    is_streaming: bool,
+    returns_void: bool,
+    not_error_may_assert_presence: bool,
+) {
+    render_assertion_with_streaming_item_type(
+        out,
+        assertion,
+        result_var,
+        field_resolver,
+        result_is_simple,
+        result_enum_fields,
+        lang,
+        is_streaming,
+        None,
+        returns_void,
+        not_error_may_assert_presence,
+    );
+}
+
 /// Return `true` when the assertion compares the field against a numeric value.
 fn assertion_value_is_numeric(assertion: &Assertion) -> bool {
     match assertion.assertion_type.as_str() {
@@ -246,12 +285,14 @@ fn render_wasm_enum_assertion(out: &mut String, assertion: &Assertion, field_exp
 }
 
 /// Try to render a synthetic/virtual field assertion. Returns `true` when the field was handled.
+#[allow(clippy::too_many_arguments)]
 fn render_synthetic_field_assertion(
     out: &mut String,
     assertion: &Assertion,
     result_var: &str,
     field: &str,
     is_streaming: bool,
+    streaming_item_type: Option<&str>,
     field_resolver: &FieldResolver,
     lang: &str,
 ) -> bool {
@@ -328,7 +369,13 @@ fn render_synthetic_field_assertion(
         f if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) => {
             // lang is always "node" or "wasm" here; both use the same JS expressions.
             if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "node", "chunks")
+                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
+                    f,
+                    "node",
+                    "chunks",
+                    None,
+                    streaming_item_type,
+                )
             {
                 match assertion.assertion_type.as_str() {
                     "count_min" => {

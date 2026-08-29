@@ -352,7 +352,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, not_error_result_is_option);
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
-        render_assertion(
+        render_assertion_with_streaming_item_type(
             &mut assertions_body,
             assertion,
             result_var,
@@ -361,6 +361,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             &effective_result_enum_fields,
             lang,
             is_streaming,
+            call_config.streaming_item_type(),
             call_config.returns_void,
             not_error_may_assert_presence,
         );

@@ -22,6 +22,15 @@ fn empty_resolver() -> FieldResolver {
 }
 
 fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> (String, bool) {
+    render_streaming_with_item_type(assertion_type, field, value, None)
+}
+
+fn render_streaming_with_item_type(
+    assertion_type: &str,
+    field: &str,
+    value: Option<serde_json::Value>,
+    item_type: Option<&str>,
+) -> (String, bool) {
     let assertion = Assertion {
         assertion_type: assertion_type.to_string(),
         field: Some(field.to_string()),
@@ -29,9 +38,26 @@ fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json:
         ..Assertion::default()
     };
     let mut out = String::new();
-    let handled =
-        render_synthetic_field_assertion(&mut out, &assertion, "result", field, true, &empty_resolver(), "node");
+    let handled = render_synthetic_field_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        field,
+        true,
+        item_type,
+        &empty_resolver(),
+        "node",
+    );
     (out, handled)
+}
+
+#[test]
+fn configured_stream_item_type_emits_event_variant_assertion() {
+    let (out, handled) =
+        render_streaming_with_item_type("is_true", "stream.has_page_event", None, Some("WorkflowEvent"));
+    assert!(handled);
+    assert!(out.contains("chunks.some((e: any) => e?.type === \"page\")"), "{out}");
+    assert!(!out.contains("skipped:"), "{out}");
 }
 
 fn field_verdicts(body: &str) -> Vec<SkipVerdict> {
