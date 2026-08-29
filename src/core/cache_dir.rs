@@ -135,7 +135,10 @@ mod tests {
         let tag_path = cache_dir.join(TAG_FILE_NAME);
         let custom_body = format!("{SIGNATURE_LINE}\n# a human-edited comment that must survive\n");
         std::fs::write(&tag_path, &custom_body).expect("plant an existing valid tag");
-        let mtime_before = std::fs::metadata(&tag_path).expect("stat before").modified().expect("mtime");
+        let mtime_before = std::fs::metadata(&tag_path)
+            .expect("stat before")
+            .modified()
+            .expect("mtime");
 
         // Guarantee the filesystem mtime clock has a chance to move, so an accidental rewrite
         // would be observable even on filesystems with coarse mtime resolution.
@@ -144,7 +147,10 @@ mod tests {
         ensure_cache_dir(&cache_dir).expect("second call must succeed");
 
         let content_after = std::fs::read_to_string(&tag_path).expect("read tag after second run");
-        let mtime_after = std::fs::metadata(&tag_path).expect("stat after").modified().expect("mtime");
+        let mtime_after = std::fs::metadata(&tag_path)
+            .expect("stat after")
+            .modified()
+            .expect("mtime");
         assert_eq!(
             content_after, custom_body,
             "an existing valid tag's content, including a user-added comment, must survive byte-for-byte"

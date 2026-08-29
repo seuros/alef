@@ -68,7 +68,14 @@ fn foreign_variant_proven_unreachable_dropped_from_unit_enum_control_kept_when_a
 
     let mut excluded = String::new();
     let mut imports = Default::default();
-    emit_enum(&en, &HashSet::new(), "sample_crate", Some(&[]), &mut excluded, &mut imports);
+    emit_enum(
+        &en,
+        &HashSet::new(),
+        "sample_crate",
+        Some(&[]),
+        &mut excluded,
+        &mut imports,
+    );
     assert_eq!(
         declared_constructors(&excluded),
         vec!["Manual".to_string(), "Automatic".to_string()],
