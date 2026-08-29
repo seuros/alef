@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checking that the enum is present.
 - Resolve generated C# and Kotlin collection-count assertions through tagged-union ownership in
   the Rust IR, including collection fields reached through batch results.
+- Fail generated Kotlin tagged-union assertions when the runtime returns a different variant,
+  instead of silently accepting the mismatch.
 - Retry generated nested Rust lock-file updates with registry access when the offline Cargo index
   cannot satisfy a newly generated dependency constraint.
 - Keep N-API TypeScript enum declarations aligned with the generated runtime representation.
