@@ -119,30 +119,135 @@ pub(super) fn relock_lockfiles_beside_changed_manifests(changed_paths: &HashSet<
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RelockMode {
+    Offline,
+    Online,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CargoStatus {
+    successful: bool,
+    code: Option<i32>,
+}
+
+impl CargoStatus {
+    fn from_exit_status(status: std::process::ExitStatus) -> Self {
+        Self {
+            successful: status.success(),
+            code: status.code(),
+        }
+    }
+
+    #[cfg(test)]
+    fn success() -> Self {
+        Self {
+            successful: true,
+            code: Some(0),
+        }
+    }
+
+    #[cfg(test)]
+    fn failed(code: Option<i32>) -> Self {
+        Self {
+            successful: false,
+            code,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum RelockFailure {
+    OfflineCommand(std::io::Error),
+    OnlineCommand {
+        offline_code: Option<i32>,
+        error: std::io::Error,
+    },
+    BothResolvers {
+        offline_code: Option<i32>,
+        online_code: Option<i32>,
+    },
+}
+
+fn attempt_relock_with<F>(mut run: F) -> Result<RelockMode, RelockFailure>
+where
+    F: FnMut(RelockMode) -> std::io::Result<CargoStatus>,
+{
+    let offline = run(RelockMode::Offline).map_err(RelockFailure::OfflineCommand)?;
+    if offline.successful {
+        return Ok(RelockMode::Offline);
+    }
+
+    let online = run(RelockMode::Online).map_err(|error| RelockFailure::OnlineCommand {
+        offline_code: offline.code,
+        error,
+    })?;
+    if online.successful {
+        return Ok(RelockMode::Online);
+    }
+
+    Err(RelockFailure::BothResolvers {
+        offline_code: offline.code,
+        online_code: online.code,
+    })
+}
+
+fn relock_args(mode: RelockMode) -> &'static [&'static str] {
+    match mode {
+        RelockMode::Offline => &["update", "--offline", "-w"],
+        RelockMode::Online => &["update", "-w"],
+    }
+}
+
 /// Best-effort, like the other lockfile-refresh commands `sync_versions` already runs
 /// (`pnpm install`, `composer update`, `mix deps.get`): a missing `cargo` binary or a lockfile
-/// that fails to resolve offline must not abort the whole version sync.
+/// that cannot resolve must not abort the whole version sync. Try the local registry cache first,
+/// then retry with registry access when that cache cannot satisfy a newly generated constraint.
+/// ~keep
 fn relock_one(dir: &Path, lock_path: &Path) {
-    match std::process::Command::new("cargo")
-        .args(["update", "--offline", "-w"])
-        .current_dir(dir)
-        .status()
-    {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            warn!(
+    let outcome = attempt_relock_with(|mode| {
+        std::process::Command::new("cargo")
+            .args(relock_args(mode))
+            .current_dir(dir)
+            .status()
+            .map(CargoStatus::from_exit_status)
+    });
+
+    match outcome {
+        Ok(RelockMode::Offline) => {}
+        Ok(RelockMode::Online) => {
+            info!(
                 lock = %lock_path.display(),
-                code = ?status.code(),
-                "cargo update --offline -w failed for this lockfile; it may still be stale against \
-                 its manifest. Re-run `cargo update` in that directory with network access if a \
-                 later `cargo check --locked` rejects it"
+                "Relocked with registry access after the offline attempt failed"
             );
         }
-        Err(error) => {
+        Err(RelockFailure::OfflineCommand(error)) => {
             warn!(
                 lock = %lock_path.display(),
                 %error,
                 "could not run cargo update for this lockfile; it may still be stale against its manifest"
+            );
+        }
+        Err(RelockFailure::OnlineCommand { offline_code, error }) => {
+            warn!(
+                lock = %lock_path.display(),
+                ?offline_code,
+                %error,
+                "cargo update failed offline, then the registry-enabled retry could not run; the lockfile may \
+                 still be stale against its manifest"
+            );
+        }
+        Err(RelockFailure::BothResolvers {
+            offline_code,
+            online_code,
+        }) => {
+            warn!(
+                lock = %lock_path.display(),
+                ?offline_code,
+                ?online_code,
+                "cargo update -w failed both offline and with registry access; the lockfile may still be stale \
+                 against its manifest. Resolve the dependency conflict in that directory before running \
+                 `cargo check --locked`"
             );
         }
     }
