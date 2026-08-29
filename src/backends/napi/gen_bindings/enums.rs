@@ -222,7 +222,7 @@ fn napi_convert_case(case: &str) -> Option<convert_case::Case<'static>> {
 /// `errors::gen_dts` (the declared `.d.ts` shape) all call this instead of re-deriving the
 /// condition, so the runtime struct and the TypeScript declaration for the same enum can never
 /// disagree about which shape it takes. ~keep
-pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
+pub(crate) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged)
 }

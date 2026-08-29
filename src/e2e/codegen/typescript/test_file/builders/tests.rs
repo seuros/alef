@@ -149,7 +149,7 @@ fn node_tagged_enum_struct_variant_uses_configured_discriminant() {
 fn node_tagged_enum_struct_variant_uses_default_discriminant() {
     let enums = [EnumDef {
         name: "AuditEvent".into(),
-        serde_tag: Some("type".into()),
+        serde_tag: None,
         variants: vec![crate::core::ir::EnumVariant {
             name: "Created".into(),
             fields: vec![crate::core::ir::FieldDef {

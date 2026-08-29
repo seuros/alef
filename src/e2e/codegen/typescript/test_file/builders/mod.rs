@@ -385,11 +385,10 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             let ir_name = type_name.strip_prefix(wasm_type_prefix).unwrap_or(type_name);
             enums
                 .iter()
-                .find(|e| e.name == ir_name && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
-                .and_then(|e| {
-                    e.serde_tag
-                        .as_deref()
-                        .map(|tag| (tag, crate::backends::napi::tagged_enum_discriminant_js_name(e)))
+                .find(|e| e.name == ir_name && crate::backends::napi::is_tagged_data_enum(e))
+                .map(|e| {
+                    let js_name = crate::backends::napi::tagged_enum_discriminant_js_name(e);
+                    (e.serde_tag.as_deref().unwrap_or(js_name), js_name)
                 })
         } else {
             None
