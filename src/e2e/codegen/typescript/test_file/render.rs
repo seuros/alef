@@ -217,8 +217,19 @@ pub fn render_test_file(
     // `referenced_enums` the way the request-side builders do, rather than trusting this set. ~keep
     let mut all_result_enum_classes: std::collections::BTreeSet<String> =
         result_enum_fields.values().cloned().collect();
+    // The body's constructor reference for a `json_object` "config" arg is resolved through
+    // `wasm_prefixed_wrapped_type(lang, canonical_ts_type_name(lang, ..), ..)` (see
+    // `json_object_constructor_type` in `args.rs`), not through `canonical_ts_type_name` alone.
+    // Every `options_type` collected into the import set here must go through the same two-step
+    // chain, or a bare (unprefixed) IR type name configured as `options_type` renders a body that
+    // calls `WasmFoo.default()` while the import statement names the unprefixed `Foo` — a
+    // `ReferenceError` at runtime that `tsc` cannot catch, since both are valid identifiers.
+    // For `lang != "wasm"`, `wasm_prefixed_wrapped_type` is a no-op, so this changes nothing for
+    // the node backend, whose options types are TypeScript interfaces, not wasm-bindgen classes. ~keep
     if let Some(opts) = options_type {
-        all_options_types.insert(canonical_ts_type_name(lang, opts, config));
+        let canonical = canonical_ts_type_name(lang, opts, config);
+        let resolved = wasm_prefixed_wrapped_type(lang, &canonical, type_defs, enums, wasm_type_prefix);
+        all_options_types.insert(resolved);
     }
     for fixture in fixtures.iter() {
         let cc = e2e_config.resolve_call_for_fixture(
@@ -230,7 +241,9 @@ pub fn render_test_file(
         );
         if let Some(o) = cc.overrides.get(lang) {
             if let Some(opts) = &o.options_type {
-                all_options_types.insert(canonical_ts_type_name(lang, opts, config));
+                let canonical = canonical_ts_type_name(lang, opts, config);
+                let resolved = wasm_prefixed_wrapped_type(lang, &canonical, type_defs, enums, wasm_type_prefix);
+                all_options_types.insert(resolved);
             }
             for (k, v) in &o.nested_types {
                 all_nested_types.entry(k.clone()).or_insert_with(|| v.clone());

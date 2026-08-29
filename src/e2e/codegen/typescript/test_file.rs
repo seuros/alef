@@ -51,6 +51,8 @@ mod wasm_enum_member_agreement_tests;
 #[cfg(test)]
 mod wasm_optional_chain_tests;
 #[cfg(test)]
+mod wasm_options_type_import_prefix_tests;
+#[cfg(test)]
 mod wasm_snippet_prefix_tests;
 #[cfg(test)]
 mod wasm_trait_bridge_import_tests;
