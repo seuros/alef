@@ -575,13 +575,44 @@ mod tests {
             render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
 
         assert!(
-            body.contains("createWorkflowStepFromJson(json: jsonEncode(m))"),
+            body.contains("createWorkflowStepFromJson(json: jsonEncode(element))"),
             "enum elements must use the generated package decoder:\n{body}"
         );
         assert!(
             !body.contains("_parse"),
             "no hand-authored enum decoder may be emitted:\n{body}"
         );
+    }
+
+    #[test]
+    fn scalar_enum_array_does_not_cast_elements_to_maps() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "run_steps", "description": "Run workflow steps",
+            "input": {"steps": ["approve", "reject"]}
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "run_workflow".into();
+        e2e_config.call.args.push(crate::e2e::config::ArgMapping {
+            name: "steps".into(),
+            field: "steps".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: Some("WorkflowStep".into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        });
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(
+            body.contains("createWorkflowStepFromJson(json: jsonEncode(element))"),
+            "{body}"
+        );
+        assert!(!body.contains("cast<Map<String, dynamic>>()"), "{body}");
     }
 
     // Regression test for defect #543/2: binding the result of a `Future<void>`-returning

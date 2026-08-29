@@ -671,7 +671,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         // matches the binding's parameter type.
                         let dart_fn = type_name_to_create_from_json_dart(elem_type);
                         setup_lines.push(format!(
-                            "final {var_name} = await Future.wait((jsonDecode({json_source}) as List<dynamic>).cast<Map<String, dynamic>>().map((m) => {dart_fn}(json: jsonEncode(m))));"
+                            "final {var_name} = await Future.wait((jsonDecode({json_source}) as List<dynamic>).map((element) => {dart_fn}(json: jsonEncode(element))));"
                         ));
                         // For generic arrays, emit named parameter if it's a direct FRB call
                         if is_frb_bridge_call {
