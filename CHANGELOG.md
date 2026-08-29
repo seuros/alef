@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(gleam): stop declaring foreign cfg-gated enum variants the Rustler NIF this binding shims
+  can never produce. `emit_enum` now filters through `enum_variant_declaration`, the same
+  authority Dart's mirror and the Rustler declaration already consult.
+
 ## [0.75.0] - 2026-08-29
 
 ### Fixed

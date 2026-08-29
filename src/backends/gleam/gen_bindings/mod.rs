@@ -79,8 +79,21 @@ impl Backend for GleamBackend {
 
         let collisions = build_collision_set(api);
 
+        // The dependency this binding wraps -- used to tell a HOST-owned cfg-gated enum variant
+        // (declared unconditionally, deferring to the compiler) apart from a FOREIGN one this
+        // binding's own `configured_features` may prove unreachable. See `emit_enum`'s doc
+        // comment for why Gleam's declaration must consult the same authority the Rustler NIF
+        // declaration it shims already does. ~keep
+        let configured_features = crate::codegen::cfg::enabled_features_for_language(config, Language::Gleam);
         for en in api.enums.iter().filter(|e| !exclude_types.contains(e.name.as_str())) {
-            emit_enum(en, &collisions, &mut body, &mut imports);
+            emit_enum(
+                en,
+                &collisions,
+                &module_name,
+                Some(configured_features.as_slice()),
+                &mut body,
+                &mut imports,
+            );
             body.push('\n');
         }
 

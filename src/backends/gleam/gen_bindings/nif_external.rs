@@ -1,3 +1,5 @@
+use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::conversions::{VariantDeclaration, enum_variant_declaration};
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, ErrorDef, FieldDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 use std::collections::BTreeSet;
@@ -91,12 +93,40 @@ pub(crate) fn emit_variant_fields(fields: &[FieldDef], out: &mut String, imports
     }
 }
 
+/// Emit the Gleam type declaration mirroring `en`.
+///
+/// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's own
+/// `#[cfg(...)]` gate; Gleam's declaration is a `@external`-backed shim over the Rustler NIF the
+/// Elixir/Rustler backend emits for the SAME consumer project (see `gleam/mod.rs`'s module doc),
+/// so a variant `codegen::conversions::enums::enum_variant_declaration` proves unreachable for
+/// this binding's own `configured_features` is one the Rustler NIF declaration already dropped
+/// (`backends::rustler::gen_bindings::types::gen_enum`) -- keeping it here would let Gleam code
+/// pattern-match on a constructor no NIF call can ever actually produce. Reuses the same
+/// authority every other Rust-emitting backend's declaration already consults, rather than
+/// re-deriving the rule locally. A host-owned cfg-gated variant still resolves to `Keep`
+/// unconditionally (matching every other backend's declaration surface). ~keep
 pub(crate) fn emit_enum(
     en: &EnumDef,
     collisions: &std::collections::HashSet<String>,
+    source_crate_name: &str,
+    configured_features: Option<&[String]>,
     out: &mut String,
     imports: &mut BTreeSet<&'static str>,
 ) {
+    let is_host_enum = is_host_owned_rust_path(source_crate_name, &en.rust_path);
+    let configured_features_set: Option<std::collections::HashSet<&str>> =
+        configured_features.map(|features| features.iter().map(String::as_str).collect());
+    let declared_variants: Vec<&crate::core::ir::EnumVariant> = en
+        .variants
+        .iter()
+        .filter(|variant| {
+            !matches!(
+                enum_variant_declaration(variant, is_host_enum, configured_features_set.as_ref()),
+                VariantDeclaration::Drop
+            )
+        })
+        .collect();
+
     emit_cleaned_gleam_doc(out, &en.doc, "");
     out.push_str(&crate::backends::gleam::template_env::render(
         "enum_header.jinja",
@@ -104,7 +134,7 @@ pub(crate) fn emit_enum(
             name => &en.name,
         },
     ));
-    for variant in &en.variants {
+    for variant in declared_variants {
         let ctor = variant_constructor_name(&en.name, &variant.name, collisions);
         if variant.fields.is_empty() {
             out.push_str(&crate::backends::gleam::template_env::render(
@@ -329,3 +359,6 @@ fn gleam_public_member_name(name: &str) -> String {
         name,
     )
 }
+
+#[cfg(test)]
+mod enum_declaration_cfg_tests;
