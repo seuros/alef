@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::process;
 
-use crate::cli::{cache, commands, dispatch};
+use crate::cli::{cache, commands, dispatch, pipeline};
 
 use super::args::*;
 use super::dispatch::DispatchContext;
@@ -38,6 +38,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     // release being gated is published. `--json` already reported
                     // `checks_pass`, so one command could answer `ok: true` and exit 1.
                     if !commands::validate_versions::checks_pass(&checks) {
+                        has_mismatches = true;
+                    }
+                    // ~keep alef #1528: `checks_pass` above only compares version STRINGS across
+                    // manifests; it has no notion of whether a committed `Cargo.lock` can actually
+                    // resolve a requirement reachable from a manifest alef generated. That drift
+                    // (the `tower-http` shape: a hand-written dependency alef never watches moves,
+                    // and nothing about alef's own output changes) never prompts a regen, so
+                    // `check_generated_lock_freshness` -- correct, and already proven against real
+                    // incidents -- never gets a chance to run before the release is cut. This is
+                    // the same check, reachable from the actual release gate instead, and it
+                    // shares `checks_pass`'s own tolerance for a lock genuinely waiting on this
+                    // release's not-yet-published version rather than re-litigating it.
+                    if let Some(version) = resolved_cfg.resolved_version()
+                        && let Some(error) = pipeline::check_release_lock_freshness(&workspace_root, &version)
+                    {
+                        tracing::error!("[{}] {error:#}", resolved_cfg.name);
                         has_mismatches = true;
                     }
                 }

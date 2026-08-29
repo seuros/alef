@@ -9,7 +9,7 @@ use super::version_core::{
     write_version_to_cargo_toml,
 };
 use super::version_csharp::sync_csharp_project_versions;
-use super::version_lockfiles::relock_cargo_lockfiles;
+use super::version_lockfiles::{relock_cargo_lockfiles, retry_blocked_lockfiles};
 use super::version_python::sync_python_versions;
 use super::version_regen::{regenerate_readmes, regenerate_scaffold_after_sync, regenerate_test_apps_after_sync};
 use super::version_registry::sync_registry_package_versions;
@@ -778,6 +778,14 @@ pub fn sync_versions(
         // validate set can never diverge again. See alef #148.
         relock_cargo_lockfiles(&version);
     }
+    // Unconditional, unlike the gated call above: alef #1528 found that once a lock is left
+    // `blocked_on_publish` by the run that first bumped its manifest, nothing ever revisits it on
+    // a LATER `sync_versions` call that changes no manifest bytes at all -- which is every call
+    // after the first, since the version is already correct on disk. `blocked_on_publish` is
+    // re-derived fresh each time from whatever the lock and manifest currently disagree on, so it
+    // cannot tell "still pending" from "published weeks ago, never relocked since"; only an actual
+    // retry can. See `retry_blocked_lockfiles`'s doc for the full incident.
+    retry_blocked_lockfiles(&version);
     if any_composer_json_modified {
         run_optional("composer", &["update", "--lock", "--no-interaction"]);
     }

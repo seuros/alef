@@ -43,8 +43,9 @@ pub(crate) use generate::{
     stamp_for_adoption,
 };
 pub use helpers::{init, run_optional};
-pub(crate) use lock_freshness::check_generated_lock_freshness;
+pub(crate) use lock_freshness::{check_generated_lock_freshness, check_generated_node_lock_freshness};
 pub use version::sync_versions;
 pub use version_core::{set_version, verify_versions};
+pub(crate) use version_lockfiles::check_release_lock_freshness;
 pub(crate) use version_registry::sync_registry_package_versions;
 pub use workspace_lints::ensure_workspace_alef_meta_check_cfg;
