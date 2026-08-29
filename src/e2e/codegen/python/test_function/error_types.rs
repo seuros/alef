@@ -4,7 +4,7 @@
 //! (`declared_error_variant::substantiates_variant_identity`'s `"python" => true` arm), so
 //! `error_assertions::emit_error_assertion` catches that class directly —
 //! `pytest.raises(BadRequestError)` — for a fixture whose declared `error` value names a real
-//! variant, rather than the broad `Exception` (xberg #1525). That class name must be imported
+//! variant, rather than the broad `Exception`. That class name must be imported
 //! into the generated file exactly like any other type it references.
 
 use std::collections::BTreeSet;

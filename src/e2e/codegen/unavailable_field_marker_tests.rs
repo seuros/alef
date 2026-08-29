@@ -459,7 +459,7 @@ fn diagnostic_names_language_fixture_field_and_the_opt_in() {
     );
 }
 
-/// xberg issue #1529: a census across five consumer repos found this exact wording on 15
+/// A census across five consumer repos found this exact wording on 15
 /// backends, `rust` and `brew` among them, and initially read that as 15 independent backend
 /// gaps. It is not — every backend renderer calls the same `FieldResolver::is_valid_for_result`
 /// (grep `is_valid_for_result` across `e2e/codegen/*/assertions.rs`: one predicate, ~18 call

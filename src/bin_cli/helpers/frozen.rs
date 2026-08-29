@@ -374,7 +374,7 @@ pub(crate) fn drifted_seed_report_lines(frozen: &[FrozenFile]) -> Vec<String> {
 /// `alef verify`'s closing sign-off line, derived FROM [`drifted_frozen_seeds`] rather than
 /// computed independently of it.
 ///
-/// xberg#1535: the sign-off used to be a bare literal at the call site, printed whenever every
+/// The sign-off used to be a bare literal at the call site, printed whenever every
 /// *other* finding was empty -- with no regard for whether [`drifted_seed_report_lines`] had
 /// just printed the "Frozen files whose withheld content has DRIFTED" block a few lines above.
 /// A run against 21 version-bearing manifests (`package.json`, `go.mod`, `pom.xml`, ...) named

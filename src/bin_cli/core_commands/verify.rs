@@ -431,7 +431,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     {
         // Derived FROM `drifted_seeds` -- the same finding set `drifted_seed_report_lines`
         // (printed above, unconditionally) reports -- not a second, independently-maintained
-        // condition. See `frozen::report_sign_off_line`'s doc for xberg#1535: this used to be a
+        // condition. See `frozen::report_sign_off_line`'s doc: this used to be a
         // bare literal here, so a run that had just printed the DRIFTED block a few lines above
         // went on to assert the unqualified opposite three lines later and exited 0. ~keep
         crate::bin_cli::output::line(crate::bin_cli::helpers::frozen::report_sign_off_line(
