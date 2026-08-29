@@ -71,10 +71,13 @@ pub(super) fn classify_nested_leaf(
 /// no) element of the JSON array named by `array_var` has a `key_snake` value satisfying the
 /// assertion's predicate.
 ///
-/// `contains`, `contains_all`, `contains_any`, `not_contains` and `equals` are implemented —
-/// the assertion type tslp's own fixtures use against wildcard leaves (`structure[].kind`,
-/// `imports[].source`) plus its natural string-comparison siblings. Anything else renders a
-/// skip comment rather than a silently-wrong quantifier.
+/// `contains`, `contains_all`, `contains_any`, `not_contains`, `equals` and `not_empty` are
+/// implemented — the assertion type tslp's own fixtures use against wildcard leaves
+/// (`structure[].kind`, `imports[].source`) plus its natural string-comparison siblings.
+/// `not_empty` matches the sibling wildcard renderers in `python`/`dart`/`elixir`'s
+/// `assertions.rs`, which all read a wildcard `not_empty` the same way: some element's key
+/// holds a non-empty value. Anything else renders a skip comment rather than a silently-wrong
+/// quantifier.
 pub(super) fn render_wildcard_assertion(out: &mut String, assertion: &Assertion, array_var: &str, key_snake: &str) {
     match assertion.assertion_type.as_str() {
         "contains" => {
@@ -147,6 +150,21 @@ pub(super) fn render_wildcard_assertion(out: &mut String, assertion: &Assertion,
                     "expected some element to equal the expected value",
                 );
             }
+        }
+        "not_empty" => {
+            // No needle to compare against — every other sibling backend's wildcard `not_empty`
+            // (`python/dart/elixir/assertions.rs`) asks the same question: does SOME element's
+            // key hold a non-empty value. `compare_mode: "not_empty"` routes the jinja template
+            // past the needle loop entirely rather than iterating zero needles.
+            render_quantifier(
+                out,
+                array_var,
+                key_snake,
+                &[],
+                false,
+                "not_empty",
+                "expected some element to have a non-empty value",
+            );
         }
         other => {
             let field = assertion.field.as_deref().unwrap_or("");

@@ -141,6 +141,24 @@ mod chunk_heading_context_tests {
             "got: {out}"
         );
     }
+
+    /// The skip must classify as a `GeneratorGap`, not a `LanguageLimitation`:
+    /// `backends::magnus::gen_bindings::classes::gen_enum` already generates a native per-variant
+    /// accessor method for this exact enum shape (internally tagged, single-field tuple variant);
+    /// it is simply never registered with the Ruby class in `module_init.rs`. That is alef's own
+    /// unfinished wiring, not a boundary Ruby or magnus forbids crossing — see
+    /// `field_skip::tests::the_load_bearing_classifications_are_pinned` for the full evidence.
+    #[test]
+    fn enum_variant_accessor_skip_is_a_generator_gap_not_a_language_limitation() {
+        use crate::e2e::codegen::field_skip::{FieldSkip, SkipClass};
+
+        let out = render("metadata.format.excel", "equals", Some(serde_json::json!("Excel")));
+        assert_eq!(
+            FieldSkip::extract_classified(&out).map(|(field, skip)| (field, skip.class())),
+            Some(("metadata.format.excel", SkipClass::GeneratorGap)),
+            "got: {out}"
+        );
+    }
 }
 
 #[cfg(test)]

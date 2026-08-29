@@ -4,6 +4,9 @@
         for (int _wc_i = 0; _wc_i < _wc_count; _wc_i++) {
             char* _wc_elem = alef_json_array_get_index({{ array_var }}, _wc_i);
             char* _wc_val = alef_json_get_string(_wc_elem, "{{ key_snake }}");
+{% if compare_mode == "not_empty" %}
+            if (_wc_val != NULL && strlen(_wc_val) > 0) { found = 1; }
+{% else %}
 {% for needle in needles %}
 {% if compare_mode == "equals" %}
             if (_wc_val != NULL && strcmp(_wc_val, {{ needle }}) == 0) { found = 1; }
@@ -11,6 +14,7 @@
             if (_wc_val != NULL && strstr(_wc_val, {{ needle }}) != NULL) { found = 1; }
 {% endif %}
 {% endfor %}
+{% endif %}
             free(_wc_val);
             free(_wc_elem);
         }

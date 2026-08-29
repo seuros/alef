@@ -7,13 +7,12 @@ use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{ruby_regex_literal, ruby_string_literal, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
-use crate::e2e::fixture::{Assertion, Fixture};
+use crate::e2e::fixture::Fixture;
 
 use crate::e2e::codegen::inert_example::{self, InertCause, InertExample};
 
 use super::args::build_args_and_setup;
 use super::assertions::render_assertion;
-use super::values::json_to_ruby;
 use super::visitor::build_ruby_visitor;
 
 /// Build the RSpec `raise_error(...)` matcher expression for an `error`-asserting test.
@@ -243,7 +242,7 @@ pub(super) fn render_chat_stream_example(
     // fixture and see none of them.
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
-        emit_chat_stream_assertion(
+        super::streaming_assertion::emit_chat_stream_assertion(
             &mut assertions_body,
             assertion,
             e2e_config,
@@ -363,146 +362,6 @@ fn render_refused_example(description_literal: &str, markers: &str, refusal: &In
     }
     out.push_str("  end\n");
     out
-}
-
-/// Map a streaming fixture assertion to an `expect` call on the local aggregator
-/// variable produced by [`render_chat_stream_example`]. Pseudo-fields like
-/// `chunks` / `stream_content` / `stream_complete` resolve to the in-block locals,
-/// not response accessors.
-pub(super) fn emit_chat_stream_assertion(
-    out: &mut String,
-    assertion: &Assertion,
-    _e2e_config: &E2eConfig,
-    streaming_item_type: Option<&str>,
-    stream_complete_is_derived: bool,
-) {
-    let atype = assertion.assertion_type.as_str();
-    if atype == "not_error" || atype == "error" {
-        return;
-    }
-    let field = assertion.field.as_deref().unwrap_or("");
-
-    // Ruby drives the stream with a block, so by the time the call returns there is no iterator
-    // left to ask for one more element -- the only way to observe a chunk arriving after done.
-    // `csharp/streaming.rs` can probe its enumerator and does; ruby cannot, and the previous
-    // mapping papered over that by aliasing this field onto the `stream_complete` local, so two
-    // different assertions rendered one identical check that could not fail either way. ~keep
-    if field == "no_chunks_after_done" {
-        out.push_str(&format!(
-            "    # skipped: {}; a block-driven ruby stream exposes no post-completion probe\n",
-            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
-        ));
-        return;
-    }
-    if field == "stream_complete" && !stream_complete_is_derived {
-        out.push_str(&format!(
-            "    # skipped: {}; this stream's chunks carry no terminal finish_reason, \
-so completion is not observable here\n",
-            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
-        ));
-        return;
-    }
-
-    enum Kind {
-        Chunks,
-        Bool,
-        Str,
-        IntTokens,
-        Json,
-        Unsupported,
-    }
-
-    // Use StreamingFieldResolver to compute field expressions from chunks.
-    let expr_opt = crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
-        field,
-        "ruby",
-        "chunks",
-        None,
-        streaming_item_type,
-    );
-
-    let (expr, kind) = match (field, expr_opt) {
-        ("chunks", Some(expr)) => (expr, Kind::Chunks),
-        ("chunks.length", Some(expr)) => (expr, Kind::Chunks),
-        ("stream_content", Some(expr)) => (expr, Kind::Str),
-        ("finish_reason", Some(expr)) => (expr, Kind::Str),
-        ("tool_calls", Some(expr)) => (expr, Kind::Json),
-        ("tool_calls[0].function.name", Some(expr)) => (expr, Kind::Str),
-        ("usage.total_tokens", Some(expr)) => (expr, Kind::IntTokens),
-        // Match on the field alone: the resolver answers `Some` here for every language, so a
-        // `None` pattern would be unreachable and would silently drop the assertion into the
-        // `Unsupported` arm. The spec body binds `stream_complete` to this very resolver
-        // expression, so asserting the local and asserting the accessor are the same check;
-        // `no_chunks_after_done` is refused above rather than aliased onto it. ~keep
-        ("stream_complete", _) => ("stream_complete".to_string(), Kind::Bool),
-        _ => ("".to_string(), Kind::Unsupported),
-    };
-
-    if matches!(kind, Kind::Unsupported) {
-        out.push_str(&format!(
-            "    # skipped: {}\n",
-            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
-        ));
-        return;
-    }
-
-    match (atype, &kind) {
-        ("count_min", Kind::Chunks) => {
-            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                out.push_str(&format!("    expect({expr}.length).to be >= {n}\n"));
-            }
-        }
-        ("count_equals", Kind::Chunks) => {
-            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                out.push_str(&format!("    expect({expr}.length).to eq({n})\n"));
-            }
-        }
-        ("equals", Kind::Str) => {
-            if let Some(val) = &assertion.value {
-                let rb_val = json_to_ruby(val);
-                // Mirror Python's `expr.strip() == expected.strip()` pattern: converters
-                // commonly emit a trailing newline that fixture authors don't write into the
-                // expected string, so strip both sides for the equality check.
-                out.push_str(&format!("    expect({expr}.to_s.strip).to eq({rb_val}.strip)\n"));
-            }
-        }
-        ("contains", Kind::Str) => {
-            if let Some(val) = &assertion.value {
-                let rb_val = json_to_ruby(val);
-                out.push_str(&format!("    expect({expr}.to_s).to include({rb_val})\n"));
-            }
-        }
-        ("not_empty", Kind::Str) => {
-            out.push_str(&format!("    expect({expr}.to_s).not_to be_empty\n"));
-        }
-        ("not_empty", Kind::Json) => {
-            out.push_str(&format!("    expect({expr}).not_to be_nil\n"));
-        }
-        ("is_empty", Kind::Str) => {
-            out.push_str(&format!("    expect({expr}.to_s).to be_empty\n"));
-        }
-        ("is_true", Kind::Bool) => {
-            out.push_str(&format!("    expect({expr}).to be(true)\n"));
-        }
-        ("is_false", Kind::Bool) => {
-            out.push_str(&format!("    expect({expr}).to be(false)\n"));
-        }
-        ("greater_than_or_equal", Kind::IntTokens) => {
-            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                out.push_str(&format!("    expect({expr}).to be >= {n}\n"));
-            }
-        }
-        ("equals", Kind::IntTokens) => {
-            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                out.push_str(&format!("    expect({expr}).to eq({n})\n"));
-            }
-        }
-        _ => {
-            out.push_str(&format!(
-                "    # skipped: streaming assertion '{atype}' on field '{field}' not supported\n"
-            ));
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

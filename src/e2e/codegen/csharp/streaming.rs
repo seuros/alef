@@ -1,6 +1,9 @@
 //! C# streaming e2e test method rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Assertion, Fixture};
@@ -499,16 +502,32 @@ so completion is not observable here",
             }
             return;
         }
+        // ~keep Both `count_min`/`count_equals` arms below used to guard on `as_u64()` with no
+        // `else`, so a fixture value that did not narrow to a `u64` rendered NOTHING: no
+        // assertion, no skip comment. Routed through the same funnel every other narrowing guard
+        // in this file now uses.
         "chunks" | "stream.items" => match atype {
             "count_min" => {
                 if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                     let _ = writeln!(out, "        Assert.True(chunks.Count >= {n});");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        streaming_assertion_value_skip_line("        ", "//", field, atype)
+                    );
                 }
                 return;
             }
             "count_equals" => {
                 if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                     let _ = writeln!(out, "        Assert.Equal({n}, chunks.Count);");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        streaming_assertion_value_skip_line("        ", "//", field, atype)
+                    );
                 }
                 return;
             }
@@ -587,6 +606,15 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
         return;
     }
 
+    // ~keep Every `if let Some(...) = ...` guard below used to have no `else`: a fixture value
+    // that did not narrow to the expected shape (`as_u64()`, or bare presence for `equals`/
+    // `contains`, which accept any JSON value) rendered NOTHING -- no assertion, no skip comment.
+    // The catch-all default also used to emit ad hoc text
+    // ("streaming assertion '<t>' on field '<f>' not supported") matching neither `FieldSkip`'s
+    // nor `AssertionTypeSkip`'s registered wording, invisible to the strict gate even though a
+    // line was present. All of these now route through the same funnel
+    // `emit_non_chat_stream_assertion` in this file, and every other backend's streaming
+    // renderer, already uses.
     match (atype, &kind) {
         ("count_min", Kind::Chunks) => {
             if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
@@ -594,23 +622,47 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
                     out,
                     "        Assert.True(chunks.Count >= {n}, \"expected at least {n} chunks\");"
                 );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         ("count_equals", Kind::Chunks) => {
             if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                 let _ = writeln!(out, "        Assert.Equal({n}, chunks.Count);");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         ("equals", Kind::Str) => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
                 let _ = writeln!(out, "        Assert.Equal({cs_val}, {expr});");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         ("contains", Kind::Str) => {
             if let Some(val) = &assertion.value {
                 let cs_val = json_to_csharp(val);
                 let _ = writeln!(out, "        Assert.Contains({cs_val}, {expr} ?? string.Empty);");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         ("not_empty", Kind::Str) => {
@@ -637,17 +689,30 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
         ("greater_than_or_equal", Kind::IntTokens) => {
             if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                 let _ = writeln!(out, "        Assert.True({expr} >= {n}, \"expected >= {n}\");");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         ("equals", Kind::IntTokens) => {
             if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                 let _ = writeln!(out, "        Assert.Equal((long?){n}, {expr});");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("        ", "//", field, atype)
+                );
             }
         }
         _ => {
             let _ = writeln!(
                 out,
-                "        // skipped: streaming assertion '{atype}' on field '{field}' not supported"
+                "{}",
+                streaming_assertion_type_skip_line("        ", "//", field, atype)
             );
         }
     }
@@ -679,6 +744,109 @@ mod strict_field_availability_marker_tests {
 
         assert!(
             out.contains("streaming assertion on unsupported field 'weird_field'"),
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod emit_chat_stream_assertion_tests {
+    use super::emit_chat_stream_assertion;
+    use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
+    use crate::e2e::fixture::Assertion;
+
+    /// ~keep Before this change, `count_min` on `chunks` with a fixture `value` that did not
+    /// narrow to a `u64` (here a string) rendered NOTHING: the `if let Some(n) = ...` guard had
+    /// no `else`. This is the regression test: a line must be emitted at all, and it must be the
+    /// funnel's registered wording.
+    #[test]
+    fn count_min_with_unnarrowable_value_emits_a_line_instead_of_vanishing() {
+        let assertion = Assertion {
+            assertion_type: "count_min".into(),
+            field: Some("chunks".into()),
+            value: Some(serde_json::json!("not-a-number")),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+        assert_eq!(
+            out,
+            "        // skipped: assertion type 'count_min' has no renderable value for streaming field \
+             'chunks'\n",
+            "got: {out}"
+        );
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&out),
+            Some(("count_min", AssertionTypeSkip::StreamingAssertionValueNotRenderable)),
+            "the rendered line must round-trip through the assertion-type funnel, got: {out}"
+        );
+    }
+
+    /// ~keep `equals`/`contains` on `stream_content` (`Kind::Str`) guard only on `Some(val)`, but
+    /// with no `else` a fixture that omitted `value` entirely rendered nothing at all.
+    #[test]
+    fn equals_with_no_declared_value_emits_a_line_instead_of_vanishing() {
+        let assertion = Assertion {
+            assertion_type: "equals".into(),
+            field: Some("stream_content".into()),
+            value: None,
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+        assert_eq!(
+            out,
+            "        // skipped: assertion type 'equals' has no renderable value for streaming field \
+             'stream_content'\n",
+            "got: {out}"
+        );
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&out),
+            Some(("equals", AssertionTypeSkip::StreamingAssertionValueNotRenderable))
+        );
+    }
+
+    /// ~keep Before this change the catch-all arm emitted ad hoc text
+    /// (`streaming assertion '<t>' on field '<f>' not supported`) that matched neither
+    /// `FieldSkip`'s nor `AssertionTypeSkip`'s registered shape. Exact rendered output, not
+    /// `contains`, and a round trip through the funnel that would fail if the wording drifted
+    /// back to the old ad hoc text or diverged from `emit_non_chat_stream_assertion`'s wording
+    /// for the same variant.
+    #[test]
+    fn unsupported_assertion_type_on_a_supported_field_is_recognised_by_the_funnel() {
+        let assertion = Assertion {
+            assertion_type: "matches_regex".into(),
+            field: Some("chunks".into()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+        assert_eq!(
+            out,
+            "        // skipped: assertion type 'matches_regex' on field 'chunks' not yet supported for streaming\n",
+            "got: {out}"
+        );
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&out),
+            Some(("matches_regex", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
+            "the rendered line must round-trip through the assertion-type funnel, got: {out}"
+        );
+    }
+
+    /// A matched, well-formed assertion must still render a real `Assert...`, not a skip
+    /// comment -- the fix must not regress the happy path.
+    #[test]
+    fn count_min_with_a_narrowable_value_still_renders_a_real_assertion() {
+        let assertion = Assertion {
+            assertion_type: "count_min".into(),
+            field: Some("chunks".into()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+        assert_eq!(
+            out, "        Assert.True(chunks.Count >= 2, \"expected at least 2 chunks\");\n",
             "got: {out}"
         );
     }

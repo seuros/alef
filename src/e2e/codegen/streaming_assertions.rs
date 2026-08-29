@@ -45,4 +45,6 @@ pub use snippets::RUST_STREAM_CRATE_PATH;
 use renderers::{TailSeg, parse_tail};
 
 #[cfg(test)]
+mod kotlin_android_accessor_tests;
+#[cfg(test)]
 mod tests;

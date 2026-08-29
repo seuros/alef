@@ -281,3 +281,57 @@ fn unsupported_assertion_type_on_a_wildcard_field_renders_a_skip_comment_not_bro
         "an unimplemented predicate must not emit a fake assert: {out}"
     );
 }
+
+/// `not_empty` on a wildcard field must quantify over the array's elements — some element's
+/// key holds a non-empty value — matching the sibling wildcard renderers in
+/// `python`/`dart`/`elixir`'s `assertions.rs`. Before this, `not_empty` fell through to the
+/// generic skip alongside genuinely unimplemented types like `greater_than`, even though C
+/// already has every JSON primitive (`alef_json_get_string`, `strlen`) this predicate needs.
+#[test]
+fn not_empty_on_a_wildcard_field_renders_a_per_element_quantifier_not_a_skip() {
+    let assertion = Assertion {
+        assertion_type: "not_empty".to_string(),
+        field: Some("items[].kind".to_string()),
+        ..Default::default()
+    };
+    let accessed_fields = [("items[].kind".to_string(), "items__kind".to_string(), true)];
+    let mut wildcard_locals = HashMap::new();
+    wildcard_locals.insert(
+        "items__kind".to_string(),
+        ("items_json".to_string(), "kind".to_string()),
+    );
+
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "sample",
+        &permissive_resolver(),
+        &accessed_fields,
+        &HashMap::new(),
+        &HashMap::new(),
+        &wildcard_locals,
+    );
+
+    assert!(
+        !out.contains("skipped"),
+        "not_empty is now implemented for wildcard fields, must not skip: {out}"
+    );
+    assert!(
+        out.contains("alef_json_array_count(items_json)"),
+        "must iterate the array, not read one scalar off it: {out}"
+    );
+    assert!(
+        out.contains("alef_json_get_string(_wc_elem, \"kind\")"),
+        "must extract \"kind\" from the ELEMENT: {out}"
+    );
+    assert!(
+        out.contains("if (_wc_val != NULL && strlen(_wc_val) > 0) { found = 1; }"),
+        "must test each element's value for non-emptiness: {out}"
+    );
+    assert!(
+        out.contains("assert(found && \"expected some element to have a non-empty value\");"),
+        "got: {out}"
+    );
+}

@@ -109,8 +109,16 @@ impl StreamingFieldResolver {
                 "python" => format!("len({chunks_var})"),
                 "php" => format!("count(${chunks_var})"),
                 "elixir" => format!("length({chunks_var})"),
-                // kotlin List.size is a property (not .length)
-                "kotlin" => format!("{chunks_var}.size"),
+                // kotlin/kotlin_android List.size is a property (not .length) -- both back
+                // this virtual field with a Kotlin `List<T>` (kotlin_android's host-JVM test
+                // project collects into the same collection type kotlin does; see
+                // `kotlin_android.rs`'s doc comment), so `.length` here compiled for neither.
+                // Was `"kotlin"`-only, so a fixture asserting `chunks.length` /
+                // `stream.items.length` for kotlin_android fell through to the `_` default
+                // below (`.length`, meant for node/wasm/typescript) and emitted a reference to
+                // a member `List<T>` does not have -- a Kotlin compile error in the generated
+                // e2e file, not merely a skipped assertion. ~keep
+                "kotlin" | "kotlin_android" => format!("{chunks_var}.size"),
                 // zig: chunks_var is ArrayList([]u8); use .items.len
                 "zig" => format!("{chunks_var}.items.len"),
                 // Swift Array uses .count (Collection protocol)
