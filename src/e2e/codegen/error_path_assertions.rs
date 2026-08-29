@@ -8,14 +8,24 @@
 //! silently dropped assertion is indistinguishable from a fixture that never declared one.
 //!
 //! The commonest dropped shape is `equals` against an `error.<field>` path (e.g.
-//! `error.status_code`). Only the `rust` backend resolves those, via
-//! `FieldResolver::accessor_for_error`, and it can do so because
-//! `[e2e.error_field_aliases]` is documented as mapping to fields on the **Rust** error type.
-//! No binding re-exposes those fields: `pyo3::create_exception!`, the JNI/P-Invoke/cgo exception
-//! and error mappings and the C ABI (`{prefix}_last_error_code` / `{prefix}_last_error_context`)
-//! all carry a message and, at most, a numeric FFI-taxonomy code — never the error struct's own
-//! fields. Naming the gap is therefore the honest fix for every non-`rust` backend; implementing
-//! an accessor would mean inventing a field the binding does not have.
+//! `error.status_code`). The `rust` backend resolves those via
+//! `FieldResolver::accessor_for_error`, which reads `[e2e.error_field_aliases]` — a map onto
+//! fields on the **Rust** error type, so it generalizes to no other language. `python` resolves a
+//! narrower but real subset the SAME way for every crate, via `error_field_reachability`: when
+//! the sub-field names one of the crate's whitelisted error introspection methods
+//! (`ErrorDef.methods` — `status_code`, `is_transient`, `error_type`), pyo3's own error converter
+//! (`src/codegen/error_gen/pyo3.rs`) already calls that method on the LIVE Rust error value at
+//! conversion time and threads the result through the raised exception's `args`, so a real
+//! assertion against the crate's generated `{Error}Info` companion pyclass is possible — see
+//! `python::test_function::error_assertions::emit_error_assertion`. Most bindings still cannot:
+//! `pyo3::create_exception!`'s bare form, the JNI/P-Invoke/cgo exception and error mappings, and
+//! the C ABI (`{prefix}_last_error_code` / `{prefix}_last_error_context`) collapse a failure to a
+//! message and, at most, a numeric FFI-taxonomy code before the field is ever reachable — even
+//! where a backend's `error.methods`-driven class exists (dart, swift, wasm, go, java, csharp,
+//! php, magnus), its own error-conversion path defaults the field at construction time rather
+//! than reading it off a live error value, so an accessor there would assert a fabricated
+//! constant, not the fixture's real expectation. Naming the gap is the honest fix for those
+//! backends until a future change wires a live value through their own conversion path too.
 //!
 //! ~keep A DIFFERENT shape used to be conflated with that one and must not be again: fixture
 //! authors routinely declare a fixture's error expectation as two `"error"`-type assertions — a
@@ -35,6 +45,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::core::ir::ErrorDef;
 use crate::e2e::fixture::Fixture;
 
 /// Whether an `"error"`-type assertion carries a message/type-name value, i.e. is the shape
@@ -56,6 +67,16 @@ fn is_valued_error_assertion(assertion: &crate::e2e::fixture::Assertion) -> bool
 /// Returns an empty string for the overwhelmingly common single-`error`-assertion fixture, so a
 /// backend that adopts this helper leaves those fixtures' output byte-identical.
 pub(crate) fn render(fixture: &Fixture, line_prefix: &str, language: &str) -> String {
+    render_with_errors(fixture, line_prefix, language, &[])
+}
+
+/// [`render`], but aware of the crate's declared error types — so a caller that renders a real
+/// assertion for a resolvable `error.<field>` path (today, only python; see
+/// `error_field_reachability`) does not ALSO get a skip marker for the very assertion it just
+/// rendered. Passing an empty `errors` slice (what [`render`] does) reproduces the old
+/// behaviour exactly: nothing is ever considered resolvable, so every non-`"error"` assertion is
+/// still named.
+pub(crate) fn render_with_errors(fixture: &Fixture, line_prefix: &str, language: &str, errors: &[ErrorDef]) -> String {
     // ~keep A fixture with no `"error"` assertion never reaches a backend's error block, and its
     // assertions are rendered normally by the happy path. Guarding here rather than at each of the
     // ~20 call sites means a call site placed outside its `expects_error` branch degrades to a
@@ -84,6 +105,11 @@ pub(crate) fn render(fixture: &Fixture, line_prefix: &str, language: &str) -> St
             );
             continue;
         }
+        if super::error_field_reachability::resolvable_equals_error_field(assertion, errors).is_some() {
+            // Rendered elsewhere by the caller's own per-language accessor against the crate's
+            // whitelisted error introspection methods — not a skip. ~keep
+            continue;
+        }
         let field = assertion.field.as_deref().unwrap_or("<none>");
         let _ = writeln!(
             out,
@@ -98,6 +124,17 @@ pub(crate) fn render(fixture: &Fixture, line_prefix: &str, language: &str) -> St
 /// [`render`], appended straight onto a backend's output buffer.
 pub(crate) fn emit(out: &mut String, fixture: &Fixture, line_prefix: &str, language: &str) {
     out.push_str(&render(fixture, line_prefix, language));
+}
+
+/// [`render_with_errors`], appended straight onto a backend's output buffer.
+pub(crate) fn emit_with_errors(
+    out: &mut String,
+    fixture: &Fixture,
+    line_prefix: &str,
+    language: &str,
+    errors: &[ErrorDef],
+) {
+    out.push_str(&render_with_errors(fixture, line_prefix, language, errors));
 }
 
 #[cfg(test)]
@@ -161,6 +198,116 @@ mod tests {
             records[0].verdict,
             crate::e2e::codegen::SkipVerdict::AwaitingGeneratorSupport
         );
+    }
+
+    fn error_def_with_methods(name: &str, method_names: &[&str]) -> crate::core::ir::ErrorDef {
+        crate::core::ir::ErrorDef {
+            name: name.to_string(),
+            rust_path: format!("demo::{name}"),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant::default()],
+            doc: String::new(),
+            methods: method_names
+                .iter()
+                .map(|method_name| crate::core::ir::MethodDef {
+                    name: (*method_name).to_string(),
+                    params: Vec::new(),
+                    return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
+                    is_async: false,
+                    is_static: false,
+                    error_type: None,
+                    doc: String::new(),
+                    receiver: Some(crate::core::ir::ReceiverKind::Ref),
+                    cfg: None,
+                    sanitized: false,
+                    trait_source: None,
+                    returns_ref: false,
+                    returns_cow: false,
+                    return_newtype_wrapper: None,
+                    has_default_impl: false,
+                    binding_excluded: false,
+                    binding_exclusion_reason: None,
+                    version: Default::default(),
+                })
+                .collect(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// The paired regression this whole change exists to prove: the SAME fixture, rendered
+    /// through `render_with_errors` with an `errors` slice that resolves `error.status_code`,
+    /// suppresses the skip marker for that ONE assertion (the caller renders it instead) — while
+    /// `render` (what every other backend still calls, ignorant of `errors`) keeps naming it
+    /// exactly as before. This is the evidence a backend gaining the real assertion did not
+    /// silently change behaviour for every backend still emitting a skip. ~keep
+    #[test]
+    fn render_with_errors_suppresses_the_marker_only_when_the_field_resolves() {
+        let fixture = fixture_with(vec![
+            assertion("error", None),
+            assertion("equals", Some("error.status_code")),
+        ]);
+        let errors = vec![error_def_with_methods("SampleError", &["status_code"])];
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        let resolved = render_with_errors(&fixture, "    // ", "python", &errors);
+        assert_eq!(resolved, "", "a resolvable field must render no skip marker at all");
+        assert!(crate::e2e::codegen::take_skip_records().is_empty());
+
+        // The unchanged `render`/`emit` entry points — what go/c/csharp/... still call — must
+        // keep naming the very same assertion, proving this is additive, not a global behaviour
+        // change smuggled in through the shared funnel.
+        let _ = crate::e2e::codegen::take_skip_records();
+        let unresolved = render(&fixture, "    // ", "go");
+        assert_eq!(
+            unresolved,
+            "    // skipped: assertion type 'equals' has no accessor for error field error.status_code in this \
+             backend\n"
+        );
+        assert_eq!(crate::e2e::codegen::take_skip_records().len(), 1);
+    }
+
+    /// Negative control on the reachability side: passing `errors` through does NOT make every
+    /// `error.<field>` assertion stop being a skip — only the ones the field-reachability check
+    /// actually resolves. A field the crate's error type never whitelisted must still be named.
+    #[test]
+    fn render_with_errors_still_names_an_unresolvable_field() {
+        let fixture = fixture_with(vec![
+            assertion("error", None),
+            assertion("equals", Some("error.retry_after")),
+        ]);
+        let errors = vec![error_def_with_methods("SampleError", &["status_code"])];
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        let rendered = render_with_errors(&fixture, "    // ", "python", &errors);
+        assert_eq!(
+            rendered,
+            "    // skipped: assertion type 'equals' has no accessor for error field error.retry_after in this \
+             backend\n"
+        );
+        assert_eq!(crate::e2e::codegen::take_skip_records().len(), 1);
+    }
+
+    /// Negative control on the assertion-type side: a resolvable field with a NON-`equals`
+    /// assertion type (nothing renders that shape today) must still be named, not silently
+    /// dropped — the exact defect this module exists to prevent.
+    #[test]
+    fn render_with_errors_still_names_a_resolvable_field_with_an_unrendered_assertion_type() {
+        let fixture = fixture_with(vec![
+            assertion("error", None),
+            assertion("greater_than", Some("error.status_code")),
+        ]);
+        let errors = vec![error_def_with_methods("SampleError", &["status_code"])];
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        let rendered = render_with_errors(&fixture, "    // ", "python", &errors);
+        assert_eq!(
+            rendered,
+            "    // skipped: assertion type 'greater_than' has no accessor for error field error.status_code in \
+             this backend\n"
+        );
+        assert_eq!(crate::e2e::codegen::take_skip_records().len(), 1);
     }
 
     /// A fixture repeating the bare `"error"` shape twice declares nothing a single "must fail"
