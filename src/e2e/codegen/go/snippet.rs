@@ -1,54 +1,12 @@
 use crate::codegen::naming::{go_error_type_name, go_free_function_name, go_type_name, to_go_name};
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, FunctionDef, TypeDef};
 use crate::e2e::{config::E2eConfig, fixture::Fixture};
 use anyhow::{Result, bail};
 
+use super::adapter_target_params::{flattened_stream_params, target_params_or};
+use super::ir_signature::{go_ir_named_type, go_is_bridge_param, go_options_param_is_pointer};
 use super::setup::build_args_and_setup;
-
-/// Unwraps a (possibly `Optional`-wrapped) `TypeRef::Named` down to its type name.
-///
-/// Used to match a function parameter's IR type against the configured `options_type`
-/// name so the pointer-vs-value and arity decisions below can be derived from the
-/// same signature the Go binding backend generated from, instead of re-asserting it
-/// independently. ~keep
-fn go_ir_named_type(ty: &TypeRef) -> Option<&str> {
-    match ty {
-        TypeRef::Named(name) => Some(name.as_str()),
-        TypeRef::Optional(inner) => go_ir_named_type(inner),
-        _ => None,
-    }
-}
-
-/// Mirrors `backends::go::gen_bindings::functions::gen_function_wrapper`'s pointer-vs-value
-/// decision for a non-bridge parameter: the Go binding backend emits `*T` when the IR
-/// parameter is `optional`, or when its `Named` type is opaque — value `T` otherwise. Both
-/// this function and the binding backend read the same `ParamDef`/`TypeDef.is_opaque`
-/// facts; this is a re-derivation of the same public inputs; it is not a copy of any
-/// gen_bindings-private logic. ~keep
-fn go_options_param_is_pointer(param: &ParamDef, opaque_names: &std::collections::HashSet<&str>) -> bool {
-    if param.optional {
-        return true;
-    }
-    matches!(&param.ty, TypeRef::Named(name) if opaque_names.contains(name.as_str()))
-}
-
-/// Mirrors `gen_bindings::functions::is_bridge_param`'s two membership checks (by
-/// parameter name, then by `Named` type alias) using the same `TraitBridgeConfig` facts
-/// the binding backend reads — the params those checks match are real Rust function
-/// parameters that the Go binding backend strips from its emitted signature (replaced by
-/// a `nil` argument at the FFI call site), so they must not be counted toward the
-/// Go-visible arity used by the `extra_args` clamp below. ~keep
-fn go_is_bridge_param(
-    param: &ParamDef,
-    bridge_param_names: &std::collections::HashSet<String>,
-    bridge_type_aliases: &std::collections::HashSet<String>,
-) -> bool {
-    if bridge_param_names.contains(&param.name) {
-        return true;
-    }
-    go_ir_named_type(&param.ty).is_some_and(|name| bridge_type_aliases.contains(name))
-}
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
@@ -72,7 +30,8 @@ pub(super) fn render_snippet_body(
     // `IrAbsent` into a real answer about what each argument's parameter is declared as. ~keep
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs)
         .with_functions(functions);
-    let target_params = recipe.target_params(lang);
+    let flattened_params = flattened_stream_params(config, type_defs, lang, call);
+    let target_params = target_params_or(&flattened_params, || recipe.target_params(lang));
     let override_config = recipe.override_config;
     let import_alias = override_config
         .and_then(|value| value.alias.as_deref())
@@ -411,6 +370,7 @@ fn snippet_setup_line(line: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ir::{ParamDef, TypeRef};
 
     /// A visitor fixture whose call already binds an options value must attach the visitor to THAT
     /// binding. Introducing a second `opts` object made the call carry both — `Convert(html,

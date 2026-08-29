@@ -7,6 +7,7 @@ mod service_api;
 pub(super) mod types;
 
 use binding_file::{find_options_bridge_function, format_go_code, gen_go_file, strip_trailing_whitespace};
+pub(crate) use functions::adapter_flattened_field;
 
 use crate::core::backend::{
     Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, TraitBridgeRegistrationSurface,

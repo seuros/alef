@@ -789,6 +789,28 @@ fn named_return_type(ty: &TypeRef) -> Option<&str> {
     type_ref_named_type(ty)
 }
 
+/// The DTO field a streaming adapter's Go wrapper decomposes into a single ergonomic scalar
+/// parameter, when it does.
+///
+/// Mirrors the exact condition [`gen_adapter_wrapper`] renders from: exactly one configured
+/// `[[adapters]] params` entry whose declared type resolves (in `types`) to an IR struct with
+/// at least one field. `None` covers every shape `gen_adapter_wrapper`'s non-decomposing branch
+/// handles instead -- zero or multiple configured params, a param type absent from `types`, or
+/// a fieldless struct -- so Go exposes `adapter.params` unchanged in every one of those. Exposed
+/// (`pub(crate)`) so e2e/snippet argument rendering can ask this question directly instead of
+/// re-deriving its own copy of the same test, which is how the Java/C# streaming-request bug
+/// happened in the first place. ~keep
+pub(crate) fn adapter_flattened_field<'a>(
+    adapter: &crate::core::config::AdapterConfig,
+    types: &'a [crate::core::ir::TypeDef],
+) -> Option<&'a crate::core::ir::FieldDef> {
+    if adapter.request_type.is_none() || adapter.params.len() != 1 {
+        return None;
+    }
+    let param_ty_name = &adapter.params[0].ty;
+    types.iter().find(|t| &t.name == param_ty_name)?.fields.first()
+}
+
 /// Emit a module-level wrapper function for a streaming adapter.
 /// This allows tests/consumers to call pkg.CrawlStream(engine, url) instead of engine.CrawlStream(url).
 /// For adapters with a request_type, decompose the first field into primitive parameters for ergonomics.
@@ -818,56 +840,26 @@ pub(super) fn gen_adapter_wrapper(
     });
     let request_type_simple = request_type.rsplit("::").next().unwrap_or(request_type);
 
-    let (param_parts, request_construction) = if adapter.request_type.is_some() && adapter.params.len() == 1 {
-        let param = &adapter.params[0];
-        let param_ty_name = &param.ty;
-        let ir_type = types.iter().find(|t| &t.name == param_ty_name);
+    let (param_parts, request_construction) = if let Some(first_field) = adapter_flattened_field(adapter, types) {
+        let field_name = &first_field.name;
+        let field_name_go = to_go_name(field_name);
 
-        if let Some(ty_def) = ir_type {
-            if let Some(first_field) = ty_def.fields.first() {
-                let field_name = &first_field.name;
-                let field_name_go = to_go_name(field_name);
+        let go_field_type = match &first_field.ty {
+            TypeRef::String => "string".to_string(),
+            TypeRef::Vec(inner) if matches!(**inner, TypeRef::String) => "[]string".to_string(),
+            TypeRef::Vec(_) => "[]interface{}".to_string(),
+            other => crate::backends::go::type_map::go_type(other).into_owned(),
+        };
 
-                let go_field_type = match &first_field.ty {
-                    TypeRef::String => "string".to_string(),
-                    TypeRef::Vec(inner) if matches!(**inner, TypeRef::String) => "[]string".to_string(),
-                    TypeRef::Vec(_) => "[]interface{}".to_string(),
-                    other => crate::backends::go::type_map::go_type(other).into_owned(),
-                };
+        let wrapper_params = vec![
+            format!("engine *{owner_type}"),
+            format!("{field_name_go} {go_field_type}"),
+        ];
 
-                let wrapper_params = vec![
-                    format!("engine *{owner_type}"),
-                    format!("{field_name_go} {go_field_type}"),
-                ];
+        let struct_field_name = to_go_name(field_name);
+        let construction = format!("req := &{request_type_simple}{{{struct_field_name}: {field_name_go}}}\n\t");
 
-                let struct_field_name = to_go_name(field_name);
-                let construction = format!("req := &{request_type_simple}{{{struct_field_name}: {field_name_go}}}\n\t");
-
-                (wrapper_params, Some(construction))
-            } else {
-                let mut params = vec![format!("engine *{owner_type}")];
-                for p in &adapter.params {
-                    let go_param_type = match p.ty.as_str() {
-                        "String" => "string".to_string(),
-                        ty => ty.rsplit("::").next().unwrap_or(ty).to_string(),
-                    };
-                    let param_name = go_param_name(&p.name);
-                    params.push(format!("{param_name} {go_param_type}"));
-                }
-                (params, None)
-            }
-        } else {
-            let mut params = vec![format!("engine *{owner_type}")];
-            for p in &adapter.params {
-                let go_param_type = match p.ty.as_str() {
-                    "String" => "string".to_string(),
-                    ty => ty.rsplit("::").next().unwrap_or(ty).to_string(),
-                };
-                let param_name = go_param_name(&p.name);
-                params.push(format!("{param_name} {go_param_type}"));
-            }
-            (params, None)
-        }
+        (wrapper_params, Some(construction))
     } else {
         let mut params = vec![format!("engine *{owner_type}")];
         for p in &adapter.params {
@@ -914,5 +906,7 @@ pub(super) fn gen_adapter_wrapper(
     )
 }
 
+#[cfg(test)]
+mod adapter_wrapper_tests;
 #[cfg(test)]
 mod tests;

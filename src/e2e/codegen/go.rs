@@ -919,8 +919,10 @@ fn render_harness_main(_e2e_config: &E2eConfig, groups: &[FixtureGroup], go_modu
     out
 }
 
+mod adapter_target_params;
 mod assertions;
 mod enum_literals;
+mod ir_signature;
 mod json_values;
 mod method_calls;
 mod setup;
@@ -934,6 +936,8 @@ pub use test_backend::emit_test_backend;
 use test_file::{GoTestFileContext, render_test_file};
 use test_function::fixture_has_go_callable;
 
+#[cfg(test)]
+mod adapter_flatten_snippet_tests;
 #[cfg(test)]
 mod assertion_wildcard_element_tests;
 #[cfg(test)]
