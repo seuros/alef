@@ -201,6 +201,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     }
     if !needed_converters.is_empty() {
         typing_parts.push("overload");
+        typing_parts.push("TypedDict");
     }
     let needs_async_iterator = adapters
         .iter()

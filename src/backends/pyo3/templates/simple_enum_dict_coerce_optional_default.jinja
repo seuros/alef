@@ -1,1 +1,1 @@
-        **_optional_kwarg("{{ name }}", None if {{ accessor }} is None else _coerce_enum(_rust.{{ enum_name }}, {{ accessor }})),
+        **{{ helper_name }}(None if {{ accessor }} is None else _coerce_enum(_rust.{{ enum_name }}, {{ accessor }})),

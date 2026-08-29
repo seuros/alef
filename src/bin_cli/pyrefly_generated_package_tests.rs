@@ -379,6 +379,16 @@ fn walkdir_pyproject_tomls(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     found
 }
 
+fn pyrefly_executable() -> Option<std::path::PathBuf> {
+    match which::which("pyrefly") {
+        Ok(path) => Some(path),
+        Err(error) if std::env::var_os("ALEF_REQUIRE_PYREFLY").is_some() => {
+            panic!("ALEF_REQUIRE_PYREFLY is set but pyrefly is unavailable: {error}")
+        }
+        Err(_) => None,
+    }
+}
+
 /// Runs `alef all` against a real fixture, then runs real pyrefly 1.2.0+ over the real
 /// `packages/python` output it wrote -- the same directory and the same `pyproject.toml` (with
 /// its scaffolded `[[tool.pyrefly.sub-config]]` suppressions) a consumer's own `pyrefly check`
@@ -399,9 +409,9 @@ fn walkdir_pyproject_tomls(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// covers.
 #[test]
 fn alef_all_generated_python_package_type_checks_clean_under_pyrefly() {
-    if which::which("pyrefly").is_err() {
+    let Some(pyrefly) = pyrefly_executable() else {
         return;
-    }
+    };
 
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
@@ -431,10 +441,9 @@ fn alef_all_generated_python_package_type_checks_clean_under_pyrefly() {
         api_py.is_file(),
         "sanity: alef all must have written api.py, got tree under {root:?}"
     );
-
     let project_dir = find_pyrefly_project_dir(&root);
 
-    let output = std::process::Command::new("pyrefly")
+    let output = std::process::Command::new(&pyrefly)
         .arg("check")
         .arg(&project_dir)
         .output()

@@ -295,7 +295,7 @@ fn should_keep_the_kwargs_unpack_when_options_defaults_the_field_to_none() {
 
     assert_eq!(
         arguments,
-        vec![r#"**_optional_kwarg("theme", value.theme)"#.to_string()],
+        vec![r#"**_optional_layout_spec_theme(value.theme)"#.to_string()],
         "a field `options.py` defaults to `None` must stay omittable -- passing `None` to a \
          non-`Option` pyo3 parameter fails extraction:\n{facade}"
     );
@@ -325,19 +325,135 @@ fn mixed_optional_primitive_defaults_use_heterogeneous_kwarg_helper() {
     assert_eq!(
         arguments,
         vec![
-            r#"**_optional_kwarg("minimum_score", value.minimum_score)"#.to_string(),
-            r#"**_optional_kwarg("minimum_words", value.minimum_words)"#.to_string(),
-            r#"**_optional_kwarg("require_text", value.require_text)"#.to_string(),
+            r#"**_optional_layout_spec_minimum_score(value.minimum_score)"#.to_string(),
+            r#"**_optional_layout_spec_minimum_words(value.minimum_words)"#.to_string(),
+            r#"**_optional_layout_spec_require_text(value.require_text)"#.to_string(),
         ],
         "mixed optional values must flow through a heterogeneous kwargs type: {facade}"
     );
     assert!(
-        facade.contains("def _optional_kwarg(name: str, value: Any) -> dict[str, Any]:"),
-        "the generated helper must expose heterogeneous values to the type checker: {facade}"
+        facade.contains("class _LayoutSpecMinimumScoreKwargs(TypedDict, total=False):\n    minimum_score: float")
+            && facade.contains("class _LayoutSpecMinimumWordsKwargs(TypedDict, total=False):\n    minimum_words: int")
+            && facade.contains("class _LayoutSpecRequireTextKwargs(TypedDict, total=False):\n    require_text: bool"),
+        "each optional field must retain its constructor keyword and value type: {facade}"
     );
     assert!(
         !facade.contains("**({"),
         "homogeneous dict unpacks trigger Pyrefly errors: {facade}"
+    );
+}
+
+#[test]
+fn generated_mixed_optional_kwargs_pass_pyrefly_and_typed_sabotage_fails() {
+    let pyrefly = match which::which("pyrefly") {
+        Ok(path) => path,
+        Err(error) if std::env::var_os("ALEF_REQUIRE_PYREFLY").is_some() => {
+            panic!("ALEF_REQUIRE_PYREFLY is set but pyrefly is unavailable: {error}")
+        }
+        Err(_) => return,
+    };
+    let field_specs = [
+        (
+            "max_ocr_output_fragmented_word_ratio",
+            crate::core::ir::PrimitiveType::F64,
+            "float",
+        ),
+        ("min_ocr_mean_confidence", crate::core::ir::PrimitiveType::F64, "float"),
+        (
+            "min_words_for_ocr_output_check",
+            crate::core::ir::PrimitiveType::Usize,
+            "int",
+        ),
+        (
+            "max_ocr_output_dict_invalid_word_ratio",
+            crate::core::ir::PrimitiveType::F64,
+            "float",
+        ),
+        ("min_undecodable_ratio", crate::core::ir::PrimitiveType::F64, "float"),
+        (
+            "enable_provenance_ocr_routing",
+            crate::core::ir::PrimitiveType::Bool,
+            "bool",
+        ),
+        (
+            "min_provenance_fallback_ratio",
+            crate::core::ir::PrimitiveType::F64,
+            "float",
+        ),
+    ];
+    let fields = field_specs
+        .iter()
+        .map(|(name, primitive, _)| FieldDef {
+            name: name.to_string(),
+            ty: TypeRef::Primitive(primitive.clone()),
+            typed_default: Some(DefaultValue::FunctionCall(format!("test_lib::default_{name}"))),
+            ..Default::default()
+        })
+        .collect();
+    let facade = render_facade_and_stub(&surface(fields, Vec::new(), Vec::new())).0;
+    let directory = tempfile::tempdir().expect("temporary generated Python package");
+    let package = directory.path().join("test_lib");
+    std::fs::create_dir_all(&package).expect("create Python package");
+    std::fs::write(package.join("api.py"), &facade).expect("write emitted facade");
+    std::fs::write(package.join("__init__.py"), "").expect("write package init");
+    std::fs::write(
+        directory.path().join("pyproject.toml"),
+        "[tool.pyrefly]\nproject-includes = [\"test_lib/**/*.py\"]\n",
+    )
+    .expect("write Pyrefly project config");
+    let stub_params = field_specs
+        .iter()
+        .map(|(name, _, python_type)| format!("{name}: {python_type} | None = None"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        package.join("_test_lib.pyi"),
+        format!("class LayoutSpec:\n    def __init__(self, *, {stub_params}) -> None: ...\ndef render(*, spec: LayoutSpec) -> str: ...\n"),
+    )
+    .expect("write native binding stub");
+    let option_fields = field_specs
+        .iter()
+        .map(|(name, _, python_type)| format!("    {name}: {python_type} | None = None"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        package.join("options.py"),
+        format!("from dataclasses import dataclass\n@dataclass\nclass LayoutSpec:\n{option_fields}\n"),
+    )
+    .expect("write public options module");
+    let checked = std::process::Command::new(&pyrefly)
+        .current_dir(directory.path())
+        .arg("check")
+        .arg(".")
+        .output()
+        .expect("pyrefly generated facade check must run");
+    assert!(
+        checked.status.success(),
+        "pyrefly rejected the real emitted facade:\n{}\n{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let sabotaged = facade.replace(
+        "**_optional_layout_spec_enable_provenance_ocr_routing(value.enable_provenance_ocr_routing)",
+        "**_optional_layout_spec_enable_provenance_ocr_routing(\"wrong\")",
+    );
+    assert_ne!(
+        sabotaged, facade,
+        "negative control must sabotage an emitted TypedDict field"
+    );
+    std::fs::write(package.join("api.py"), sabotaged).expect("write sabotaged generated facade");
+    let rejected = std::process::Command::new(&pyrefly)
+        .current_dir(directory.path())
+        .arg("check")
+        .arg(".")
+        .output()
+        .expect("pyrefly negative control must run");
+    assert!(
+        !rejected.status.success(),
+        "pyrefly must reject a mismatched emitted TypedDict field:\n{}\n{}",
+        String::from_utf8_lossy(&rejected.stdout),
+        String::from_utf8_lossy(&rejected.stderr)
     );
 }
 
@@ -417,7 +533,7 @@ fn a_function_derived_default_on_a_non_named_field_is_omitted_not_passed_as_none
             "strict=value.strict".to_string(),
             "wrap_columns=value.wrap_columns".to_string(),
             "tags=value.tags".to_string(),
-            r#"**_optional_kwarg("allowed_marks", value.allowed_marks)"#.to_string(),
+            r#"**_optional_layout_spec_allowed_marks(value.allowed_marks)"#.to_string(),
         ],
         "only the function-derived field may be omitted, and it must be omitted rather than \
          passed as `None`:\n{facade}"
