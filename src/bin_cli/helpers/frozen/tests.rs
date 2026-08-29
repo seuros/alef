@@ -683,3 +683,56 @@ fn the_same_drifted_seed_outside_a_rewritten_root_is_not_reported() {
         "a create-once seed alef never re-attempts is not frozen and not drifted"
     );
 }
+
+/// xberg#1535: `alef verify` printed the "Frozen files whose withheld content has DRIFTED"
+/// block naming 21 version-bearing manifests, then three lines later asserted the unqualified
+/// "All bindings and versions are up to date." for that very same run and exited 0. This proves
+/// [`report_sign_off_line`] -- what `alef verify` actually prints as its closing line -- can
+/// never again produce that unqualified sentence once [`drifted_frozen_seeds`] is non-empty,
+/// using the real [`frozen_managed_paths`] walk (not a hand-built `FrozenFile` list) so the two
+/// cannot drift apart without failing here. Before the fix this test's first assertion failed:
+/// the call site printed the bare literal regardless of the finding count. ~keep
+#[test]
+fn sign_off_line_is_not_the_unqualified_up_to_date_sentence_when_seeds_have_drifted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("e2e");
+    std::fs::create_dir_all(root.join("php")).unwrap();
+    std::fs::create_dir_all(root.join("node")).unwrap();
+    std::fs::write(root.join("php/install.sh"), "#!/usr/bin/env bash\nVERSION=1.2.1\n").unwrap();
+    std::fs::write(root.join("node/install.sh"), "#!/usr/bin/env bash\nVERSION=1.2.1\n").unwrap();
+    let files = vec![
+        gen_file_unheadered("e2e/php/install.sh", "#!/usr/bin/env bash\nVERSION=1.4.2\n"),
+        gen_file_unheadered("e2e/node/install.sh", "#!/usr/bin/env bash\nVERSION=1.4.2\n"),
+    ];
+
+    let frozen = frozen_managed_paths(&files, dir.path(), &[root]);
+    let drifted = drifted_frozen_seeds(&frozen);
+    assert_eq!(
+        drifted.len(),
+        2,
+        "both version-bearing fixtures must be counted as drifted create-once seeds: {drifted:?}"
+    );
+
+    let sign_off = report_sign_off_line(drifted.len());
+
+    assert_ne!(
+        sign_off, "All bindings and versions are up to date.",
+        "a run that just reported drifted frozen paths must never also assert the unqualified \
+         sign-off for the same run: {sign_off}"
+    );
+    assert_eq!(
+        sign_off,
+        "2 frozen path(s) drifted and not enforced (see the DRIFTED block above); everything \
+         else is up to date.",
+        "the sign-off must state the exact count and stay honest about what it does and does \
+         not cover"
+    );
+}
+
+/// The converse control: an otherwise-clean run (no drifted seeds at all) must still get the
+/// plain, unqualified sentence -- this fix must not turn every clean `alef verify` run into a
+/// qualified one. ~keep
+#[test]
+fn sign_off_line_stays_the_unqualified_sentence_when_nothing_has_drifted() {
+    assert_eq!(report_sign_off_line(0), "All bindings and versions are up to date.");
+}

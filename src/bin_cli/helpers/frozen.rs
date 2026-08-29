@@ -371,6 +371,32 @@ pub(crate) fn drifted_seed_report_lines(frozen: &[FrozenFile]) -> Vec<String> {
     lines
 }
 
+/// `alef verify`'s closing sign-off line, derived FROM [`drifted_frozen_seeds`] rather than
+/// computed independently of it.
+///
+/// xberg#1535: the sign-off used to be a bare literal at the call site, printed whenever every
+/// *other* finding was empty -- with no regard for whether [`drifted_seed_report_lines`] had
+/// just printed the "Frozen files whose withheld content has DRIFTED" block a few lines above.
+/// A run against 21 version-bearing manifests (`package.json`, `go.mod`, `pom.xml`, ...) named
+/// every one of them as drifted and then, three lines later, asserted the unqualified opposite
+/// and exited 0 -- the two halves of the report disagreeing about the same run. Passing the
+/// finding count in, instead of re-testing a matching condition at the call site, is what keeps
+/// them from drifting apart again: there is only one place that decides whether the report was
+/// clean, and it is the place that already counted the findings.
+///
+/// This does not change what `--exit-code` gates -- see [`drifted_frozen_seeds`]'s doc for why
+/// a drifted create-once seed stays non-fatal there. It only stops the sign-off from lying about
+/// a finding the same run just printed. ~keep
+pub(crate) fn report_sign_off_line(drifted_seed_count: usize) -> String {
+    if drifted_seed_count == 0 {
+        return "All bindings and versions are up to date.".to_owned();
+    }
+    format!(
+        "{drifted_seed_count} frozen path(s) drifted and not enforced (see the DRIFTED block \
+         above); everything else is up to date."
+    )
+}
+
 /// `alef verify`'s frozen-file report -- the ADOPTABLE entries only, one line each plus its
 /// remedy.
 ///

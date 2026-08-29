@@ -224,8 +224,21 @@ pub(crate) enum Commands {
         latest: bool,
     },
     /// Verify bindings are up to date and API surface parity.
+    ///
+    /// Fails by default (no `--exit-code` needed -- see that flag) on every drift/staleness/
+    /// coverage finding this command reports, with one deliberate exception: a drifted
+    /// create-once seed -- a pre-existing, unmarked file the write guard refuses to touch
+    /// forever, such as a version-bearing installer or manifest whose baked-in content has gone
+    /// stale. That finding is printed on every run, including a passing one, under "Frozen files
+    /// whose withheld content has DRIFTED", but it never gates the exit code: failing the build
+    /// for content a consumer cannot fix from their own `alef.toml` (the write guard will not
+    /// overwrite it) would only buy a blanket `[workspace.ownership] user_owned` opt-out rather
+    /// than a fix -- the same reasoning this codebase already applies to `GeneratorGap`. To make
+    /// this fatal in your own CI, grep the heading above in the `alef verify` log, or declare
+    /// the path `user_owned` in `alef.toml` to silence it once reviewed.
     Verify {
-        /// Deprecated compatibility flag; verification now fails by default.
+        /// Deprecated compatibility flag; verification now fails by default -- see this
+        /// command's own doc for exactly what that default failure does and does not cover.
         #[arg(long, hide = true)]
         exit_code: bool,
         /// Report drift without returning a failure status.

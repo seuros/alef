@@ -429,7 +429,14 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         && !has_incomplete_crates
         && !has_schema_surface_drift
     {
-        crate::bin_cli::output::line("All bindings and versions are up to date.");
+        // Derived FROM `drifted_seeds` -- the same finding set `drifted_seed_report_lines`
+        // (printed above, unconditionally) reports -- not a second, independently-maintained
+        // condition. See `frozen::report_sign_off_line`'s doc for xberg#1535: this used to be a
+        // bare literal here, so a run that had just printed the DRIFTED block a few lines above
+        // went on to assert the unqualified opposite three lines later and exited 0. ~keep
+        crate::bin_cli::output::line(crate::bin_cli::helpers::frozen::report_sign_off_line(
+            drifted_seeds.len(),
+        ));
     } else {
         // Printed first and named distinctly from every finding below: for these crates, the
         // remaining sections describe an interrupted run's expected shape (files a `--clean`
