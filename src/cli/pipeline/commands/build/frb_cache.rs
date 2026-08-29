@@ -42,7 +42,7 @@ pub(super) fn configure(command: &mut std::process::Command, cmd: &str, cache_sc
         home.as_deref(),
         local_app_data.as_deref(),
     ) {
-        std::fs::create_dir_all(&cache_path)
+        crate::core::cache_dir::ensure_cache_dir(&cache_path)
             .with_context(|| format!("failed to create FVM cache at {}", cache_path.display()))?;
         command.env("FVM_CACHE_PATH", cache_path);
     }
@@ -54,7 +54,7 @@ pub(super) fn configure(command: &mut std::process::Command, cmd: &str, cache_sc
         local_app_data.as_deref(),
         cache_scope,
     ) {
-        std::fs::create_dir_all(&target_path)
+        crate::core::cache_dir::ensure_cache_dir(&target_path)
             .with_context(|| format!("failed to create FRB Cargo target cache at {}", target_path.display()))?;
         command.env("CARGO_TARGET_DIR", target_path);
     }

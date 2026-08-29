@@ -141,7 +141,7 @@ impl ScratchDir {
     }
 
     fn in_root(root: &Path) -> Result<Self> {
-        std::fs::create_dir_all(root)
+        crate::core::cache_dir::ensure_cache_dir(root)
             .map_err(|error| Error::Other(format!("creating snippet scratch root {}: {error}", root.display())))?;
         let inner = tempfile::Builder::new()
             .prefix(SCRATCH_PREFIX)

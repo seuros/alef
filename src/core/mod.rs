@@ -2,6 +2,7 @@
 //! Defines IR types, config schema, and backend trait.
 
 pub mod backend;
+pub mod cache_dir;
 pub mod config;
 pub mod error;
 pub mod extension;

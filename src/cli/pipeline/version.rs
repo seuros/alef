@@ -852,7 +852,7 @@ pub fn sync_versions(
         let _ = run_command(&format!("cargo build -p {ffi_crate}"));
     }
 
-    let _ = std::fs::create_dir_all(".alef");
+    let _ = crate::core::cache_dir::ensure_cache_dir(std::path::Path::new(".alef"));
     let _ = std::fs::write(&last_path, &version);
 
     if !no_regen {

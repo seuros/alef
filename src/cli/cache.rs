@@ -111,7 +111,7 @@ fn read_per_file_memo() -> PerFileMemo {
 
 fn write_per_file_memo(entries: &[(String, u64, u64)], aggregate: &str) -> anyhow::Result<()> {
     let dir = Path::new(CACHE_DIR);
-    fs::create_dir_all(dir)?;
+    crate::core::cache_dir::ensure_cache_dir(dir)?;
     let mut content = format!("aggregate\t{aggregate}\n");
     for (path, mtime, size) in entries {
         content.push_str(&format!("{path}\t{mtime}\t{size}\n"));
@@ -166,7 +166,7 @@ pub fn read_cached_ir(crate_name: &str) -> anyhow::Result<crate::core::ir::ApiSu
 /// Write IR to cache for the given crate.
 pub fn write_ir_cache(crate_name: &str, api: &crate::core::ir::ApiSurface, cache_key: &CacheKey) -> anyhow::Result<()> {
     let cache_dir = ir_cache_dir(crate_name);
-    fs::create_dir_all(&cache_dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&cache_dir)?;
     fs::write(cache_dir.join("ir.json"), serde_json::to_string_pretty(api)?)?;
     fs::write(cache_dir.join("ir.hash"), cache_key.as_str())?;
     Ok(())
@@ -217,7 +217,7 @@ pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey) -> boo
 /// caller never folded a later phase's output back in" (alef#158). ~keep
 pub fn write_lang_hash(crate_name: &str, lang: &str, key: &CacheKey, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    fs::create_dir_all(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&dir)?;
     fs::write(dir.join(format!("{lang}.hash")), key.as_str())?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
     tracing::debug!(
@@ -233,7 +233,7 @@ pub fn write_lang_hash(crate_name: &str, lang: &str, key: &CacheKey, output_path
 /// its files. The language hash itself remains unchanged.
 pub fn write_lang_manifest(crate_name: &str, lang: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    fs::create_dir_all(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&dir)?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
     tracing::debug!(
         crate_name,
@@ -275,7 +275,7 @@ pub fn read_lang_manifest(crate_name: &str, lang: &str) -> Vec<PathBuf> {
 /// clobber the recorded paths for every other language's manifests.
 pub fn write_scaffold_manifest(crate_name: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    fs::create_dir_all(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&dir)?;
     write_manifest(&dir.join("scaffold-ownership.manifest"), output_paths)
 }
 
@@ -1054,7 +1054,7 @@ pub fn write_stage_hash(
     output_paths: &[PathBuf],
 ) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
-    fs::create_dir_all(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&dir)?;
     fs::write(dir.join(format!("{stage}.hash")), stage_hash)?;
     write_manifest(&dir.join(format!("{stage}.manifest")), output_paths)?;
     Ok(())
@@ -1114,7 +1114,7 @@ pub fn hash_content(content: &str) -> String {
 /// reflect pure codegen output, independent of any on-disk formatter.
 pub fn write_generation_hashes(name: &str, hashes: &[(String, String)]) -> anyhow::Result<()> {
     let dir = Path::new(CACHE_DIR).join("hashes");
-    fs::create_dir_all(&dir)?;
+    crate::core::cache_dir::ensure_cache_dir(&dir)?;
     let lines: Vec<String> = hashes.iter().map(|(p, h)| format!("{p}\t{h}")).collect();
     fs::write(dir.join(format!("{name}.output_hashes")), lines.join("\n"))?;
     Ok(())

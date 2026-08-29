@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat(cache): write a [`CACHEDIR.TAG`](https://bford.info/cachedir/) into every directory alef
+  uses purely as regenerable cache or scratch space, so backup and sync tools honouring the spec
+  (`tar --exclude-caching`, `rsync --exclude-tag`, Borg, restic, some `du` variants) skip them
+  automatically -- the same treatment cargo, uv and Gradle give their own caches. Covers the
+  in-repo `.alef/` caches, the snippet validation/scratch/session/toolchain caches, and the global
+  `~/.cache/alef` (`%LOCALAPPDATA%\alef` on Windows) zig-hash, FVM and flutter_rust_bridge
+  target caches. Tagging is idempotent, never rewrites a valid existing tag or clobbers an
+  unrecognised one, and never fails a build. Directories holding committed, non-regenerable alef
+  records are deliberately left untagged.
+
 ### Fixed
 
 - fix(gleam): stop declaring foreign cfg-gated enum variants the Rustler NIF this binding shims

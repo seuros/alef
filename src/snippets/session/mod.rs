@@ -97,7 +97,7 @@ pub(super) const fn keeps_scratch_outside_working_directory(language: Language) 
 impl ValidationSession {
     pub fn workspace_directory(&self) -> Result<PathBuf> {
         let directory = workspace_scratch_directory(&self.working_directory, &self.fingerprint);
-        std::fs::create_dir_all(&directory)?;
+        crate::core::cache_dir::ensure_cache_dir(&directory)?;
         Ok(directory)
     }
 
@@ -424,7 +424,7 @@ fn activate_session(
     }
     let caches = session.cache_directories();
     for directory in caches.directories() {
-        std::fs::create_dir_all(directory).map_err(|error| {
+        crate::core::cache_dir::ensure_cache_dir(directory).map_err(|error| {
             Error::Other(format!(
                 "creating snippet toolchain cache {}: {error}",
                 directory.display()

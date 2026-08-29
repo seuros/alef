@@ -131,7 +131,7 @@ fn write_zig_hash_cache_entry(url: &str, hash: &str) {
         return;
     };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        let _ = crate::core::cache_dir::ensure_cache_dir(parent);
     }
     std::fs::write(&path, json).ok();
 }

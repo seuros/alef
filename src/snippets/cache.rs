@@ -190,7 +190,7 @@ impl ValidationCache {
         allowed_side_effects: &[SideEffectClass],
         result: &ValidationResult,
     ) -> Result<()> {
-        std::fs::create_dir_all(&self.directory)?;
+        crate::core::cache_dir::ensure_cache_dir(&self.directory)?;
         let entry = CacheEntry {
             schema_version: CACHE_SCHEMA_VERSION,
             result: result.clone(),
