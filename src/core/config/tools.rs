@@ -128,7 +128,21 @@ pub fn require_tools(tools: &[&str]) -> String {
 
 /// Require the selected Ruby interpreter to resolve its own Bundler executable. ~keep
 pub fn require_ruby_bundler() -> String {
-    format!("{} && ruby -S bundle --version >/dev/null 2>&1", require_tool("ruby"))
+    format!(
+        "{} && {} >/dev/null 2>&1",
+        require_tool("ruby"),
+        ruby_bundle("--version")
+    )
+}
+
+/// Run Bundler with a project-local gem path separated by Ruby ABI. ~keep
+pub(crate) fn ruby_bundle(arguments: &str) -> String {
+    format!("BUNDLE_PATH=vendor/bundle ruby -S bundle {arguments}")
+}
+
+/// Run a bundled Ruby gem executable through the active Ruby interpreter. ~keep
+pub(crate) fn ruby_bundle_exec(command: &str) -> String {
+    ruby_bundle(&format!("exec ruby -S {command}"))
 }
 
 impl ToolsConfig {
@@ -215,8 +229,70 @@ mod tests {
     fn ruby_bundler_precondition_checks_the_active_interpreter() {
         assert_eq!(
             require_ruby_bundler(),
-            "command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1"
+            "command -v ruby >/dev/null 2>&1 && BUNDLE_PATH=vendor/bundle ruby -S bundle --version >/dev/null 2>&1"
         );
+    }
+
+    #[test]
+    fn ruby_bundle_exec_forces_bundler_and_gem_tool_through_active_interpreter() {
+        assert_eq!(
+            ruby_bundle_exec("rubocop -A ."),
+            "BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rubocop -A ."
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &std::path::Path, content: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::write(path, content).expect("write executable");
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod executable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ruby_bundle_exec_survives_foreign_tool_shebangs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ruby = temp.path().join("ruby");
+        let bundle = temp.path().join("bundle");
+        let rubocop = temp.path().join("rubocop");
+        let marker = temp.path().join("marker");
+        write_executable(
+            &ruby,
+            "#!/bin/sh\n[ \"$1\" = -S ] || exit 91\nshift\nscript=$(command -v \"$1\") || exit 92\nshift\nexec /bin/sh \"$script\" \"$@\"\n",
+        );
+        write_executable(
+            &bundle,
+            "#!/missing/foreign/ruby\n[ \"$BUNDLE_PATH\" = vendor/bundle ] || exit 94\n[ \"$1\" = exec ] || exit 93\nshift\nexec \"$@\"\n",
+        );
+        write_executable(
+            &rubocop,
+            "#!/missing/foreign/ruby\nprintf '%s\\n' active > \"$ABI_PROBE\"\n",
+        );
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let run = |command: &str| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", command])
+                .env("PATH", &path)
+                .env("ABI_PROBE", &marker)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("run ABI probe")
+        };
+
+        assert!(!run("BUNDLE_PATH=vendor/bundle bundle exec ruby -S rubocop").success());
+        assert!(!run("ruby -S bundle exec ruby -S rubocop").success());
+        assert!(!run("BUNDLE_PATH=vendor/bundle ruby -S bundle exec rubocop").success());
+        assert!(!marker.exists());
+        assert!(run(&ruby_bundle_exec("rubocop")).success());
+        assert_eq!(std::fs::read_to_string(marker).expect("read marker"), "active\n");
     }
 
     #[test]

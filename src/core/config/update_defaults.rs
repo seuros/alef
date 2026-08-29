@@ -1,6 +1,16 @@
 use super::extras::Language;
 use super::output::{StringOrVec, UpdateConfig};
-use super::tools::{LangContext, require_ruby_bundler, require_tool};
+use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle};
+
+fn ruby_update_command(output_dir: &str) -> String {
+    let get_frozen = ruby_bundle("config get frozen");
+    let unfreeze = ruby_bundle("config set --local frozen false");
+    let update = ruby_bundle("update --all");
+    let restore = ruby_bundle("config set --local frozen \"$prev_frozen\"");
+    format!(
+        "cd {output_dir} && prev_frozen=$({get_frozen} 2>/dev/null | awk '/Set for your local app/ {{print $NF}}'); {unfreeze}; {update}; status=$?; if [ -n \"$prev_frozen\" ] && [ \"$prev_frozen\" != \"false\" ]; then {restore}; fi; exit $status"
+    )
+}
 
 /// Return the default update configuration for a language.
 ///
@@ -81,16 +91,15 @@ pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext
                 upgrade: Some(StringOrVec::Multiple(upgrade_cmds)),
             }
         }
-        Language::Ruby => UpdateConfig {
-            precondition: Some(require_ruby_bundler()),
-            before: None,
-            update: Some(StringOrVec::Single(format!(
-                "cd {output_dir} && prev_frozen=$(ruby -S bundle config get frozen 2>/dev/null | awk '/Set for your local app/ {{print $NF}}'); ruby -S bundle config set --local frozen false; ruby -S bundle update --all; status=$?; if [ -n \"$prev_frozen\" ] && [ \"$prev_frozen\" != \"false\" ]; then ruby -S bundle config set --local frozen \"$prev_frozen\"; fi; exit $status"
-            ))),
-            upgrade: Some(StringOrVec::Single(format!(
-                "cd {output_dir} && prev_frozen=$(ruby -S bundle config get frozen 2>/dev/null | awk '/Set for your local app/ {{print $NF}}'); ruby -S bundle config set --local frozen false; ruby -S bundle update --all; status=$?; if [ -n \"$prev_frozen\" ] && [ \"$prev_frozen\" != \"false\" ]; then ruby -S bundle config set --local frozen \"$prev_frozen\"; fi; exit $status"
-            ))),
-        },
+        Language::Ruby => {
+            let command = ruby_update_command(output_dir);
+            UpdateConfig {
+                precondition: Some(require_ruby_bundler()),
+                before: None,
+                update: Some(StringOrVec::Single(command.clone())),
+                upgrade: Some(StringOrVec::Single(command)),
+            }
+        }
         Language::Php => UpdateConfig {
             precondition: Some(require_tool("composer")),
             before: None,
@@ -267,17 +276,25 @@ mod tests {
         let config = cfg(Language::Ruby, "packages/ruby");
         assert_eq!(
             config.precondition.as_deref(),
-            Some("command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1")
+            Some(
+                "command -v ruby >/dev/null 2>&1 && BUNDLE_PATH=vendor/bundle ruby -S bundle --version >/dev/null 2>&1"
+            )
         );
         let update = config.update.expect("ruby update command").commands().join(" ");
         let upgrade = config.upgrade.expect("ruby upgrade command").commands().join(" ");
         for command in [update, upgrade] {
-            assert!(command.contains("ruby -S bundle config get frozen"), "got: {command}");
             assert!(
-                command.contains("ruby -S bundle config set --local frozen false"),
+                command.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle config get frozen"),
                 "got: {command}"
             );
-            assert!(command.contains("ruby -S bundle update --all"), "got: {command}");
+            assert!(
+                command.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle config set --local frozen false"),
+                "got: {command}"
+            );
+            assert!(
+                command.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle update --all"),
+                "got: {command}"
+            );
         }
     }
 

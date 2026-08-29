@@ -692,7 +692,8 @@ pub struct TestAppRunConfig {
     /// Command(s) to run before the main run commands; aborts on failure.
     pub before: Option<StringOrVec>,
     /// Command(s) that install the published package into the registry-mode test
-    /// app and exercise it (e.g. `cd test_apps/ruby && ruby -S bundle install && ruby -S bundle exec rspec`).
+    /// app and exercise it (e.g. `cd test_apps/ruby && BUNDLE_PATH=vendor/bundle ruby -S bundle install &&
+    /// BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rspec`).
     pub run: Option<StringOrVec>,
 }
 

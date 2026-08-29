@@ -161,12 +161,12 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
         .expect("poly.toml emitted")
         .content;
 
-    // Each linter poly does not bundle is delegated as a workspace hook so a
-    // single `poly lint .` invokes it once over its package, respecting the
-    // tool's native config.
+    // Each external linter is delegated once through a workspace hook. ~keep
+    let rubocop = "BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rubocop";
+    let steep = "BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S steep check";
     for (table, cmd) in [
-        ("[hooks.pre-commit.commands.rubocop]", "ruby -S bundle exec rubocop"),
-        ("[hooks.pre-commit.commands.steep]", "ruby -S bundle exec steep check"),
+        ("[hooks.pre-commit.commands.rubocop]", rubocop),
+        ("[hooks.pre-commit.commands.steep]", steep),
         ("[hooks.pre-commit.commands.golangci-lint]", "golangci-lint run ./..."),
         ("[hooks.pre-commit.commands.checkstyle]", "mvn -q checkstyle:check"),
         ("[hooks.pre-commit.commands.dart-analyze]", "dart analyze"),

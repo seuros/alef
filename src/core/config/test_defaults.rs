@@ -1,6 +1,6 @@
 use super::extras::Language;
 use super::output::{StringOrVec, TestConfig};
-use super::tools::{LangContext, require_ruby_bundler, require_tool, wrap_command as wrap};
+use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle_exec, wrap_command as wrap};
 
 /// Return the default test configuration for a language.
 ///
@@ -87,9 +87,15 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
             }
         }
         Language::Ruby => {
-            let cmd = wrap(format!("cd {output_dir} && ruby -S bundle exec rspec"), ctx.run_wrapper);
+            let cmd = wrap(
+                format!("cd {output_dir} && {}", ruby_bundle_exec("rspec")),
+                ctx.run_wrapper,
+            );
             let cov = wrap(
-                format!("cd {output_dir} && ruby -S bundle exec rspec --format documentation"),
+                format!(
+                    "cd {output_dir} && {}",
+                    ruby_bundle_exec("rspec --format documentation")
+                ),
                 ctx.run_wrapper,
             );
             TestConfig {
@@ -444,13 +450,18 @@ mod tests {
         let c = cfg(Language::Ruby, "packages/ruby");
         assert_eq!(
             c.precondition.as_deref(),
-            Some("command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1")
+            Some(
+                "command -v ruby >/dev/null 2>&1 && BUNDLE_PATH=vendor/bundle ruby -S bundle --version >/dev/null 2>&1"
+            )
         );
         let cmd = c.command.unwrap().commands().join(" ");
         let coverage = c.coverage.unwrap().commands().join(" ");
-        assert!(cmd.contains("ruby -S bundle exec rspec"), "got: {cmd}");
         assert!(
-            coverage.contains("ruby -S bundle exec rspec --format documentation"),
+            cmd.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rspec"),
+            "got: {cmd}"
+        );
+        assert!(
+            coverage.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rspec --format documentation"),
             "got: {coverage}"
         );
     }

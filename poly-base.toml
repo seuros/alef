@@ -81,13 +81,13 @@ workspace = true
 files = "packages/python/**/*.py"
 
 [hooks.pre-commit.commands.rubocop]
-run = "bundle exec rubocop"
+run = "BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rubocop"
 root = "packages/ruby"
 workspace = true
 files = "packages/ruby/**/*.rb"
 
 [hooks.pre-commit.commands.steep]
-run = "bundle exec steep check"
+run = "BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S steep check"
 root = "packages/ruby"
 workspace = true
 files = "packages/ruby/**/*.rb"

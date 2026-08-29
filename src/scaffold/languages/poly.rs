@@ -17,6 +17,7 @@
 //! (line_length 120, lf, final_newline, trim_trailing_whitespace).
 
 use crate::core::backend::GeneratedFile;
+use crate::core::config::tools::ruby_bundle_exec;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use std::path::PathBuf;
 
@@ -600,18 +601,10 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     }
     if has(Language::Ruby) {
         let dir = config.package_dir(Language::Ruby);
-        out.push_str(&workspace_hook(
-            "rubocop",
-            &dir,
-            "ruby -S bundle exec rubocop",
-            "**/*.rb",
-        ));
-        out.push_str(&workspace_hook(
-            "steep",
-            &dir,
-            "ruby -S bundle exec steep check",
-            "**/*.rb",
-        ));
+        let rubocop = ruby_bundle_exec("rubocop");
+        let steep = ruby_bundle_exec("steep check");
+        out.push_str(&workspace_hook("rubocop", &dir, &rubocop, "**/*.rb"));
+        out.push_str(&workspace_hook("steep", &dir, &steep, "**/*.rb"));
     }
     if has(Language::Go) {
         let dir = config.package_dir(Language::Go);

@@ -448,7 +448,8 @@ RSpec::Core::RakeTask.new(:spec)
 
 # rake-compiler's `compile` task is a no-op when cross_compile is true; the real
 # work hangs off `compile:<ruby_platform>`. Wire `compile` → `compile:ruby` so
-# both the dev shorthand and CI's `ruby -S bundle exec rake compile` actually build.
+# both the dev shorthand and CI's
+# `BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rake compile` actually build.
 task compile: "compile:ruby"
 
 task spec: :compile

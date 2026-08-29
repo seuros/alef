@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::extras::Language;
 use super::output::{SetupConfig, StringOrVec};
-use super::tools::{LangContext, require_ruby_bundler, require_tool};
+use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle};
 
 /// Return the default working directory (relative to repo root) for a language's
 /// setup commands. Languages whose manifest file lives outside the repo root
@@ -101,8 +101,11 @@ pub(crate) fn default_setup_config(lang: Language, output_dir: &str, ctx: &LangC
             precondition: Some(require_ruby_bundler()),
             before: None,
             install: Some(StringOrVec::Multiple(vec![
-                format!("cd {output_dir} && ruby -S bundle install"),
-                format!("cd {output_dir} && ruby -S bundle lock --add-checksums 2>/dev/null || true"),
+                format!("cd {output_dir} && {}", ruby_bundle("install")),
+                format!(
+                    "cd {output_dir} && {} 2>/dev/null || true",
+                    ruby_bundle("lock --add-checksums")
+                ),
             ])),
             timeout_seconds: 1800,
             workdir: default_setup_workdir(lang),
@@ -388,12 +391,17 @@ mod tests {
         let c = cfg(Language::Ruby, "packages/ruby");
         assert_eq!(
             c.precondition.as_deref(),
-            Some("command -v ruby >/dev/null 2>&1 && ruby -S bundle --version >/dev/null 2>&1")
+            Some(
+                "command -v ruby >/dev/null 2>&1 && BUNDLE_PATH=vendor/bundle ruby -S bundle --version >/dev/null 2>&1"
+            )
         );
         let install = c.install.unwrap().commands().join(" ");
-        assert!(install.contains("ruby -S bundle install"), "got: {install}");
         assert!(
-            install.contains("ruby -S bundle lock --add-checksums"),
+            install.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle install"),
+            "got: {install}"
+        );
+        assert!(
+            install.contains("BUNDLE_PATH=vendor/bundle ruby -S bundle lock --add-checksums"),
             "got: {install}"
         );
     }

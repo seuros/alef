@@ -75,8 +75,7 @@ pub fn package_ruby(
     )?;
     fs::write(&gemspec_path, platform_gemspec)?;
 
-    let build_cmd = format!("gem build {gemspec_name}");
-    crate::publish::run_shell_command_in(&build_cmd, &pkg_dir)?;
+    run_gem_build(&pkg_dir, &gemspec_name)?;
 
     let gem_file = find_gem_file(&pkg_dir, &gem_name, version, &platform)
         .with_context(|| format!("gem build did not produce expected .gem in {}", pkg_dir.display()))?;
@@ -97,6 +96,26 @@ pub fn package_ruby(
         name: gem_filename,
         checksum: None,
     })
+}
+
+fn gem_build_command(gemspec_name: &str) -> Command {
+    let mut command = Command::new("ruby");
+    command.args(["-S", "gem", "build", gemspec_name]);
+    command
+}
+
+fn run_gem_build(pkg_dir: &Path, gemspec_name: &str) -> Result<()> {
+    let output = gem_build_command(gemspec_name)
+        .current_dir(pkg_dir)
+        .output()
+        .context("failed to execute `ruby -S gem build`")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "`ruby -S gem build {gemspec_name}` failed with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
 }
 
 /// Locate the compiled Ruby native extension. Delegates to
@@ -276,6 +295,50 @@ fn ruby_abi_override(raw: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, content: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::write(path, content).expect("write executable");
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod executable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gem_build_uses_active_ruby_despite_foreign_gem_shebang() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ruby = temp.path().join("ruby");
+        let gem = temp.path().join("gem");
+        let marker = temp.path().join("marker");
+        write_executable(
+            &ruby,
+            "#!/bin/sh\n[ \"$1\" = -S ] || exit 91\nshift\nscript=$(command -v \"$1\") || exit 92\nshift\nexec /bin/sh \"$script\" \"$@\"\n",
+        );
+        write_executable(
+            &gem,
+            "#!/missing/foreign/ruby\nprintf '%s\\n' \"$*\" > \"$ABI_PROBE\"\n",
+        );
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let direct = Command::new(&gem).arg("build").arg("package.gemspec").status();
+        assert!(direct.is_err() || direct.is_ok_and(|status| !status.success()));
+        let status = gem_build_command("package.gemspec")
+            .env("PATH", path)
+            .env("ABI_PROBE", &marker)
+            .status()
+            .expect("run gem build command");
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(marker).expect("read marker"),
+            "build package.gemspec\n"
+        );
+    }
 
     #[test]
     fn ruby_abi_override_trims_and_rejects_blank() {
