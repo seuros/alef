@@ -629,14 +629,7 @@ fn merge_ruby_gemfile(existing: &str, generated: &str) -> String {
         let insert_at = lines
             .iter()
             .position(|line| line.trim() == "group :development do")
-            .and_then(|start| {
-                lines
-                    .iter()
-                    .enumerate()
-                    .skip(start + 1)
-                    .find(|(_, line)| line.trim() == "end")
-                    .map(|(index, _)| index)
-            });
+            .map(|start| start + 1);
         if let Some(index) = insert_at {
             lines.splice(index..index, missing);
         } else {
@@ -1084,6 +1077,19 @@ end
         assert!(!merged.contains("< 0.9.128"), "{merged}");
         assert!(merged.contains("gem \"debug\", \"~> 1.9\""), "{merged}");
         assert!(merged.contains("gem \"rake-compiler\", \"~> 1.3\""), "{merged}");
+    }
+
+    #[test]
+    fn ruby_gemfile_inserts_missing_gem_after_nested_development_block() {
+        let existing = "group :development do\n  platforms :mri do\n    gem \"debug\"\n  end\nend\n";
+        let generated = "group :development do\n  gem \"rb_sys\", \">= 0.9.130\"\nend\n";
+
+        let merged = merge_ruby_gemfile(existing, generated);
+
+        assert!(
+            merged.starts_with("group :development do\n  gem \"rb_sys\", \">= 0.9.130\"\n  platforms :mri do"),
+            "managed gems must be inserted before nested blocks in the development group: {merged}"
+        );
     }
 
     #[test]
