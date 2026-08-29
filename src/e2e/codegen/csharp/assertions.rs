@@ -365,6 +365,16 @@ pub(super) fn render_assertion(
                 field_resolver.accessor(format_path, "csharp", &effective_result_var)
             })
             .unwrap_or_else(|| format!("{effective_result_var}.Metadata.Format"));
+        let format_path = assertion
+            .field
+            .as_deref()
+            .map(|field| match field.find(".format") {
+                Some(idx) => &field[..idx + ".format".len()],
+                None => field,
+            })
+            .unwrap_or_default();
+        let field_is_collection =
+            field_resolver.union_variant_field_is_collection(format_path, &variant_name, &inner_field);
         let _ = writeln!(
             out,
             "        if ({container} is FormatMetadata.{} {})",
@@ -376,6 +386,7 @@ pub(super) fn render_assertion(
             assertion,
             &variant_var,
             &inner_field,
+            field_is_collection,
             result_is_vec,
             assert_enum_fields,
         );

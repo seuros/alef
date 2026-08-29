@@ -15,6 +15,7 @@
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
@@ -87,6 +88,7 @@ pub(super) fn render_discriminated_union_assertion(
     variant_var: &str,
     payload_field: &str,
     inner_field: &str,
+    field_is_collection: bool,
 ) {
     if inner_field.is_empty() {
         return;
@@ -204,14 +206,25 @@ pub(super) fn render_discriminated_union_assertion(
                 "                assertTrue({field_expr}.toString().isEmpty(), \"expected empty value\")"
             );
         }
+        "count_min" if field_is_collection => {
+            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+                let _ = writeln!(
+                    out,
+                    "                assertTrue({field_expr}.size >= {count}, \"expected count >= {count}\")"
+                );
+            } else {
+                render_unsupported_assertion(out, assertion);
+            }
+        }
         _ => {
-            let _ = writeln!(
-                out,
-                "                // skipped: assertion type '{}' not yet supported for discriminated union fields",
-                assertion.assertion_type
-            );
+            render_unsupported_assertion(out, assertion);
         }
     }
+}
+
+fn render_unsupported_assertion(out: &mut String, assertion: &Assertion) {
+    let reason = AssertionTypeSkip::DiscriminatedUnionAssertionTypeNotSupported.message(&assertion.assertion_type);
+    let _ = writeln!(out, "                // skipped: {reason}");
 }
 
 /// The IR-general sealed-class narrowing path: recognizes ANY tagged union
@@ -277,9 +290,122 @@ pub(super) fn try_render_generic_union_assertion(
     );
     let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
     let _ = writeln!(out, "            is {union_type}.{variant_pascal} -> {{");
-    render_discriminated_union_assertion(out, assertion, &variant_var, &payload_field, &suffix);
+    let field_is_collection = field_resolver.union_variant_field_is_collection(&prefix, &variant_pascal, &suffix);
+    render_discriminated_union_assertion(
+        out,
+        assertion,
+        &variant_var,
+        &payload_field,
+        &suffix,
+        field_is_collection,
+    );
     let _ = writeln!(out, "            }}");
     let _ = writeln!(out, "            else -> {{}}");
     let _ = writeln!(out, "        }}");
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    fn resolver() -> FieldResolver {
+        let types = vec![
+            TypeDef {
+                name: "Envelope".to_string(),
+                fields: vec![field("details", TypeRef::Named("DetailUnion".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "WebPayload".to_string(),
+                fields: vec![
+                    field("entries", TypeRef::Vec(Box::new(TypeRef::String))),
+                    field("label", TypeRef::String),
+                ],
+                ..TypeDef::default()
+            },
+        ];
+        let enums = vec![EnumDef {
+            name: "DetailUnion".to_string(),
+            variants: vec![EnumVariant {
+                name: "Web".to_string(),
+                fields: vec![field("payload", TypeRef::Named("WebPayload".to_string()))],
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        }];
+        FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .with_ir_enum_map(
+            FieldResolver::ir_enum_fields(&types, &enums),
+            Some("Envelope".to_string()),
+        )
+        .with_ir_collection_map(
+            FieldResolver::ir_collection_fields(&types),
+            Some("Envelope".to_string()),
+        )
+    }
+
+    #[test]
+    fn count_min_on_a_union_payload_collection_renders_a_size_assertion() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.web.entries".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        render_discriminated_union_assertion(
+            &mut out,
+            &assertion,
+            "webVariant",
+            "payload",
+            "entries",
+            resolver().union_variant_field_is_collection("details", "web", "entries"),
+        );
+
+        assert_eq!(
+            out,
+            "                assertTrue(webVariant.payload.entries!!.size >= 2, \"expected count >= 2\")\n"
+        );
+    }
+
+    #[test]
+    fn count_min_on_a_union_payload_scalar_stays_an_explicit_skip() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        render_discriminated_union_assertion(
+            &mut out,
+            &assertion,
+            "webVariant",
+            "payload",
+            "label",
+            resolver().union_variant_field_is_collection("details", "web", "label"),
+        );
+
+        assert_eq!(
+            out,
+            "                // skipped: assertion type 'count_min' not yet supported for discriminated union fields\n"
+        );
+    }
 }

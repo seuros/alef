@@ -92,6 +92,13 @@ pub(super) fn is_collection_path(map: &IrCollectionMap, path: &str) -> bool {
     let Some(root) = map.root_type.as_deref() else {
         return false;
     };
+    is_collection_path_from(map, root, path)
+}
+
+/// Walk `path` from an explicitly resolved IR owner type rather than the call's result root.
+/// Tagged-union renderers use this after narrowing a variant to its payload type, since a
+/// struct-only walk from `root_type` cannot cross the enum boundary itself. ~keep
+pub(super) fn is_collection_path_from(map: &IrCollectionMap, root: &str, path: &str) -> bool {
     let segments = parse_path(path);
     let Some((last, prefix)) = segments.split_last() else {
         return false;

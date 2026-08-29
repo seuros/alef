@@ -236,6 +236,8 @@ pub(super) fn render_assertion(
             None => f,
         };
         let container = field_resolver.accessor(format_path, "kotlin_android", result_var);
+        let field_is_collection =
+            field_resolver.union_variant_field_is_collection(format_path, &variant_pascal, &inner_field);
         let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
         let _ = writeln!(out, "            is FormatMetadata.{variant_pascal} -> {{");
         super::discriminated::render_discriminated_union_assertion(
@@ -244,6 +246,7 @@ pub(super) fn render_assertion(
             &variant_var,
             "metadata",
             &inner_field,
+            field_is_collection,
         );
         let _ = writeln!(out, "            }}");
         let _ = writeln!(out, "            else -> {{}}");

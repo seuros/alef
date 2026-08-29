@@ -19,10 +19,25 @@
 //! deeper.
 use heck::ToUpperCamelCase;
 
+use super::super::ir_collection::is_collection_path_from;
 use super::super::ir_enum::enum_type_at_path_from;
 use super::super::types::FieldResolver;
 
 impl FieldResolver {
+    /// Whether a field reached after narrowing `union_field` to `variant` is collection-typed.
+    /// The enum map resolves the concrete payload owner; the collection map then walks the
+    /// remaining payload-relative path, so no backend or consumer field name participates. ~keep
+    pub fn union_variant_field_is_collection(&self, union_field: &str, variant: &str, field: &str) -> bool {
+        let Some(union_type) = self.ir_enum_type_name(union_field) else {
+            return false;
+        };
+        let variant = variant.to_upper_camel_case();
+        let Some((_, payload_type)) = self.union_variant_payload(&union_type, &variant) else {
+            return false;
+        };
+        is_collection_path_from(&self.ir_collection_map, payload_type, field)
+    }
+
     /// The left-to-right scan [`Self::tagged_union_split`] does, generalized with `absolute_prefix`
     /// -- the fixture-root path already consumed by an earlier crossing, or `""` for the first one
     /// -- so [`Self::crossing_declares`] can reuse the exact same scan to find a SECOND (or third,
