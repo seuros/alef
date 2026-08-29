@@ -98,10 +98,28 @@ pub(super) fn variant_field_accessor(field_resolver: &FieldResolver, field: &str
             return None;
         }
         let enum_type = field_resolver.ir_enum_type_name(&prefix)?;
-        field_resolver.union_variant_payload(&enum_type, &variant.to_upper_camel_case())?;
+        let variant = variant.to_upper_camel_case();
+        let (_, payload_type) = field_resolver.union_variant_payload(&enum_type, &variant)?;
+        if field_resolver.is_declared_field_of_type(payload_type, payload_field) != Some(true) {
+            return None;
+        }
+        let (serde_tag, wire_variant) = field_resolver.tagged_enum_wire_discriminator(&enum_type, &variant)?;
 
         let enum_hash = field_resolver.accessor(&prefix, "ruby", result_var);
-        return Some(format!("{enum_hash}.fetch(:{payload_field})"));
+        let tag = crate::e2e::escape::ruby_string_literal(serde_tag);
+        let wire_variant = crate::e2e::escape::ruby_string_literal(wire_variant);
+        let payload_field = crate::e2e::escape::ruby_string_literal(payload_field);
+        return Some(format!(
+            concat!(
+                "{enum_hash}.then {{ |enum_hash| raise \"unexpected tagged enum variant\" ",
+                "unless enum_hash.fetch({tag}.to_sym) == {wire_variant}; ",
+                "enum_hash.fetch({payload_field}.to_sym) }}"
+            ),
+            enum_hash = enum_hash,
+            tag = tag,
+            wire_variant = wire_variant,
+            payload_field = payload_field,
+        ));
     }
     None
 }
@@ -164,13 +182,25 @@ mod tests {
         let enums = vec![
             EnumDef {
                 name: "EncodingDetails".to_string(),
-                serde_tag: Some("type".to_string()),
-                variants: vec![EnumVariant {
-                    name: "Spreadsheet".to_string(),
-                    is_tuple: true,
-                    fields: vec![field("_0", named("SpreadsheetDetails"))],
-                    ..EnumVariant::default()
-                }],
+                serde_tag: Some("type'kind".to_string()),
+                variants: vec![
+                    EnumVariant {
+                        name: "Spreadsheet".to_string(),
+                        serde_rename: Some("sheet'kind".to_string()),
+                        is_tuple: true,
+                        fields: vec![field("_0", named("SpreadsheetDetails"))],
+                        ..EnumVariant::default()
+                    },
+                    EnumVariant {
+                        name: "Empty".to_string(),
+                        ..EnumVariant::default()
+                    },
+                    EnumVariant {
+                        name: "Pair".to_string(),
+                        fields: vec![field("left", TypeRef::String), field("right", TypeRef::String)],
+                        ..EnumVariant::default()
+                    },
+                ],
                 ..EnumDef::default()
             },
             EnumDef {
@@ -197,6 +227,10 @@ mod tests {
         )
         .with_ir_enum_map(map, Some("ProcessingResult".to_string()))
         .with_ruby_hash_serialized_enum_names(hash_serialized_enum_names(&enums))
+        .with_ir_result_fields(
+            FieldResolver::ir_result_field_facts(&type_defs, "ruby"),
+            Some("ProcessingResult".to_string()),
+        )
     }
 
     /// THE CANARY (positive control). A field path that crosses a hash-serialized enum, spelled
@@ -295,10 +329,12 @@ mod tests {
     #[test]
     fn render_assertion_reaches_a_hash_serialized_variant_field_under_any_name() {
         let out = render("summary.encoding.spreadsheet.sheet_count");
+        assert!(out.contains("result.summary.encoding.then { |enum_hash|"), "got: {out}");
         assert!(
-            out.contains("result.summary.encoding.fetch(:sheet_count)"),
+            out.contains("enum_hash.fetch(\"type'kind\".to_sym) == \"sheet'kind\""),
             "got: {out}"
         );
+        assert!(out.contains("enum_hash.fetch('sheet_count'.to_sym)"), "got: {out}");
         assert!(!out.contains("# skipped:"), "got: {out}");
     }
 
@@ -308,5 +344,54 @@ mod tests {
         use crate::e2e::codegen::field_skip::FieldSkip;
         let out = render("summary.encoding.spreadsheet.sheet_count");
         assert_eq!(FieldSkip::extract_classified(&out), None, "got: {out}");
+    }
+
+    #[test]
+    fn runtime_accessor_rejects_a_different_wire_variant() {
+        let out = render("summary.encoding.spreadsheet.sheet_count");
+        assert!(
+            out.contains("raise \"unexpected tagged enum variant\" unless"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("fetch(\"type'kind\".to_sym) == \"sheet'kind\""),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn nonexistent_payload_leaf_remains_a_generator_gap() {
+        let out = render("summary.encoding.spreadsheet.not_declared");
+        assert!(out.contains("# skipped: enum variant accessor"), "got: {out}");
+        assert!(!out.contains("fetch(\"not_declared\".to_sym)"), "got: {out}");
+    }
+
+    #[test]
+    fn nested_and_indexed_payload_suffixes_remain_generator_gaps() {
+        for field in [
+            "summary.encoding.spreadsheet.sheet_count.value",
+            "summary.encoding.spreadsheet.sheet_count[0]",
+        ] {
+            let out = render(field);
+            assert!(
+                out.contains("# skipped: enum variant accessor"),
+                "field={field}, got: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_variant_remains_a_generator_gap() {
+        for field in [
+            "summary.encoding.unknown.sheet_count",
+            "summary.encoding.empty.sheet_count",
+            "summary.encoding.pair.left",
+        ] {
+            let out = render(field);
+            assert!(
+                out.contains("# skipped: enum variant accessor"),
+                "field={field}, got: {out}"
+            );
+        }
     }
 }

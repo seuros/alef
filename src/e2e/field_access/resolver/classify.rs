@@ -779,6 +779,12 @@ impl FieldResolver {
             .map(|(field_name, type_name)| (field_name.as_str(), type_name.as_str()))
     }
 
+    /// The serde discriminator key and wire value for a concrete tagged-enum variant.
+    pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
+        let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;
+        Some((wire.tag.as_str(), wire.variants.get(variant)?.as_str()))
+    }
+
     /// Whether the Java binding backend emits a `getValue()` accessor for the enum type
     /// backing `field`, per `backends::java::gen_bindings::emits_get_value`. `None` when the
     /// IR does not positively resolve `field` to a concrete enum type (unresolved root type,

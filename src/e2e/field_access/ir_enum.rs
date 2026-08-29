@@ -20,8 +20,8 @@ use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::codegen::call_ir::named_type;
 
 use super::parse::{parse_path, segment_name};
-use super::types::IrEnumMap;
 use super::types::PathSegment;
+use super::types::{IrEnumMap, TaggedEnumWire};
 
 /// Build the `(type, field) -> is-enum` / `(type, field) -> next type` maps [`IrEnumMap`]
 /// needs, by inspecting every field of every `TypeDef` this crate declares.
@@ -72,8 +72,31 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         enum_fields,
         enum_field_types,
         variant_payload_types: build_variant_payload_types(enums),
+        tagged_enum_wire: build_tagged_enum_wire(enums),
         root_type: None,
     }
+}
+
+fn build_tagged_enum_wire(enums: &[EnumDef]) -> HashMap<String, TaggedEnumWire> {
+    enums
+        .iter()
+        .filter_map(|enum_def| {
+            let tag = enum_def.serde_tag.clone()?;
+            let variants = enum_def
+                .variants
+                .iter()
+                .map(|variant| {
+                    let wire = crate::codegen::naming::wire_variant_value(
+                        &variant.name,
+                        variant.serde_rename.as_deref(),
+                        enum_def.serde_rename_all.as_deref(),
+                    );
+                    (variant.name.clone(), wire)
+                })
+                .collect();
+            Some((enum_def.name.clone(), TaggedEnumWire { tag, variants }))
+        })
+        .collect()
 }
 
 /// `variant_payload_types[enum][variant] -> (field_name, payload_type_name)` for every

@@ -253,7 +253,16 @@ pub struct IrEnumMap {
     /// variants are deliberately not recorded here: there is no single payload type to advance
     /// into, and a caller must fall back to its own "not implemented" handling for that shape.
     pub variant_payload_types: HashMap<String, HashMap<String, (String, String)>>,
+    /// `tagged_enum_wire[enum_name] -> (serde_tag, Rust variant -> serde wire value)`.
+    /// Carries the exact discriminator spellings assertion generators need at runtime.
+    pub tagged_enum_wire: HashMap<String, TaggedEnumWire>,
     pub root_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaggedEnumWire {
+    pub tag: String,
+    pub variants: HashMap<String, String>,
 }
 
 /// Per-type PHP getter classification + chain-resolution metadata.
