@@ -278,8 +278,33 @@ mod union_traversal_tests {
              \x20           is ShapeKind.Circle -> {\n\
              \x20               assertEquals(5, unionCircle.data.radius!!, \"expected: 5\")\n\
              \x20           }\n\
-             \x20           else -> {}\n\
+             \x20           else -> kotlin.test.assertTrue(false, \"Expected Circle variant\")\n\
              \x20       }\n",
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn legacy_format_union_fails_when_the_runtime_variant_differs() {
+        let result_fields: HashSet<String> = [
+            "metadata".to_string(),
+            "metadata.format".to_string(),
+            "metadata.format.excel".to_string(),
+            "metadata.format.excel.sheet_count".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let out = render("metadata.format.excel.sheet_count", &resolver, true);
+
+        assert!(
+            out.contains("else -> kotlin.test.assertTrue(false, \"Expected Excel variant\")"),
             "got: {out}"
         );
     }

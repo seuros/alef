@@ -249,7 +249,10 @@ pub(super) fn render_assertion(
             field_is_collection,
         );
         let _ = writeln!(out, "            }}");
-        let _ = writeln!(out, "            else -> {{}}");
+        let _ = writeln!(
+            out,
+            "            else -> kotlin.test.assertTrue(false, \"Expected {variant_pascal} variant\")"
+        );
         let _ = writeln!(out, "        }}");
         return;
     }
