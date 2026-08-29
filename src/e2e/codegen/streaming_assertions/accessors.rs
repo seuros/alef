@@ -1,4 +1,9 @@
+use crate::e2e::field_access::PythonTypedDictMap;
+
 use super::model::{StreamingFieldResolver, split_streaming_deep_path};
+use super::python_typeddict_accessor::{
+    python_field_access, python_tool_call_element_type, render_python_tool_calls_deep,
+};
 use super::renderers::{render_deep_tail, render_rust_tool_calls_deep, render_swift_tool_calls_deep};
 
 impl StreamingFieldResolver {
@@ -62,6 +67,31 @@ impl StreamingFieldResolver {
         chunks_var: &str,
         module_qualifier: Option<&str>,
         item_type: Option<&str>,
+    ) -> Option<String> {
+        Self::accessor_with_typeddict_map(field, lang, chunks_var, module_qualifier, item_type, None)
+    }
+
+    /// Same as [`Self::accessor_with_streaming_context`] but additionally accepts the Python
+    /// `TypedDict`-vs-attribute-access classification map ([`PythonTypedDictMap`]), so the Python
+    /// arms below (`stream_content`, `stream_complete`, `tool_calls` and its deep
+    /// `[N].function.name` continuation, `finish_reason`, `usage`, and `stream.has_*_event`)
+    /// render subscript access (`c["field"]`) instead of `.field` for a field whose owner the
+    /// pyo3 backend emits as a `TypedDict`.
+    ///
+    /// Every other language arm ignores `typeddict_map` entirely, and `typeddict_map: None` (what
+    /// every pre-existing caller passes, via [`Self::accessor_with_streaming_context`]) renders
+    /// exactly the dotted form every arm rendered before this parameter existed — this is purely
+    /// additive, not a second classifier: the map is built once by
+    /// `field_access::python_typeddict::build_python_typeddict_map`, from the pyo3 backend's own
+    /// `is_dataclass_backed_config` predicate, and handed in by the caller (see
+    /// `python::test_function::result_assertions::emit_streaming_virtual_assertion`). ~keep
+    pub fn accessor_with_typeddict_map(
+        field: &str,
+        lang: &str,
+        chunks_var: &str,
+        module_qualifier: Option<&str>,
+        item_type: Option<&str>,
+        typeddict_map: Option<&PythonTypedDictMap>,
     ) -> Option<String> {
         match field {
             "stream.items" | "chunks" => Some(match lang {
@@ -129,7 +159,12 @@ impl StreamingFieldResolver {
                     )
                 }
                 "python" => {
-                    format!("\"\".join(c.choices[0].delta.content or \"\" for c in {chunks_var} if c.choices)")
+                    let (choices_acc, choices_ty) = python_field_access("choices", item_type, typeddict_map);
+                    let (delta_acc, delta_ty) = python_field_access("delta", choices_ty.as_deref(), typeddict_map);
+                    let (content_acc, _) = python_field_access("content", delta_ty.as_deref(), typeddict_map);
+                    format!(
+                        "\"\".join(c{choices_acc}[0]{delta_acc}{content_acc} or \"\" for c in {chunks_var} if c{choices_acc})"
+                    )
                 }
                 "zig" => {
                     // Zig: `{chunks_var}_content` is a `std.ArrayList(u8)` populated by
@@ -191,7 +226,9 @@ impl StreamingFieldResolver {
                     )
                 }
                 "python" => {
-                    format!("bool({chunks_var}) and {chunks_var}[-1].choices[0].finish_reason is not None")
+                    let (choices_acc, choices_ty) = python_field_access("choices", item_type, typeddict_map);
+                    let (finish_acc, _) = python_field_access("finish_reason", choices_ty.as_deref(), typeddict_map);
+                    format!("bool({chunks_var}) and {chunks_var}[-1]{choices_acc}[0]{finish_acc} is not None")
                 }
                 "elixir" => {
                     format!("Enum.at(List.last({chunks_var}).choices, 0).finish_reason != nil")
@@ -244,12 +281,35 @@ impl StreamingFieldResolver {
             // PHP and WASM intentionally return `None`: PHP's crawl-stream is
             // exposed as eager JSON (see `chunks_var` collect_snippet) and WASM
             // does not support streaming on `wasm32` targets.
-            "stream.has_page_event" => item_type
-                .and_then(|ty| has_event_variant_accessor(lang, chunks_var, EventVariant::Page, ty, module_qualifier)),
-            "stream.has_error_event" => item_type
-                .and_then(|ty| has_event_variant_accessor(lang, chunks_var, EventVariant::Error, ty, module_qualifier)),
+            "stream.has_page_event" => item_type.and_then(|ty| {
+                has_event_variant_accessor(
+                    lang,
+                    chunks_var,
+                    EventVariant::Page,
+                    ty,
+                    module_qualifier,
+                    typeddict_map,
+                )
+            }),
+            "stream.has_error_event" => item_type.and_then(|ty| {
+                has_event_variant_accessor(
+                    lang,
+                    chunks_var,
+                    EventVariant::Error,
+                    ty,
+                    module_qualifier,
+                    typeddict_map,
+                )
+            }),
             "stream.has_complete_event" => item_type.and_then(|ty| {
-                has_event_variant_accessor(lang, chunks_var, EventVariant::Complete, ty, module_qualifier)
+                has_event_variant_accessor(
+                    lang,
+                    chunks_var,
+                    EventVariant::Complete,
+                    ty,
+                    module_qualifier,
+                    typeddict_map,
+                )
             }),
 
             // event_count_min is the collected chunks count — used with
@@ -310,8 +370,11 @@ impl StreamingFieldResolver {
                     )
                 }
                 "python" => {
+                    let (choices_acc, choices_ty) = python_field_access("choices", item_type, typeddict_map);
+                    let (delta_acc, delta_ty) = python_field_access("delta", choices_ty.as_deref(), typeddict_map);
+                    let (tool_calls_acc, _) = python_field_access("tool_calls", delta_ty.as_deref(), typeddict_map);
                     format!(
-                        "[t for c in {chunks_var} for ch in (c.choices or []) for t in (ch.delta.tool_calls or [])]"
+                        "[t for c in {chunks_var} for ch in (c{choices_acc} or []) for t in (ch{delta_acc}{tool_calls_acc} or [])]"
                     )
                 }
                 "elixir" => {
@@ -392,8 +455,10 @@ impl StreamingFieldResolver {
                     // FinishReason is a PyO3 enum object, not a plain string.
                     // Wrap in str() so callers can do `.strip()` / string comparisons
                     // without `AttributeError: 'FinishReason' has no attribute 'strip'`.
+                    let (choices_acc, choices_ty) = python_field_access("choices", item_type, typeddict_map);
+                    let (finish_acc, _) = python_field_access("finish_reason", choices_ty.as_deref(), typeddict_map);
                     format!(
-                        "(str({chunks_var}[-1].choices[0].finish_reason) if {chunks_var} and {chunks_var}[-1].choices else None)"
+                        "(str({chunks_var}[-1]{choices_acc}[0]{finish_acc}) if {chunks_var} and {chunks_var}[-1]{choices_acc} else None)"
                     )
                 }
                 "elixir" => {
@@ -434,7 +499,8 @@ impl StreamingFieldResolver {
                     // Access the last chunk's usage object (may be None).
                     // Deep paths like usage.total_tokens are rendered as:
                     //   (chunks[-1].usage if chunks else None).total_tokens
-                    format!("({chunks_var}[-1].usage if {chunks_var} else None)")
+                    let (usage_acc, _) = python_field_access("usage", item_type, typeddict_map);
+                    format!("({chunks_var}[-1]{usage_acc} if {chunks_var} else None)")
                 }
                 "rust" => {
                     format!("{chunks_var}.last().and_then(|c| c.usage.as_ref())")
@@ -501,6 +567,29 @@ impl StreamingFieldResolver {
                     if lang == "zig" && root == "tool_calls" {
                         return None;
                     }
+                    // Python: choose subscript vs. attribute access at every hop per the owning
+                    // type's `TypedDict` classification, mirroring `field_access::python_renderer`'s
+                    // per-segment dispatch for ordinary field paths. `root_expr` must itself be
+                    // built through `accessor_with_typeddict_map` (not the plain `accessor()`
+                    // shim used below), so its own `choices`/`delta`/`tool_calls` hops pick up
+                    // the same classification the deep tail continues from.
+                    if lang == "python" && root == "tool_calls" {
+                        let root_expr = Self::accessor_with_typeddict_map(
+                            root,
+                            lang,
+                            chunks_var,
+                            module_qualifier,
+                            item_type,
+                            typeddict_map,
+                        )?;
+                        let tool_call_type = python_tool_call_element_type(item_type, typeddict_map);
+                        return Some(render_python_tool_calls_deep(
+                            &root_expr,
+                            tail,
+                            tool_call_type.as_deref(),
+                            typeddict_map,
+                        ));
+                    }
                     let root_expr = Self::accessor(root, lang, chunks_var)?;
                     Some(render_deep_tail(&root_expr, tail, lang))
                 } else {
@@ -555,12 +644,17 @@ fn has_event_variant_accessor(
     variant: EventVariant,
     item_type: &str,
     module_qualifier: Option<&str>,
+    typeddict_map: Option<&PythonTypedDictMap>,
 ) -> Option<String> {
     let tag = variant.tag();
     let camel = variant.upper_camel();
     match lang {
-        // Python: tagged-union exposes `.type` returning the lower-case wire tag.
-        "python" => Some(format!("any(e.type == \"{tag}\" for e in {chunks_var})")),
+        // Python: tagged-union exposes `.type` returning the lower-case wire tag — subscripted
+        // instead when `item_type` itself is classified `TypedDict`.
+        "python" => {
+            let (type_acc, _) = python_field_access("type", Some(item_type), typeddict_map);
+            Some(format!("any(e{type_acc} == \"{tag}\" for e in {chunks_var})"))
+        }
         // Node / TypeScript: deserialized union objects expose a `type`
         // discriminator field with the lower-case wire tag.
         "node" | "typescript" => Some(format!("{chunks_var}.some((e: any) => e?.type === \"{tag}\")")),

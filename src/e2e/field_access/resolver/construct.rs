@@ -394,6 +394,19 @@ impl FieldResolver {
         self
     }
 
+    /// The Python `TypedDict` classification this resolver was built with (see
+    /// [`Self::with_python_typeddict_map`]).
+    ///
+    /// Exposed so callers that render Python accessor expressions OUTSIDE this resolver's own
+    /// `PathSegment`-based rendering — namely the streaming-virtual-field accessors in
+    /// `e2e::codegen::streaming_assertions`, which build their expressions as hand-rolled
+    /// `format!` strings over the stream item type rather than the call's declared result type —
+    /// can classify their own field owners against the SAME map this resolver would consult,
+    /// instead of re-deriving the rule (see the `two-generators-disagree` skill). ~keep
+    pub fn python_typeddict_map(&self) -> &PythonTypedDictMap {
+        &self.python_typeddict_map
+    }
+
     /// Compute the per-owner-type field facts for [`Self::with_ir_result_fields`], under the
     /// optionality rule the binding for `language` applies. The returned map has no `root_type`
     /// yet — `with_ir_result_fields` anchors it to the specific call being rendered. Mirrors

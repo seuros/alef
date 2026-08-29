@@ -169,6 +169,12 @@ fn render_python_wildcard_assertion(
         field_resolver.element_accessor(elem_part, "python", "_e")
     };
     let iterable = format!("({array_accessor} or [])");
+    // `str({elem_accessor})` below is call-argument position: a narrowing crossing in
+    // `elem_accessor` (`(x if y else None)`) carries its own load-bearing parens elsewhere, but
+    // is redundant once already wrapped in `str(...)`'s own delimiters. `elem_accessor` itself
+    // stays unstripped for the non-call-argument uses this function doesn't have today but a
+    // future arm might add. ~keep
+    let elem_accessor_arg = strip_redundant_call_arg_parens(&elem_accessor);
 
     match assertion.assertion_type.as_str() {
         "contains" | "contains_all" | "not_contains" => {
@@ -187,7 +193,7 @@ fn render_python_wildcard_assertion(
                 } else {
                     format!("str({expected})")
                 };
-                let pred = format!("any({needle} in str({elem_accessor}) for _e in {iterable})");
+                let pred = format!("any({needle} in str({elem_accessor_arg}) for _e in {iterable})");
                 if negate {
                     let _ = writeln!(out, "    assert not {pred}");
                 } else {
@@ -196,7 +202,7 @@ fn render_python_wildcard_assertion(
             }
         }
         "not_empty" => {
-            let pred = format!("any(str({elem_accessor}) != \"\" for _e in {iterable})");
+            let pred = format!("any(str({elem_accessor_arg}) != \"\" for _e in {iterable})");
             let _ = writeln!(out, "    assert {pred}");
         }
         other => {
@@ -363,7 +369,15 @@ fn render_standard_assertion(
                         "any(any(v in text for text in _alef_e2e_item_texts(item)) for item in {field_access} for v in [{list_str}])"
                     )
                 } else if field_is_enum {
-                    format!("any(v.lower() in str({field_access}).lower() for v in [{list_str}])")
+                    // `str({field_access})` is call-argument position (the sole content between
+                    // `str(...)`'s own parens): a narrowing crossing's own enclosing parens are
+                    // redundant there, exactly as `strip_redundant_call_arg_parens` already
+                    // handles for `len(...)`/`hasattr(...)`. Every OTHER use of `field_access`
+                    // in this match (the `for item in {field_access}` / `v in {field_access}`
+                    // arms above and below) keeps it unstripped: those parens are load-bearing,
+                    // not call-argument position. ~keep
+                    let field_access_arg = strip_redundant_call_arg_parens(field_access);
+                    format!("any(v.lower() in str({field_access_arg}).lower() for v in [{list_str}])")
                 } else {
                     format!("any(v in {field_access} for v in [{list_str}])")
                 };
@@ -386,11 +400,16 @@ fn render_standard_assertion(
             if let Some(val) = &assertion.value {
                 let expected = value_to_python_string(val);
                 let op = if val.is_boolean() || val.is_null() { "is" } else { "==" };
+                // `field_access_arg`: the enum branch below wraps `field_access` as the sole
+                // argument of `_alef_e2e_text(...)` -- call-argument position, same shape as
+                // `len(...)`/`hasattr(...)` above. Harmless to compute even when `is_enum` is
+                // false: the template only reads it on the branch that needs it.
                 let rendered = crate::e2e::template_env::render(
                     "python/assertion.jinja",
                     minijinja::context! {
                         assertion_type => "equals",
                         field_access => field_access,
+                        field_access_arg => strip_redundant_call_arg_parens(field_access),
                         field_is_optional => field_is_optional,
                         is_enum => field_is_enum,
                         expected_val => expected,
@@ -553,7 +572,11 @@ fn python_contains_expr(
         return format!("any({expected} in text for item in {field_access} for text in _alef_e2e_item_texts(item))");
     }
     if field_is_enum && expected_is_string {
-        return format!("{expected}.lower() in str({field_access}).lower()");
+        // `str({field_access})` is call-argument position — see the identical fix and rationale
+        // for the `"contains_any"` arm in `render_standard_assertion`, which this mirrors for
+        // `contains_all`/`contains`/`not_contains`. ~keep
+        let field_access_arg = strip_redundant_call_arg_parens(field_access);
+        return format!("{expected}.lower() in str({field_access_arg}).lower()");
     }
     format!("{expected} in {field_access}")
 }

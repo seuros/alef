@@ -487,3 +487,130 @@ fn not_empty_on_an_optional_typeddict_field_does_not_double_wrap_the_narrowing_t
         "len's argument must not be double-wrapped: {out}"
     );
 }
+
+/// A resolver identical to `typeddict_resolver`'s "optional TypedDict field" shape, reused by
+/// both `str()` call-argument regression tests below so the same narrowing ternary
+/// (`(result["markdown"]["content"] if result["markdown"] else None)`) exercises both
+/// `_alef_e2e_text(...)` (equals+enum) and `str(...)` (contains_any+enum).
+///
+/// Both `"markdown"` AND `"markdown.content"` are registered as optional: `"markdown"` alone
+/// drives the ternary crossing in the rendered accessor (a crossing at a NON-last segment, per
+/// `render_python_with_optionals`'s doc), while `"markdown.content"` -- the full leaf path -- is
+/// what `FieldResolver::is_optional` checks by exact match to set the `field_is_optional` flag
+/// the `contains_any` template's presence guard reads. Registering only `"markdown"` would leave
+/// that flag false and the guard line unrendered; both are independently optional in the IR for
+/// the analogous nested-`Option` shape this stands in for.
+fn typeddict_resolver_with_optional_markdown_content() -> FieldResolver {
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::from(["markdown".to_string(), "markdown.content".to_string()]),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_python_typeddict_map(
+        {
+            let mut map = PythonTypedDictMap {
+                typeddict_types: ["ApiResult", "Markdown"].iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            };
+            map.field_types
+                .entry("ApiResult".to_string())
+                .or_default()
+                .insert("markdown".to_string(), "Markdown".to_string());
+            map
+        },
+        Some("ApiResult".to_string()),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// `str()`/`_alef_e2e_text()` call-argument redundant-paren sweep (round 2)
+// ---------------------------------------------------------------------------
+
+/// `equals` on an enum-classified field whose accessor is a narrowing ternary: the ternary's own
+/// parens are dropped once it lands as the sole argument of `_alef_e2e_text(...)` -- the same
+/// `strip_redundant_call_arg_parens` fix `not_empty`/`min_length` already had, extended to the
+/// `str()`-shaped `_alef_e2e_text()` call this task closes.
+#[test]
+fn equals_on_an_optional_typeddict_enum_field_does_not_double_wrap_the_narrowing_ternary_in_alef_e2e_text() {
+    let resolver = typeddict_resolver_with_optional_markdown_content();
+    let assertion = make_assertion("equals", Some("markdown.content"), Some(serde_json::json!("hi")));
+    let fields_enum: HashSet<String> = ["markdown.content".to_string()].into_iter().collect();
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        &fields_enum,
+        &HashMap::new(),
+        false,
+    );
+    assert_eq!(
+        out.trim(),
+        "assert _alef_e2e_text(result[\"markdown\"][\"content\"] if result[\"markdown\"] else None).lower() \
+         == \"hi\".lower()"
+    );
+    assert!(
+        !out.contains("_alef_e2e_text(("),
+        "_alef_e2e_text's argument must not be double-wrapped: {out}"
+    );
+}
+
+/// `contains_any` on the SAME optional/`TypedDict` enum field renders the identical narrowing
+/// ternary TWICE: once bare, as the `field_is_optional` presence guard (`{{ field_access }} is
+/// not None`), where the parens are load-bearing -- Python's conditional-expression precedence is
+/// lower than `is not`, so an unparenthesized `A if B else C is not None` parses as `A if B else
+/// (C is not None)`, not `(A if B else C) is not None` -- and once as the sole argument of
+/// `str(...)` inside the `any(...)` comparison, where the same parens are redundant. Both must
+/// render correctly from the one fix: the guard keeps its parens, `str(...)`'s argument does not
+/// double them.
+#[test]
+fn contains_any_on_an_optional_typeddict_enum_field_keeps_the_guards_parens_but_not_strs() {
+    let resolver = typeddict_resolver_with_optional_markdown_content();
+    let assertion = Assertion {
+        assertion_type: "contains_any".to_string(),
+        field: Some("markdown.content".to_string()),
+        values: Some(vec![serde_json::json!("hi")]),
+        ..Default::default()
+    };
+    let fields_enum: HashSet<String> = ["markdown.content".to_string()].into_iter().collect();
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        &fields_enum,
+        &HashMap::new(),
+        false,
+    );
+    let guard_line = "    assert (result[\"markdown\"][\"content\"] if result[\"markdown\"] else None) is not None\n";
+    let cmp_line = "    assert any(v.lower() in str(result[\"markdown\"][\"content\"] if result[\"markdown\"] else \
+        None).lower() for v in [\"hi\"])\n";
+    assert_eq!(out, format!("{guard_line}{cmp_line}"));
+}
+
+/// `python_contains_expr` backs `contains`/`contains_all`/`not_contains`. The enum branch wraps
+/// its `field_access` argument in `str(...)`, the same call-argument shape `contains_any` has
+/// above; unit-tested directly here (rather than through the full assertion pipeline) since the
+/// function takes the narrowing-ternary shape as a plain `&str` argument.
+#[test]
+fn python_contains_expr_enum_branch_does_not_double_wrap_a_narrowing_ternary() {
+    let field_access = "(result[\"markdown\"][\"content\"] if result[\"markdown\"] else None)";
+    let expr = python_contains_expr(field_access, "\"hi\"", true, false, true);
+    assert_eq!(
+        expr,
+        "\"hi\".lower() in str(result[\"markdown\"][\"content\"] if result[\"markdown\"] else None).lower()"
+    );
+}
+
+/// CONTROL: a `field_access` with no enclosing parens to strip is passed through unchanged inside
+/// `str(...)` — proving the fix only ever removes a REDUNDANT wrap, never alters an expression
+/// that had none to begin with.
+#[test]
+fn python_contains_expr_enum_branch_leaves_an_unparenthesized_field_access_untouched() {
+    let expr = python_contains_expr("result.status", "\"hi\"", true, false, true);
+    assert_eq!(expr, "\"hi\".lower() in str(result.status).lower()");
+}

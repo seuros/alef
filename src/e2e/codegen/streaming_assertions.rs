@@ -34,6 +34,7 @@
 
 mod accessors;
 mod model;
+mod python_typeddict_accessor;
 mod renderers;
 mod snippets;
 

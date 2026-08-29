@@ -322,6 +322,18 @@ pub(super) fn render_test_function(
     }
 
     // Build result and assertions
+    //
+    // The stream chunk item type is only needed for streaming fixtures, and only to classify
+    // that type (and the ones it transitively owns) against `TypedDict` — see
+    // `emit_streaming_virtual_assertion`. Resolved the same way rust/go/ruby resolve it for
+    // their own streaming accessors (`recipe::streaming_item_type`): an explicit
+    // `[crates.e2e.call.streaming] item_type` wins, else the matching `[[crates.adapters]]
+    // pattern = "streaming"` entry's `item_type`.
+    let streaming_item_type = is_streaming
+        .then(|| {
+            crate::e2e::codegen::recipe::streaming_item_type(call_config, &config.adapters, &[function_name.as_str()])
+        })
+        .flatten();
     let mut result_assertions = String::new();
     emit_result_and_assertions(
         &mut result_assertions,
@@ -334,6 +346,7 @@ pub(super) fn render_test_function(
         result_is_simple,
         is_streaming,
         force_bind_result,
+        streaming_item_type,
     );
 
     // Append trait-bridge teardown after assertions. This restores shared

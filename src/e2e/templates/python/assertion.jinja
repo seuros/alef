@@ -4,8 +4,8 @@
    - assertion_type: assertion type ("equals", "contains", etc.)
    - field_access: Python expression for the field
    - field_access_arg: `field_access` with one redundant enclosing `(...)` pair dropped, for use
-     in call-argument position (hasattr's/len's sole argument). Optional -- falls back to
-     `field_access` when the caller doesn't set it.
+     in call-argument position (hasattr's/len's/_alef_e2e_text's sole argument). Optional --
+     falls back to `field_access` when the caller doesn't set it.
    - field_is_optional: bool
    - expected_val: Python-formatted value string (or empty string)
    - has_expected_val: bool
@@ -27,7 +27,7 @@
 {% if assertion_type == "equals" %}
 {% if is_string_val %}
 {% if is_enum %}
-    assert _alef_e2e_text({{ field_access }}).lower() {{ op }} {{ expected_val }}.lower()
+    assert _alef_e2e_text({{ field_access_arg | default(field_access) }}).lower() {{ op }} {{ expected_val }}.lower()
 {% else %}
     assert {{ field_access }} {{ op }} {{ expected_val }}
 {% endif %}

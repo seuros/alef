@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(python-e2e): make the streaming assertion accessors subscript-aware for
+  `python_output = "typed-dict"` crates, closing the gap 0.75.0's TypedDict fix deliberately left
+  in `streaming_assertions::accessors`. Covers `stream_content`, `stream_complete`, `tool_calls`
+  and its deep continuation, `finish_reason`, `usage`, and the event accessors.
+- fix(python-e2e): resolve the streaming chunk item type for Python the way every other backend
+  already does, so `stream.has_*_event` and `stream.event_count_min` are no longer silently
+  skipped.
+- fix(python-e2e): strip the redundant enclosing parens from a narrowing accessor when it is the
+  sole argument of `str(...)` or `_alef_e2e_text(...)`, extending the `len(...)`/`hasattr(...)`
+  fix from 0.75.0 to every call-argument position a sweep could find.
+
 - fix(snippets): tag the snippet scratch root's parent rather than the scratch root itself. The
   scratch sweep deletes every entry under that root once it passes the abandonment threshold, so a
   `CACHEDIR.TAG` written there was created, swept, and rewritten on every run. A tag on the parent
