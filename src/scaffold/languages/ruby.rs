@@ -100,7 +100,7 @@ pub(crate) fn scaffold_ruby_cargo(
     };
     let mut dep_lines: Vec<String> = vec![
         format!("magnus = \"{}\"", tv::cargo::MAGNUS),
-        "rb-sys = \">=0.9, <0.9.128\"".to_owned(),
+        format!("rb-sys = \"{}\"", tv::cargo::RB_SYS),
         "serde = { version = \"1\", features = [\"derive\"] }".to_owned(),
         "serde_json = \"1\"".to_owned(),
     ];
@@ -438,7 +438,7 @@ RbSys::ExtensionTask.new("{cargo_pkg_name}", GEMSPEC) do |ext|
   # Pin cross_compile_versions to Ruby 3.2-3.5 stable releases.
   # This overrides the container's RUBY_CC_VERSION env var at rake task definition time.
   # The setter was added in a later rb_sys version; guard against older gem installations
-  # where the method does not exist (e.g., rb_sys 0.9.127 locked to avoid mingw bug in 0.9.128).
+  # where the method does not exist (older rb_sys lines predating the 0.9.130 floor).
   # rb-sys-dock 0.9.x ships images for Ruby 3.2, 3.3, 3.4, and 3.5; this list must
   # match those available images. Per-ABI platform gem windows are controlled by rake-compiler-dock.
   ext.cross_compile_versions = %w[3.5.0 3.4.9 3.3.11 3.2.11] if ext.respond_to?(:cross_compile_versions=)

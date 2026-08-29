@@ -16,6 +16,9 @@
 //! artifacts hosted on non-default registries) are tracked manually.
 
 pub mod npm {
+    // ~keep No `renovate:` marker: this is an engines FLOOR, not a dependency pin. Bumping it
+    // automatically would drop support for a Node line consumers may still target, which is a
+    // policy decision rather than a freshness one.
     pub const NODE_ENGINE: &str = ">= 22";
 
     // renovate: datasource=npm depName=@napi-rs/cli
@@ -76,6 +79,15 @@ pub mod cargo {
 
     // renovate: datasource=crate depName=magnus
     pub const MAGNUS: &str = "0.8";
+
+    // ~keep The FLOOR is the guard, not a ceiling. 0.9.128 shipped a mingw sysroot bug, and the
+    // constraint used to cap BELOW it (`>=0.9, <0.9.128`), which also locked every consumer out
+    // of every later fix. 0.9.130 is the current release and is above the broken window, so
+    // flooring there excludes 0.9.128/0.9.129 while leaving the 0.9.x line open. Keep this in
+    // lockstep with `gem::RB_SYS` -- the crate and the gem are two names for the same dependency
+    // and a consumer that resolves different versions for them will not build.
+    // renovate: datasource=crate depName=rb-sys
+    pub const RB_SYS: &str = ">=0.9.130, <0.10";
 
     // renovate: datasource=crate depName=ext-php-rs
     pub const EXT_PHP_RS: &str = "0.15.15";
@@ -160,6 +172,9 @@ pub mod cargo {
 }
 
 pub mod pypi {
+    // ~keep No `renovate:` marker: this is a compound range, and Renovate's regex custom manager
+    // derives no range strategy for one, so the entry would be tracked and never updated -- the
+    // same limitation documented on `gem`'s constraints. The floor admits every 1.x at build time.
     pub const MATURIN_BUILD_REQUIRES: &str = "maturin>=1.0,<2.0";
 
     // Replaces mypy: pyrefly is a fast single-binary Rust type-checker, run as a
@@ -187,7 +202,11 @@ pub mod gem {
     // tracked manually here — the `~>` floors already admit newer releases at
     // `bundle install`. (Other ecosystems whose versioning tolerates a missing
     // strategy, e.g. hex, keep their markers.)
-    pub const RB_SYS: &str = "\">= 0.9\", \"< 0.9.128\"";
+    // ~keep Emitted as two requirement arguments (`spec.add_dependency "rb_sys", ">= ...", "< ..."`),
+    // which the gemspec DSL accepts; a single comma-joined string is rejected as an "Illformed
+    // requirement". See `cargo::RB_SYS` for why the floor -- not a ceiling -- carries the
+    // 0.9.128 mingw guard, and keep the two in lockstep.
+    pub const RB_SYS: &str = "\">= 0.9.130\", \"< 0.10\"";
 
     pub const SORBET_RUNTIME: &str = "~> 0.5";
 
