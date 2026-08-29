@@ -146,6 +146,21 @@ fn classify_extra(raw: &str) -> ExcludeEntry {
 /// per-package build-output / vendored-dependency directories (a Go module's
 /// `vendor/`, a JS package's `dist/`, a CI job's `artifacts/`) that legitimately
 /// recur under `crates/*` or `packages/*`, not just at the repo root.
+///
+/// `schemas/**` excludes the directory holding [`crate::core::config::DEFAULT_SCHEMA_PATH`]
+/// (a consumer's vendored `alef.schema.json`, written only by `alef schema`) on the same
+/// "exact-byte data" reasoning as `fixtures/**`/`test_documents/**`: `alef schema --check`
+/// and `alef verify` classify that file byte-for-byte (see
+/// `core::config::schema::check_alef_config_schema`'s doc), so a poly JSON-format pass
+/// reshaping it after `alef schema` writes it put alef's own formatter and its own
+/// byte-exact gate in permanent disagreement -- `alef schema --check` passed right after
+/// `alef schema` ran, then failed stale the moment `alef all`'s whole-tree `poly fmt --fix`
+/// pass (which, unlike alef's own dev-repo `poly.toml`, had nothing excluding this path)
+/// touched the same file. Excluding it here, matching what alef's own repo already
+/// configures for itself, keeps the byte-exact gate honest without trying to make
+/// `serde_json::to_string_pretty`'s output byte-match an external formatter's opinion --
+/// a coupling that would silently break again the next time that formatter's JSON style
+/// changes. ~keep
 const EXCLUDES: &[(&str, ExcludeScope)] = &[
     ("*.freezed.dart", ExcludeScope::AnyDepth),
     ("*.g.dart", ExcludeScope::AnyDepth),
@@ -162,6 +177,7 @@ const EXCLUDES: &[(&str, ExcludeScope)] = &[
     ("fixtures/**", ExcludeScope::RepoRoot),
     ("node_modules/**", ExcludeScope::AnyDepth),
     ("readme_templates/**", ExcludeScope::RepoRoot),
+    ("schemas/**", ExcludeScope::RepoRoot),
     ("target/**", ExcludeScope::AnyDepth),
     ("templates/readme/**", ExcludeScope::RepoRoot),
     ("test_documents/**", ExcludeScope::RepoRoot),

@@ -64,6 +64,7 @@
 //! closes this gap.
 
 use super::normalization::{format_rust_content, normalize_content, normalize_whitespace};
+use crate::cli::pipeline::format::poly_format_strict;
 use crate::core::backend::GeneratedFile;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -92,6 +93,15 @@ pub fn find_create_once_template_drift(scaffold_files: &[GeneratedFile], base_di
 /// uses (rustfmt for `.rs`, then trailing-whitespace/blank-line normalization) so
 /// formatter-only noise is never mistaken for drift. A file that is not on disk at all is
 /// not "drifted" -- that is a missing-file condition a different check already covers.
+///
+/// Rust is fully normalized right here via `rustfmt`, the one formatter alef always
+/// requires. Every other create-once language (Ruby, Zig, Kotlin, ...) is instead run
+/// through `poly fmt` -- see [`non_rust_content_still_differs_after_formatting`] -- because
+/// `alef all`'s whole-tree pass already reformats those languages through poly after
+/// scaffolding (`cli::pipeline::format::converge_full_regen`), and comparing raw generated
+/// bytes against a poly-reformatted on-disk file mistook that reformatting for template
+/// drift (RuboCop's one-line-array expansion on a scaffolded Ruby spec was the reported
+/// instance, but the condition is generic to every language poly formats). ~keep
 fn differs_from_template(file: &GeneratedFile, base_dir: &Path) -> bool {
     let full_path = base_dir.join(&file.path);
     let Ok(existing) = std::fs::read_to_string(&full_path) else {
@@ -104,7 +114,63 @@ fn differs_from_template(file: &GeneratedFile, base_dir: &Path) -> bool {
     } else {
         existing
     };
-    normalize_whitespace(&on_disk) != normalize_whitespace(&generated)
+    if normalize_whitespace(&on_disk) == normalize_whitespace(&generated) {
+        return false;
+    }
+    if is_rust {
+        return true;
+    }
+    non_rust_content_still_differs_after_formatting(&file.path, base_dir, &generated, &on_disk)
+}
+
+/// For a non-Rust create-once file whose raw content already differs from its template:
+/// reformat BOTH sides with `poly fmt --fix` before concluding drift, so a language
+/// formatter poly wraps (RuboCop, gofmt, ...) reshaping generated output the same way it
+/// reshaped the on-disk copy is never mistaken for a real template change.
+///
+/// `false` -- no drift reported -- when `poly` cannot confirm the difference (not on PATH,
+/// or the format attempt fails on either side): running a language's real formatter here can
+/// be slow or require a toolchain a given host may lack, and a false negative (staying
+/// silent about a genuine template fix) is far cheaper than reporting the formatter's own
+/// output as drift. Same policy as the git-history ambiguity this module already resolves in
+/// favour of silence, applied to a second source of ambiguity. ~keep
+fn non_rust_content_still_differs_after_formatting(
+    relative_path: &Path,
+    base_dir: &Path,
+    generated: &str,
+    on_disk: &str,
+) -> bool {
+    let (Some(formatted_generated), Some(formatted_on_disk)) = (
+        normalize_with_poly(relative_path, base_dir, generated),
+        normalize_with_poly(relative_path, base_dir, on_disk),
+    ) else {
+        return false;
+    };
+    normalize_whitespace(&formatted_on_disk) != normalize_whitespace(&formatted_generated)
+}
+
+/// Reformat `content` with `poly fmt --fix`, or `None` if `poly` cannot run or the format
+/// attempt fails. Delegates the actual invocation (and its exit-code/stderr success policy)
+/// to [`poly_format_strict`] rather than re-deriving it, so this never disagrees with the
+/// exact tool `alef all` itself calls -- including the argument shape: every other caller of
+/// `poly_format_strict` hands it directories, never a lone file, so this does too (a fresh
+/// temp directory under `base_dir`, holding one file named like the real one) rather than
+/// being the one caller that finds out the CLI does not accept a bare file path.
+///
+/// The temp directory is created under `base_dir`, not the system temp root, so
+/// `poly_format_strict`'s `config_start` (`base_dir`) resolves the consumer's actual
+/// `poly.toml` exactly the way a real formatting pass would; the file keeps the real file's
+/// name so poly's per-extension engine selection sees what it would for the real file.
+fn normalize_with_poly(relative_path: &Path, base_dir: &Path, content: &str) -> Option<String> {
+    let file_name = relative_path.file_name()?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("alef-drift-check-")
+        .tempdir_in(base_dir)
+        .ok()?;
+    let temp_path = temp_dir.path().join(file_name);
+    std::fs::write(&temp_path, content).ok()?;
+    poly_format_strict(&[temp_dir.path().to_path_buf()], base_dir).ok()?;
+    std::fs::read_to_string(&temp_path).ok()
 }
 
 /// `Some(true)`: `relative`'s entire git history under `base_dir` is exactly one commit --
@@ -181,7 +247,11 @@ mod tests {
     /// The behavior this module exists to add: a file scaffolded once, never touched
     /// again (exactly one commit), that now differs from a template that has since been
     /// fixed -- this is exactly the zig/kotlin/kotlin_android situation the drift report
-    /// was built for. ~keep
+    /// was built for. `.zig` is a non-Rust extension, so this exercises
+    /// [`non_rust_content_still_differs_after_formatting`] too (poly has no Zig engine, so
+    /// its own formatting pass is a no-op here either way -- but confirming that still
+    /// requires `poly` itself to be reachable; without it the check stays silent by design,
+    /// see that function's doc). ~keep
     #[test]
     fn a_create_once_file_untouched_since_scaffold_and_differing_from_template_is_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -196,11 +266,20 @@ mod tests {
         )];
         let drift = find_create_once_template_drift(&files, dir.path());
 
-        assert_eq!(
-            drift,
-            vec![relative],
-            "an untouched file that predates a template fix must be reported"
-        );
+        if crate::cli::pipeline::format::is_tool_available("poly") {
+            assert_eq!(
+                drift,
+                vec![relative],
+                "an untouched file that predates a template fix must be reported"
+            );
+        } else {
+            assert_eq!(
+                drift,
+                Vec::<PathBuf>::new(),
+                "without poly on PATH the check cannot confirm the difference isn't formatting-only, so \
+                 it must stay silent (false negative preferred over false positive)"
+            );
+        }
     }
 
     /// The false-positive boundary this module deliberately declines to cross: once a
@@ -277,5 +356,67 @@ mod tests {
             Vec::<PathBuf>::new(),
             "marker-rail files are never in scope for this check"
         );
+    }
+
+    /// The general non-Rust condition Finding B's Ruby report is one instance of. A
+    /// scaffolded Python file that `alef all`'s whole-tree `poly fmt --fix` pass has already
+    /// reformatted (`x=1` -> `x = 1\n`, the same transformation `format_generated_python_...`
+    /// in `cli::pipeline::format::tests` already proves poly performs) must not be reported
+    /// as template drift just because the raw, never-formatted template output looks
+    /// different byte-for-byte. Passes identically whether or not `poly` is installed here:
+    /// with poly, the difference is confirmed as formatting-only; without it, the check
+    /// stays silent by design (see [`non_rust_content_still_differs_after_formatting`]). ~keep
+    #[test]
+    fn a_non_rust_create_once_file_reformatted_only_by_poly_is_not_reported_as_drift() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // On-disk content is what alef's own formatting pass already produced from the raw
+        // template output below -- not a consumer edit.
+        let relative = seed_file(dir.path(), "packages/python/scaffolded.py", "x = 1\n");
+        init_git_repo(dir.path());
+        git_commit_all(dir.path(), "scaffold");
+
+        let files = vec![create_once_file(relative, "x=1")];
+        let drift = find_create_once_template_drift(&files, dir.path());
+
+        assert_eq!(
+            drift,
+            Vec::<PathBuf>::new(),
+            "a difference poly's own formatter accounts for must never be reported as template drift"
+        );
+    }
+
+    /// Control for the same condition: a genuine content change on a non-Rust create-once
+    /// file must still be reported once poly can confirm the difference is not merely
+    /// formatting. Guards against the Finding B fix regressing into "never report non-Rust
+    /// drift". Requires `poly` on PATH to prove the positive case -- without it the module's
+    /// documented policy is to stay silent rather than guess (a false negative), which is a
+    /// different, already-covered code path, not this test's subject. ~keep
+    #[test]
+    fn a_non_rust_create_once_file_with_a_genuine_content_change_is_still_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative = seed_file(dir.path(), "packages/python/scaffolded.py", "x = 1\n");
+        init_git_repo(dir.path());
+        git_commit_all(dir.path(), "scaffold");
+
+        // The template now assigns a different value -- a real content change, not a
+        // reformatting-only difference.
+        let files = vec![create_once_file(relative.clone(), "x=2")];
+        let drift = find_create_once_template_drift(&files, dir.path());
+
+        if crate::cli::pipeline::format::is_tool_available("poly") {
+            assert_eq!(
+                drift,
+                vec![relative],
+                "a genuine content change must still be reported once poly confirms it isn't just formatting"
+            );
+        } else {
+            assert_eq!(
+                drift,
+                Vec::<PathBuf>::new(),
+                "without poly on PATH the check cannot confirm the difference isn't formatting-only, so \
+                 it must stay silent -- a false negative is accepted in exchange for never reporting a \
+                 formatter's own output as drift"
+            );
+        }
     }
 }

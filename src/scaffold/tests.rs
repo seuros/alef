@@ -105,6 +105,7 @@ mod licenses;
 mod marker_stamping;
 mod poly;
 mod poly_migrations;
+mod poly_schema_exclude;
 mod python_node;
 mod repair;
 mod unstamped_cache_miss;

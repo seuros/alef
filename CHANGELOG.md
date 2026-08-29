@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- fix(scaffold): exclude `schemas/**` from the scaffolded consumer `poly.toml`, matching alef's own
+  repository configuration. `alef all`'s whole-tree `poly fmt --fix` pass was reshaping a vendored
+  `alef.schema.json` after `alef schema` wrote it, leaving alef's own formatter and its own
+  byte-exact `alef schema --check` gate in permanent disagreement.
+- fix(verify): stop reporting a non-Rust create-once scaffold file as drifted from its template
+  when the only difference is formatting alef itself applied. The drift check normalized just
+  `.rs` files through rustfmt and compared every other language raw, so any formatter poly wraps
+  produced a false drift notice. Both sides are now reformatted before drift is concluded; when
+  `poly` cannot run, the check stays silent rather than reporting a difference it cannot confirm.
+
 - fix(scaffold): correct the scaffolded Java `pom.xml`'s maven-javadoc-plugin parameter from the
   unknown singular `failOnWarning` to the plugin's real plural `failOnWarnings`, so javadoc
   warnings actually fail the build as the configuration intended instead of being silently
