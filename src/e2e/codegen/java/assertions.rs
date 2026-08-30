@@ -17,6 +17,7 @@ use crate::e2e::fixture::Assertion;
 use heck::ToLowerCamelCase;
 
 use super::assertion_wildcard::render_wildcard_assertion;
+use super::enum_lowering::{EnumLowering, classify_enum_lowering};
 use super::values::json_to_java;
 
 #[allow(clippy::too_many_arguments)]
@@ -429,54 +430,11 @@ pub(super) fn render_assertion(
         return;
     }
 
-    // Determine if this field maps to a sealed-interface type declared in
-    // `assert_enum_types`.  When `Some`, the value is the type name (e.g.
-    // "FormatMetadata") and the corresponding `{TypeName}Display` helper will
-    // be used to produce the display string for assertions.
-    let sealed_display_type: Option<String> = assertion.field.as_deref().and_then(|f| {
-        let resolved = field_resolver.resolve(f);
-        assert_enum_types
-            .get(f)
-            .or_else(|| assert_enum_types.get(resolved))
-            .cloned()
-    });
-    let is_sealed_display_field = sealed_display_type.is_some();
-
-    // Determine if this field is an enum type (no `.contains()` on enums in Java).
-    // Check both the raw fixture field path and the resolved (aliased) path so that
-    // `fields_enum` entries can use either form (e.g., `"assets[].category"` or the
-    // resolved `"assets[].asset_category"`). The hand-maintained `enum_fields` config is
-    // checked first, but a field it never lists (e.g. a recursive struct's own enum field,
-    // reached only through its parent's path — `data.kind` on a self-referential
-    // `Option<Box<DataNode>>`) must still be rescued from the IR-derived classification, the
-    // same way `field_resolver.is_enum` already backs every other backend's equivalent check
-    // (csharp/kotlin/dart/gleam/swift/...). Without it, such a field silently falls through to
-    // a plain `assertEquals(String, EnumType)` that can never pass, since a `String` is never
-    // `.equals()` an enum constant. ~keep
-    // NOTE: Sealed-interface types (those in assert_enum_types) are not Java enums
-    // and do not have a .getValue() method — exclude them from enum field treatment.
-    //
-    // A third shape needs the same exclusion: an IR enum with data-carrying variants (e.g. a
-    // `#[serde(untagged)]` union) is still an "enum" in the IR, but the Java binding backend
-    // renders it as a wrapper class (`gen_java_tagged_union` / `gen_java_untagged_wrapper`),
-    // neither of which declares `getValue()`. `java_enum_emits_get_value` answers from the
-    // exact predicate the binding backend itself branches on
-    // (`backends::java::gen_bindings::emits_get_value`), so this can never disagree with what
-    // was actually emitted; it answers `None` when the IR doesn't resolve a concrete enum type
-    // for the field (e.g. a `fields_enum`-only config entry), in which case the pre-existing
-    // behaviour (assume `getValue()` is available) is kept. ~keep
-    let field_is_enum = assertion.field.as_deref().is_some_and(|f| {
-        let resolved = field_resolver.resolve(f);
-        let in_enum_fields = enum_fields.get(f).is_some()
-            || enum_fields.get(resolved).is_some()
-            || field_resolver.is_enum(f)
-            || field_resolver.is_enum(resolved);
-        let emits_get_value = field_resolver
-            .java_enum_emits_get_value(f)
-            .or_else(|| field_resolver.java_enum_emits_get_value(resolved))
-            .unwrap_or(true);
-        in_enum_fields && !is_sealed_display_field && emits_get_value
-    });
+    let EnumLowering {
+        sealed_display_type,
+        is_sealed_display_field,
+        field_is_enum,
+    } = classify_enum_lowering(assertion.field.as_deref(), field_resolver, enum_fields, assert_enum_types);
 
     // Determine if this field is an array (List<T>) — needed to choose .toString() for
     // contains assertions, since List.contains(Object) uses equals() which won't match

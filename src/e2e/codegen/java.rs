@@ -360,6 +360,7 @@ impl E2eCodegen for JavaCodegen {
 mod args;
 mod assertion_wildcard;
 mod assertions;
+mod enum_lowering;
 mod field_shape;
 mod http;
 mod project;
