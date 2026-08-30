@@ -40,8 +40,8 @@
 //! left the cursor on the map's OWNER, so `extras[key].title` classified `title` against the
 //! struct that declares `extras` rather than against the map's VALUE type. Retaining the owner
 //! and defaulting to `None` are both guesses — each happens to be right for a different config —
-//! so the fix is a DERIVED edge (`PythonTypedDictMap::map_value_types`, built in
-//! `python_typeddict` from `call_ir::map_value_named_type`) rather than a different default:
+//! so the fix is a DERIVED edge (recorded by `python_typeddict` from
+//! `call_ir::map_value_named_type`) rather than a different default:
 //! `named_type` names nothing for a map, so before that edge existed the IR had no answer to
 //! give at all. ~keep
 
@@ -421,10 +421,7 @@ mod tests {
 
     fn with_map_values(mut map: PythonTypedDictMap, edges: &[(&str, &str, &str)]) -> PythonTypedDictMap {
         for (owner, field, target) in edges {
-            map.map_value_types
-                .entry(owner.to_string())
-                .or_default()
-                .insert(field.to_string(), target.to_string());
+            map.record_map_value(owner, field, target);
         }
         map
     }
@@ -535,7 +532,7 @@ mod tests {
         assert_eq!(
             python_element_owner_type(&parse_path("results[0]"), &map),
             Some("Report".to_string()),
-            "a field hop reads field_types, never map_value_types"
+            "a field hop never reads the internal map-value edge namespace"
         );
     }
 }

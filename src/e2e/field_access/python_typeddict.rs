@@ -47,31 +47,38 @@ pub(super) fn build_python_typeddict_map(
     let struct_names: HashSet<&str> = type_defs.iter().map(|t| t.name.as_str()).collect();
     let reexported: ahash::AHashSet<&str> = reexported_types.iter().map(String::as_str).collect();
 
-    let mut typeddict_types: HashSet<String> = HashSet::new();
-    let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut map_value_types: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut map = PythonTypedDictMap::default();
 
     for type_def in type_defs {
         if type_def.is_return_type && is_dataclass_backed_config(type_def, output_style, &reexported) {
-            typeddict_types.insert(type_def.name.clone());
+            map.typeddict_types.insert(type_def.name.clone());
         }
         for field in &type_def.fields {
-            record_edge(&mut field_types, type_def, field, named_type(&field.ty), &struct_names);
             record_edge(
-                &mut map_value_types,
+                &mut map.field_types,
                 type_def,
                 field,
-                map_value_named_type(&field.ty),
+                named_type(&field.ty),
                 &struct_names,
             );
+            record_map_value_edge(&mut map, type_def, field, &struct_names);
         }
     }
 
-    PythonTypedDictMap {
-        typeddict_types,
-        field_types,
-        map_value_types,
-        root_type: None,
+    map
+}
+
+fn record_map_value_edge(
+    map: &mut PythonTypedDictMap,
+    type_def: &TypeDef,
+    field: &crate::core::ir::FieldDef,
+    struct_names: &HashSet<&str>,
+) {
+    let Some(named) = map_value_named_type(&field.ty) else {
+        return;
+    };
+    if struct_names.contains(named) {
+        map.record_map_value(&type_def.name, &field.name, named);
     }
 }
 
@@ -174,7 +181,7 @@ mod tests {
     /// `extras[key].title` has a derivable owner for `title`.
     ///
     /// Reverting the fix drops the edge entirely (`named_type` names nothing for a map), leaving
-    /// `map_value_types` empty and the renderer with nothing to advance to.
+    /// the internal map-value namespace empty and the renderer with nothing to advance to.
     #[test]
     fn a_map_valued_field_records_the_value_type_as_a_map_value_edge() {
         let map = build_python_typeddict_map(
@@ -183,8 +190,8 @@ mod tests {
             &[],
         );
         assert_eq!(
-            map.map_value_types.get("ParseOutput").and_then(|f| f.get("extras")),
-            Some(&"Metadata".to_string())
+            map.advance_map_value(Some("ParseOutput"), "extras").as_deref(),
+            Some("Metadata")
         );
     }
 
@@ -217,8 +224,9 @@ mod tests {
                 Some(&"Metadata".to_string()),
                 "an Option/Vec of a named type is still a plain traversal edge"
             );
-            assert!(
-                map.map_value_types.is_empty(),
+            assert_eq!(
+                map.advance_map_value(Some("ParseOutput"), "extras"),
+                None,
                 "an Option/Vec of a named type is not a map and traverses no key access"
             );
         }
@@ -234,6 +242,6 @@ mod tests {
             PythonDtoStyle::TypedDict,
             &[],
         );
-        assert!(map.map_value_types.is_empty());
+        assert_eq!(map.advance_map_value(Some("ParseOutput"), "extras"), None);
     }
 }

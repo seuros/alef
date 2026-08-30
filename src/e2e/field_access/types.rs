@@ -492,19 +492,23 @@ impl SwiftFirstClassMap {
 ///   subscript access for fields on this type".
 /// * `field_types[type_name][field_name]` — the IR-resolved `Named` type that `field_name`
 ///   traverses into (seeing through `Option`/`Vec`, matching `ir_enum`/`ir_collection`).
-/// * `map_value_types[type_name][field_name]` — for a MAP-typed field, the `Named` type one KEY
-///   access into it lands on. Deliberately a separate edge set from `field_types`: `extras` on
-///   `HashMap<String, Meta>` is a `dict` after a field hop and a `Meta` only after a key hop, and
-///   only the segment that renders the key access may advance to `Meta`. Folding both into
-///   `field_types` would let a dotted `extras.title` path classify `title` against `Meta` when it
-///   is really a key on a plain `dict`. ~keep
+/// * Map-value traversal edges share `field_types`' storage under an internal NUL-prefixed key.
+///   Rust field identifiers cannot contain NUL, so a plain field hop and a map key hop remain
+///   collision-free while the public struct shape stays source-compatible. `extras` on
+///   `HashMap<String, Meta>` is a `dict` after a field hop and a `Meta` only after a key hop;
+///   [`Self::advance_map_value`] is the only reader of that internal namespace. ~keep
 /// * `root_type` — the IR type name backing the result variable.
 #[derive(Debug, Clone, Default)]
 pub struct PythonTypedDictMap {
     pub typeddict_types: HashSet<String>,
     pub field_types: HashMap<String, HashMap<String, String>>,
-    pub map_value_types: HashMap<String, HashMap<String, String>>,
     pub root_type: Option<String>,
+}
+
+const MAP_VALUE_EDGE_PREFIX: &str = "\0map-value:";
+
+fn map_value_edge_key(field_name: &str) -> String {
+    format!("{MAP_VALUE_EDGE_PREFIX}{field_name}")
 }
 
 impl PythonTypedDictMap {
@@ -534,14 +538,23 @@ impl PythonTypedDictMap {
     /// `TypedDict`" — the two are different answers, and the MapAccess renderer keeps its previous
     /// owner rather than substituting `is_typeddict(None)`'s attribute-access default for a fact
     /// it never derived. ~keep
-    pub fn advance_map_value(&self, owner_type: Option<&str>, field_name: &str) -> Option<String> {
+    pub(crate) fn advance_map_value(&self, owner_type: Option<&str>, field_name: &str) -> Option<String> {
         let owner = owner_type?;
-        self.map_value_types.get(owner).and_then(|m| m.get(field_name).cloned())
+        self.field_types
+            .get(owner)
+            .and_then(|fields| fields.get(&map_value_edge_key(field_name)).cloned())
+    }
+
+    pub(crate) fn record_map_value(&mut self, owner_type: &str, field_name: &str, target_type: &str) {
+        self.field_types
+            .entry(owner_type.to_string())
+            .or_default()
+            .insert(map_value_edge_key(field_name), target_type.to_string());
     }
 
     /// True when no per-type information is recorded.
     pub fn is_empty(&self) -> bool {
-        self.typeddict_types.is_empty() && self.field_types.is_empty() && self.map_value_types.is_empty()
+        self.typeddict_types.is_empty() && self.field_types.is_empty()
     }
 }
 
