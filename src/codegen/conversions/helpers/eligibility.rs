@@ -189,6 +189,22 @@ pub fn can_generate_conversion(typ: &TypeDef, convertible: &AHashSet<String>) ->
     convertible.contains(&typ.name)
 }
 
+/// Whether a backend emits `impl From<core::T> for T` for `typ`.
+///
+/// `core_to_binding` must be the set returned by [`core_to_binding_convertible_types`] for the
+/// same surface and the same `excluded_field_types` the caller passes to its own type emitter —
+/// this predicate deliberately takes the set rather than recomputing it, so a caller cannot pair
+/// the right question with the wrong set. Trait definitions are excluded because no backend emits
+/// a struct wrapper, and therefore no conversion, for one.
+///
+/// This is the single predicate shared by the site that *emits* the impl and every site that
+/// *calls* it (`core_value.into()`). A caller that re-derives its own eligibility rule can emit a
+/// `.into()` against a `From` impl that was never generated — the exact drift this exists to make
+/// impossible. ~keep
+pub fn core_to_binding_from_impl_emitted(typ: &TypeDef, core_to_binding: &AHashSet<String>) -> bool {
+    !typ.is_trait && can_generate_conversion(typ, core_to_binding)
+}
+
 /// Whether the pyo3 backend gives `typ` a `from_json` staticmethod. Requires all three,
 /// independently necessary, conditions: `typ` itself derives `serde::Deserialize`
 /// (`TypeDef::has_serde` — without it there is no `Deserialize` impl to parse into), the
