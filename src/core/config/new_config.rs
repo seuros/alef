@@ -304,7 +304,7 @@ impl NewAlefConfig {
             validate_ffi_config(&krate.name, ffi)?;
         }
 
-        Ok(ResolvedCrateConfig {
+        let resolved = ResolvedCrateConfig {
             name: krate.name.clone(),
             sources: krate.sources.clone(),
             source_crates,
@@ -383,7 +383,9 @@ impl NewAlefConfig {
             crate_attributes,
             cargo_lints: krate.cargo_lints.clone(),
             verify: krate.verify.clone(),
-        })
+        };
+        validate_effective_ffi_config(&resolved)?;
+        Ok(resolved)
     }
 }
 
@@ -516,6 +518,78 @@ fn validate_ffi_config(crate_name: &str, ffi: &FfiConfig) -> Result<(), ResolveE
     }
 
     Ok(())
+}
+
+fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), ResolveError> {
+    let uses_c_abi = config.ffi.is_some()
+        || config.languages.iter().any(|language| {
+            matches!(
+                language,
+                Language::Ffi
+                    | Language::C
+                    | Language::Go
+                    | Language::Java
+                    | Language::Csharp
+                    | Language::Dart
+                    | Language::Kotlin
+                    | Language::Swift
+                    | Language::Zig
+                    | Language::KotlinAndroid
+                    | Language::Jni
+            )
+        });
+    if !uses_c_abi {
+        return Ok(());
+    }
+
+    let invalid = |field: &str, value: &str, error: String| {
+        ResolveError::InvalidConfig(format!(
+            "crate `{}`: effective C-ABI {field} value `{value}` is invalid: {error}",
+            config.name
+        ))
+    };
+    let prefix = config.ffi_prefix();
+    abi_grammar::validate_ascii_abi_identifier(&prefix).map_err(|error| invalid("prefix", &prefix, error))?;
+    let header = config.ffi_header_name();
+    abi_grammar::validate_c_header_filename(&header).map_err(|error| invalid("header_name", &header, error))?;
+    let lib = config.ffi_lib_name();
+    abi_grammar::validate_native_artifact_basename(&lib).map_err(|error| invalid("lib_name", &lib, error))?;
+
+    if config.languages.contains(&Language::C) {
+        validate_effective_c_e2e_config(config, &invalid)?;
+    }
+    Ok(())
+}
+
+fn validate_effective_c_e2e_config(
+    config: &ResolvedCrateConfig,
+    invalid: &impl Fn(&str, &str, String) -> ResolveError,
+) -> Result<(), ResolveError> {
+    let Some(e2e) = config.e2e.as_ref() else {
+        return Ok(());
+    };
+    let package = e2e.resolve_package("c");
+    if let Some(overrides) = e2e.call.overrides.get("c") {
+        if let Some(prefix) = overrides.prefix.as_deref() {
+            abi_grammar::validate_ascii_abi_identifier(prefix)
+                .map_err(|error| invalid("e2e.call.overrides.c.prefix", prefix, error))?;
+        }
+        if let Some(header) = overrides.header.as_deref() {
+            abi_grammar::validate_c_header_filename(header)
+                .map_err(|error| invalid("e2e.call.overrides.c.header", header, error))?;
+        }
+    }
+    if let Some(name) = package.as_ref().and_then(|package| package.name.as_deref()) {
+        abi_grammar::validate_native_artifact_basename(name)
+            .map_err(|error| invalid("e2e.packages.c.name", name, error))?;
+    }
+    let path = package
+        .as_ref()
+        .and_then(|package| package.path.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| config.ffi_crate_path());
+    abi_grammar::validate_c_make_path(&path, e2e.effective_output())
+        .map_err(|error| invalid("e2e.packages.c.path", &path, error))
 }
 
 /// Resolve a list of `SourceCrate` entries, rebasing sources for any entry with

@@ -91,6 +91,34 @@ pub fn validate_native_artifact_basename(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a path embedded unquoted in the generated C Makefile.
+pub fn validate_c_make_path(value: &str, output_base: &str) -> Result<(), String> {
+    if value.is_empty() || std::path::Path::new(value).is_absolute() || value.contains('\\') {
+        return Err(format!("`{value}` must be a non-empty relative POSIX path"));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '+'))
+    {
+        return Err(format!("`{value}` contains a character active in Make or the shell"));
+    }
+
+    let mut depth = output_base
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .count()
+        + 1;
+    for component in value.split('/') {
+        match component {
+            "" | "." => {}
+            ".." if depth == 0 => return Err(format!("`{value}` escapes the repository root")),
+            ".." => depth -= 1,
+            _ => depth += 1,
+        }
+    }
+    Ok(())
+}
+
 /// Validate a bare ASCII ABI identifier: `[ffi] prefix` and a capsule's
 /// `c_return_type`.
 ///
@@ -123,7 +151,83 @@ pub fn validate_ascii_abi_identifier(value: &str) -> Result<(), String> {
             "`{value}` may only contain ASCII letters, digits, and `_` after the first character"
         ));
     }
+    if value.starts_with("__")
+        || value
+            .strip_prefix('_')
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+    {
+        return Err(format!("`{value}` is reserved to the C implementation"));
+    }
+    if is_c_reserved_keyword(value) {
+        return Err(format!("`{value}` is a reserved C keyword"));
+    }
     Ok(())
+}
+
+const C_RESERVED_KEYWORDS: &[&str] = &[
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "_Alignas",
+    "_Alignof",
+    "_Atomic",
+    "_Bool",
+    "_Complex",
+    "_Decimal32",
+    "_Decimal64",
+    "_Decimal128",
+    "_Generic",
+    "_Imaginary",
+    "_Noreturn",
+    "_Static_assert",
+    "_Thread_local",
+    "alignas",
+    "alignof",
+    "bool",
+    "constexpr",
+    "false",
+    "nullptr",
+    "static_assert",
+    "thread_local",
+    "true",
+    "typeof",
+    "typeof_unqual",
+];
+
+fn is_c_reserved_keyword(value: &str) -> bool {
+    C_RESERVED_KEYWORDS.contains(&value)
 }
 
 /// Validate a capsule's `into_raw_type`: a fully-qualified Rust pointee type path
@@ -191,6 +295,9 @@ pub fn validate_rust_pointee_type_path(value: &str) -> Result<(), String> {
 /// rejects everything else, including loops) closes both off; nothing accepted
 /// by this grammar can produce a literal `'` in the source text.
 pub fn validate_cfg_expression(value: &str) -> Result<(), String> {
+    if value.chars().any(|ch| ch == '\'' || ch.is_control()) {
+        return Err("cfg expression contains a character that is active in its TOML literal-string host".to_string());
+    }
     let expr: syn::Expr =
         syn::parse_str(value).map_err(|error| format!("`{value}` is not a valid cfg expression: {error}"))?;
     validate_cfg_expr_shape(&expr)
@@ -220,6 +327,9 @@ fn validate_cfg_expr_shape(expr: &syn::Expr) -> Result<(), String> {
             };
             if !matches!(name.as_str(), "any" | "all" | "not") {
                 return Err(format!("`{name}` is not a valid cfg combinator (expected any/all/not)"));
+            }
+            if name == "not" && call.args.len() != 1 {
+                return Err("cfg combinator `not` requires exactly one argument".to_string());
             }
             for arg in &call.args {
                 validate_cfg_expr_shape(arg)?;
@@ -383,6 +493,13 @@ mod tests {
         assert!(validate_native_artifact_basename("my/lib").is_err());
     }
 
+    #[test]
+    fn c_make_path_rejects_expansion_and_repository_escape() {
+        assert_eq!(validate_c_make_path("../../crates/sample-ffi", "e2e"), Ok(()));
+        assert!(validate_c_make_path("../../$(shell touch pwned)", "e2e").is_err());
+        assert!(validate_c_make_path("../../../outside", "e2e").is_err());
+    }
+
     // -- ascii abi identifier -------------------------------------------------
 
     #[test]
@@ -396,6 +513,9 @@ mod tests {
         assert!(validate_ascii_abi_identifier("evil\", \"x").is_err());
         assert!(validate_ascii_abi_identifier("evil-prefix").is_err());
         assert!(validate_ascii_abi_identifier("123start").is_err());
+        assert!(validate_ascii_abi_identifier("int").is_err());
+        assert!(validate_ascii_abi_identifier("__private").is_err());
+        assert!(validate_ascii_abi_identifier("_Private").is_err());
     }
 
     // -- rust pointee type path -----------------------------------------------
@@ -451,6 +571,9 @@ mod tests {
     fn cfg_expression_rejects_non_string_and_unknown_combinator() {
         assert!(validate_cfg_expression("target_os = 1").is_err());
         assert!(validate_cfg_expression("evil(target_os = \"x\")").is_err());
+        assert!(validate_cfg_expression("target_os = \"foo'bar\"").is_err());
+        assert!(validate_cfg_expression("not()").is_err());
+        assert!(validate_cfg_expression("not(unix, windows)").is_err());
     }
 
     // -- cargo package name ------------------------------------------------------

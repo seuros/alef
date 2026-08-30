@@ -607,8 +607,9 @@ pub(super) fn gen_build_rs(
                 .count()
                 .max(1);
             let to_root = "../".repeat(depth);
-            let dest_dir = format!("{to_root}{go_dir}/include");
-            format!("        Path::new(\"{dest_dir}/{escaped_header_name}\"),\n")
+            let destination =
+                super::rust_literal::escape_rust_str_literal(&format!("{to_root}{go_dir}/include/{header_name}"));
+            format!("        Path::new(\"{destination}\"),\n")
         }
         None => String::new(),
     };

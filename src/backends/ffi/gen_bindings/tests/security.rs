@@ -2,6 +2,7 @@ use super::super::FfiBackend;
 use super::common::{resolved_one, sample_api, sample_config};
 use crate::core::backend::Backend;
 use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
+use std::collections::HashMap;
 
 fn generated_lib(api: &ApiSurface) -> String {
     let content = FfiBackend
@@ -154,4 +155,18 @@ fn field_accessor_reports_conversion_errors_and_documents_ownership() {
     let named_accessor = generated_export_block(&named_lib, "my_lib_process_result_metrics");
     assert!(named_accessor.contains("A non-null returned handle is owned by the caller."));
     assert!(named_accessor.contains("It must be freed with `my_lib_metrics_free`."));
+}
+
+#[test]
+fn go_header_destination_escapes_the_composed_rust_path() {
+    let build = super::super::helpers::gen_build_rs(
+        "sample.h",
+        "libsample_ffi",
+        Some("packages/go/evil\"; panic!(\"pwned\"); //"),
+        "sample",
+        &HashMap::new(),
+    );
+    syn::parse_file(&build).expect("generated build.rs remains valid Rust");
+    assert!(build.contains(r#"evil\"; panic!(\"pwned\"); //"#));
+    assert!(!build.contains(r#"evil"; panic!("pwned"); //"#));
 }
