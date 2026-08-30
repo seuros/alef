@@ -107,4 +107,3 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
         "must not emit Segments[0] != nil for a value-type element; got:\n{out}"
     );
 }
-

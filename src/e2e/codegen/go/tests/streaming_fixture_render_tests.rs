@@ -72,7 +72,6 @@ fn test_streaming_fixture_emits_collect_snippet() {
         "should emit collect loop, got:\n{out}"
     );
 }
-
 #[test]
 fn test_streaming_with_client_factory_and_json_arg() {
     // Covers no returns_result on the call, json_object args
@@ -156,4 +155,3 @@ fn test_streaming_with_client_factory_and_json_arg() {
         "should emit collect loop, got:\n{out}"
     );
 }
-
