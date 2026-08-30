@@ -309,7 +309,7 @@ fn node_lowers_external_tagged_unit_and_payload_array_elements() {
         id: "choose_many".into(),
         description: "choose unit and payload variants".into(),
         input: serde_json::json!({
-            "choices": ["plain", {"type": "wrapped", "value": "payload"}]
+            "choices": ["plain", {"wrapped": {"value": "payload"}}]
         }),
         assertions: vec![not_error_assertion()],
         ..Default::default()
@@ -370,4 +370,65 @@ fn node_lowers_external_tagged_unit_and_payload_array_elements() {
         ),
         "{output}"
     );
+}
+
+#[test]
+fn node_imports_untagged_object_array_element_casts_as_types() {
+    let argument = ArgMapping {
+        name: "choices".into(),
+        field: "input.choices".into(),
+        arg_type: "json_object".into(),
+        element_type: Some("ObjectChoice".into()),
+        optional: false,
+        owned: false,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "chooseMany".into();
+    e2e_config.call.args = vec![argument.clone()];
+    let fixture = Fixture {
+        id: "choose_objects".into(),
+        description: "choose object payloads".into(),
+        input: serde_json::json!({"choices": [{"value": "payload"}]}),
+        assertions: vec![not_error_assertion()],
+        ..Default::default()
+    };
+    let choice = EnumDef {
+        name: "ObjectChoice".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Value".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "value".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let output = render_test_file(
+        "node",
+        "choice",
+        &[&fixture],
+        "",
+        "sample-bindings",
+        "chooseMany",
+        &[argument],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[choice],
+        &[],
+        "",
+        &Default::default(),
+        &[],
+    );
+
+    assert!(output.contains("type ObjectChoice"), "{output}");
+    assert!(output.contains("{ value: \"payload\" } as ObjectChoice"), "{output}");
 }

@@ -685,7 +685,7 @@ fn node_adjacent_tagged_payload_uses_binding_content_field() {
     }];
 
     let expression = ts_builder_expression(
-        serde_json::json!({"@type": "wrapped-value", "value": "payload"})
+        serde_json::json!({"@type": "wrapped-value", "payload-data": {"value": "payload"}})
             .as_object()
             .expect("object"),
         "AdjacentChoice",
@@ -704,6 +704,46 @@ fn node_adjacent_tagged_payload_uses_binding_content_field() {
         expression,
         "{ \"@type\": \"wrapped-value\", \"payload-data\": { value: \"payload\" } } as AdjacentChoice"
     );
+}
+
+#[test]
+fn node_untagged_object_literal_registers_its_cast_type_and_compiles() {
+    let enums = [EnumDef {
+        name: "ObjectChoice".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Value".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "value".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let mut referenced_enums = std::collections::BTreeSet::new();
+    let expression = ts_builder_expression(
+        serde_json::json!({"value": "payload"}).as_object().expect("object"),
+        "ObjectChoice",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &[],
+        &enums,
+        "",
+        &[],
+        &mut referenced_enums,
+    );
+
+    assert_eq!(
+        referenced_enums,
+        std::collections::BTreeSet::from(["type ObjectChoice".into()])
+    );
+    assert_strict_typescript_compiles(&format!(
+        "type ObjectChoice = {{ value: string }};\nconst choice: ObjectChoice = {expression};\nvoid choice;\n"
+    ));
 }
 
 /// The filter site directly: a fixture key `SampleOptions` doesn't declare must refuse

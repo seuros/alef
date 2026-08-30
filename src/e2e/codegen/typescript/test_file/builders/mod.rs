@@ -81,8 +81,26 @@ fn build_node_tagged_enum_variant_literal(
     referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> Option<String> {
     let tag_field = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
-    let tag_value_json = obj.get(tag_field)?;
-    let tag_value = tag_value_json.as_str()?;
+    let (tag_value, payload): (&str, std::borrow::Cow<'_, serde_json::Map<String, serde_json::Value>>) =
+        if let Some(content_field) = enum_def.serde_content.as_deref() {
+            let serde_tag = enum_def.serde_tag.as_deref()?;
+            (
+                obj.get(serde_tag)?.as_str()?,
+                std::borrow::Cow::Borrowed(obj.get(content_field)?.as_object()?),
+            )
+        } else if let Some(serde_tag) = enum_def.serde_tag.as_deref() {
+            let tag_value = obj.get(serde_tag)?.as_str()?;
+            let mut remaining = obj.clone();
+            remaining.remove(serde_tag);
+            (tag_value, std::borrow::Cow::Owned(remaining))
+        } else {
+            let mut entries = obj.iter();
+            let (tag_value, payload) = entries.next()?;
+            if entries.next().is_some() {
+                return None;
+            }
+            (tag_value, std::borrow::Cow::Borrowed(payload.as_object()?))
+        };
     let variant = enum_def.variants.iter().find(|v| {
         crate::codegen::naming::wire_variant_value(
             &v.name,
@@ -100,10 +118,8 @@ fn build_node_tagged_enum_variant_literal(
 
     let payload_key = crate::backends::napi::tagged_enum_binding_field_js_name(enum_def, variant, field);
 
-    let mut remaining = obj.clone();
-    remaining.remove(tag_field);
     let nested_with_cast = ts_builder_expression_inner(
-        &remaining,
+        &payload,
         inner_type_name,
         nested_types,
         "node",
@@ -125,7 +141,7 @@ fn build_node_tagged_enum_variant_literal(
     referenced_enums.insert(format!("type {type_name}"));
     Some(format!(
         "{{ {tag_key}: {}, {payload_key}: {nested_expr} }} as {type_name}",
-        json_to_js(tag_value_json)
+        serde_json::to_string(tag_value).expect("enum wire values serialize as JSON strings")
     ))
 }
 
@@ -469,6 +485,12 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             fields.push(format!("{js_key}: {field_expr}"));
         }
         let obj_literal = format!("{{ {} }}", fields.join(", "));
+        if enums
+            .iter()
+            .any(|definition| definition.name == type_name && crate::backends::napi::is_untagged_data_enum(definition))
+        {
+            referenced_enums.insert(format!("type {type_name}"));
+        }
         return format!("{obj_literal} as {type_name}");
     }
 
