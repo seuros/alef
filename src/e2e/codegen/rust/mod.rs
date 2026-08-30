@@ -20,8 +20,11 @@ mod assertion_streaming_option_tests;
 mod assertion_synthetic;
 #[cfg(test)]
 mod assertion_wildcard_element_tests;
+mod assertion_wire;
 #[cfg(test)]
 mod collection_field_classification_tests;
+#[cfg(test)]
+mod containment_enum_wire_tests;
 mod fieldless_result;
 #[cfg(test)]
 mod fieldless_result_tests;

@@ -2,12 +2,12 @@
 
 use std::fmt::Write as FmtWrite;
 
-use crate::e2e::escape::rust_raw_string;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
 use super::args::json_to_rust_literal;
 use super::assertion_synthetic::{numeric_literal, value_to_rust_string};
+use super::assertion_wire::renamed_variant_expected;
 
 pub(super) fn render_equals_assertion(
     out: &mut String,
@@ -108,26 +108,6 @@ pub(super) fn render_equals_assertion(
             }
         }
     }
-}
-
-/// Rewrite an enum field's fixture expectation from the serde WIRE value to the Rust variant
-/// identifier, so it compares like-for-like against the `format!("{:?}", ..)` expression the
-/// enum branch of [`render_equals_assertion`] emits.
-///
-/// Returns `None` — leaving the fixture literal exactly as authored — whenever the IR cannot
-/// resolve the field to a concrete enum, the expectation is not a string, or no serde rename
-/// separates the wire spelling from the identifier. That last case is the idiomatic one and is
-/// already correct untranslated, which is what makes this purely additive: it can only change
-/// output for a field the IR positively resolves to an enum with a renamed variant matching the
-/// fixture value.
-fn renamed_variant_expected(
-    field: Option<&str>,
-    value: &serde_json::Value,
-    field_resolver: &FieldResolver,
-) -> Option<String> {
-    let wire = value.as_str()?;
-    let variant = field_resolver.enum_variant_for_wire_value(field?, wire)?;
-    Some(rust_raw_string(variant))
 }
 
 /// Whether a wildcard-traversed array element (`links[].link_type`) is enum-typed.

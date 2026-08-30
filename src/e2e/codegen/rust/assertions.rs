@@ -18,6 +18,7 @@ use super::assertion_synthetic::{
     render_first_chunk_starts_with_heading, render_keywords_assertion, render_keywords_count_assertion,
     tree_field_access_expr, value_to_rust_string,
 };
+use super::assertion_wire::containment_expected;
 
 /// Returns `true` when the assertion's leaf field resolves to an `Option<T>` where
 /// `T` is a scalar (i.e. not a collection). Used to decide whether numeric comparison
@@ -37,10 +38,10 @@ fn is_optional_scalar_field(assertion: &Assertion, is_unwrapped: bool, field_res
 ///
 /// ~keep Every containment operator shares this, because a fixture author picks the operator
 /// and the field independently: an enum field has no `contains` method of its own, and a
-/// collection field's `contains` compares whole elements rather than performing the substring
-/// search a fixture value expects. An operator that emits the plain form for those two field
-/// kinds emits Rust that does not compile, which is invisible until the consumer builds its
-/// generated tests.
+/// collection field's `contains` compares whole elements rather than the substring search a
+/// fixture value expects. An operator emitting the plain form for those two field kinds emits
+/// Rust that does not compile. `expected` arrives at the enum arm already reconciled onto the
+/// `Debug` surface by `assertion_wire::containment_expected` — see that module on lowercasing.
 ///
 /// ~keep The collection arm's semantics must match the five other e2e backends (Python, Node,
 /// Ruby, Java, C#): a substring search over several item keys, not an exact match on `name`
@@ -389,6 +390,9 @@ pub fn render_assertion_with_streaming(
         .as_deref()
         .is_some_and(|field| field_resolver.is_array(field) || field_resolver.is_collection_root(field))
         || result_is_vec;
+    // ~keep Threaded only when the field is enum-typed, so a collection or string field can
+    // never reach the wire-rename lookup `containment_expected` performs.
+    let enum_field = assertion.field.as_deref().filter(|_| field_is_enum);
 
     match assertion.assertion_type.as_str() {
         "error" => {
@@ -413,7 +417,7 @@ pub fn render_assertion_with_streaming(
         }
         "contains" => {
             if let Some(val) = &assertion.value {
-                let expected = value_to_rust_string(val);
+                let expected = containment_expected(val, enum_field, field_resolver);
                 let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
                 let message = containment_message(field_is_enum, field_is_collection);
                 let _ = writeln!(out, "    assert!({predicate}, \"{message}: {{}}\", {expected});");
@@ -422,7 +426,7 @@ pub fn render_assertion_with_streaming(
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for val in values {
-                    let expected = value_to_rust_string(val);
+                    let expected = containment_expected(val, enum_field, field_resolver);
                     let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
                     let message = containment_message(field_is_enum, field_is_collection);
                     let _ = writeln!(out, "    assert!({predicate}, \"{message}: {{}}\", {expected});");
@@ -431,7 +435,7 @@ pub fn render_assertion_with_streaming(
         }
         "not_contains" => {
             for val in assertion.expected_values() {
-                let expected = value_to_rust_string(val);
+                let expected = containment_expected(val, enum_field, field_resolver);
                 let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
                 let _ = writeln!(
                     out,
@@ -458,7 +462,7 @@ pub fn render_assertion_with_streaming(
                 let checks: Vec<String> = values
                     .iter()
                     .map(|v| {
-                        let expected = value_to_rust_string(v);
+                        let expected = containment_expected(v, enum_field, field_resolver);
                         containment_predicate(&field_access, &expected, field_is_enum, field_is_collection)
                     })
                     .collect();
@@ -674,10 +678,10 @@ fn render_rust_wildcard_assertion(
     };
     let array_is_optional = !array_part.is_empty() && field_resolver.is_optional(array_part);
     let escaped_field = escape_rust(field);
-    // Enum-typed elements are not guaranteed to implement `Display` — only `Debug` is a
-    // safe assumption (the non-wildcard containment predicate already relies on it below).
-    // `{elem_accessor}.to_string()` would fail to compile for an enum that only derives
-    // `Debug`, so stringify via Debug instead whenever the traversed leaf is an enum. ~keep
+    // Enum-typed elements are not guaranteed to implement `Display` — only `Debug` is a safe
+    // assumption. `{elem_accessor}.to_string()` would fail to compile for an enum that only
+    // derives `Debug`, so stringify via Debug whenever the traversed leaf is an enum — and
+    // reconcile the fixture's wire value onto that same Debug surface below. ~keep
     let elem_is_enum = wildcard_elem_is_enum(field_resolver, elem_part, field);
     let elem_stringified = if elem_is_enum {
         format!("format!(\"{{:?}}\", {elem_accessor})")
@@ -694,7 +698,7 @@ fn render_rust_wildcard_assertion(
                 assertion.expected_values()
             };
             for val in values {
-                let expected = value_to_rust_string(val);
+                let expected = containment_expected(val, elem_is_enum.then_some(field), field_resolver);
                 // `str::contains` needs a string pattern; non-string fixture values
                 // (numbers, bools) have to be stringified first. ~keep
                 let pattern = if val.is_string() {

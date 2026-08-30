@@ -227,6 +227,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Rust identifier while the fixture records the wire value; under `#[serde(rename)]` or
   `#[serde(rename_all)]` the two disagreed, so the generated assertion failed for a correct
   result or passed without ever exercising the rename.
+- Extend that same reconciliation to the Rust e2e containment operators (`contains`,
+  `contains_all`, `not_contains`, `contains_any`) and to the wildcard element renderer
+  (`links[].link_type`), all of which were left comparing a fixture's wire value against
+  `format!("{:?}", ..)`'s Rust identifier. `not_contains` was the quietest case: it did not
+  fail, it passed vacuously, because no variant's `Debug` rendering can contain a wire spelling
+  the rename moved it off. The wildcard predicate was the strictest, having no `to_lowercase()`
+  to soften the comparison. Every surface now translates through one shared lookup, so a single
+  enum cannot be reconciled one way by `assert_eq!` and another by `assert!`.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.
