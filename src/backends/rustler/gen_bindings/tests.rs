@@ -237,6 +237,7 @@ fn tagged_enum_api_surface() -> ApiSurface {
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: Some("camelCase".to_string()),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],

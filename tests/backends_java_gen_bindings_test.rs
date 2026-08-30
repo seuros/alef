@@ -4148,6 +4148,7 @@ fn options_field_visitor_uses_trait_bridge_config_not_convert_literals() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4478,6 +4479,7 @@ fn options_field_visitor_context_type_with_lifetime_params_is_still_bound() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4528,9 +4530,8 @@ result_type = "FlowDecision"
         .expect("lifetime-bound context type must still be emitted as a Java record");
     assert!(context.content.contains("public record VisitContext"));
 
-    // ...and the visitor pattern built on top of it must still resolve and emit its trio of
-    // support files, all carrying the alef marker so a future config change that drops the
-    // pattern again can be swept as an orphan instead of left dangling in the tree.
+    // ...and the visitor pattern built on top of it must still resolve and emit its trio of support
+    // files, all carrying the alef marker so a dropped pattern is swept as an orphan, not dangling.
     let visitor = files
         .iter()
         .find(|f| f.path.to_string_lossy().contains("Callback.java"))
@@ -4657,9 +4658,8 @@ fn test_facade_no_java_lang_imports() {
     }
 }
 
-/// Regression test: streaming adapter item types must have _to_json handles in NativeLib,
-/// even if the type has has_serde=false in the IR (due to cfg gating).
-/// Without the fix, this would cause: "cannot find symbol: variable KCRAWL_CRAWL_EVENT_TO_JSON"
+/// Regression test: streaming adapter item types must have _to_json handles in NativeLib, even if
+/// has_serde=false in the IR (due to cfg gating), or generated code fails with "cannot find symbol".
 #[test]
 fn test_streaming_adapter_item_to_json_handle_emitted_unconditionally() {
     let backend = JavaBackend;
