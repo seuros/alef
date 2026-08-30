@@ -33,8 +33,12 @@ BANNED_FUNCTIONS = {
 # an independent reimplementation. Do not add an entry to silence a real duplicate; consolidate
 # the duplicate instead.
 ALLOWLIST: dict[tuple[str, str], str] = {
-    ("src/codegen/naming.rs", "wire_variant_value"): "canonical definition; naming.rs IS the canonical implementation",
-    ("src/codegen/naming.rs", "pascal_to_snake"): "canonical definition; naming.rs IS the canonical implementation",
+    ("src/codegen/naming/wire.rs", "wire_variant_value"): (
+        "canonical definition; codegen::naming IS the canonical implementation"
+    ),
+    ("src/codegen/naming/case.rs", "pascal_to_snake"): (
+        "canonical definition; codegen::naming IS the canonical implementation"
+    ),
     ("src/backends/java/gen_bindings/helpers.rs", "java_apply_rename_all"): (
         "thin wrapper delegating to naming::apply_serde_rename_all; kept because "
         "src/backends/java/gen_bindings/types/enums.rs still calls it directly"

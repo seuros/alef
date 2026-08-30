@@ -78,6 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-built Windows CLI archive and writes/updates `bucket/alef.json` in a Scoop bucket
   repository. Add `Registry::Scoop` to `alef check-registry`.
 
+### Changed
+
+- Split `codegen::naming` into one submodule per name surface (`surfaces`, `wire`, `host`,
+  `symbols`, `identifiers`, `languages`, `case`), leaving `naming.rs` as a re-export facade.
+  Every `codegen::naming::<item>` path is unchanged; this is a refactor with no behavior change.
+  `hooks/check_backend_naming_helpers.py`'s allowlist now points at the canonical definitions'
+  new files, so the hook no longer flags `wire_variant_value` and `pascal_to_snake` themselves.
+
 ### Fixed
 
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The

@@ -113,14 +113,18 @@ fn rejects_a_language_prefixed_variant_of_a_banned_name() {
 #[test]
 fn accepts_the_allowlisted_canonical_and_wrapper_definitions() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let naming_dir = dir.path().join("src/codegen");
-    fs::create_dir_all(&naming_dir).expect("create codegen dir");
+    let naming_dir = dir.path().join("src/codegen/naming");
+    fs::create_dir_all(&naming_dir).expect("create naming dir");
     fs::write(
-        naming_dir.join("naming.rs"),
-        "pub fn wire_variant_value(variant_name: &str, serde_rename: Option<&str>, rename_all: Option<&str>) -> String { variant_name.to_string() }\n\
-         pub fn pascal_to_snake(name: &str) -> String { name.to_string() }\n",
+        naming_dir.join("wire.rs"),
+        "pub fn wire_variant_value(variant_name: &str, serde_rename: Option<&str>, rename_all: Option<&str>) -> String { variant_name.to_string() }\n",
     )
-    .expect("write fixture");
+    .expect("write wire fixture");
+    fs::write(
+        naming_dir.join("case.rs"),
+        "pub fn pascal_to_snake(name: &str) -> String { name.to_string() }\n",
+    )
+    .expect("write case fixture");
 
     let java_dir = dir.path().join("src/backends/java/gen_bindings");
     fs::create_dir_all(&java_dir).expect("create java dir");
@@ -132,7 +136,11 @@ fn accepts_the_allowlisted_canonical_and_wrapper_definitions() {
 
     let output = run_hook(
         dir.path(),
-        &["src/codegen/naming.rs", "src/backends/java/gen_bindings/helpers.rs"],
+        &[
+            "src/codegen/naming/wire.rs",
+            "src/codegen/naming/case.rs",
+            "src/backends/java/gen_bindings/helpers.rs",
+        ],
     );
 
     assert!(
