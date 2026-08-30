@@ -589,3 +589,121 @@ fn the_java_swift_comparison_can_still_fail() {
         "the oracle still renders it, so the two genuinely differ here and the comparison is live"
     );
 }
+
+/// SECURITY. A `Vec` field carrying a named `#[serde(default = "default_scheme_allowlist")]`
+/// alongside `skip_serializing_if` was given `List.of()` on all three emission paths — record
+/// component nullability, compact-constructor restore, and builder initializer.
+///
+/// Alef never evaluates the referenced Rust function; extraction records only its name
+/// (`DefaultValue::FunctionCall`). Substituting the empty collection is therefore a fabricated
+/// value, and for the "return a populated list" case it OVERRIDES the real default: a scheme
+/// allow-list of `["http", "https"]` arrives at Rust as `[]`. An allow-list that ships empty is
+/// not a cosmetic default bug — it is a policy the caller never chose, and the same shape applies
+/// to a deny-list, where the empty value fails open instead of closed.
+///
+/// The correct rendering is no eager value at all: `@Nullable` with a `null` builder default, so
+/// `@JsonInclude(NON_ABSENT)` drops the key and Rust's own serde default supplies the value.
+///
+/// The fixture spells the post-fix IR: `extract::extractor::types` used to blanket-overwrite this
+/// field's `typed_default` with `Empty` under a container `#[derive(Default)]`, and now applies
+/// precedence so the `FunctionCall` survives. ~keep
+#[test]
+fn named_serde_default_vec_defers_to_rust_instead_of_shipping_an_empty_allowlist() {
+    let mut allowlist = impl_default_field(
+        "scheme_allowlist",
+        TypeRef::Vec(Box::new(TypeRef::String)),
+        DefaultValue::FunctionCall("default_scheme_allowlist".to_string()),
+    );
+    allowlist.default = Some("serde(default = \"default_scheme_allowlist\")".to_string());
+    allowlist.serde_skip_serializing_if = true;
+    let typ = impl_default_record(vec![allowlist]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("List.of()"),
+        "alef does not know what default_scheme_allowlist() returns; List.of() is a fabricated \
+         allow-list that overrides the real Rust one:\n{out}"
+    );
+    assert!(
+        !out.contains("if (schemeAllowlist == null)"),
+        "no compact-constructor restore may fabricate a value alef never read:\n{out}"
+    );
+    assert!(
+        out.contains("@Nullable"),
+        "the component must stay nullable so an unset field is dropped by @JsonInclude(NON_ABSENT) \
+         and Rust's own serde default fires:\n{out}"
+    );
+}
+
+/// The same refusal for a `Map`-typed named default, and the discrimination control that keeps
+/// the fix from degenerating into "suppress every collection default".
+///
+/// A bare `#[serde(default)]` records no `FunctionCall` — it resolves to `Default::default()`, so
+/// on a `Vec` the empty collection IS the exact Rust value and must still be emitted. The only
+/// difference between the two fixtures below is `typed_default`; without the second one, a fix
+/// that suppressed both would satisfy the test above while reintroducing the
+/// `NullPointerException` on `.isEmpty()` that the eager `List.of()` exists to prevent. ~keep
+#[test]
+fn named_map_default_defers_while_a_bare_serde_default_still_builds_the_empty_collection() {
+    let map_ty = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
+
+    let mut named = impl_default_field(
+        "header_overrides",
+        map_ty.clone(),
+        DefaultValue::FunctionCall("default_header_overrides".to_string()),
+    );
+    named.default = Some("serde(default = \"default_header_overrides\")".to_string());
+    named.serde_skip_serializing_if = true;
+    let named_out = render_impl_default_record(&impl_default_record(vec![named]));
+
+    assert!(
+        !named_out.contains("Map.of()"),
+        "a named Map default is as unknown to alef as a named Vec default:\n{named_out}"
+    );
+
+    let mut bare = impl_default_field("header_overrides", map_ty, DefaultValue::Empty);
+    bare.default = Some("/* serde(default) */".to_string());
+    bare.serde_skip_serializing_if = true;
+    let bare_out = render_impl_default_record(&impl_default_record(vec![bare]));
+
+    assert!(
+        bare_out.contains("Map.of()"),
+        "a bare serde(default) on a Map resolves to Default::default(), which IS the empty map; \
+         suppressing it would be a different regression:\n{bare_out}"
+    );
+}
+
+/// The predicate in isolation, so the four-argument contract is pinned independently of how
+/// `gen_record_type` happens to weave it together today.
+#[test]
+fn serde_default_collection_literal_declines_only_the_function_call_defaults() {
+    use crate::backends::java::gen_bindings::helpers::serde_default_collection_literal;
+
+    let vec_ty = TypeRef::Vec(Box::new(TypeRef::String));
+    let map_ty = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
+    let named = DefaultValue::FunctionCall("default_scheme_allowlist".to_string());
+    let resolved = DefaultValue::PublicFunctionCall("sample_crate::Policy::allowlist".to_string());
+
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, true, true, Some(&DefaultValue::Empty)),
+        Some("List.of()")
+    );
+    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, None), Some("List.of()"));
+    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, Some(&named)), None);
+    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, Some(&resolved)), None);
+    assert_eq!(serde_default_collection_literal(&map_ty, true, true, Some(&named)), None);
+    assert_eq!(
+        serde_default_collection_literal(&map_ty, true, true, Some(&DefaultValue::Empty)),
+        Some("Map.of()")
+    );
+    // `skip_serializing_if` and the serde-default marker remain preconditions for either form.
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, true, false, Some(&DefaultValue::Empty)),
+        None
+    );
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, false, true, Some(&DefaultValue::Empty)),
+        None
+    );
+}

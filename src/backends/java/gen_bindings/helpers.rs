@@ -89,13 +89,34 @@ pub(crate) fn boxes_to_carry_literal_default(ty: &TypeRef, typed_default: Option
 /// field initializer and `records.rs`'s "must this component be `@Nullable`" decision and compact
 /// constructor restore all have to agree on this same value, or the record ends up `@Nullable`
 /// over a component the compact constructor never actually lets be null (or vice versa) — this is
-/// the single place that decision is made. ~keep
+/// the single place that decision is made.
+///
+/// Only the *bare* `#[serde(default)]` qualifies, which is what `typed_default` discriminates.
+/// For it, `Default::default()` on a `Vec`/`Map` is the empty collection, so this literal is the
+/// exact Rust value. A named `#[serde(default = "path")]` reaches the IR as
+/// [`DefaultValue::FunctionCall`] (or `PublicFunctionCall` once postprocessing resolves the path),
+/// and alef never evaluates that function body — so `List.of()`/`Map.of()` would be a *claim*
+/// about a value alef does not have, and a wrong one for the common "return a populated list"
+/// case: a scheme allow-list of `["http", "https"]` shipped as `[]`. Declining leaves the
+/// component `@Nullable` with a `null` builder default and no compact-constructor restore, which
+/// `@JsonInclude(NON_ABSENT)` then drops from the wire so Rust's own serde default supplies the
+/// real value. That is the stance Kotlin (`object_wrapper::types::kotlin_field_default`), Swift
+/// (`gen_bindings::dto::emit_decoder_init`) and C# (`gen_bindings::types::records`) already take
+/// for `FunctionCall`; keying on `typed_default` here is what makes all four backends agree from
+/// one signal instead of four. ~keep
 pub(crate) fn serde_default_collection_literal(
     ty: &TypeRef,
     has_serde_default: bool,
     serde_skip_serializing_if: bool,
+    typed_default: Option<&DefaultValue>,
 ) -> Option<&'static str> {
     if !has_serde_default || !serde_skip_serializing_if {
+        return None;
+    }
+    if matches!(
+        typed_default,
+        Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_))
+    ) {
         return None;
     }
     match ty {

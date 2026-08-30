@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Stop `#[derive(Default)]` erasing a field's named `#[serde(default = "path")]` from the IR.
+  Extraction blanket-overwrote every field's `typed_default` with `DefaultValue::Empty` whenever
+  the container derived `Default`, destroying the `FunctionCall` recorded for the named form.
+  `Empty` asserts "the value is exactly this type's zero", so every backend keying its refusal on
+  `FunctionCall` -- Kotlin, Swift and C# -- fabricated an empty collection instead of deferring:
+  a named allow-list default shipped as `[]` (permitting nothing) and a deny-list default shipped
+  as `[]` (failing open), silently replacing the value the Rust function actually returns. `Empty`
+  is now seeded only where no stronger typed default was recorded, so the four affected backends
+  emit no eager value and let Rust's own serde default supply it. The bare `#[serde(default)]`,
+  whose value genuinely is the type's zero, is unchanged. Java, which keyed the same decision on
+  the marker string rather than on `typed_default`, now consults `typed_default` too so all four
+  backends agree from one signal.
 - Stop reaching `sh -c` with config-supplied values interpolated into shell text. The Go
   test-app run default and every clean-command default (including destructive `rm -rf` paths)
   now build typed argv (`ArgvRunConfig`/`ArgvStep`, run via `Command::new(..).args(..)` with

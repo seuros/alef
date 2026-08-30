@@ -49,8 +49,12 @@ pub(crate) fn gen_record_type(
         // record component must not be `@Nullable` for it either — see the `has_nullable`
         // computation below, and the compact-constructor restore further down that is what makes
         // dropping `@Nullable` here correct rather than merely convenient. ~keep
-        let serde_default_collection_default =
-            serde_default_collection_literal(&f.ty, has_serde_default, f.serde_skip_serializing_if);
+        let serde_default_collection_default = serde_default_collection_literal(
+            &f.ty,
+            has_serde_default,
+            f.serde_skip_serializing_if,
+            f.typed_default.as_ref(),
+        );
 
         // alef could not read the real value out of `impl Default`. `java_literal_default`
         // correctly refuses to restore a guessed literal for this in the compact constructor
@@ -274,6 +278,7 @@ pub(crate) fn gen_record_type(
                     &f.ty,
                     is_serde_default_marker(f.default.as_deref()),
                     f.serde_skip_serializing_if,
+                    f.typed_default.as_ref(),
                 )
                 .map(str::to_string)
             })?;

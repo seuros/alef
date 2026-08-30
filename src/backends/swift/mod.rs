@@ -16,6 +16,11 @@ pub use gen_bindings::SwiftBackend;
 #[cfg(test)]
 mod tests;
 
+// `gen_bindings/dto.rs` is at its recorded file-size ceiling and `gen_bindings/mod.rs` is at the
+// 1,000-line cap, so the named-`#[serde(default = "path")]` deferral coverage lives here.
+#[cfg(test)]
+mod named_serde_default_tests;
+
 pub(crate) fn signatures_reference_named<'a>(
     types: impl IntoIterator<Item = &'a crate::core::ir::TypeDef>,
     functions: impl IntoIterator<Item = &'a crate::core::ir::FunctionDef>,

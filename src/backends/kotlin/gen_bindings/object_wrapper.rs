@@ -22,6 +22,11 @@ mod mut_writeback_tests;
 #[cfg(test)]
 mod optional_enum_default_tests;
 
+// Same reason again: the named-`#[serde(default = "path")]` deferral coverage gets its own module
+// rather than growing the already-over-cap `tests.rs`.
+#[cfg(test)]
+mod named_serde_default_tests;
+
 pub(crate) use dto::emit_type_with_imports;
 pub(crate) use enums::emit_enum;
 pub(crate) use errors::emit_error_type_with_imports;

@@ -304,52 +304,94 @@ fn deriving_default_alone_does_not_set_the_container_serde_flag() {
     );
 }
 
-/// Proves the exact fixture shape `codegen::config_gen`'s JSON-probe predicate depends on,
-/// through real extraction rather than a hand-built `FieldDef` literal: on a `#[derive(Default)]`
-/// type, `#[derive(Default)]`'s blanket seeding (`extract::extractor::types::extract_struct`)
-/// unconditionally overwrites `typed_default` to `Empty` on every field — including one that
-/// already carries a genuine `#[serde(default = "path")]` — so `typed_default.is_some()` is true
-/// for a field serde will fill on a missing key (`count`) and one that is fully required
-/// (`label`) alike. Only `FieldDef::default`, set once by `extract_field` from the real
-/// attribute and never touched by the later derive/impl overwrite, tells the two apart. This is
-/// the production counterpart to the hand-built fixtures in
-/// `codegen::config_gen::tests::derive_default_probe` and the (now-repaired) `grid_cell_type` in
-/// `codegen::config_gen::tests::defaults` — it fails if extraction ever stops producing this
-/// shape, which would make those fixtures fictions again. ~keep
+/// The root of the collapsed-collection-default family. `#[derive(Default)]` used to blanket-write
+/// `DefaultValue::Empty` over every field, destroying the `FunctionCall` that
+/// `helpers::fields::extract_field` records for `#[serde(default = "path")]`. Only the marker
+/// string in `FieldDef::default` survived, so every backend keying its refusal on `FunctionCall`
+/// (Kotlin, Swift, C#) saw `Empty` — "the type's zero, exactly" — and fabricated an empty
+/// collection over a populated one.
+///
+/// The two attributes are not redundant and do not agree: an absent wire key is filled by `path()`
+/// under `#[serde(default = "path")]`, never by `Default::default()`. `Empty` must therefore lose
+/// to a recorded `FunctionCall`, on collections and scalars alike. ~keep
 #[test]
-fn derive_default_seeds_empty_over_a_genuine_field_level_serde_default() {
+fn derive_default_does_not_erase_a_named_serde_default() {
+    use crate::core::ir::DefaultValue;
+
     let source = r#"
         #[derive(Default, serde::Serialize, serde::Deserialize)]
-        pub struct DerivedConfig {
-            #[serde(default = "mylib::default_count")]
-            pub count: u32,
-            pub label: String,
+        pub struct SecurityPolicy {
+            #[serde(default = "default_scheme_allowlist")]
+            pub scheme_allowlist: Vec<String>,
+            #[serde(default = "default_header_overrides")]
+            pub header_overrides: std::collections::HashMap<String, String>,
+            #[serde(default = "default_redirect_limit")]
+            pub redirect_limit: u32,
         }
     "#;
 
     let surface = extract_from_source(source);
-    let config = surface.types.iter().find(|typ| typ.name == "DerivedConfig").unwrap();
-    let count = config.fields.iter().find(|field| field.name == "count").unwrap();
-    let label = config.fields.iter().find(|field| field.name == "label").unwrap();
+    let policy = &surface.types[0];
+    let field = |name: &str| {
+        policy
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("`{name}` is missing from the extracted surface"))
+    };
 
+    assert!(policy.has_default, "the fixture must still derive Default");
     assert_eq!(
-        count.default.as_deref(),
-        Some("serde(default = \"mylib::default_count\")"),
-        "the genuine field-level serde default must survive the derive(Default) overwrite"
+        field("scheme_allowlist").typed_default,
+        Some(DefaultValue::FunctionCall("default_scheme_allowlist".to_string())),
+        "a Vec's named serde default must survive derive(Default); `Empty` here licenses every \
+         backend to ship an empty allow-list in place of the real one"
     );
     assert_eq!(
-        label.default, None,
-        "a field with no serde attribute of its own must not gain a default"
+        field("header_overrides").typed_default,
+        Some(DefaultValue::FunctionCall("default_header_overrides".to_string())),
+        "a Map's named serde default must survive derive(Default)"
     );
     assert_eq!(
-        count.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "derive(Default) overwrites even a serde-defaulted field's typed_default to Empty"
+        field("redirect_limit").typed_default,
+        Some(DefaultValue::FunctionCall("default_redirect_limit".to_string())),
+        "a scalar's named serde default must survive derive(Default)"
     );
-    assert_eq!(
-        label.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "typed_default alone cannot distinguish `count` (serde will fill it) from `label` \
-         (fully required): both read Empty"
-    );
+}
+
+/// Discrimination control for the test above. Precedence must not become suppression: the seeding
+/// of `Empty` is correct for every field that has no named default of its own, and a fix that
+/// simply stopped writing `Empty` under `#[derive(Default)]` would satisfy the assertions above
+/// while stripping the type-zero assertion off every ordinary field in every consumer crate.
+///
+/// A *bare* `#[serde(default)]` is the sharpest case: it records no `typed_default` at all, so it
+/// must still land on `Empty` — for it, `Default::default()` genuinely is the value, and on a
+/// `Vec` that is exactly the empty list. ~keep
+#[test]
+fn derive_default_still_seeds_empty_where_no_named_default_was_recorded() {
+    use crate::core::ir::DefaultValue;
+
+    let source = r#"
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        pub struct SecurityPolicy {
+            #[serde(default)]
+            pub scheme_allowlist: Vec<String>,
+            #[serde(default)]
+            pub header_overrides: std::collections::HashMap<String, String>,
+            pub redirect_limit: u32,
+            pub user_agent: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let policy = &surface.types[0];
+
+    for field in &policy.fields {
+        assert_eq!(
+            field.typed_default,
+            Some(DefaultValue::Empty),
+            "`{}` carries no named serde default, so the derived type-zero assertion still applies",
+            field.name
+        );
+    }
 }

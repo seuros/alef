@@ -152,10 +152,25 @@ pub(crate) fn extract_struct(
     // `extract::extractor::defaults`, which writes `DefaultValue::Unresolved` when it cannot
     // recover the real values — the distinction this seeding must not be confused with. Note that
     // `has_default` itself does *not* carry it: `functions::impl_blocks` sets the same flag for a
-    // manual impl. ~keep
+    // manual impl.
+    //
+    // That assertion is scoped to fields the derived impl actually fills, which is why this is a
+    // *precedence* rule and not an assignment. A field carrying `#[serde(default = "path")]` is
+    // filled by `path()` when its wire key is absent — `Default::default()` is never consulted —
+    // so its value is whatever that function returns and emphatically not the type's zero.
+    // Blanket-overwriting the `FunctionCall` that `helpers::fields::extract_field` recorded
+    // downgraded "alef does not know this value" to "alef knows it is empty", and every backend
+    // that keys its refusal on `FunctionCall` (`backends::kotlin`'s `kotlin_field_default`,
+    // `backends::swift`'s `emit_decoder_init`, `backends::csharp`'s `gen_record_type`) then
+    // fabricated `emptyList()`/`[]`/`null` over a populated allow-list or deny-list. `Empty` is
+    // therefore seeded only where nothing stronger was already recorded; a bare
+    // `#[serde(default)]` records no `typed_default` at all and still lands on `Empty`, which is
+    // correct because for it `Default::default()` genuinely is the value. ~keep
     if has_default {
         for field in &mut fields {
-            field.typed_default = Some(DefaultValue::Empty);
+            if field.typed_default.is_none() {
+                field.typed_default = Some(DefaultValue::Empty);
+            }
         }
     }
 

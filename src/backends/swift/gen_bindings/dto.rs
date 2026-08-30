@@ -471,7 +471,7 @@ pub(crate) fn swift_type_based_default(ty: &TypeRef) -> Option<String> {
 /// `decodeIfPresent ?? nil` for Optional fields with no such literal, and plain
 /// `decode(T.self, ...)` for non-Optional fields with no safe Swift fallback
 /// (e.g. nested `Named` structs, and the defaults whose value alef cannot see).
-pub(super) fn emit_decoder_init(mapper: &SwiftMapper, visible_fields: &[&FieldDef], out: &mut String) {
+pub(crate) fn emit_decoder_init(mapper: &SwiftMapper, visible_fields: &[&FieldDef], out: &mut String) {
     out.push_str("    public init(from decoder: any Decoder) throws {\n");
     out.push_str("        let container = try decoder.container(keyedBy: CodingKeys.self)\n");
     for field in visible_fields {

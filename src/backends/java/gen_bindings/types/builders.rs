@@ -227,7 +227,12 @@ pub(super) fn gen_builder_nested_class(
                     // use this exact same value — otherwise the record component and the builder
                     // default drift independently, which is how `@Nullable List<T> children` ended
                     // up next to a builder that never actually produces a null `children`. ~keep
-                    serde_default_collection_literal(&field.ty, true, true)
+                    // A named `#[serde(default = "path")]` is declined there (its `FunctionCall`
+                    // names a function alef never evaluates), so it lands on `null` here — the
+                    // wire key is then dropped by `@JsonInclude(NON_ABSENT)` and Rust's own serde
+                    // default supplies the real value, instead of an empty collection silently
+                    // replacing a populated allow-list. ~keep
+                    serde_default_collection_literal(&field.ty, true, true, field.typed_default.as_ref())
                         .map(str::to_string)
                         .unwrap_or_else(|| "null".to_string())
                 } else {
