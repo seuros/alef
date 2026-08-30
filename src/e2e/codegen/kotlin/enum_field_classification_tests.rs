@@ -323,53 +323,145 @@ fn render_android(
     out
 }
 
+/// The exact assertion a unit-only enum field must lower to on the JVM facade (accessor methods,
+/// so `result.kind()`), and in kotlin_android (data-class properties, so `result.kind`).
+const JVM_UNIT_ENUM_ASSERTION: &str = "        assertEquals(\"key_value\", result.kind().getValue())";
+const ANDROID_UNIT_ENUM_ASSERTION: &str = "        assertEquals(\"key_value\", result.kind.toWire())";
+
+/// The exact line a payload-carrying union field must render instead of any assertion, in both
+/// Kotlin targets. The wording is language-neutral and single-sourced through
+/// `payload_union_skip_line`, so the two targets render byte-identical refusals.
+const UNION_SKIP_LINE: &str = "        // skipped: enum field 'kind' is a payload-carrying union \
+                               with no scalar wire accessor in this binding";
+
+/// The controls: a unit-only enum must still lower to its exact scalar comparison in each target.
+///
+/// ~keep A "fix" that refuses every enum-typed field would satisfy the union test below; these two
+/// are what stop that from shipping. Reverting the payload-union gate leaves both green.
+#[test]
+fn a_unit_only_enum_field_still_lowers_to_its_exact_scalar_comparison_in_each_target() {
+    let (type_defs, enums, functions) = table_ir();
+    let unit_config = e2e_config_for("process", |_| {});
+    let unit_fixture = fixture_calling("process");
+
+    let jvm = render(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
+    assert!(
+        jvm.contains(JVM_UNIT_ENUM_ASSERTION),
+        "expected exactly `{JVM_UNIT_ENUM_ASSERTION}`, got:\n{jvm}"
+    );
+
+    let android = render_android(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
+    assert!(
+        android.contains(ANDROID_UNIT_ENUM_ASSERTION),
+        "expected exactly `{ANDROID_UNIT_ENUM_ASSERTION}`, got:\n{android}"
+    );
+}
+
 /// The compile-shape discriminator: one IR carrying BOTH a unit-only enum and a payload-carrying
-/// union must lower only the first through the scalar accessor, in each Kotlin target.
+/// union must lower only the first through the scalar accessor, and must render a registered
+/// refusal — not a comparison against the fixture literal — for the second, in each Kotlin target.
 ///
 /// `toWire()` (kotlin_android) and `getValue()` (JVM facade) are both emitted only on the
 /// fieldless-variant branch of the binding backends' enum emitters, so applying either to a sealed
-/// class is an unresolved reference at Kotlin compile time. Asserting the union case still renders
-/// an `assertEquals(` against `result.kind` separates "the accessor was correctly withheld" from
-/// "the assertion was skipped entirely", which would satisfy the absence check for the wrong
-/// reason. ~keep
+/// class is an unresolved reference at Kotlin compile time. Withholding the accessor alone is
+/// worse than useless: `resolve_string_expr`'s non-enum branch then hands `render_equals_arm` the
+/// bare accessor, emitting `assertEquals("key_value", result.kind)`. Kotlin's `assertEquals(Any?,
+/// Any?)` accepts that, so it compiles and is simply FALSE at runtime for every fixture — a
+/// green-looking suite failing on a comparison that never had a chance. Both halves are pinned:
+/// the exact skip line, and the absence of any `assertEquals(`. ~keep
+///
+/// Reverting `try_skip_payload_union_scalar_lowering` fails this on the missing skip line AND on
+/// the reappearing `assertEquals(`, in both targets.
 #[test]
-fn a_payload_carrying_union_field_is_not_lowered_through_to_wire_or_get_value() {
+fn a_payload_carrying_union_field_renders_a_registered_refusal_in_each_target() {
     let (type_defs, enums, functions) = table_ir();
-    let unit_config = e2e_config_for("process", |_| {});
     let union_config = e2e_config_for("process_union", |_| {});
-    let unit_fixture = fixture_calling("process");
     let union_fixture = fixture_calling("process_union");
 
-    let android_unit = render_android(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
-    assert!(
-        android_unit.contains(".toWire()"),
-        "the unit-only enum must still lower through .toWire() in kotlin_android, got:\n{android_unit}"
+    for (target, out) in [
+        (
+            "kotlin_android",
+            render_android(&union_fixture, &union_config, &type_defs, &enums, &functions),
+        ),
+        (
+            "kotlin/JVM",
+            render(&union_fixture, &union_config, &type_defs, &enums, &functions),
+        ),
+    ] {
+        assert!(
+            out.contains(UNION_SKIP_LINE),
+            "{target}: expected exactly `{UNION_SKIP_LINE}`, got:\n{out}"
+        );
+        assert!(
+            !out.contains(".toWire()") && !out.contains(ENUM_MARKER),
+            "{target}: neither scalar accessor exists on the sealed class, got:\n{out}"
+        );
+        assert!(
+            !out.contains("\"key_value\""),
+            "{target}: the fixture literal must not be compared against anything — a wrapper \
+             object compared to a String is false at runtime for every fixture, got:\n{out}"
+        );
+    }
+}
+
+/// The externally tagged data enum is the one shape where the two Kotlin targets must DISAGREE:
+/// `emits_get_value` folds it down to a plain Java `enum` that keeps `getValue()`, while
+/// kotlin_android's `emit_enum` still renders a sealed class with no `toWire()`. A single shared
+/// predicate would be wrong in one of them. ~keep
+///
+/// Collapsing `UnionLoweringTarget::KotlinJvm` onto the data-carrying predicate fails this on the
+/// JVM half; collapsing `KotlinAndroid` onto `emits_get_value` fails it on the Android half.
+#[test]
+fn an_externally_tagged_data_enum_is_refused_on_android_but_kept_on_the_jvm() {
+    use crate::e2e::codegen::payload_union_skip::{UnionLoweringTarget, lacks_scalar_wire_accessor};
+    use crate::e2e::field_access::FieldResolver;
+
+    let external = EnumDef {
+        name: "Payload".to_string(),
+        variants: vec![EnumVariant {
+            name: "Blob".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            is_tuple: true,
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    };
+    let types = vec![TypeDef {
+        name: "Envelope".to_string(),
+        fields: vec![kind_field(TypeRef::Named("Payload".to_string()), false)],
+        ..TypeDef::default()
+    }];
+    let enums = vec![external];
+    let resolver = FieldResolver::new(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )
+    .with_ir_enum_map(
+        FieldResolver::ir_enum_fields(&types, &enums),
+        Some("Envelope".to_string()),
+    )
+    .with_java_wrapper_enum_names(
+        enums
+            .iter()
+            .filter(|enum_def| !crate::backends::java::gen_bindings::emits_get_value(enum_def))
+            .map(|enum_def| enum_def.name.clone())
+            .collect(),
     );
 
-    let android_union = render_android(&union_fixture, &union_config, &type_defs, &enums, &functions);
     assert!(
-        !android_union.contains(".toWire()"),
-        "a payload-carrying union is a Kotlin sealed class with no toWire(), got:\n{android_union}"
+        lacks_scalar_wire_accessor(&resolver, "kind", UnionLoweringTarget::KotlinAndroid),
+        "kotlin_android renders an externally tagged data enum as a sealed class with no toWire()"
     );
     assert!(
-        android_union.contains("assertEquals(") && android_union.contains("result.kind"),
-        "the union assertion must still be rendered — an absent .toWire() only proves the fix \
-         when the assertion itself was emitted, got:\n{android_union}"
-    );
-
-    let jvm_unit = render(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
-    assert!(
-        jvm_unit.contains(ENUM_MARKER),
-        "the unit-only enum must still lower through .getValue() on the JVM, got:\n{jvm_unit}"
-    );
-
-    let jvm_union = render(&union_fixture, &union_config, &type_defs, &enums, &functions);
-    assert!(
-        !jvm_union.contains(ENUM_MARKER),
-        "the JVM facade declares no getValue() on the union wrapper either, got:\n{jvm_union}"
-    );
-    assert!(
-        jvm_union.contains("assertEquals(") && jvm_union.contains("result.kind"),
-        "the union assertion must still be rendered on the JVM path too, got:\n{jvm_union}"
+        !lacks_scalar_wire_accessor(&resolver, "kind", UnionLoweringTarget::KotlinJvm),
+        "the Java facade folds an externally tagged data enum down to a plain enum that keeps \
+         getValue(), so the JVM target must NOT refuse it"
     );
 }

@@ -19,6 +19,7 @@ use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
+use crate::e2e::codegen::payload_union_skip::{UnionLoweringTarget, payload_union_skip_line};
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -68,14 +69,50 @@ pub(super) fn try_render_field_shape_gates(
     } else {
         "kotlin"
     };
-    try_render_wildcard_traversal_assertion(
+    if try_render_wildcard_traversal_assertion(
         out,
         assertion,
         result_var,
         field_resolver,
         result_is_simple,
         accessor_lang,
-    )
+    ) {
+        return true;
+    }
+    try_skip_payload_union_scalar_lowering(out, assertion, field_resolver, kotlin_android_style)
+}
+
+/// The last gate, deliberately after the union-traversal and wildcard gates above: those two have
+/// their own, correct answers for a path that *crosses* a union or names a union-typed element,
+/// and only a path whose own leaf IS the union reaches here.
+///
+/// ~keep Neither Kotlin target has a scalar wire accessor on that leaf — kotlin_android's
+/// `toWire()` is declared on the `enum class` branch `object_wrapper::enums::emit_enum` takes only
+/// when every variant is fieldless, and the JVM target's `getValue()` follows
+/// `backends::java::gen_bindings::types::enums::emits_get_value`, which withholds it for a
+/// `serde(tag)`/`serde(untagged)` union wrapper while still folding an externally tagged data enum
+/// down to a plain Java `enum`. The two therefore disagree, and `UnionLoweringTarget` keeps them
+/// apart. Refusing rather than falling through matters here: `resolve_string_expr`'s non-enum
+/// branch would hand `render_equals_arm` the bare accessor, emitting
+/// `assertEquals("key_value", result.kind)` — a `String` compared to a sealed-class instance, which
+/// Kotlin accepts and which is false at runtime for every fixture.
+fn try_skip_payload_union_scalar_lowering(
+    out: &mut String,
+    assertion: &Assertion,
+    field_resolver: &FieldResolver,
+    kotlin_android_style: bool,
+) -> bool {
+    let target = if kotlin_android_style {
+        UnionLoweringTarget::KotlinAndroid
+    } else {
+        UnionLoweringTarget::KotlinJvm
+    };
+    let Some(line) = payload_union_skip_line("        ", "//", field_resolver, assertion.field.as_deref(), target)
+    else {
+        return false;
+    };
+    let _ = writeln!(out, "{line}");
+    true
 }
 
 /// In streaming context, `usage` and `usage.*` fields must be read from the

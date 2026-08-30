@@ -34,6 +34,26 @@ use super::test_case::{DartTestCaseContext, render_test_case};
 /// classified as enum-typed.
 const ENUM_WRAPPER_MARKER: &str = ".wireValue";
 
+/// The exact assertion a unit-only enum field must lower to. Pinned in full, not as a
+/// `.contains(".wireValue")` probe: the accessor's presence says nothing about *what* it is
+/// compared against, and the fixture's serde wire literal must survive verbatim (see
+/// `centralized-naming` — a value rebuilt from the idiomatic Dart member name cannot round-trip).
+const UNIT_ENUM_ASSERTION: &str = "    expect(result.kind.wireValue, equals('key_value'));";
+
+/// The exact assertion an `Option<Enum>` field must lower to — same accessor, reached through
+/// Dart's null-aware `?.`.
+const OPTIONAL_UNIT_ENUM_ASSERTION: &str = "    expect(result.kind?.wireValue, equals('key_value'));";
+
+/// The exact line a payload-carrying union field must render instead of any assertion.
+///
+/// ~keep This is the whole point of the fix. Withholding `.wireValue` alone left the field on the
+/// generic string path, which emits `expect(result.kind.toString(), equals('key_value'.toString()))`
+/// — freezed's `toString()` on the generated sealed class is a diagnostic rendering
+/// (`StageOutput.text(_0: ...)`), never the serde wire value, so that assertion compares two
+/// unrelated strings and fails for a reason no consumer can act on.
+const UNION_SKIP_LINE: &str = "    // skipped: enum field 'kind' is a payload-carrying union \
+                               with no scalar wire accessor in this binding";
+
 /// A `DataNodeKind`-shaped enum: two unit variants, no serde rename overrides.
 fn data_node_kind_enum() -> EnumDef {
     EnumDef {
@@ -268,20 +288,17 @@ fn an_explicit_enum_fields_config_entry_still_classifies_as_enum() {
     );
 }
 
-/// The compile-shape discriminator: one IR carrying BOTH a unit-only enum and a payload-carrying
-/// union must lower only the first through `.wireValue`.
+/// The controls: a unit-only enum, required and optional, must still lower to its exact
+/// `.wireValue` comparison.
 ///
-/// `flat_wire_enums` emits the `{{Enum}}WireValue` extension only for an enum whose every variant
-/// is fieldless, so for `StageOutput` there is no such extension in the generated Dart at all and
-/// `result.kind.wireValue` is an undefined getter — a `dart analyze` error, not a wrong-string
-/// runtime failure. Asserting the union case still renders an `expect(...)` line separates "the
-/// accessor was correctly withheld" from "the assertion was skipped entirely", which would make
-/// the absence check pass for the wrong reason. ~keep
+/// ~keep These exist so a "fix" that refuses every enum-typed field — the cheapest way to make the
+/// union test below pass — fails here instead of shipping. Reverting the payload-union gate leaves
+/// both of these green, which is exactly why they are not the whole story.
 #[test]
-fn a_payload_carrying_union_field_is_not_lowered_through_wire_value() {
+fn a_unit_only_enum_field_still_lowers_to_its_exact_wire_value_comparison() {
     let (type_defs, enums, functions) = table_ir();
 
-    let unit_out = render(
+    let required = render(
         &fixture_calling("process"),
         &e2e_config_for("process", |_| {}),
         &type_defs,
@@ -289,9 +306,39 @@ fn a_payload_carrying_union_field_is_not_lowered_through_wire_value() {
         &functions,
     );
     assert!(
-        unit_out.contains(ENUM_WRAPPER_MARKER),
-        "the unit-only enum must still lower through .wireValue, got:\n{unit_out}"
+        required.contains(UNIT_ENUM_ASSERTION),
+        "expected exactly `{UNIT_ENUM_ASSERTION}`, got:\n{required}"
     );
+
+    let optional = render(
+        &fixture_calling("process_optional"),
+        &e2e_config_for("process_optional", |_| {}),
+        &type_defs,
+        &enums,
+        &functions,
+    );
+    assert!(
+        optional.contains(OPTIONAL_UNIT_ENUM_ASSERTION),
+        "expected exactly `{OPTIONAL_UNIT_ENUM_ASSERTION}`, got:\n{optional}"
+    );
+}
+
+/// The compile-shape discriminator: one IR carrying BOTH a unit-only enum and a payload-carrying
+/// union must lower only the first through `.wireValue`, and must render a registered refusal —
+/// not a generic string comparison — for the second.
+///
+/// `flat_wire_enums` emits the `{{Enum}}WireValue` extension only for an enum whose every variant
+/// is fieldless, so for `StageOutput` there is no such extension in the generated Dart at all.
+/// Withholding the accessor is necessary but not sufficient: the field then reaches the generic
+/// `expect({accessor}.toString(), equals({literal}.toString()))` arm, which compares freezed's
+/// diagnostic `toString()` against the serde wire value. Both halves are pinned below — the exact
+/// skip line, and the absence of any string comparison against the fixture literal. ~keep
+///
+/// Reverting the `payload_union_skip_line` gate in `dart/assertions.rs` fails this test on the
+/// missing skip line AND on the reappearing `equals('key_value'` comparison.
+#[test]
+fn a_payload_carrying_union_field_renders_a_registered_refusal_not_a_string_comparison() {
+    let (type_defs, enums, functions) = table_ir();
 
     let union_out = render(
         &fixture_calling("process_union"),
@@ -301,13 +348,28 @@ fn a_payload_carrying_union_field_is_not_lowered_through_wire_value() {
         &functions,
     );
     assert!(
+        union_out.contains(UNION_SKIP_LINE),
+        "expected exactly `{UNION_SKIP_LINE}`, got:\n{union_out}"
+    );
+    assert!(
         !union_out.contains(ENUM_WRAPPER_MARKER),
         "a payload-carrying union has no .wireValue extension in the generated Dart, so the \
          assertion must not reach for one, got:\n{union_out}"
     );
     assert!(
-        union_out.contains("expect("),
-        "the union assertion must still be rendered — an absent .wireValue only proves the fix \
-         when the assertion itself was emitted, got:\n{union_out}"
+        !union_out.contains("equals('key_value'"),
+        "the fixture literal must not be compared against anything: freezed's toString() is a \
+         diagnostic rendering, not the serde wire value, got:\n{union_out}"
+    );
+}
+
+/// The refusal must be a *registered* wording, or `ALEF_E2E_STRICT_FIELD_AVAILABILITY` walks past
+/// it and a suite that dropped this assertion looks identical to one that ran it. ~keep
+#[test]
+fn the_union_refusal_is_recognised_by_the_field_skip_funnel() {
+    use crate::e2e::codegen::field_skip::FieldSkip;
+    assert_eq!(
+        FieldSkip::extract_classified(UNION_SKIP_LINE),
+        Some(("kind", FieldSkip::PayloadUnionHasNoScalarWireAccessor))
     );
 }

@@ -299,6 +299,25 @@ field_skip_variants! {
         "enum field ",
         " comparison not yet supported on zig's typed-struct result",
     ),
+    /// ~keep The same shape as [`Self::EnumEqualsNotSupportedOnZigTypedResult`], for the four
+    /// targets whose binding lowers a *unit-only* enum to a scalar carrying the serde wire value
+    /// (dart `.wireValue`, kotlin_android `.toWire()`, the kotlin/JVM Java facade's `.getValue()`,
+    /// swift `.rawValue`) but lowers a data-carrying one to a payload union that declares no such
+    /// member. Withholding the accessor alone is not a fix: the field then falls through to the
+    /// generic string pipeline and is compared to the fixture literal, which is a Dart/Kotlin
+    /// comparison against a wrapper object's `toString()` (always false at runtime) and a Swift
+    /// type mismatch that does not compile. Refusing the assertion outright is the only honest
+    /// option left at these call sites.
+    ///
+    /// `GeneratorGap`, not `LanguageLimitation`: all four languages *can* discriminate a union
+    /// variant — `kotlin/discriminated.rs` already emits `is <Union>.<Variant>` for a path that
+    /// crosses one — so a future alef release can lower this exactly. What is missing is the
+    /// wire-value-to-variant resolution at this call site, which sees only a field path; and for
+    /// `#[serde(untagged)]` there is no discriminator on the wire to resolve against at all.
+    PayloadUnionHasNoScalarWireAccessor: GeneratorGap => (
+        "enum field ",
+        " is a payload-carrying union with no scalar wire accessor in this binding",
+    ),
 }
 
 impl FieldSkip {

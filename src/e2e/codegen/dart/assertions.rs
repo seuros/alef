@@ -2,6 +2,7 @@ use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
+use crate::e2e::codegen::payload_union_skip::{UnionLoweringTarget, payload_union_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToLowerCamelCase;
@@ -210,6 +211,22 @@ pub(super) fn render_assertion_dart(
         return;
     }
 
+    // A payload-carrying union has no `.wireValue` extension (`flat_wire_enums` emits one only
+    // for an all-fieldless-variants enum) and no honest fallback: freezed's `toString()` on the
+    // generated sealed class is a diagnostic rendering, not the serde wire value, so comparing it
+    // to the fixture literal asserts the wrong string. Refuse instead. Placed AFTER the `[].`
+    // traversal above, which has its own answer for a union-typed element (`.runtimeType`). ~keep
+    if let Some(line) = payload_union_skip_line(
+        "    ",
+        "//",
+        field_resolver,
+        assertion.field.as_deref(),
+        UnionLoweringTarget::Dart,
+    ) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
+
     let field_accessor = if result_is_simple {
         // Whole-result assertion path: the dart return is a scalar (e.g. a
         // `Uint8List` for speech/file_content), so any `field` on the
@@ -244,21 +261,13 @@ pub(super) fn render_assertion_dart(
                 // compares the enum's Dart `toString()` (its variant name) against the fixture's
                 // serde wire value, so the test passes or fails on the wrong string. ~keep
                 //
-                // `ir_enum_is_data_carrying` then excludes the shape that has no `.wireValue` to
-                // reach for: `gen_bindings::wire_value::flat_wire_enums` emits the extension only
-                // for an enum whose every variant is fieldless, so a payload-carrying union
-                // (`StructureKind::Other(String)`, any `#[serde(untagged)]` union) is rendered by
-                // flutter_rust_bridge as a freezed sealed class the extension was never written
-                // against — `result.kind.wireValue` is then an undefined getter, a Dart analyze
-                // error. `None` (the IR did not resolve a concrete enum, e.g. a `fields_enum`-only
-                // config entry) keeps the pre-existing behaviour. ~keep
+                // A payload-carrying union never reaches here: `payload_union_skip_line` above
+                // refused it, because it has no `.wireValue` AND no honest fallback. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
                     .filter(|f| !f.is_empty())
-                    .is_some_and(|f| {
-                        field_resolver.is_enum(f) && field_resolver.ir_enum_is_data_carrying(f) != Some(true)
-                    });
+                    .is_some_and(|f| field_resolver.is_enum(f));
 
                 // Check if this field is a display-as-text type (e.g. AssistantContent).
                 let is_display_as_text = assertion
@@ -341,15 +350,12 @@ pub(super) fn render_assertion_dart(
             if let Some(expected) = &assertion.value {
                 let dart_val = format_value(expected);
                 // Check if this field is an enum field. See the `equals`/`field_equals` arm
-                // above for why this must consult the IR, not only the config, and why a
-                // data-carrying union is excluded from the `.wireValue` branch. ~keep
+                // above for why this must consult the IR, not only the config. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
                     .filter(|f| !f.is_empty())
-                    .is_some_and(|f| {
-                        field_resolver.is_enum(f) && field_resolver.ir_enum_is_data_carrying(f) != Some(true)
-                    });
+                    .is_some_and(|f| field_resolver.is_enum(f));
 
                 // Check if this field is a display-as-text type.
                 let is_display_as_text = assertion

@@ -262,6 +262,7 @@ mod stubs;
 mod test_file;
 mod test_method;
 mod values;
+mod wildcard_assertion;
 
 pub use stubs::emit_test_backend;
 

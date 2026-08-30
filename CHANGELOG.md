@@ -211,6 +211,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached for `.wireValue`, `.toWire()`, `.getValue()` and `.rawValue` — accessors the binding
   backends emit only on the all-fieldless-variants branch — producing generated tests that do not
   compile.
+- Refuse, with a registered `skipped:` marker, assertions whose field is a payload-carrying enum
+  union in generated Dart, Kotlin, Kotlin Android and Swift E2E suites. The IR classifies a
+  `#[serde(untagged)]` or otherwise data-carrying union as "enum-typed" just like a fieldless
+  enum, so assertions reached for `.wireValue`, `.toWire()`, `.getValue()` and `.rawValue` —
+  accessors the binding backends emit only on the all-fieldless-variants branch. Withholding the
+  accessor alone left the field on the generic string path, comparing freezed's diagnostic
+  `toString()` in Dart, a wrapper object against a `String` in Kotlin (false at runtime), and a
+  type mismatch in Swift that does not compile. The new
+  `FieldSkip::PayloadUnionHasNoScalarWireAccessor` wording is counted by
+  `ALEF_E2E_STRICT_FIELD_AVAILABILITY` as a generator gap.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.
