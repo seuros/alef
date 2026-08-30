@@ -307,8 +307,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         match arg_def.arg_type.as_str() {
             "mock_url" => {
                 let name = arg_def.name.clone();
-                let field = arg_def.field.strip_prefix("input.").unwrap_or(&arg_def.field);
-                let value = fixture.input.get(field).unwrap_or(&serde_json::Value::Null);
+                let value = resolve_field(&fixture.input, &arg_def.field);
                 if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value)
                     .or_else(|| crate::e2e::codegen::snippet_url_literal(is_snippet, value))
                 {

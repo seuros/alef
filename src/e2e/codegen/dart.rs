@@ -205,6 +205,8 @@ mod enum_field_classification_tests;
 #[cfg(test)]
 mod local_naming_tests;
 #[cfg(test)]
+mod mock_url_resolution_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod typed_data_import_tests;
