@@ -84,6 +84,10 @@ jobs:
           java-version: "25"
       - uses: xberg-io/actions/setup-maven@v1
       - uses: xberg-io/actions/setup-zig@v1
+      - uses: xberg-io/actions/setup-elixir@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
       - uses: astral-sh/setup-uv@v10.0.1
       - name: Install generated Python type checker
         run: uv tool install pyrefly==1.2.0
@@ -91,6 +95,7 @@ jobs:
         run: npm install --global typescript@5.9.2
       - name: Run tests
         env:
+          ALEF_REQUIRE_ELIXIR: "1"
           ALEF_REQUIRE_PYREFLY: "1"
           ALEF_REQUIRE_TSC: "1"
         run: cargo test --workspace

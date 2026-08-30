@@ -173,7 +173,7 @@ fn accessor_elixir_stream_content_joins_mapped_deltas() {
     // so the same composition is emitted as nested calls. ~keep
     assert!(expr.contains("Enum.join("), "elixir stream_content: {expr}");
     assert!(expr.contains("Enum.map(chunks,"), "elixir stream_content: {expr}");
-    // Elixir lists do not support bracket access — must use Enum.at, never choices[0]
+    // Elixir lists do not support bracket access; use Enum.at, never choices[0]. ~keep
     assert!(
         !expr.contains("choices[0]"),
         "elixir stream_content must not use bracket access on list: {expr}"
@@ -185,18 +185,22 @@ fn accessor_elixir_stream_content_joins_mapped_deltas() {
 }
 
 #[test]
-fn accessor_elixir_stream_complete_uses_list_last() {
+fn accessor_elixir_stream_complete_handles_missing_terminal_choice() {
     let expr = StreamingFieldResolver::accessor("stream_complete", "elixir", "chunks").unwrap();
     assert!(expr.contains("List.last(chunks)"), "elixir stream_complete: {expr}");
-    assert!(expr.contains("finish_reason != nil"), "elixir stream_complete: {expr}");
-    // Elixir lists do not support bracket access — must use Enum.at, never choices[0]
+    assert!(expr.contains("nil -> false"), "elixir stream_complete: {expr}");
+    assert!(
+        expr.contains("Map.get(choice, :finish_reason) != nil"),
+        "elixir stream_complete: {expr}"
+    );
+    // Elixir lists do not support bracket access; use nil-safe List.first, never choices[0]. ~keep
     assert!(
         !expr.contains("choices[0]"),
         "elixir stream_complete must not use bracket access on list: {expr}"
     );
     assert!(
-        expr.contains("Enum.at("),
-        "elixir stream_complete must use Enum.at for list index: {expr}"
+        expr.contains("List.first("),
+        "elixir stream_complete must use List.first for safe list access: {expr}"
     );
 }
 

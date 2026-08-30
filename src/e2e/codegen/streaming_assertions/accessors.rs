@@ -170,7 +170,12 @@ impl StreamingFieldResolver {
                     // "cannot pipe chunks into ...". Streaming accessors are pasted into operator
                     // contexts by every call site, so they must stay primary expressions.
                     format!(
-                        "Enum.join(Enum.map({chunks_var}, fn c -> Map.get(Map.get((Enum.at(c.choices, 0) || %{{}}), :delta, %{{}}), :content, \"\") end), \"\")"
+                        concat!(
+                            "Enum.join(Enum.map({chunks_var}, fn c -> (Map.get((Map.get(",
+                            "(Enum.at(c.choices, 0) || %{{}}), :delta, %{{}}) || %{{}}), ",
+                            ":content, \"\") || \"\") end), \"\")"
+                        ),
+                        chunks_var = chunks_var
                     )
                 }
                 "python" => {
@@ -246,7 +251,14 @@ impl StreamingFieldResolver {
                     format!("bool({chunks_var}) and {chunks_var}[-1]{choices_acc}[0]{finish_acc} is not None")
                 }
                 "elixir" => {
-                    format!("Enum.at(List.last({chunks_var}).choices, 0).finish_reason != nil")
+                    format!(
+                        concat!(
+                            "case List.last({chunks_var}) do nil -> false; c -> case ",
+                            "List.first(Map.get(c, :choices, []) || []) do nil -> false; ",
+                            "choice -> Map.get(choice, :finish_reason) != nil end end"
+                        ),
+                        chunks_var = chunks_var
+                    )
                 }
                 // zig: the collect snippet exhausts the stream; check last chunk JSON
                 // was collected (chunks.items is non-empty) as a proxy for completion.

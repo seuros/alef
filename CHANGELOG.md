@@ -52,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertion on either field rendered `assert chunks |> Enum.flat_map(...) not in [nil, "", [], %{}]`,
   which the compiler rejected with `cannot pipe chunks into Enum.flat_map(...) not in [...]` and
   failed the whole generated E2E elixir suite. Deep `tool_calls.<field>` tails also composed onto
-  the bare pipe.
+  the bare pipe. Normalize absent and explicitly nil streaming deltas, tool calls, and terminal
+  choices so sparse or usage-only chunks contribute empty values instead of crashing generated
+  assertions.
 - Resolve the Python wildcard element's `TypedDict`-vs-attribute owner from the same
   result-relative path the container half is rendered from. On an envelope-projected container
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the

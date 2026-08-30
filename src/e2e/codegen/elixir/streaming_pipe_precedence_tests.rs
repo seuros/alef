@@ -34,7 +34,14 @@ const TOOL_CALLS_ACCESSOR: &str = "Enum.flat_map(chunks, fn c -> (Map.get((Map.g
 
 /// The exact `stream_content` accessor the Elixir backend must emit.
 const STREAM_CONTENT_ACCESSOR: &str = "Enum.join(Enum.map(chunks, fn c -> \
-     Map.get(Map.get((Enum.at(c.choices, 0) || %{}), :delta, %{}), :content, \"\") end), \"\")";
+     (Map.get((Map.get((Enum.at(c.choices, 0) || %{}), :delta, %{}) || %{}), :content, \"\") || \"\") end), \"\")";
+
+/// The exact `stream_complete` accessor the Elixir backend must emit.
+const STREAM_COMPLETE_ACCESSOR: &str = concat!(
+    "case List.last(chunks) do nil -> false; c -> case ",
+    "List.first(Map.get(c, :choices, []) || []) do nil -> false; ",
+    "choice -> Map.get(choice, :finish_reason) != nil end end"
+);
 
 /// The pre-fix `tool_calls` accessor, kept verbatim so the scanner below can be shown to reject
 /// the shape that actually broke a consumer build rather than passing vacuously. ~keep
@@ -112,6 +119,17 @@ fn render_streaming_assertion(assertion_type: &str, field: &str) -> String {
     out
 }
 
+fn run_elixir(program: &str, script: &str, required: bool) -> Option<std::process::Output> {
+    match Command::new(program).args(["-e", script]).output() {
+        Ok(output) => Some(output),
+        Err(error) if error.kind() == ErrorKind::NotFound && required => {
+            panic!("ALEF_REQUIRE_ELIXIR is set but Elixir is unavailable: {error}")
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => panic!("failed to execute installed Elixir runtime: {error}"),
+    }
+}
+
 /// Pins the accessor character-for-character. Restoring the pre-fix
 /// `chunks |> Enum.flat_map(fn c -> ... end)` fails on the leading `chunks |> `.
 #[test]
@@ -168,10 +186,8 @@ end
 "#,
     );
 
-    let output = match Command::new("elixir").args(["-e", &script]).output() {
-        Ok(output) => output,
-        Err(error) if error.kind() == ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to execute installed Elixir runtime: {error}"),
+    let Some(output) = run_elixir("elixir", &script, std::env::var_os("ALEF_REQUIRE_ELIXIR").is_some()) else {
+        return;
     };
 
     assert!(
@@ -180,6 +196,98 @@ end
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Content aggregation has the same sparse input domain as tool-call aggregation. In particular,
+/// `Map.get/3` does not replace an explicitly stored nil delta, so the delta must be normalized
+/// before the content lookup. ~keep
+#[test]
+fn stream_content_accessor_handles_sparse_chunks_in_elixir_runtime() {
+    let accessor =
+        StreamingFieldResolver::accessor("stream_content", "elixir", "chunks").expect("elixir content accessor");
+    let script = format!(
+        r#"
+chunks = [
+  %{{choices: []}},
+  %{{choices: [%{{}}]}},
+  %{{choices: [%{{delta: nil}}]}},
+  %{{choices: [%{{delta: %{{content: nil}}}}]}},
+  %{{choices: [%{{delta: %{{content: "hello"}}}}]}}
+]
+
+unless {accessor} == "hello" do
+  raise "unexpected content"
+end
+"#,
+    );
+    let Some(output) = run_elixir("elixir", &script, std::env::var_os("ALEF_REQUIRE_ELIXIR").is_some()) else {
+        return;
+    };
+
+    assert!(
+        output.status.success(),
+        "generated content accessor failed in Elixir runtime\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Completion is false, not an exception, when the stream is empty or its terminal chunk has no
+/// choice. A choice with a finish reason remains the positive control. ~keep
+#[test]
+fn stream_complete_accessor_handles_empty_and_usage_only_streams_in_elixir_runtime() {
+    let accessor =
+        StreamingFieldResolver::accessor("stream_complete", "elixir", "chunks").expect("elixir completion accessor");
+    assert_eq!(accessor, STREAM_COMPLETE_ACCESSOR);
+    let script = format!(
+        r#"
+completion = fn chunks -> {accessor} end
+
+unless completion.([]) == false do
+  raise "empty stream reported complete"
+end
+
+unless completion.([%{{choices: []}}, %{{choices: [], usage: %{{total_tokens: 1}}}}]) == false do
+  raise "usage-only stream reported complete"
+end
+
+unless completion.([%{{choices: [%{{finish_reason: "stop"}}]}}]) == true do
+  raise "finished stream reported incomplete"
+end
+"#,
+    );
+    let Some(output) = run_elixir("elixir", &script, std::env::var_os("ALEF_REQUIRE_ELIXIR").is_some()) else {
+        return;
+    };
+
+    assert!(
+        output.status.success(),
+        "generated completion accessor failed in Elixir runtime\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Proves required-toolchain mode cannot turn a missing executable into a green runtime test.
+#[test]
+fn required_elixir_mode_fails_when_runtime_is_unavailable() {
+    let result = std::panic::catch_unwind(|| run_elixir("alef-elixir-does-not-exist", "", true));
+    let panic = result.expect_err("required mode must fail when Elixir is unavailable");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("ALEF_REQUIRE_ELIXIR is set"), "got: {message}");
+}
+
+/// Keeps the required mode wired to a job that actually installs Elixir. Checking both needles
+/// prevents either half from drifting into a vacuous green runtime test. ~keep
+#[test]
+fn ci_installs_and_requires_elixir_for_runtime_regressions() {
+    let workflow = include_str!("../../../../.github/workflows/ci.yml");
+    assert!(workflow.contains("uses: xberg-io/actions/setup-elixir@v1"));
+    assert!(workflow.contains("ALEF_REQUIRE_ELIXIR: \"1\""));
 }
 
 /// The same latent break on the other pipe-headed accessor: `not_empty` on `stream_content` was
