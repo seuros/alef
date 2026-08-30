@@ -4,9 +4,11 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+mod argv;
 mod citation;
 mod sync;
 
+pub use argv::{ArgvRunConfig, ArgvStep};
 pub use citation::{CitationAuthor, CitationConfig};
 pub use sync::{SyncConfig, TextReplacement};
 
@@ -694,7 +696,17 @@ pub struct TestAppRunConfig {
     /// Command(s) that install the published package into the registry-mode test
     /// app and exercise it (e.g. `cd test_apps/ruby && BUNDLE_PATH=vendor/bundle ruby -S bundle install &&
     /// BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rspec`).
+    ///
+    /// Mutually exclusive with `argv_run` in practice: a default that needs to embed a
+    /// config-supplied value as a literal argument sets `argv_run` and leaves this `None`.
+    /// `alef.toml` overrides (`[crates.e2e.registry.run.<lang>]`) always set this field --
+    /// hand-written shell syntax is exactly what a user authoring an override means to run.
     pub run: Option<StringOrVec>,
+    /// Argv-only alternative to `run`, for generated defaults that must not risk a shell
+    /// re-interpreting a config-supplied value. See [`ArgvRunConfig`]. When both `run` and
+    /// `argv_run` are set, the caller runs `argv_run` and ignores `run`.
+    #[serde(default)]
+    pub argv_run: Option<ArgvRunConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
@@ -753,7 +765,16 @@ pub struct CleanConfig {
     /// Command(s) to run before the main clean commands; aborts on failure.
     pub before: Option<StringOrVec>,
     /// Command(s) to clean build artifacts for this language.
+    ///
+    /// Mutually exclusive with `argv_clean` in practice, for the same reason as
+    /// `TestAppRunConfig::run`/`argv_run`: `alef.toml` overrides always set this field, and a
+    /// default that must embed a config-supplied path (a custom package output directory) as a
+    /// literal argument sets `argv_clean` instead.
     pub clean: Option<StringOrVec>,
+    /// Argv-only alternative to `clean`. See [`ArgvRunConfig`]. When both `clean` and
+    /// `argv_clean` are set, the caller runs `argv_clean` and ignores `clean`.
+    #[serde(default)]
+    pub argv_clean: Option<ArgvRunConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]

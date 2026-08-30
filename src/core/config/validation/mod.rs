@@ -18,6 +18,7 @@
 mod preconditions;
 
 use super::resolved::ResolvedCrateConfig;
+use crate::core::config::extras::Language;
 use crate::core::error::AlefError;
 use preconditions::{
     build_main_fields, clean_main_fields, lint_main_fields, setup_main_fields, test_main_fields, update_main_fields,
@@ -32,6 +33,8 @@ use preconditions::{
 pub fn validate_resolved(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
     validate_tools(&config.tools)?;
     validate_package_metadata(config)?;
+    validate_e2e_env_keys(config)?;
+    validate_extra_lint_paths(config)?;
     validate_section("lint", &config.lint, lint_main_fields, |c| c.precondition.as_deref())?;
     validate_section("test", &config.test, test_main_fields, |c| c.precondition.as_deref())?;
     validate_test_e2e_precondition(&config.test)?;
@@ -69,6 +72,101 @@ fn validate_trait_bridges(config: &ResolvedCrateConfig) -> Result<(), AlefError>
         }
     }
     Ok(())
+}
+
+/// Whether `name` is a valid POSIX-style environment variable name (`[A-Za-z_][A-Za-z0-9_]*`).
+///
+/// The sole gate `[crates.e2e.env]` keys pass through, once, at config resolution. That single
+/// point of control covers every downstream consumer of `config.e2e.env` at once: the shell
+/// sites that fold it into a command string (`cli::pipeline::commands::test_apps`,
+/// `cli::pipeline::commands::test`) and the generated-output sites that serialize it into a
+/// target language's own literal syntax (Elixir, Ruby, TypeScript, Rust, WASM JS harnesses).
+/// A key confined to this pattern carries nothing any of those grammars could reinterpret --
+/// no shell metacharacter, no quote, no interpolation marker -- so no downstream consumer needs
+/// its own key-side defense. Values are deliberately unrestricted: they are meant to carry
+/// arbitrary text, so each consumer remains responsible for encoding a *value* safely for its
+/// own target (shell sites via `Command::env`, generated-output sites via their language's own
+/// escaping).
+pub(crate) fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Reject a `[crates.e2e.env]` key that is not a valid POSIX-style environment variable name.
+///
+/// See [`is_valid_env_var_name`] for why this is the single highest-leverage check available:
+/// every consumer of `config.e2e.env`, shell-based or generated-output, receives an
+/// already-safe key once this passes. Rejecting at config resolution (rather than warning and
+/// dropping the entry downstream) is deliberate: an invalid key here is a config-authoring
+/// mistake the operator needs to see and fix, not a hazard the pipeline should quietly work
+/// around by discarding the variable a fixture may depend on.
+fn validate_e2e_env_keys(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
+    let Some(e2e) = &config.e2e else {
+        return Ok(());
+    };
+    let mut invalid: Vec<&str> = e2e
+        .env
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !is_valid_env_var_name(key))
+        .collect();
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    invalid.sort_unstable();
+    Err(AlefError::Config(format!(
+        "invalid `[crates.e2e.env]` key(s) for crate `{}`: {}. Environment variable names must \
+         match `[A-Za-z_][A-Za-z0-9_]*` -- they are forwarded into shell commands and into \
+         several generated languages' own source, and a name outside this pattern cannot be \
+         expressed safely in all of them.",
+        config.name,
+        invalid.join(", ")
+    )))
+}
+
+/// Whether `path` is a well-formed path fragment (`[A-Za-z0-9._/-]+`, non-empty).
+///
+/// `[crates.<lang>].extra_lint_paths` entries reach
+/// [`crate::core::config::tools::append_paths`], which space-joins and appends them to a
+/// lint/format shell command string with no quoting at all -- there is no `Command::env` or
+/// argv boundary available at that call site the way there is for `[go] module` or a clean
+/// command's `output_dir`, because `append_paths` composes plain shell text meant for
+/// `run_command`/`run_command_streamed`, not `ArgvRunConfig`. A path confined to this pattern
+/// carries nothing that grammar could reinterpret: no whitespace to split off an extra
+/// argument, no `;`/backtick/`$(...)` to run a second command.
+fn is_well_formed_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')
+}
+
+/// Reject an `extra_lint_paths` entry that is not a well-formed path fragment.
+///
+/// See [`is_well_formed_path_char`] for why this is the single choke point: every
+/// `append_paths` call site (one per lint/format/typecheck default across every language)
+/// receives an already-safe path once this passes, without each call site needing its own
+/// escaping.
+fn validate_extra_lint_paths(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
+    let mut invalid: Vec<String> = Vec::new();
+    for lang in Language::ALL {
+        for path in config.extra_lint_paths_for_language(lang) {
+            if path.is_empty() || !path.chars().all(is_well_formed_path_char) {
+                invalid.push(format!("{lang}: {path:?}"));
+            }
+        }
+    }
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(AlefError::Config(format!(
+        "invalid `extra_lint_paths` entries for crate `{}`: {}. Entries are appended verbatim \
+         into a lint/format shell command with no quoting, so they must match \
+         `[A-Za-z0-9._/-]+` -- no whitespace or shell metacharacters.",
+        config.name,
+        invalid.join(", ")
+    )))
 }
 
 fn validate_package_metadata(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
@@ -124,6 +222,114 @@ sources = ["src/lib.rs"]
     fn no_user_overrides_is_valid() {
         let config = resolve_first(base_config());
         validate_resolved(&config).expect("default config should validate");
+    }
+
+    /// RED: an `[crates.e2e.env]` key carrying shell syntax must be rejected at config
+    /// resolution, not silently forwarded to any downstream consumer.
+    #[test]
+    fn e2e_env_key_with_shell_syntax_is_rejected() {
+        let toml = format!(
+            "{base}\n[crates.e2e]\nfixtures = \"fixtures\"\noutput = \"e2e\"\n\
+             [crates.e2e.call]\nfunction = \"process\"\nmodule = \"test-lib\"\n\
+             [crates.e2e.env]\n\"MYVAR; touch pwned\" = \"safe\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        let err = validate_resolved(&config).expect_err("shell-shaped env key must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("MYVAR; touch pwned"),
+            "error should name the bad key: {msg}"
+        );
+        assert!(
+            msg.contains("[A-Za-z_][A-Za-z0-9_]*"),
+            "error should name the required pattern: {msg}"
+        );
+    }
+
+    /// GREEN: a conventional identifier-shaped env key validates cleanly.
+    #[test]
+    fn e2e_env_key_valid_identifier_is_accepted() {
+        let toml = format!(
+            "{base}\n[crates.e2e]\nfixtures = \"fixtures\"\noutput = \"e2e\"\n\
+             [crates.e2e.call]\nfunction = \"process\"\nmodule = \"test-lib\"\n\
+             [crates.e2e.env]\nALLOW_PRIVATE_NETWORK = \"true\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        validate_resolved(&config).expect("identifier-shaped env key should validate");
+    }
+
+    /// RED: an `extra_lint_paths` entry carrying shell syntax must be rejected at config
+    /// resolution, not silently appended verbatim to a lint/format shell command.
+    #[test]
+    fn extra_lint_paths_entry_with_shell_syntax_is_rejected() {
+        let toml = format!(
+            "{base}\n[crates.python]\nextra_lint_paths = [\"scripts; touch pwned\"]\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        let err = validate_resolved(&config).expect_err("shell-shaped extra_lint_paths entry must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("scripts; touch pwned"),
+            "error should name the bad entry: {msg}"
+        );
+        assert!(
+            msg.contains("[A-Za-z0-9._/-]+"),
+            "error should name the required pattern: {msg}"
+        );
+    }
+
+    /// GREEN: a conventional path-shaped `extra_lint_paths` entry validates cleanly.
+    #[test]
+    fn extra_lint_paths_entry_valid_path_is_accepted() {
+        let toml = format!(
+            "{base}\n[crates.python]\nextra_lint_paths = [\"scripts/helpers.py\"]\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        validate_resolved(&config).expect("path-shaped extra_lint_paths entry should validate");
+    }
+
+    #[test]
+    fn is_valid_env_var_name_accepts_identifiers_and_rejects_shell_syntax() {
+        for ok in ["MOCK_SERVER_URL", "_leading_underscore", "A1", "a"] {
+            assert!(is_valid_env_var_name(ok), "expected {ok:?} to be valid");
+        }
+        for bad in [
+            "",
+            "1LEADING_DIGIT",
+            "HAS-HYPHEN",
+            "HAS SPACE",
+            "HAS;SEMI",
+            "HAS'QUOTE",
+            "$(cmd)",
+        ] {
+            assert!(!is_valid_env_var_name(bad), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn is_well_formed_path_char_accepts_paths_and_rejects_shell_syntax() {
+        for ok in ["scripts/helpers.py", "a_b-c.d", "vendor/third_party"] {
+            assert!(
+                ok.chars().all(is_well_formed_path_char),
+                "expected {ok:?} to be all well-formed path chars"
+            );
+        }
+        for bad in [
+            "scripts; touch pwned",
+            "scripts`touch pwned`",
+            "scripts$(touch pwned)",
+            "has space",
+            "has'quote",
+        ] {
+            assert!(
+                !bad.chars().all(is_well_formed_path_char),
+                "expected {bad:?} to contain a rejected char"
+            );
+        }
     }
 
     #[test]

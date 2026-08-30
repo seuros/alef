@@ -1,4 +1,4 @@
-use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command_streamed};
+use crate::cli::pipeline::helpers::{check_precondition, run_argv_step_streamed, run_before, run_command_streamed};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use rayon::prelude::*;
 use tracing::error;
@@ -15,6 +15,14 @@ pub fn clean(config: &ResolvedCrateConfig, languages: &[Language]) -> anyhow::Re
             }
             if let Err(e) = run_before(*lang, clean_cfg.before.as_ref()) {
                 return (*lang, Err(e));
+            }
+            if let Some(argv) = &clean_cfg.argv_clean {
+                for step in &argv.steps {
+                    if let Err(e) = run_argv_step_streamed(step, &argv.work_dir, &argv.env, Some(&label)) {
+                        return (*lang, Err(e));
+                    }
+                }
+                return (*lang, Ok(()));
             }
             if let Some(cmd_list) = &clean_cfg.clean {
                 for cmd in cmd_list.commands() {

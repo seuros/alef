@@ -1,5 +1,5 @@
 use super::extras::Language;
-use super::output::{StringOrVec, TestAppRunConfig};
+use super::output::{ArgvRunConfig, ArgvStep, StringOrVec, TestAppRunConfig};
 use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle, ruby_bundle_exec};
 
 /// Strip a leading package-manager version-constraint prefix (`^`, `~`, `>`,
@@ -34,6 +34,7 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("cargo")),
             before: None,
             run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/rust && cargo test"))),
+            argv_run: None,
         },
         Language::Python => {
             let pm = ctx.tools.python_pm();
@@ -46,6 +47,7 @@ pub fn default_test_apps_run_config(
                 precondition: Some(require_tool(pm)),
                 before: None,
                 run: Some(StringOrVec::Single(run)),
+                argv_run: None,
             }
         }
         Language::Node => {
@@ -61,6 +63,7 @@ pub fn default_test_apps_run_config(
                 precondition: Some(require_tool(pm)),
                 before: None,
                 run: Some(StringOrVec::Single(run)),
+                argv_run: None,
             }
         }
         Language::Wasm => {
@@ -76,6 +79,7 @@ pub fn default_test_apps_run_config(
                 precondition: Some(require_tool(pm)),
                 before: None,
                 run: Some(StringOrVec::Single(run)),
+                argv_run: None,
             }
         }
         Language::Ruby => TestAppRunConfig {
@@ -86,6 +90,7 @@ pub fn default_test_apps_run_config(
                 ruby_bundle("install"),
                 ruby_bundle_exec("rspec")
             ))),
+            argv_run: None,
         },
         Language::Php => {
             let version_arg = published_version
@@ -99,6 +104,7 @@ pub fn default_test_apps_run_config(
                 run: Some(StringOrVec::Single(format!(
                     "cd {test_apps_dir}/php && bash install.sh{version_arg} && composer install && composer test"
                 ))),
+                argv_run: None,
             }
         }
         Language::Elixir => TestAppRunConfig {
@@ -107,6 +113,7 @@ pub fn default_test_apps_run_config(
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/elixir && mix deps.get && mix test"
             ))),
+            argv_run: None,
         },
         Language::Go => {
             // `cmd/setup` downloads the platform native library from the GitHub release ~keep
@@ -114,19 +121,37 @@ pub fn default_test_apps_run_config(
             // app's own package — `go run <module>/cmd/setup` works directly against the ~keep
             // module fetched from the proxy (or replaced locally), no copy-out-of-the ~keep
             // read-only-module-cache workaround needed. ~keep
-            let run_cmd = if let Some(mod_path) = go_module_path {
-                format!(
-                    "cd {test_apps_dir}/go && GOWORK=off go mod tidy && \
-GOWORK=off go run {mod_path}/cmd/setup && \
-GOWORK=off go test ./..."
-                )
-            } else {
-                format!("cd {test_apps_dir}/go && GOWORK=off go mod tidy && GOWORK=off go test ./...")
-            };
+            //
+            // `go_module_path` is `[go] module` -- a free-form, user-authored value with no
+            // syntax restrictions, so it must never be interpolated into shell text again (it
+            // used to be, via an unquoted `format!`, and that let `;`, backticks, or `$(...)`
+            // in the module path execute arbitrary commands during `alef test-apps run`).
+            // Every step below runs as literal argv via `ArgvStep` instead: the module path is
+            // passed as a single opaque argument to `go run`, so a shell never gets a chance to
+            // reinterpret it. ~keep
+            let mut steps = vec![ArgvStep {
+                command: "go".to_owned(),
+                args: vec!["mod".to_owned(), "tidy".to_owned()],
+            }];
+            if let Some(mod_path) = go_module_path {
+                steps.push(ArgvStep {
+                    command: "go".to_owned(),
+                    args: vec!["run".to_owned(), format!("{mod_path}/cmd/setup")],
+                });
+            }
+            steps.push(ArgvStep {
+                command: "go".to_owned(),
+                args: vec!["test".to_owned(), "./...".to_owned()],
+            });
             TestAppRunConfig {
                 precondition: Some(require_tool("go")),
                 before: None,
-                run: Some(StringOrVec::Single(run_cmd)),
+                run: None,
+                argv_run: Some(ArgvRunConfig {
+                    work_dir: format!("{test_apps_dir}/go"),
+                    env: vec![("GOWORK".to_owned(), "off".to_owned())],
+                    steps,
+                }),
             }
         }
         Language::Java => TestAppRunConfig {
@@ -135,11 +160,13 @@ GOWORK=off go test ./..."
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/java && mvn --batch-mode --no-transfer-progress test"
             ))),
+            argv_run: None,
         },
         Language::Csharp => TestAppRunConfig {
             precondition: Some(require_tool("dotnet")),
             before: None,
             run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/csharp && dotnet test"))),
+            argv_run: None,
         },
         Language::Kotlin => TestAppRunConfig {
             precondition: Some(require_tool("gradle")),
@@ -147,6 +174,7 @@ GOWORK=off go test ./..."
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/kotlin && gradle test --no-daemon"
             ))),
+            argv_run: None,
         },
         Language::KotlinAndroid => TestAppRunConfig {
             precondition: Some(require_tool("gradle")),
@@ -154,6 +182,7 @@ GOWORK=off go test ./..."
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/kotlin_android && gradle test --no-daemon"
             ))),
+            argv_run: None,
         },
         Language::Dart => TestAppRunConfig {
             // Pub.dev cannot ship the native libraries inside the Dart package — the full ~keep
@@ -180,6 +209,7 @@ GOWORK=off go test ./..."
                 dart run \"${{DART_PKG}}:download_libs\" && \
                 dart test"
             ))),
+            argv_run: None,
         },
         Language::Swift => TestAppRunConfig {
             precondition: Some(require_tool("swift")),
@@ -187,6 +217,7 @@ GOWORK=off go test ./..."
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/swift_e2e && swift test"
             ))),
+            argv_run: None,
         },
         Language::Zig => TestAppRunConfig {
             precondition: Some(require_tool("zig")),
@@ -210,11 +241,13 @@ zon.write_text(content)
 PYEOF
 zig build test"#
             ))),
+            argv_run: None,
         },
         Language::Gleam => TestAppRunConfig {
             precondition: Some(require_tool("gleam")),
             before: None,
             run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/gleam && gleam test"))),
+            argv_run: None,
         },
         Language::R => TestAppRunConfig {
             precondition: Some(require_tool("Rscript")),
@@ -222,16 +255,19 @@ zig build test"#
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/r && Rscript -e \"devtools::test()\""
             ))),
+            argv_run: None,
         },
         Language::C => TestAppRunConfig {
             precondition: Some(require_tool("make")),
             before: None,
             run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/c && make test"))),
+            argv_run: None,
         },
         Language::Ffi => TestAppRunConfig {
             precondition: None,
             before: None,
             run: None,
+            argv_run: None,
         },
         Language::Jni => TestAppRunConfig {
             precondition: Some(require_tool("gradle")),
@@ -239,6 +275,7 @@ zig build test"#
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/kotlin_android && gradle test --no-daemon"
             ))),
+            argv_run: None,
         },
     }
 }
@@ -260,11 +297,13 @@ pub fn default_test_apps_run_config_for_name(name: &str, test_apps_dir: &str, _c
             run: Some(StringOrVec::Single(format!(
                 "cd {test_apps_dir}/{name} && bash run_tests.sh"
             ))),
+            argv_run: None,
         },
         _ => TestAppRunConfig {
             precondition: None,
             before: None,
             run: None,
+            argv_run: None,
         },
     }
 }
@@ -330,7 +369,10 @@ mod tests {
     fn runnable_languages_have_run_and_precondition() {
         for lang in all_languages() {
             let c = cfg(lang, "test_apps");
-            assert!(c.run.is_some(), "{lang} should have a default run command");
+            assert!(
+                c.run.is_some() || c.argv_run.is_some(),
+                "{lang} should have a default run command"
+            );
             let pre = c
                 .precondition
                 .unwrap_or_else(|| panic!("{lang} should have a precondition"));
@@ -478,16 +520,19 @@ mod tests {
     #[test]
     fn go_runs_go_test_with_gowork_off() {
         let c = cfg(Language::Go, "test_apps");
-        let run = c.run.unwrap().commands().join(" ");
         assert!(
-            run.contains("GOWORK=off go test"),
-            "expected GOWORK=off in go run command, got: {run}"
+            c.run.is_none(),
+            "go's default run must be argv-only, not a shell string: {:?}",
+            c.run
         );
-        assert!(
-            run.contains("GOWORK=off go mod tidy"),
-            "expected `go mod tidy` to populate go.sum before test, got: {run}"
-        );
-        assert!(run.contains("cd test_apps/go"), "expected cd test_apps/go, got: {run}");
+        let argv = c.argv_run.expect("go should have an argv run command");
+        assert_eq!(argv.work_dir, "test_apps/go");
+        assert_eq!(argv.env, vec![("GOWORK".to_owned(), "off".to_owned())]);
+        assert_eq!(argv.steps.len(), 2, "no module path -> tidy, test");
+        assert_eq!(argv.steps[0].command, "go");
+        assert_eq!(argv.steps[0].args, vec!["mod", "tidy"]);
+        assert_eq!(argv.steps[1].command, "go");
+        assert_eq!(argv.steps[1].args, vec!["test", "./..."]);
     }
 
     #[test]
@@ -499,30 +544,50 @@ mod tests {
             None,
             Some("github.com/example/mylib/packages/go"),
         );
-        let run = c.run.unwrap().commands().join(" ");
-        assert!(
-            !run.contains("go mod vendor") && !run.contains("-mod=vendor"),
-            "must not use vendor mode, got: {run}"
+        assert!(c.run.is_none(), "go's default run must be argv-only: {:?}", c.run);
+        let argv = c.argv_run.expect("go should have an argv run command");
+        assert_eq!(argv.work_dir, "test_apps/go");
+        assert_eq!(argv.steps.len(), 3, "with a module path -> tidy, run cmd/setup, test");
+        assert_eq!(argv.steps[0].command, "go");
+        assert_eq!(argv.steps[0].args, vec!["mod", "tidy"]);
+        assert_eq!(argv.steps[1].command, "go");
+        assert_eq!(
+            argv.steps[1].args,
+            vec!["run", "github.com/example/mylib/packages/go/cmd/setup"],
+            "cmd/setup must be invoked directly against the module path, as one literal argument"
+        );
+        assert_eq!(argv.steps[2].command, "go");
+        assert_eq!(argv.steps[2].args, vec!["test", "./..."]);
+    }
+
+    /// RED (pre-fix)/GREEN (post-fix): `[go] module` is a free-form, user-authored value with
+    /// no syntax restrictions. It used to be spliced unquoted into a `format!("cd {dir} &&
+    /// GOWORK=off go mod tidy && GOWORK=off go run {mod_path}/cmd/setup && ...")` shell string,
+    /// so `;`, backticks, or `$(...)` in the module path executed arbitrary commands during
+    /// `alef test-apps run`. It must now survive as a single literal argv element: shell
+    /// metacharacters inside it must never be split, joined, or reinterpreted.
+    #[test]
+    fn go_module_path_survives_shell_metacharacters_as_a_single_argument() {
+        let malicious = "github.com/example/mylib; touch pwned; echo";
+        let c = default_test_apps_run_config(
+            Language::Go,
+            "test_apps",
+            &LangContext::default(&ToolsConfig::default()),
+            None,
+            Some(malicious),
         );
         assert!(
-            run.contains("go run github.com/example/mylib/packages/go/cmd/setup"),
-            "expected cmd/setup to be invoked directly against the module path, got: {run}"
+            c.run.is_none(),
+            "must be argv-only, not a shell string that could reinterpret this payload"
         );
-        assert!(
-            !run.contains("go list -m") && !run.contains("mktemp") && !run.contains("go mod edit -replace"),
-            "the copy-out-of-the-module-cache workaround must be gone, got: {run}"
+        let argv = c.argv_run.expect("go should have an argv run command");
+        let setup_step = &argv.steps[1];
+        assert_eq!(setup_step.command, "go");
+        assert_eq!(
+            setup_step.args,
+            vec!["run".to_owned(), format!("{malicious}/cmd/setup")],
+            "the entire payload, including `;`, must arrive as one literal argument"
         );
-        assert!(
-            !run.contains("curl")
-                && !run.contains("releases/download")
-                && !run.contains("github.com/example/mylib/releases/download"),
-            "runner must be generic — no project-specific download logic, got: {run}"
-        );
-        assert!(
-            run.contains("GOWORK=off go test ./..."),
-            "expected plain `go test ./...`, got: {run}"
-        );
-        assert!(run.contains("cd test_apps/go"), "expected cd test_apps/go, got: {run}");
     }
 
     #[test]
@@ -559,8 +624,8 @@ mod tests {
     #[test]
     fn test_apps_dir_is_substituted() {
         let c = cfg(Language::Go, "my/custom/apps");
-        let run = c.run.unwrap().commands().join(" ");
-        assert!(run.contains("cd my/custom/apps/go"), "got: {run}");
+        let argv = c.argv_run.expect("go should have an argv run command");
+        assert_eq!(argv.work_dir, "my/custom/apps/go");
     }
 
     #[test]

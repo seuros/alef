@@ -1,6 +1,9 @@
 use crate::cli::cache;
-use crate::cli::pipeline::helpers::{check_precondition_named, run_command_streamed};
+use crate::cli::pipeline::helpers::{
+    check_precondition_named, run_argv_step_streamed, run_command_streamed, run_command_streamed_with_env,
+};
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::config::output::TestAppRunConfig;
 use crate::core::hash;
 use crate::process::{configure_process_group, kill_process_tree, termination};
 use anyhow::Context as _;
@@ -249,10 +252,22 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
         match serde_json::from_str::<std::collections::HashMap<String, String>>(&servers) {
             Ok(map) => {
                 for (fixture_id, server_url) in &map {
-                    env_vars.push((
-                        format!("MOCK_SERVER_{}", fixture_id.to_ascii_uppercase()),
-                        server_url.clone(),
-                    ));
+                    let key = format!("MOCK_SERVER_{}", fixture_id.to_ascii_uppercase());
+                    // `fixture_id` is a fixture author's free-form JSON `"id"` field, not a
+                    // value alef controls -- unlike `[crates.e2e.env]` (validated once, at
+                    // config resolution, see `core::config::validation::validate_e2e_env_keys`),
+                    // there is no single upstream gate for it. Skip (rather than reject the
+                    // whole run for) a derived key that isn't a valid env-var name: this
+                    // mirrors the JSON-parse-failure handling directly below, which is also a
+                    // warn-and-fall-back-to-MOCK_SERVER_URL, never an abort. ~keep
+                    if crate::core::config::validation::is_valid_env_var_name(&key) {
+                        env_vars.push((key, server_url.clone()));
+                    } else {
+                        warn!(
+                            "skipping MOCK_SERVER_<FIXTURE_ID> env var derived from fixture id \
+                             {fixture_id:?}: {key:?} is not a valid environment variable name"
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -297,9 +312,19 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
 /// Before anything runs, each target's generated output is checked against the crate's
 /// current sources + `alef.toml` (see [`warn_if_test_apps_stale`]) and a stale target
 /// gets a loud warning naming the fix — this never blocks the run, only diagnoses it.
-pub fn test_apps_run(config: &ResolvedCrateConfig, config_path: &Path, names: &[String]) -> anyhow::Result<()> {
-    warn_if_test_apps_stale(config, config_path, names);
-    let server = start_mock_server(config).context("failed to start e2e mock-server for test apps")?;
+/// Build the shared env-var list injected into every test-app `run`/`before` command:
+/// `[crates.e2e.env]` plus the mock-server's `MOCK_SERVER_URL`/`MOCK_SERVERS`/per-fixture vars.
+///
+/// `config.e2e.env` keys are already guaranteed to be valid POSIX environment-variable names
+/// by `core::config::validation::validate_e2e_env_keys`, which every `alef` command runs at
+/// config-load time -- so there is nothing left to validate here. `server`'s per-fixture keys
+/// are filtered at construction (see `start_mock_server`), for the same reason. Real process
+/// environment variables via `Command::env`, never shell text: a value (an e2e-policy flag, a
+/// per-fixture mock-server URL) is arbitrary text that must not be re-parsed by a shell, and
+/// interpolating it into an `export {k}='{v}'; ` prefix used to do exactly that -- an
+/// apostrophe in a value broke out of the quoting, and an unvalidated key needed no escaping
+/// at all to inject a second command.
+fn test_app_env_vars(config: &ResolvedCrateConfig, server: &Option<MockServerHandle>) -> Vec<(String, String)> {
     let server_env: Vec<(String, String)> = server.as_ref().map(|h| h.env_vars.clone()).unwrap_or_default();
     let e2e_env: Vec<(String, String)> = config
         .e2e
@@ -310,37 +335,63 @@ pub fn test_apps_run(config: &ResolvedCrateConfig, config_path: &Path, names: &[
             vars
         })
         .unwrap_or_default();
-    let env_prefix: String = e2e_env
-        .iter()
-        .chain(server_env.iter())
-        .map(|(k, v)| format!("export {k}='{v}'; "))
-        .collect();
+    e2e_env.into_iter().chain(server_env).collect()
+}
+
+/// Run one registry-mode test-app target: precondition gate, `before` hook, then the main
+/// command -- `argv_run` (typed, no shell) when the default set one, else the legacy shell
+/// `run` field. Extracted from `test_apps_run` so the parallel-dispatch closure there stays a
+/// plain function call.
+fn run_test_app_target(
+    name: &str,
+    cfg: &TestAppRunConfig,
+    env_pairs: &[(&str, String)],
+    env_vars: &[(String, String)],
+) -> TestAppOutcome {
+    if !check_precondition_named(name, cfg.precondition.as_deref()) {
+        return TestAppOutcome::Skipped;
+    }
+    if let Some(before) = &cfg.before {
+        for cmd in before.commands() {
+            if let Err(e) = run_command_streamed_with_env(cmd, Some(name), env_pairs) {
+                return TestAppOutcome::Failed(e);
+            }
+        }
+    }
+    if let Some(argv) = &cfg.argv_run {
+        for step in &argv.steps {
+            let mut step_env = argv.env.clone();
+            step_env.extend(env_vars.iter().cloned());
+            if let Err(e) = run_argv_step_streamed(step, &argv.work_dir, &step_env, Some(name)) {
+                return TestAppOutcome::Failed(e);
+            }
+        }
+        return TestAppOutcome::Passed;
+    }
+    match &cfg.run {
+        Some(cmd_list) => {
+            for cmd in cmd_list.commands() {
+                if let Err(e) = run_command_streamed_with_env(cmd, Some(name), env_pairs) {
+                    return TestAppOutcome::Failed(e);
+                }
+            }
+            TestAppOutcome::Passed
+        }
+        None => TestAppOutcome::Skipped,
+    }
+}
+
+pub fn test_apps_run(config: &ResolvedCrateConfig, config_path: &Path, names: &[String]) -> anyhow::Result<()> {
+    warn_if_test_apps_stale(config, config_path, names);
+    let server = start_mock_server(config).context("failed to start e2e mock-server for test apps")?;
+    let env_vars = test_app_env_vars(config, &server);
+    let env_pairs: Vec<(&str, String)> = env_vars.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
 
     let results: Vec<(String, TestAppOutcome)> = names
         .par_iter()
         .map(|name| {
             let cfg = config.test_apps_run_config_for_name(name);
-            if !check_precondition_named(name, cfg.precondition.as_deref()) {
-                return (name.clone(), TestAppOutcome::Skipped);
-            }
-            if let Some(before) = &cfg.before {
-                for cmd in before.commands() {
-                    if let Err(e) = run_command_streamed(&format!("{env_prefix}{cmd}"), Some(name)) {
-                        return (name.clone(), TestAppOutcome::Failed(e));
-                    }
-                }
-            }
-            match &cfg.run {
-                Some(cmd_list) => {
-                    for cmd in cmd_list.commands() {
-                        if let Err(e) = run_command_streamed(&format!("{env_prefix}{cmd}"), Some(name)) {
-                            return (name.clone(), TestAppOutcome::Failed(e));
-                        }
-                    }
-                    (name.clone(), TestAppOutcome::Passed)
-                }
-                None => (name.clone(), TestAppOutcome::Skipped),
-            }
+            (name.clone(), run_test_app_target(name, &cfg, &env_pairs, &env_vars))
         })
         .collect();
 

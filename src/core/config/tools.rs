@@ -97,10 +97,14 @@ pub fn wrap_command(cmd: String, wrapper: Option<&str>) -> String {
 
 /// Append space-separated `paths` to `cmd`. No-op when `paths` is empty.
 ///
-/// Path entries are inserted verbatim — they must be shell-safe identifiers
-/// or quoted by the caller. The parser-level validation in
-/// `super::validation` rejects whitespace and shell metacharacters, so
-/// real-world `extra_lint_paths` values reach here pre-sanitised.
+/// Path entries are inserted verbatim into a string that reaches `sh -c` (via the
+/// `lint`/`build`/`test`/`update`/`setup` default builders that call this). This function
+/// itself does no escaping -- the guarantee comes from upstream, not from this call site.
+/// `super::validation::validate_extra_lint_paths` rejects any `extra_lint_paths` entry outside
+/// `[A-Za-z0-9._/-]+` once, at config resolution, before any `Language` config carrying one
+/// reaches a default builder. A previous version of this comment claimed that check existed
+/// when it did not; re-derive this claim from `super::validation`'s actual contents rather
+/// than trusting the comment, the same way that gap was found.
 pub fn append_paths(cmd: String, paths: &[String]) -> String {
     if paths.is_empty() {
         cmd
