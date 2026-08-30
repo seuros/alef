@@ -62,7 +62,7 @@ tests, and release metadata from one `alef.toml`.
 
 ## Installation
 
-Alef requires Rust 1.88 or newer.
+Building from source requires Rust 1.88 or newer. The prebuilt binaries below need no toolchain.
 
 ```bash
 cargo install alef --locked
@@ -73,6 +73,18 @@ binary-install metadata:
 
 ```bash
 cargo binstall alef
+```
+
+Or install a prebuilt binary from a package manager:
+
+```bash
+brew trust xberg-io/tap
+brew install xberg-io/tap/alef
+```
+
+```powershell
+scoop bucket add xberg https://github.com/xberg-io/scoop-bucket
+scoop install alef
 ```
 
 ## Quick Start
