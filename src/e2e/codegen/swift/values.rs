@@ -1,6 +1,6 @@
 use crate::backends::swift::gen_rust_crate::type_bridge::field_needs_json_bridge;
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig};
-use crate::e2e::escape::escape_java as escape_swift_str;
+use crate::e2e::escape::escape_swift as escape_swift_str;
 use crate::e2e::field_access::SwiftFirstClassMap;
 use heck::ToLowerCamelCase;
 use std::collections::{HashMap, HashSet};

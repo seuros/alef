@@ -124,12 +124,34 @@ pub fn escape_go(s: &str) -> String {
 }
 
 /// Escape a string for embedding in a Java string literal.
+///
+/// Delegates to [`crate::codegen::java_literal::escape_java_string_literal`], the single place
+/// Java literal escaping is defined, so generated e2e sources and generated bindings cannot
+/// disagree about what a hostile value looks like in Java source.
 pub fn escape_java(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    crate::codegen::java_literal::escape_java_string_literal(s)
+}
+
+/// Escape a string for embedding in a Swift double-quoted string literal.
+///
+/// Deliberately *not* the Java escaper: Swift has no octal escape at all and spells a Unicode
+/// escape `\u{XXXX}`, so Java's `\uXXXX` and `\NNN` forms are compile errors in Swift source.
+/// Swift files are read as UTF-8, so non-ASCII needs no escape at all. ~keep
+pub fn escape_swift(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for character in s.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            other if other.is_control() => out.push_str(&format!("\\u{{{:X}}}", other as u32)),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Escape a string for embedding in a Kotlin double-quoted string literal.
@@ -530,6 +552,23 @@ mod tests {
     #[test]
     fn php_pcre_literal_wraps_plain_value_in_slashes() {
         assert_eq!(php_pcre_literal("BadRequest"), "'/BadRequest/'");
+    }
+
+    /// The escaper this delegates to escapes control characters; the five-`replace` chain it
+    /// replaced left everything outside `\n`/`\r`/`\t` raw, so a raw ESC proves the delegation.
+    #[test]
+    fn escape_java_delegates_to_the_central_java_literal_escaper() {
+        assert_eq!(escape_java("escape\u{1b}[0m"), "escape\\033[0m");
+        assert_eq!(escape_java("quote\"and\\slash"), "quote\\\"and\\\\slash");
+    }
+
+    /// Swift has no octal escape and spells Unicode escapes `\u{XXXX}`, so it must not inherit
+    /// Java's forms — this aliased the Java escaper until the Java one learned them.
+    #[test]
+    fn escape_swift_uses_swift_escape_syntax_not_javas() {
+        assert_eq!(escape_swift("escape\u{1b}[0m"), "escape\\u{1B}[0m");
+        assert_eq!(escape_swift("caf\u{e9}"), "caf\u{e9}");
+        assert_eq!(escape_swift("nul\0byte"), "nul\\0byte");
     }
 
     #[test]
