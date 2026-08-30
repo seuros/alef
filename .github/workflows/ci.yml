@@ -99,6 +99,13 @@ jobs:
           ALEF_REQUIRE_PYREFLY: "1"
           ALEF_REQUIRE_TSC: "1"
         run: cargo test --workspace
+      # Every Elixir escaping oracle is #[ignore]d, so the step above runs none of them and
+      # still exits 0. They evaluate generated Elixir through the real interpreter -- the only
+      # checks in this repo that do -- so dropping `--ignored` or the filter here retires them
+      # silently. `elixir_oracle::gate` reads THIS step's actual `run:` line (not the block, and
+      # not this comment, which contains both needles) and fails if either goes missing.
+      - name: Run the Elixir escaping oracles
+        run: cargo test --lib elixir_oracle -- --ignored --nocapture
 
   # Runs the consumer's own toolchain gate over a tree alef emits, in a scratch directory.
   # The `validate` job above lints alef; this one lints alef's *output*, which nothing

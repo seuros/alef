@@ -21,4 +21,6 @@ pub(super) use params_returns::{elixir_return_typespec, gen_rustler_unimplemente
 use json_values::elixir_field_name_with_type;
 
 #[cfg(test)]
+mod elixir_oracle;
+#[cfg(test)]
 mod tests;
