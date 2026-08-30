@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   casts, including unit variants passed in directly typed arrays.
 - Preserve raw payloads for untagged N-API enum arrays and honor custom, renamed, and synthesized
   discriminators when lowering tagged enum array elements.
+- Detect file-backed byte values nested in typed request objects so every generated E2E backend
+  activates its test-document path setup when required.
 
 ## [0.79.2] - 2026-08-30
 

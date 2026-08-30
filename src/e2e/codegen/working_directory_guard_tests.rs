@@ -29,13 +29,22 @@
 
 use super::E2eCodegen;
 use super::csharp::CSharpCodegen;
+use super::dart::DartE2eCodegen;
+use super::go::GoCodegen;
 use super::java::JavaCodegen;
 use super::kotlin::KotlinE2eCodegen;
 use super::kotlin_android::KotlinAndroidE2eCodegen;
+use super::php::PhpCodegen;
+use super::python::PythonE2eCodegen;
+use super::ruby::RubyCodegen;
+use super::swift::SwiftE2eCodegen;
+use super::typescript::TypeScriptCodegen;
+use super::wasm::WasmCodegen;
 use super::zig::ZigE2eCodegen;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::e2e::{ArgMapping, CallConfig};
+use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Fixture, FixtureGroup};
 
@@ -46,6 +55,126 @@ fn generated_file_ending_in<'a>(files: &'a [GeneratedFile], suffix: &str) -> &'a
             files.iter().map(|f| f.path.display().to_string()).collect::<Vec<_>>()
         )
     })
+}
+
+fn nested_bytes_fixture() -> (E2eConfig, FixtureGroup, TypeDef) {
+    let config = E2eConfig {
+        call: CallConfig {
+            function: "process".into(),
+            module: "sample_package".into(),
+            args: vec![ArgMapping {
+                name: "request".into(),
+                field: "input".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: true,
+                element_type: Some("SampleRequest".into()),
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let group = FixtureGroup {
+        category: "documents".into(),
+        fixtures: vec![Fixture {
+            id: "process_document".into(),
+            description: "Process a local document".into(),
+            input: serde_json::json!({"content": "documents/sample.bin"}),
+            ..Default::default()
+        }],
+    };
+    let request = TypeDef {
+        name: "SampleRequest".into(),
+        fields: vec![FieldDef {
+            name: "content".into(),
+            ty: TypeRef::Bytes,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    (config, group, request)
+}
+
+#[test]
+fn node_nested_bytes_fixture_emits_test_document_setup() {
+    let (e2e_config, group, request) = nested_bytes_fixture();
+    let files = TypeScriptCodegen
+        .generate(
+            &[group],
+            &e2e_config,
+            &ResolvedCrateConfig::default(),
+            &[request],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("Node e2e generation succeeds");
+
+    generated_file_ending_in(&files, "setup.ts");
+}
+
+#[test]
+fn python_nested_bytes_fixture_emits_test_document_chdir() {
+    let (e2e_config, group, request) = nested_bytes_fixture();
+    let files = PythonE2eCodegen
+        .generate(
+            &[group],
+            &e2e_config,
+            &ResolvedCrateConfig::default(),
+            &[request],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("Python e2e generation succeeds");
+    let conftest = generated_file_ending_in(&files, "conftest.py");
+
+    assert!(
+        conftest.content.contains("os.chdir(_TEST_DOCUMENTS)"),
+        "nested bytes file reads require the generated conftest to enter test_documents, got:\n{}",
+        conftest.content
+    );
+}
+
+fn assert_nested_bytes_fixture_emits_setup(generator: &dyn E2eCodegen, expected: &str) {
+    let (e2e_config, group, request) = nested_bytes_fixture();
+    let files = generator
+        .generate(
+            &[group],
+            &e2e_config,
+            &ResolvedCrateConfig::default(),
+            &[request],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("nested bytes fixture generation failed: {error}"));
+    assert!(
+        files.iter().any(|file| file.content.contains(expected)),
+        "expected nested bytes setup containing `{expected}`, got files: {:?}",
+        files
+            .iter()
+            .map(|file| file.path.display().to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn remaining_backends_detect_nested_bytes_fixture_paths() {
+    for (generator, expected) in [
+        (&DartE2eCodegen as &dyn E2eCodegen, "Directory.current = _dir"),
+        (&GoCodegen, "os.Chdir(testDocumentsDir)"),
+        (&PhpCodegen, "chdir($_test_documents)"),
+        (&RubyCodegen, "Dir.chdir(_test_documents)"),
+        (&SwiftE2eCodegen, "FileManager.default.changeCurrentDirectoryPath"),
+        (&WasmCodegen, "process.chdir(testDocumentsDir)"),
+        (&ZigE2eCodegen, ".setCwd(b.path("),
+    ] {
+        assert_nested_bytes_fixture_emits_setup(generator, expected);
+    }
 }
 
 #[test]

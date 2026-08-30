@@ -341,9 +341,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 &f.tags,
                 &f.input,
             );
-            cc.args
-                .iter()
-                .any(|a| a.arg_type == "file_path" || a.arg_type == "bytes")
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
         });
 
         // Whether any fixture hits the mock server: a direct HTTP fixture, a

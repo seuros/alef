@@ -229,10 +229,19 @@ impl E2eCodegen for GoCodegen {
         //
         // TestMain runs before all tests and changes to the test_documents directory,
         // ensuring that relative file paths like "pdf/fake_memo.pdf" resolve correctly.
-        let has_file_fixtures = groups
-            .iter()
-            .flat_map(|g| g.fixtures.iter())
-            .any(|f| f.http.is_none() && !f.needs_mock_server());
+        let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
+            if f.http.is_some() {
+                return false;
+            }
+            let call = e2e_config.resolve_call_for_fixture(
+                f.call.as_deref(),
+                &f.id,
+                &f.resolved_category(),
+                &f.tags,
+                &f.input,
+            );
+            super::file_inputs::fixture_uses_test_documents(f, call, type_defs)
+        });
 
         // Determine if any fixture needs the mock-server binary or HTTP integration tests.
         let needs_mock_server = groups

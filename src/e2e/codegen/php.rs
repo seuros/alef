@@ -170,7 +170,8 @@ impl E2eCodegen for PhpCodegen {
         let has_http_server_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| f.http.is_some());
         let uses_server_harness = has_http_server_fixtures && !e2e_config.harness.imports.is_empty();
 
-        // Check if any fixture uses file_path or bytes args (needs chdir to test_documents).
+        // Check if any fixture reads test-document content, including byte fields nested in a
+        // typed request object.
         let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
             let cc = e2e_config.resolve_call_for_fixture(
                 f.call.as_deref(),
@@ -179,9 +180,7 @@ impl E2eCodegen for PhpCodegen {
                 &f.tags,
                 &f.input,
             );
-            cc.args
-                .iter()
-                .any(|a| a.arg_type == "file_path" || a.arg_type == "bytes")
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
         });
 
         // app_harness.php is now emitted by a consumer extension.

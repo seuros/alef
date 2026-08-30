@@ -1,6 +1,7 @@
 //! Python conftest.py and pyproject.toml rendering.
 
 use crate::core::hash::{self, CommentStyle};
+use crate::core::ir::TypeDef;
 use crate::core::template_versions as tv;
 use crate::core::version::to_pep440;
 use crate::e2e::config::{DependencyMode, E2eConfig};
@@ -315,7 +316,7 @@ fn render_env_setup_block(e2e_config: &E2eConfig) -> String {
     )
 }
 
-pub(super) fn render_conftest(e2e_config: &E2eConfig, groups: &[FixtureGroup]) -> String {
+pub(super) fn render_conftest(e2e_config: &E2eConfig, groups: &[FixtureGroup], type_defs: &[TypeDef]) -> String {
     let module = resolve_module(e2e_config);
 
     let has_mock_server_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
@@ -334,9 +335,7 @@ pub(super) fn render_conftest(e2e_config: &E2eConfig, groups: &[FixtureGroup]) -
     let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
         let cc =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        cc.args
-            .iter()
-            .any(|a| a.arg_type == "file_path" || a.arg_type == "bytes")
+        crate::e2e::codegen::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
     });
 
     let header = hash::header(CommentStyle::Hash);
@@ -543,7 +542,7 @@ mod tests {
     fn render_conftest_no_fixtures_emits_minimal_conftest() {
         let e2e_config = crate::e2e::config::E2eConfig::default();
         let groups: Vec<crate::e2e::fixture::FixtureGroup> = Vec::new();
-        let out = render_conftest(&e2e_config, &groups);
+        let out = render_conftest(&e2e_config, &groups, &[]);
         assert!(out.contains("Pytest configuration"), "got: {out}");
         assert!(!out.contains("mock_server"), "got: {out}");
     }
@@ -556,7 +555,7 @@ mod tests {
             .insert("E2E_ALLOW_PRIVATE_NETWORK".to_owned(), "true".to_owned());
         e2e_config.env.insert("ALEF_FOO".to_owned(), "bar".to_owned());
         let groups: Vec<crate::e2e::fixture::FixtureGroup> = Vec::new();
-        let out = render_conftest(&e2e_config, &groups);
+        let out = render_conftest(&e2e_config, &groups, &[]);
         assert!(out.contains("_SUITE_ENV"), "got: {out}");
         assert!(out.contains("\"E2E_ALLOW_PRIVATE_NETWORK\""), "got: {out}");
         assert!(out.contains("\"ALEF_FOO\""), "got: {out}");
@@ -570,7 +569,7 @@ mod tests {
     fn render_conftest_skips_env_block_when_env_empty() {
         let e2e_config = crate::e2e::config::E2eConfig::default();
         let groups: Vec<crate::e2e::fixture::FixtureGroup> = Vec::new();
-        let out = render_conftest(&e2e_config, &groups);
+        let out = render_conftest(&e2e_config, &groups, &[]);
         assert!(
             !out.contains("_SUITE_ENV"),
             "empty env should emit no block; got: {out}"
@@ -621,7 +620,7 @@ mod tests {
             fixtures: vec![fixture],
         }];
 
-        let out = render_conftest(&e2e_config, &groups);
+        let out = render_conftest(&e2e_config, &groups, &[]);
         assert!(out.contains("mock_server"), "expected mock-server branch; got: {out}");
         assert!(
             out.contains("os.chdir(_TEST_DOCUMENTS)"),

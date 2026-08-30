@@ -46,18 +46,15 @@ pub(super) fn render_test_file(
         })
     });
 
-    // Detect whether any fixture uses file_path or bytes args — if so, setUpAll must chdir
-    // to the test_documents directory so that relative paths like "docx/fake.docx" resolve.
-    // Mirrors the Ruby/Python conftest and Swift setUp patterns.
+    // Detect file-backed values, including byte fields nested in typed request objects, so
+    // setUpAll can resolve their relative paths from the test-documents directory.
     let needs_chdir = fixtures.iter().any(|f| {
         if f.is_http_test() {
             return false;
         }
         let call_config =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        f.resolved_args(call_config)
-            .iter()
-            .any(|a| a.arg_type == "file_path" || a.arg_type == "bytes")
+        super::super::file_inputs::fixture_uses_test_documents(f, call_config, type_defs)
     });
 
     // Detect whether any non-HTTP fixture uses a json_object arg that resolves to a JSON array —

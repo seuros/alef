@@ -40,6 +40,7 @@ pub(crate) mod error_field_reachability;
 pub(crate) mod error_path_assertions;
 mod field_resolution;
 pub(crate) mod field_skip;
+mod file_inputs;
 pub(crate) mod fixture_refusal;
 pub mod gleam;
 pub mod go;
