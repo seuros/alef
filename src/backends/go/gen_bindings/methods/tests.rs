@@ -497,6 +497,51 @@ fn a_map_param_normalizes_a_nil_map_to_the_empty_object_rust_emits() {
     );
 }
 
+#[test]
+fn an_optional_vec_param_preserves_a_nil_value_as_json_null() {
+    let mut param = simple_param("tags", TypeRef::Vec(Box::new(TypeRef::String)));
+    param.optional = true;
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ffi_param_enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    assert_eq!(go_optional_type(&param.ty).as_ref(), "[]string");
+    let out = gen_param_to_c(&param, "", false, "krz", &opaque, &enum_names, &ffi_param_enum_names);
+
+    assert!(
+        out.contains("jsonBytescTags, err := json.Marshal(tags)"),
+        "the optional slice must still be marshalled so nil becomes JSON null: {out}"
+    );
+    assert!(
+        !out.contains("if string(jsonBytescTags) == \"null\"") && !out.contains("jsonBytescTags = []byte(\"[]\")"),
+        "Option<Vec<T>> must preserve nil as None/null rather than fabricate Some(empty): {out}"
+    );
+}
+
+#[test]
+fn an_optional_map_param_preserves_a_nil_value_as_json_null() {
+    let mut param = simple_param(
+        "labels",
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+    );
+    param.optional = true;
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ffi_param_enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    assert_eq!(go_optional_type(&param.ty).as_ref(), "map[string]string");
+    let out = gen_param_to_c(&param, "", false, "krz", &opaque, &enum_names, &ffi_param_enum_names);
+
+    assert!(
+        out.contains("jsonBytescLabels, err := json.Marshal(labels)"),
+        "the optional map must still be marshalled so nil becomes JSON null: {out}"
+    );
+    assert!(
+        !out.contains("if string(jsonBytescLabels) == \"null\"") && !out.contains("jsonBytescLabels = []byte(\"{}\")"),
+        "Option<Map<K,V>> must preserve nil as None/null rather than fabricate Some(empty): {out}"
+    );
+}
+
 /// The negative control that keeps the fix from over-reaching. A `TypeRef::Json` parameter is a
 /// `serde_json::Value` on the Rust side, where `null` is a legitimate inhabitant — rewriting it
 /// to `[]` would change the argument's meaning, not normalize its spelling.

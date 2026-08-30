@@ -520,12 +520,7 @@ pub(super) fn gen_method_wrapper(
     out
 }
 
-/// Generate parameter conversion code from Go to C.
-/// `err_return_prefix` is the leading `"<zero>, "` (or `""` for value-less returns) prepended to
-/// every `return ... fmt.Errorf(...)` early exit. Callers compute it from the enclosing function's
-/// return type — `"nil, "` for pointer/slice/channel returns, `"0, "` / `"false, "` / `"\"\", "`
-/// for plain primitive/string returns, and `""` when the function only returns `error`.
-/// The JSON text `serde_json` writes for an EMPTY value of `ty`, for the collection types whose
+/// The JSON text `serde_json` writes for an EMPTY value of `param.ty`, for collection types whose
 /// Go counterpart has a nil form that marshals to `null` instead.
 ///
 /// ~keep Go's `json.Marshal` writes `null` for a nil slice or map and `[]`/`{}` only for a
@@ -535,17 +530,28 @@ pub(super) fn gen_method_wrapper(
 /// on it and takes the `set_last_error(2, ..)` branch. `param_named_type.jinja` already performs
 /// exactly this substitution for a nil DTO pointer; the Vec/Map path was the one that did not.
 ///
+/// An optional collection also returns `None`: Go slices and maps are nil-capable reference
+/// values, and their nil `null` is the intentional `Option::None` wire value rather than empty.
+///
 /// `TypeRef::Json` deliberately returns `None`: there the Rust side is a `serde_json::Value`, for
 /// which `null` is a legitimate inhabitant rather than a nil artefact, and rewriting it to `[]`
 /// would change the argument's meaning.
-fn empty_collection_wire_literal(ty: &TypeRef) -> Option<&'static str> {
-    match ty {
+fn empty_collection_wire_literal(param: &ParamDef) -> Option<&'static str> {
+    if param.optional {
+        return None;
+    }
+    match &param.ty {
         TypeRef::Vec(_) => Some("[]"),
         TypeRef::Map(_, _) => Some("{}"),
         _ => None,
     }
 }
 
+/// Generate parameter conversion code from Go to C.
+/// `err_return_prefix` is the leading `"<zero>, "` (or `""` for value-less returns) prepended to
+/// every `return ... fmt.Errorf(...)` early exit. Callers compute it from the enclosing function's
+/// return type — `"nil, "` for pointer/slice/channel returns, `"0, "` / `"false, "` / `"\"\", "`
+/// for plain primitive/string returns, and `""` when the function only returns `error`.
 /// `can_return_error` should be true when the enclosing function has `error` in its return type.
 /// When false, marshal failures are handled with `panic` since the function signature has no error return.
 pub(super) fn gen_param_to_c(
@@ -707,7 +713,7 @@ pub(super) fn gen_param_to_c(
                     c_name => &c_name,
                     go_param => &go_param,
                     err_action => &err_action,
-                    empty_literal => empty_collection_wire_literal(&param.ty),
+                    empty_literal => empty_collection_wire_literal(param),
                 },
             ));
             out.push('\n');
