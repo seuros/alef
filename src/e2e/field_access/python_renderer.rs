@@ -34,7 +34,16 @@
 //! `TypeError: 'SampleItem' object is not subscriptable`. [`python_element_owner_type`] resolves
 //! the actual element owner type by walking the array field's own path through
 //! `typeddict_map.field_types`, so [`FieldResolver::python_element_accessor`] can start the
-//! cursor there instead. ~keep
+//! cursor there instead.
+//!
+//! A FOURTH instance of that same "the wrong type answered the question" shape: a `map[key]` hop
+//! left the cursor on the map's OWNER, so `extras[key].title` classified `title` against the
+//! struct that declares `extras` rather than against the map's VALUE type. Retaining the owner
+//! and defaulting to `None` are both guesses — each happens to be right for a different config —
+//! so the fix is a DERIVED edge (`PythonTypedDictMap::map_value_types`, built in
+//! `python_typeddict` from `call_ir::map_value_named_type`) rather than a different default:
+//! `named_type` names nothing for a map, so before that edge existed the IR had no answer to
+//! give at all. ~keep
 
 use super::optional_renderers::{push_key_field_name, push_key_index_suffix};
 use super::renderers::quoted_key_literal;
@@ -117,7 +126,8 @@ fn render_python_with_optionals_from_owner(
 /// conditions [`PythonTypedDictMap::advance`] answers `None` for: an unresolved root, or a
 /// segment the map never recorded a traversal edge for. [`PythonTypedDictMap::is_typeddict`]
 /// treats `None` as "attribute access", the correct default for an opaque/native `#[pyclass]`
-/// element type.
+/// element type. A `map[key]` hop advances through
+/// [`PythonTypedDictMap::advance_map_value`] instead, per [`advance_through_map_access`].
 ///
 /// ~keep `array_segments` must be parsed from the path the CONTAINER was actually rendered from
 /// (`FieldResolver::result_relative_path`, envelope projection applied), not from the raw fixture
@@ -129,14 +139,32 @@ pub(super) fn python_element_owner_type(
 ) -> Option<String> {
     let mut current_type = typeddict_map.root_type.clone();
     for segment in array_segments {
-        let field_name = match segment {
-            PathSegment::Field(f) => f,
-            PathSegment::ArrayField { name, .. } => name,
-            PathSegment::MapAccess { .. } | PathSegment::Length => continue,
-        };
-        current_type = typeddict_map.advance(current_type.as_deref(), field_name);
+        match segment {
+            PathSegment::Field(name) | PathSegment::ArrayField { name, .. } => {
+                current_type = typeddict_map.advance(current_type.as_deref(), name);
+            }
+            PathSegment::MapAccess { field, .. } => {
+                current_type = advance_through_map_access(current_type, field, typeddict_map);
+            }
+            PathSegment::Length => {}
+        }
     }
     current_type
+}
+
+/// Advance the owner cursor across one `map[key]` access: to the map's VALUE type when the IR
+/// recorded one, otherwise unchanged.
+///
+/// ~keep Retaining the previous owner when there is no map-value edge is not a second guess at the
+/// value's shape — it is declining to make one. `is_typeddict(None)` means "attribute access", a
+/// positive claim, and asserting it for a map whose values the IR could not name (a
+/// `serde_json::Value` blob, a nested map, a foreign type) would render `.field` on what is a
+/// plain `dict` at runtime under the dominant `python_output = "typed-dict"` config — an
+/// `AttributeError` that does not exist today. The only owner this changes is the one the IR can
+/// actually derive.
+fn advance_through_map_access(current_type: Option<String>, field: &str, map: &PythonTypedDictMap) -> Option<String> {
+    let advanced = map.advance_map_value(current_type.as_deref(), field);
+    advanced.or(current_type)
 }
 
 /// Render a Python accessor expression for `segments`, tracking the IR type that "owns" each
@@ -178,12 +206,13 @@ fn render_python_accessor_from_owner(
             }
             PathSegment::MapAccess { field, key } => {
                 push_field_access(&mut out, field, current_type.as_deref(), map);
-                // The map VALUE is a plain `dict` regardless of the owning struct's DTO style,
-                // so the trailing key/index suffix is unaffected by `TypedDict`-ness — this
-                // mirrors `render_dot_access`'s MapAccess handling exactly. The owner cursor
-                // does not advance through a MapAccess segment either, matching `ir_enum`/
-                // `ir_collection`, which never populate a `field_types` edge for a Map-typed
-                // field.
+                // ~keep The key/index suffix itself is unaffected by `TypedDict`-ness (the map is
+                // a plain `dict` whatever the owning struct's DTO style), mirroring
+                // `render_dot_access`. The owner cursor, however, MUST advance to the map's VALUE
+                // type here: everything after `extras[key]` belongs to the value, and classifying
+                // it against the type that merely OWNS `extras` answers a question about the
+                // wrong type. See [`advance_through_map_access`] for the no-edge case.
+                current_type = advance_through_map_access(current_type, field, map);
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     let idx: usize = key.parse().unwrap_or(0);
                     out.push_str(&format!("[{idx}]"));
@@ -389,5 +418,126 @@ mod tests {
     fn element_owner_type_is_none_when_the_root_type_is_unresolved() {
         let map = PythonTypedDictMap::default();
         assert_eq!(python_element_owner_type(&parse_path("results.records"), &map), None);
+    }
+
+    fn with_map_values(mut map: PythonTypedDictMap, edges: &[(&str, &str, &str)]) -> PythonTypedDictMap {
+        for (owner, field, target) in edges {
+            map.map_value_types
+                .entry(owner.to_string())
+                .or_default()
+                .insert(field.to_string(), target.to_string());
+        }
+        map
+    }
+
+    /// DIRECTION ONE — the map's VALUE is a `TypedDict` while the struct that OWNS the map is not.
+    /// Everything after the key access belongs to the value, so `title` must be SUBSCRIPTED even
+    /// though `entries` itself was reached by attribute access.
+    ///
+    /// ~keep Revert the fix and the cursor stays on `Report` (not a `TypedDict`), rendering
+    /// `.title` on what is a plain `dict` at runtime: `AttributeError: 'dict' object has no
+    /// attribute 'title'`. The owner and the value are deliberately classified OPPOSITELY — a
+    /// fixture where both agree cannot tell the fixed renderer from the broken one.
+    #[test]
+    fn a_typeddict_map_value_under_a_non_typeddict_owner_is_subscripted() {
+        let map = with_map_values(
+            typeddict_map(&["Meta"], &[], "Report"),
+            &[("Report", "entries", "Meta")],
+        );
+        assert_eq!(
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            r#"result.entries.get("alpha")["title"]"#
+        );
+    }
+
+    /// DIRECTION TWO — the mirror image: the map's OWNER is a `TypedDict` while its VALUE stays a
+    /// reexported/native `#[pyclass]`. `entries` is subscripted, and `title` on the value must
+    /// switch back to ATTRIBUTE access.
+    ///
+    /// ~keep Revert the fix and the cursor stays on `ApiResult` (a `TypedDict`), rendering
+    /// `["title"]` against a compiled pyclass instance: `TypeError: 'Meta' object is not
+    /// subscriptable`. This is the direction the previously-proposed `current_type = None` fix
+    /// also gets right — and direction one is the one it gets wrong, which is why both tests
+    /// exist.
+    #[test]
+    fn a_native_map_value_under_a_typeddict_owner_uses_attribute_access() {
+        let map = with_map_values(
+            typeddict_map(&["ApiResult"], &[], "ApiResult"),
+            &[("ApiResult", "entries", "Meta")],
+        );
+        assert_eq!(
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            r#"result["entries"].get("alpha").title"#
+        );
+    }
+
+    /// PRESERVATION PIN (passes before and after the fix, by design): under the dominant
+    /// `python_output = "typed-dict"` config the owner AND the value are both `TypedDict`s, and
+    /// subscript access all the way through stays correct. Recorded so a future change that
+    /// starts answering `None` for a derived map value is caught here rather than in a consumer.
+    #[test]
+    fn a_typeddict_map_value_under_a_typeddict_owner_stays_subscripted() {
+        let map = with_map_values(
+            typeddict_map(&["ApiResult", "Meta"], &[], "ApiResult"),
+            &[("ApiResult", "entries", "Meta")],
+        );
+        assert_eq!(
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            r#"result["entries"].get("alpha")["title"]"#
+        );
+    }
+
+    /// A map the IR recorded NO value edge for (values are scalars, a JSON blob, or a foreign
+    /// type) keeps the previous owner rather than asserting attribute access.
+    ///
+    /// ~keep This is the case the rejected `current_type = None` fix would have broken: a
+    /// `HashMap<String, serde_json::Value>` on a `TypedDict` result is a plain nested `dict` at
+    /// runtime, `["title"]` is correct, and `.title` would be a new `AttributeError`. No edge
+    /// means no derived answer, so the renderer declines to change its answer.
+    #[test]
+    fn a_map_with_no_recorded_value_edge_retains_the_owner_classification() {
+        let map = typeddict_map(&["ApiResult"], &[], "ApiResult");
+        assert_eq!(
+            render_python_accessor(&parse_path("extras[alpha].title"), "result", &map),
+            r#"result["extras"].get("alpha")["title"]"#
+        );
+    }
+
+    /// The owner walk advances through a `map[key]` hop too, so an element-anchored path whose
+    /// container sits inside a map resolves the element type instead of stalling.
+    ///
+    /// ~keep Revert the fix and the `MapAccess` arm `continue`s: the cursor stays on `Envelope`,
+    /// `advance("Envelope", "records")` finds no edge, and the walk answers `None` — silently
+    /// "attribute access" for every element of every map-nested container.
+    #[test]
+    fn element_owner_type_advances_through_a_map_access_segment() {
+        let map = with_map_values(
+            typeddict_map(
+                &["Envelope", "Report", "Entry"],
+                &[("Report", "records", "Entry")],
+                "Envelope",
+            ),
+            &[("Envelope", "reports", "Report")],
+        );
+        assert_eq!(
+            python_element_owner_type(&parse_path("reports[alpha].records"), &map),
+            Some("Entry".to_string())
+        );
+    }
+
+    /// CONTROL for the walk above: `Field` and `ArrayField` hops still consult `field_types` and
+    /// are untouched by the map-value edge — a `Vec`/`Option` traversal resolves exactly as it did
+    /// before, and a map-value edge on the same owner name does not answer for them.
+    #[test]
+    fn element_owner_type_ignores_map_value_edges_for_plain_field_hops() {
+        let map = with_map_values(
+            typeddict_map(&["Envelope"], &[("Envelope", "results", "Report")], "Envelope"),
+            &[("Envelope", "results", "Decoy")],
+        );
+        assert_eq!(
+            python_element_owner_type(&parse_path("results[0]"), &map),
+            Some("Report".to_string()),
+            "a field hop reads field_types, never map_value_types"
+        );
     }
 }

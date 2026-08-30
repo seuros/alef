@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use crate::backends::pyo3::gen_bindings::errors::is_dataclass_backed_config;
 use crate::core::config::PythonDtoStyle;
 use crate::core::ir::TypeDef;
-use crate::e2e::codegen::call_ir::named_type;
+use crate::e2e::codegen::call_ir::{map_value_named_type, named_type};
 
 use super::types::PythonTypedDictMap;
 
@@ -31,6 +31,14 @@ use super::types::PythonTypedDictMap;
 /// `ir_enum::build_ir_enum_map` and `ir_collection::build_ir_collection_map` do, so a
 /// multi-segment path can advance its "current owner type" cursor one segment at a time before
 /// asking `is_typeddict` at each link.
+///
+/// ~keep A MAP-typed field names nothing to [`named_type`] (by design — see
+/// [`map_value_named_type`]), so before this it contributed no edge at all and the renderer had no
+/// derivable owner for a `extras[key].title` path: it kept the MAP'S OWNER as the cursor, which
+/// answers the classification of `title` with the type that owns `extras` rather than the type
+/// `extras[key]` actually is. The map's VALUE type is recorded as its own edge so that question
+/// has a derived answer instead of a retained one. The two edge sets stay separate because they
+/// answer different hops — see [`PythonTypedDictMap`].
 pub(super) fn build_python_typeddict_map(
     type_defs: &[TypeDef],
     output_style: PythonDtoStyle,
@@ -41,29 +49,50 @@ pub(super) fn build_python_typeddict_map(
 
     let mut typeddict_types: HashSet<String> = HashSet::new();
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut map_value_types: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     for type_def in type_defs {
         if type_def.is_return_type && is_dataclass_backed_config(type_def, output_style, &reexported) {
             typeddict_types.insert(type_def.name.clone());
         }
         for field in &type_def.fields {
-            let Some(named) = named_type(&field.ty) else {
-                continue;
-            };
-            if struct_names.contains(named) {
-                field_types
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone(), named.to_string());
-            }
+            record_edge(&mut field_types, type_def, field, named_type(&field.ty), &struct_names);
+            record_edge(
+                &mut map_value_types,
+                type_def,
+                field,
+                map_value_named_type(&field.ty),
+                &struct_names,
+            );
         }
     }
 
     PythonTypedDictMap {
         typeddict_types,
         field_types,
+        map_value_types,
         root_type: None,
     }
+}
+
+/// Record `type_def.field -> resolved` in `edges`, when `resolved` names a `TypeDef` this crate
+/// declares. A name the crate does not declare is dropped rather than recorded, so the cursor
+/// never advances to a type nothing else in the map can answer questions about.
+fn record_edge(
+    edges: &mut HashMap<String, HashMap<String, String>>,
+    type_def: &TypeDef,
+    field: &crate::core::ir::FieldDef,
+    resolved: Option<&str>,
+    struct_names: &HashSet<&str>,
+) {
+    let Some(named) = resolved else { return };
+    if !struct_names.contains(named) {
+        return;
+    }
+    edges
+        .entry(type_def.name.clone())
+        .or_default()
+        .insert(field.name.clone(), named.to_string());
 }
 
 #[cfg(test)]
@@ -128,5 +157,83 @@ mod tests {
             map.field_types.get("ParseOutput").and_then(|f| f.get("metadata")),
             Some(&"Metadata".to_string())
         );
+    }
+
+    fn map_field_type_defs(value: TypeRef) -> Vec<TypeDef> {
+        vec![
+            return_type("ParseOutput", vec![field("extras", value)]),
+            return_type("Metadata", vec![field("title", TypeRef::String)]),
+        ]
+    }
+
+    fn string_map(value: TypeRef) -> TypeRef {
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(value))
+    }
+
+    /// `extras: HashMap<String, Metadata>` records the map's VALUE type as a map-value edge, so
+    /// `extras[key].title` has a derivable owner for `title`.
+    ///
+    /// Reverting the fix drops the edge entirely (`named_type` names nothing for a map), leaving
+    /// `map_value_types` empty and the renderer with nothing to advance to.
+    #[test]
+    fn a_map_valued_field_records_the_value_type_as_a_map_value_edge() {
+        let map = build_python_typeddict_map(
+            &map_field_type_defs(string_map(TypeRef::Named("Metadata".to_string()))),
+            PythonDtoStyle::TypedDict,
+            &[],
+        );
+        assert_eq!(
+            map.map_value_types.get("ParseOutput").and_then(|f| f.get("extras")),
+            Some(&"Metadata".to_string())
+        );
+    }
+
+    /// The map-value edge does NOT also land in `field_types`: a plain field hop onto `extras`
+    /// yields a `dict`, not a `Metadata`, and only the key-access segment may advance. ~keep
+    #[test]
+    fn a_map_valued_field_records_no_plain_field_edge() {
+        let map = build_python_typeddict_map(
+            &map_field_type_defs(string_map(TypeRef::Named("Metadata".to_string()))),
+            PythonDtoStyle::TypedDict,
+            &[],
+        );
+        assert_eq!(map.field_types.get("ParseOutput").and_then(|f| f.get("extras")), None);
+    }
+
+    /// CONTROL: `Option<T>` and `Vec<T>` fields keep recording exactly the plain `field_types`
+    /// edge they always did, and gain no map-value edge — the shared `named_type` behaviour
+    /// `ir_enum`/`ir_collection` also depend on is untouched by this change.
+    #[test]
+    fn optional_and_vec_named_fields_keep_their_plain_edge_and_gain_no_map_value_edge() {
+        let named = || TypeRef::Named("Metadata".to_string());
+        for wrapped in [
+            TypeRef::Optional(Box::new(named())),
+            TypeRef::Vec(Box::new(named())),
+            TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(named())))),
+        ] {
+            let map = build_python_typeddict_map(&map_field_type_defs(wrapped), PythonDtoStyle::TypedDict, &[]);
+            assert_eq!(
+                map.field_types.get("ParseOutput").and_then(|f| f.get("extras")),
+                Some(&"Metadata".to_string()),
+                "an Option/Vec of a named type is still a plain traversal edge"
+            );
+            assert!(
+                map.map_value_types.is_empty(),
+                "an Option/Vec of a named type is not a map and traverses no key access"
+            );
+        }
+    }
+
+    /// A map whose values name no `TypeDef` this crate declares records no edge at all — the
+    /// documented "the IR cannot judge this hop" answer, distinct from a recorded non-`TypedDict`
+    /// target.
+    #[test]
+    fn a_map_of_scalars_records_no_map_value_edge() {
+        let map = build_python_typeddict_map(
+            &map_field_type_defs(string_map(TypeRef::String)),
+            PythonDtoStyle::TypedDict,
+            &[],
+        );
+        assert!(map.map_value_types.is_empty());
     }
 }

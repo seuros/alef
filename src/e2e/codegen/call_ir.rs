@@ -201,6 +201,39 @@ pub(crate) fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
     }
 }
 
+/// The named type a map's VALUES resolve to — `Some("Meta")` for `HashMap<String, Meta>` and for
+/// `Option<HashMap<String, Option<Meta>>>` — or `None` for anything that is not a map, or a map
+/// whose values name nothing (a scalar, `serde_json::Value`, a nested map).
+///
+/// ~keep Deliberately a SIBLING of [`named_type`] rather than a widening of it. `named_type` sees
+/// through `Option`/`Vec` but stops at a map, and half a dozen consumers depend on exactly that:
+/// `ir_enum`, `ir_collection`, `ir_result_fields` (whose `unresolvable_named_fields` doc pins
+/// "map values and JSON blobs are legitimately walkable further, just not through this map"),
+/// `c::assertions`, and `resolve_declared_result_type`. Answering a map's value type from
+/// `named_type` would silently reclassify every map-valued field for all of them. The question
+/// "what does one KEY access land on" is a different question from "what does this field's type
+/// name", and only the caller that renders a key access should ask it.
+///
+/// `Vec` is deliberately NOT unwrapped on either side: one key access into a `Vec<HashMap<..>>`,
+/// or out of a `HashMap<String, Vec<Meta>>`, does not land on `Meta`, so claiming it does would
+/// be a guess. `Option` is, because a key access into an optional map, or onto an optional value,
+/// lands on the same shape.
+pub(crate) fn map_value_named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
+    match type_ref {
+        crate::core::ir::TypeRef::Optional(inner) => map_value_named_type(inner),
+        crate::core::ir::TypeRef::Map(_, value) => named_map_value(value),
+        _ => None,
+    }
+}
+
+fn named_map_value(value: &crate::core::ir::TypeRef) -> Option<&str> {
+    match value {
+        crate::core::ir::TypeRef::Named(name) => Some(name),
+        crate::core::ir::TypeRef::Optional(inner) => named_map_value(inner),
+        _ => None,
+    }
+}
+
 /// Resolve a call's declared Rust result type from the core IR — the free function of that
 /// name if there is one, otherwise the method of that name declared on an IR type — unwrapped
 /// through `Option`/`Vec` via [`named_type`].
@@ -553,6 +586,45 @@ mod tests {
         let nested = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named("Model".to_string())))));
         assert_eq!(named_type(&nested), Some("Model"));
         assert_eq!(named_type(&TypeRef::String), None);
+    }
+
+    fn map_of(value: TypeRef) -> TypeRef {
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(value))
+    }
+
+    /// CONTROL, pinning the boundary `map_value_named_type` was added NOT to cross: `named_type`
+    /// still names nothing for a map, so `ir_enum`, `ir_collection`, `ir_result_fields`,
+    /// `c::assertions`, and `resolve_declared_result_type` keep treating a map-valued field as
+    /// unwalkable exactly as before. ~keep
+    #[test]
+    fn named_type_still_names_nothing_for_a_map() {
+        assert_eq!(named_type(&map_of(TypeRef::Named("Meta".to_string()))), None);
+        assert_eq!(
+            named_type(&TypeRef::Optional(Box::new(map_of(TypeRef::Named("Meta".to_string()))))),
+            None
+        );
+    }
+
+    #[test]
+    fn map_value_named_type_resolves_the_value_through_optional_wrappers() {
+        let plain = map_of(TypeRef::Named("Meta".to_string()));
+        assert_eq!(map_value_named_type(&plain), Some("Meta"));
+
+        let optional_value = map_of(TypeRef::Optional(Box::new(TypeRef::Named("Meta".to_string()))));
+        let optional_map = TypeRef::Optional(Box::new(optional_value));
+        assert_eq!(map_value_named_type(&optional_map), Some("Meta"));
+    }
+
+    /// CONTROL: the two helpers answer disjoint questions. A plain `Option`/`Vec` of a named type
+    /// is a field hop, not a key access, so `map_value_named_type` must decline it — otherwise a
+    /// `Vec<Meta>` field would gain a map-value edge that no key access ever traverses.
+    #[test]
+    fn map_value_named_type_declines_non_map_and_unnamed_value_types() {
+        let vec_of_named = TypeRef::Vec(Box::new(TypeRef::Named("Meta".to_string())));
+        assert_eq!(map_value_named_type(&vec_of_named), None);
+        assert_eq!(map_value_named_type(&TypeRef::Named("Meta".to_string())), None);
+        assert_eq!(map_value_named_type(&map_of(TypeRef::String)), None);
+        assert_eq!(map_value_named_type(&map_of(vec_of_named)), None);
     }
 
     /// A declared primitive names no type, so a backend keeps its existing lowering rather
