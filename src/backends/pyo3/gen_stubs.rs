@@ -245,6 +245,8 @@ pub fn gen_stubs(
         .map(|c| c.reexported_types.clone())
         .unwrap_or_default();
     let options_types = crate::backends::pyo3::gen_bindings::options_dataclass_type_names(api, &stub_reexported_types);
+    let pyclass_absent_types =
+        crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(config, &api.types);
     for bridge in trait_bridges {
         if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
             continue;
@@ -254,7 +256,14 @@ pub fn gen_stubs(
         if !is_protocol_bridge {
             continue;
         }
-        if let Some(stub) = gen_visitor_protocol_stub(bridge, api, &capsule_names, emit_docstrings, &options_types) {
+        if let Some(stub) = gen_visitor_protocol_stub(
+            bridge,
+            api,
+            &capsule_names,
+            emit_docstrings,
+            &options_types,
+            &pyclass_absent_types,
+        ) {
             body_lines.push(stub);
             body_lines.push("".to_string());
             protocol_trait_names.insert(bridge.trait_name.clone());

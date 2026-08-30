@@ -4,6 +4,10 @@ use crate::codegen::shared::substitute_excluded_types;
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::ApiSurface;
 
+/// What `nodecontext_to_py_object`'s fallback arm actually builds: a `PyDict` keyed by the
+/// context's public field names, whose values span every field shape the helper can lower. ~keep
+const VISITOR_CONTEXT_DICT_ANNOTATION: &str = "dict[str, Any]";
+
 /// Generate a `class TraitName(Protocol):` stub for an `OptionsField` trait bridge.
 ///
 /// Returns `None` when the bridge's trait is absent from the API surface (e.g. excluded
@@ -20,6 +24,7 @@ pub(super) fn gen_visitor_protocol_stub(
     capsule_names: &std::collections::HashSet<&str>,
     emit_docstrings: bool,
     options_types: &std::collections::HashSet<String>,
+    pyclass_absent_types: &ahash::AHashSet<String>,
 ) -> Option<String> {
     let methods = bridge.resolve_methods(api);
     if methods.is_empty() {
@@ -37,6 +42,18 @@ pub(super) fn gen_visitor_protocol_stub(
         .map(String::as_str)
         .chain(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()))
         .collect();
+
+    // A visitor bridge whose context type has no generated `#[pyclass]` hands the callback a
+    // `PyDict` instead. Ask the bridge's own predicate rather than re-deriving the condition, so
+    // the annotation here cannot promise a class the bridge does not construct -- and so a
+    // config-only removal (`[crates.python] exclude_types`, `capsule_types`), which no IR flag
+    // records, moves both sides together. ~keep
+    let dict_fallback_context: Option<&str> = crate::backends::pyo3::trait_bridge::is_visitor_bridge(trait_def, bridge)
+        .then(|| bridge.context_type.as_deref())
+        .flatten()
+        .filter(|_| {
+            crate::backends::pyo3::trait_bridge::context_binding_class(api, bridge, pyclass_absent_types).is_none()
+        });
 
     let mut lines = vec![format!("class {}(Protocol):", bridge.trait_name)];
 
@@ -76,6 +93,9 @@ pub(super) fn gen_visitor_protocol_stub(
         let mut params: Vec<String> = vec!["self".to_string()];
         for p in &method.params {
             let param_type = match &p.ty {
+                crate::core::ir::TypeRef::Named(n) if Some(n.as_str()) == dict_fallback_context => {
+                    VISITOR_CONTEXT_DICT_ANNOTATION.to_string()
+                }
                 crate::core::ir::TypeRef::Named(n) if is_plugin_bridge && options_types.contains(n) => {
                     format!("options.{n}")
                 }
@@ -123,4 +143,83 @@ pub(super) fn gen_visitor_protocol_stub(
     }
 
     Some(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::visitor_context::test_support::neutral_visitor_fixture;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::core::ir::ApiSurface;
+    use ahash::AHashSet;
+
+    fn render(api: &ApiSurface, bridge: &TraitBridgeConfig, pyclass_absent_types: &AHashSet<String>) -> String {
+        super::gen_visitor_protocol_stub(
+            bridge,
+            api,
+            &std::collections::HashSet::new(),
+            false,
+            &std::collections::HashSet::new(),
+            pyclass_absent_types,
+        )
+        .expect("visitor protocol stub should generate")
+    }
+
+    /// The stub and the bridge must remove the same context types. Both were blind to
+    /// `[crates.python] exclude_types` and `capsule_types`, so they agreed with each other while
+    /// the stub named a class the compiled module never exported.
+    ///
+    /// Asserted in both directions on purpose: a change that annotated every context as a dict
+    /// would satisfy the exclusion half alone, so the unexcluded run must still name the class. ~keep
+    #[test]
+    fn an_excluded_visitor_context_is_annotated_as_a_dict_and_an_unexcluded_one_keeps_its_class() {
+        let (api, _, bridge) = neutral_visitor_fixture();
+
+        let included = render(&api, &bridge, &AHashSet::new());
+        assert!(
+            included.contains("state: TraversalState"),
+            "control: an unexcluded context must keep its generated class, or the exclusion \
+             assertion below proves nothing:\n{included}"
+        );
+        assert!(
+            !included.contains("dict[str, Any]"),
+            "control: an unexcluded context must not be annotated as a dict:\n{included}"
+        );
+
+        let excluded_names: AHashSet<String> = ["TraversalState".to_string()].into_iter().collect();
+        let excluded = render(&api, &bridge, &excluded_names);
+        assert!(
+            excluded.contains("state: dict[str, Any]"),
+            "a context whose #[pyclass] the config removed must be annotated as the dict the \
+             bridge actually passes:\n{excluded}"
+        );
+        assert!(
+            !excluded.contains("state: TraversalState"),
+            "the stub must not name a class the emitter skipped:\n{excluded}"
+        );
+    }
+
+    /// The dict fallback belongs to the visitor shape only. A `register_fn` (plugin) bridge
+    /// marshals its parameters normally and has no context fallback at all, so the annotation must
+    /// not follow the exclusion there -- otherwise the fix would describe a shape that bridge never
+    /// produces. ~keep
+    #[test]
+    fn a_plugin_bridge_parameter_is_never_annotated_with_the_visitor_dict_fallback() {
+        let (mut api, _, mut bridge) = neutral_visitor_fixture();
+        bridge.register_fn = Some("register_walker".to_string());
+        api.types
+            .iter_mut()
+            .find(|type_def| type_def.name == "DocumentWalker")
+            .expect("neutral visitor fixture should include its trait")
+            .methods
+            .iter_mut()
+            .for_each(|method| method.has_default_impl = false);
+
+        let excluded_names: AHashSet<String> = ["TraversalState".to_string()].into_iter().collect();
+        let stub = render(&api, &bridge, &excluded_names);
+
+        assert!(
+            !stub.contains("dict[str, Any]"),
+            "a plugin bridge has no visitor context fallback to describe:\n{stub}"
+        );
+    }
 }
