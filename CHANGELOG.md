@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restrict the Zig snippet/e2e native library probe to the host's own dynamic-library extension
   instead of a shared macOS/Linux candidate set, so a stray `.dylib` in a mixed-platform target
   directory can no longer satisfy validation on Linux (or a stray `.so` on macOS).
+- Declare `vitest` as a devDependency in the scaffolded WASM crate `package.json`, pinned to the
+  same central registry version as the `e2e/wasm` and `e2e/typescript` generators, so the
+  package's own `test`/`test:watch`/`test:coverage` scripts resolve under a frozen install
+  instead of invoking a dependency the manifest never declared.
 
 ## [0.79.2] - 2026-08-30
 

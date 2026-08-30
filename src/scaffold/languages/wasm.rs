@@ -108,6 +108,9 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "clean": "rm -rf pkg dist"
+  }},
+  "devDependencies": {{
+    "vitest": "{vitest}"
   }}
 }}
 "#,
@@ -124,6 +127,12 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         node_engine = tv::npm::NODE_ENGINE,
         per_target_scripts = per_target_scripts,
         build_all = build_all,
+        // `test`/`test:watch`/`test:coverage` above invoke `vitest` directly (not `pnpm exec`
+        // or `npx`), so this package must declare it as a devDependency or a frozen install
+        // resolves nothing for those scripts to run -- same central version the e2e wasm/
+        // typescript generators pin (`tv::npm::VITEST`), so this package and its e2e sibling
+        // can never drift apart on which vitest they install. ~keep
+        vitest = tv::npm::VITEST,
     );
 
     files.push(GeneratedFile {

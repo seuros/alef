@@ -85,6 +85,40 @@ fn wasm_targets_default_to_all_four_wasm_pack_targets() {
     );
 }
 
+/// Regression for the WASM crate `package.json`'s `scripts.test`/`test:watch`/`test:coverage`
+/// invoking `vitest` directly with no corresponding `devDependencies` entry: `pnpm install
+/// --frozen-lockfile` never installs a `vitest` binary for this package, so every one of those
+/// scripts fails at runtime the moment a freshly scaffolded crate is built. The fix routes the
+/// declared dependency through the same central registry (`tv::npm::VITEST`) the `e2e/wasm` and
+/// `e2e/typescript` generators already pin, so this package and its e2e sibling can never drift
+/// apart on which vitest version installs.
+#[test]
+fn wasm_package_json_declares_vitest_dev_dependency_backing_its_test_scripts() {
+    let parsed = wasm_package_json("");
+
+    assert_eq!(
+        parsed["devDependencies"]["vitest"],
+        crate::core::template_versions::npm::VITEST,
+        "wasm package.json must pin vitest to the central registry version, got:\n{parsed:#}"
+    );
+
+    let scripts = &parsed["scripts"];
+    for (script_name, expected) in [
+        ("test", "vitest run"),
+        ("test:watch", "vitest watch"),
+        ("test:coverage", "vitest run --coverage"),
+    ] {
+        let command = scripts[script_name]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing \"{script_name}\" script, got:\n{parsed:#}"));
+        assert_eq!(command, expected, "unexpected \"{script_name}\" script");
+        assert!(
+            parsed["devDependencies"].get("vitest").is_some(),
+            "\"{script_name}\" invokes vitest but devDependencies has no vitest entry"
+        );
+    }
+}
+
 #[test]
 fn wasm_targets_web_only_ships_single_target() {
     let parsed = wasm_package_json("[crates.wasm]\ntargets = [\"web\"]\n");
