@@ -74,6 +74,7 @@ pub(crate) fn default_build_config(
     crate_name: &str,
     ctx: &LangContext,
 ) -> BuildCommandConfig {
+    let output_dir = super::shell::quote_word(output_dir);
     match lang {
         Language::Rust => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
@@ -231,7 +232,7 @@ pub(crate) fn default_build_config(
         }
         Language::Elixir => BuildCommandConfig {
             precondition: Some(require_tool("mix")),
-            dependency_precondition: Some(mix_dependency_check(output_dir)),
+            dependency_precondition: Some(mix_dependency_check(&output_dir)),
             dependency_remediation: Some(format!("cd {output_dir} && mix deps.get")),
             before: None,
             build: Some(StringOrVec::Single(format!("cd {output_dir} && mix compile"))),
@@ -389,6 +390,17 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         default_build_config(lang, dir, crate_name, &ctx)
+    }
+
+    #[test]
+    fn generated_build_quotes_configured_output_directory() {
+        let malicious = "packages/go; touch /tmp/alef-build; #";
+        let commands = cfg(Language::Go, malicious, "demo")
+            .build
+            .expect("go build command")
+            .commands()
+            .join(" ");
+        assert!(commands.contains(&format!("cd {}", super::super::shell::quote_word(malicious))));
     }
 
     #[test]

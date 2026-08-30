@@ -18,6 +18,7 @@ fn ruby_update_command(output_dir: &str) -> String {
 /// (e.g. `packages/python`). It is substituted into command templates.
 /// `ctx` provides the package manager selection.
 pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext) -> UpdateConfig {
+    let output_dir = super::shell::quote_word(output_dir);
     match lang {
         Language::Rust => UpdateConfig {
             precondition: Some(require_tool("cargo")),
@@ -92,7 +93,7 @@ pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext
             }
         }
         Language::Ruby => {
-            let command = ruby_update_command(output_dir);
+            let command = ruby_update_command(&output_dir);
             UpdateConfig {
                 precondition: Some(require_ruby_bundler()),
                 before: None,
@@ -250,6 +251,17 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         default_update_config(lang, dir, &ctx)
+    }
+
+    #[test]
+    fn generated_update_quotes_configured_output_directory() {
+        let malicious = "packages/python; touch /tmp/alef-update; #";
+        let commands = cfg(Language::Python, malicious)
+            .update
+            .expect("python update command")
+            .commands()
+            .join(" ");
+        assert!(commands.contains(&format!("cd {}", super::super::shell::quote_word(malicious))));
     }
 
     #[test]

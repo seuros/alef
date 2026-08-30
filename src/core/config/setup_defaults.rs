@@ -40,6 +40,7 @@ pub fn setup_config_for_language(lang: Language) -> SetupConfig {
 /// (e.g. `packages/python`). It is substituted into command templates.
 /// `ctx` provides the package manager selection.
 pub(crate) fn default_setup_config(lang: Language, output_dir: &str, ctx: &LangContext) -> SetupConfig {
+    let output_dir = super::shell::quote_word(output_dir);
     match lang {
         Language::Rust => {
             let mut commands: Vec<String> = vec!["rustup update stable".to_string()];
@@ -243,6 +244,17 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         default_setup_config(lang, dir, &ctx)
+    }
+
+    #[test]
+    fn generated_setup_quotes_configured_output_directory() {
+        let malicious = "packages/python; touch /tmp/alef-setup; #";
+        let commands = cfg(Language::Python, malicious)
+            .install
+            .expect("python setup command")
+            .commands()
+            .join(" ");
+        assert!(commands.contains(&format!("cd {}", super::super::shell::quote_word(malicious))));
     }
 
     #[test]

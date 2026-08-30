@@ -8,6 +8,7 @@ use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle_
 /// (e.g. `packages/python`). It is substituted into command templates.
 /// `ctx` provides tool selection and run_wrapper.
 pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangContext) -> TestConfig {
+    let output_dir = super::shell::quote_word(output_dir);
     match lang {
         Language::Python => {
             let pm = ctx.tools.python_pm();
@@ -318,6 +319,17 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         default_test_config(lang, dir, &ctx)
+    }
+
+    #[test]
+    fn generated_test_quotes_configured_output_directory() {
+        let malicious = "packages/python; touch /tmp/alef-test; #";
+        let commands = cfg(Language::Python, malicious)
+            .command
+            .expect("python test command")
+            .commands()
+            .join(" ");
+        assert!(commands.contains(&format!("cd {}", super::super::shell::quote_word(malicious))));
     }
 
     #[test]

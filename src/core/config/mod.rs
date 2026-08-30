@@ -26,6 +26,7 @@ pub mod resolved;
 pub mod schema;
 pub mod service;
 pub mod setup_defaults;
+pub(crate) mod shell;
 pub mod test_apps_run_defaults;
 pub mod test_defaults;
 pub mod tools;
