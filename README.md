@@ -68,8 +68,9 @@ To build from source, install Rust 1.88 or newer:
 cargo install alef --locked
 ```
 
-To install a published binary without a Rust toolchain, use
-[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) avoids compiling Alef when a
+matching published artifact is available. It still requires Cargo and falls back to
+`cargo install` from source when no compatible artifact is available:
 
 ```bash
 cargo binstall alef
