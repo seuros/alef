@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub mod abi_grammar;
 pub mod build_defaults;
 pub mod cargo_lints;
 pub mod clean_defaults;

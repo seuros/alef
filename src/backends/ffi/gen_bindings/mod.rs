@@ -4,6 +4,7 @@ mod functions;
 mod helpers;
 mod lib_rs;
 mod lib_setup;
+mod rust_literal;
 pub(crate) mod service_api;
 mod types;
 

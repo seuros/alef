@@ -588,24 +588,8 @@ pub(super) fn gen_build_rs(
     // (`{prefix_upper}_FEATURE_X`) exactly as cbindgen wrote them -- a different derivation here
     // would silently stop matching for a prefix with an internal capital. ~keep
     let prefix_upper = c_consumer::export_type_prefix(prefix);
-    let capsule_header_fixup = {
-        let mut pairs: Vec<(String, String)> = capsule_types
-            .values()
-            .map(|c| (format!("{prefix_upper}{}", c.c_return_type), c.c_return_type.clone()))
-            .collect();
-        pairs.sort_unstable();
-        pairs.dedup();
-        pairs.sort_by_key(|(prefixed, _)| std::cmp::Reverse(prefixed.len()));
-        if pairs.is_empty() {
-            String::new()
-        } else {
-            pairs
-                .iter()
-                .map(|(prefixed, bare)| format!("    header = header.replace(\"{prefixed}\", \"{bare}\");"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-    };
+    let escaped_header_name = super::rust_literal::escape_rust_str_literal(header_name);
+    let capsule_header_fixup = super::rust_literal::capsule_header_fixup(capsule_types, &prefix_upper);
     // The Go include dir is a SECOND publish destination, not a fan-out list that happens to
     // have one entry. Go's `binding.go` carries `#include "<header>"` under cgo, so the header
     // must be vendored next to the Go sources for the package to compile at all. Every other
@@ -624,14 +608,14 @@ pub(super) fn gen_build_rs(
                 .max(1);
             let to_root = "../".repeat(depth);
             let dest_dir = format!("{to_root}{go_dir}/include");
-            format!("        Path::new(\"{dest_dir}/{header_name}\"),\n")
+            format!("        Path::new(\"{dest_dir}/{escaped_header_name}\"),\n")
         }
         None => String::new(),
     };
     crate::backends::ffi::template_env::render(
         "build_rs.jinja",
         minijinja::context! {
-            header_name => header_name,
+            header_name => &escaped_header_name,
             lib_name => lib_name,
             prefix_upper => &prefix_upper,
             go_header_destination => go_header_destination,

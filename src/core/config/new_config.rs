@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::abi_grammar;
 use super::extras::{Language, is_known_language};
+use super::languages::FfiConfig;
 use super::output::{BuildCommandConfig, GeneratedHeaderConfig, ScaffoldConfig};
 use super::package_metadata::PackageMetadataConfig;
 use super::raw_crate::RawCrateConfig;
@@ -297,6 +299,11 @@ impl NewAlefConfig {
             }
         }
 
+        let effective_ffi = krate.ffi.clone().or_else(|| ws.ffi.clone());
+        if let Some(ffi) = effective_ffi.as_ref() {
+            validate_ffi_config(&krate.name, ffi)?;
+        }
+
         Ok(ResolvedCrateConfig {
             name: krate.name.clone(),
             sources: krate.sources.clone(),
@@ -319,7 +326,7 @@ impl NewAlefConfig {
             php: krate.php.clone().or_else(|| ws.php.clone()),
             elixir: krate.elixir.clone().or_else(|| ws.elixir.clone()),
             wasm: krate.wasm.clone().or_else(|| ws.wasm.clone()),
-            ffi: krate.ffi.clone().or_else(|| ws.ffi.clone()),
+            ffi: effective_ffi,
             go: krate.go.clone().or_else(|| ws.go.clone()),
             java: krate.java.clone().or_else(|| ws.java.clone()),
             dart: krate.dart.clone().or_else(|| ws.dart.clone()),
@@ -440,6 +447,75 @@ fn validate_crate_attribute(crate_name: &str, raw: &str) -> Result<String, Resol
     }
 
     Ok(trimmed.to_string())
+}
+
+/// Validate every user-supplied C-ABI override under `[crates.ffi]`.
+///
+/// This only validates fields the consumer actually set (`Option::Some`/non-empty
+/// `Vec`/non-empty `HashMap` entries) — never the derived defaults (`{prefix}.h`,
+/// `{prefix}_ffi`, the crate-name-derived prefix itself), which are guaranteed
+/// safe by construction and out of scope here. See `core::config::abi_grammar`
+/// for the grammar each check enforces and where that grammar comes from.
+fn validate_ffi_config(crate_name: &str, ffi: &FfiConfig) -> Result<(), ResolveError> {
+    let invalid = |field: &str, value: &str, error: String| {
+        ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: `[ffi] {field}` value `{value}` is invalid: {error}"
+        ))
+    };
+
+    if let Some(header_name) = ffi.header_name.as_ref() {
+        abi_grammar::validate_c_header_filename(header_name).map_err(|e| invalid("header_name", header_name, e))?;
+    }
+    if let Some(lib_name) = ffi.lib_name.as_ref() {
+        abi_grammar::validate_native_artifact_basename(lib_name).map_err(|e| invalid("lib_name", lib_name, e))?;
+    }
+    if let Some(prefix) = ffi.prefix.as_ref() {
+        abi_grammar::validate_ascii_abi_identifier(prefix).map_err(|e| invalid("prefix", prefix, e))?;
+    }
+    for feature in ffi
+        .features
+        .iter()
+        .flatten()
+        .chain(&ffi.extra_features)
+        .chain(&ffi.excluded_default_features)
+    {
+        abi_grammar::validate_cargo_feature_name(feature).map_err(|e| invalid("features", feature, e))?;
+    }
+
+    let mut seen_c_return_types: HashMap<&str, &str> = HashMap::new();
+    for (rust_type_name, capsule) in &ffi.capsule_types {
+        abi_grammar::validate_rust_pointee_type_path(&capsule.into_raw_type)
+            .map_err(|e| invalid("capsule_types.into_raw_type", &capsule.into_raw_type, e))?;
+        abi_grammar::validate_ascii_abi_identifier(&capsule.c_return_type)
+            .map_err(|e| invalid("capsule_types.c_return_type", &capsule.c_return_type, e))?;
+        if let Some(package) = capsule.package.as_ref() {
+            abi_grammar::validate_cargo_package_name(package)
+                .map_err(|e| invalid("capsule_types.package", package, e))?;
+        }
+        if let Some(version) = capsule.package_version.as_ref() {
+            abi_grammar::validate_cargo_version_req(version)
+                .map_err(|e| invalid("capsule_types.package_version", version, e))?;
+        }
+        if let Some(other_type) = seen_c_return_types.insert(capsule.c_return_type.as_str(), rust_type_name.as_str()) {
+            return Err(ResolveError::InvalidConfig(format!(
+                "crate `{crate_name}`: capsule types `{other_type}` and `{rust_type_name}` both declare \
+                 `c_return_type = \"{}\"` — cbindgen would forward-declare one typedef for two different \
+                 pointee types; give each capsule type a distinct `c_return_type`",
+                capsule.c_return_type
+            )));
+        }
+    }
+
+    for override_ in &ffi.target_dep_overrides {
+        abi_grammar::validate_cfg_expression(&override_.cfg)
+            .map_err(|e| invalid("target_dep_overrides.cfg", &override_.cfg, e))?;
+        for feature in &override_.features {
+            abi_grammar::validate_cargo_feature_name(feature)
+                .map_err(|e| invalid("target_dep_overrides.features", feature, e))?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Resolve a list of `SourceCrate` entries, rebasing sources for any entry with
