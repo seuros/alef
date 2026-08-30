@@ -436,6 +436,16 @@ pub(super) fn render_assertion(
         field_is_enum,
     } = classify_enum_lowering(assertion.field.as_deref(), field_resolver, enum_fields, assert_enum_types);
 
+    // Deliberately after the wildcard gate above: a path that merely *crosses* a union has its
+    // own correct lowering there, and only a path whose own leaf IS the union reaches here. See
+    // `payload_union_gate`'s module doc for the family-by-family reasoning. ~keep
+    if !result_is_simple
+        && !is_sealed_display_field
+        && super::payload_union_gate::try_skip_unsupported_family(out, assertion, field_resolver)
+    {
+        return;
+    }
+
     // Determine if this field is an array (List<T>) — needed to choose .toString() for
     // contains assertions, since List.contains(Object) uses equals() which won't match
     // strings against complex record types like StructureItem.

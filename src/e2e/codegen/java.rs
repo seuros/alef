@@ -363,6 +363,7 @@ mod assertions;
 mod enum_lowering;
 mod field_shape;
 mod http;
+mod payload_union_gate;
 mod project;
 mod snippet;
 mod stubs;
@@ -393,6 +394,8 @@ mod loop_binding_tests;
 mod not_error_bare_option_tests;
 #[cfg(test)]
 mod optional_collection_default_agreement_tests;
+#[cfg(test)]
+mod payload_union_family_tests;
 #[cfg(test)]
 mod sealed_display_wire_name_tests;
 #[cfg(test)]
