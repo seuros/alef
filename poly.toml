@@ -12,8 +12,6 @@ exclude = [
   "node_modules/**",
   "schemas/**",
   "target/**",
-  "templates/**",
-  "**/templates/**",
   "tests/snapshots/**",
   "crates/*-ffi/include/*.h",
   "packages/go/include/*.h",
@@ -139,8 +137,6 @@ lint = { exclude = [
   "node_modules/**",
   "schemas/**",
   "target/**",
-  "templates/**",
-  "**/templates/**",
   "tests/snapshots/**",
   "crates/*-ffi/include/*.h",
   "packages/go/include/*.h",
@@ -158,13 +154,11 @@ fmt = { exclude = [
   "node_modules/**",
   "schemas/**",
   "target/**",
-  "templates/**",
-  "**/templates/**",
   "tests/snapshots/**",
   "crates/*-ffi/include/*.h",
   "packages/go/include/*.h",
 ] }
-file_safety = { exclude = [
+file_safety = { added_large_files = false, exclude = [
   "**/*.jinja",
   "**/*.lock",
   "**/Cargo.lock",
@@ -177,14 +171,36 @@ file_safety = { exclude = [
   "node_modules/**",
   "schemas/**",
   "target/**",
-  "templates/**",
-  "**/templates/**",
   "tests/snapshots/**",
   "crates/*-ffi/include/*.h",
   "packages/go/include/*.h",
 ] }
 cargo = true
 commit = { stages = ["commit-msg"] }
+
+# ~keep Keep the 500 KiB binary guard repo-wide while allowing the historical changelog to grow;
+# the builtin group still checks CHANGELOG.md for conflict markers, private keys, and file metadata.
+[hooks.pre-commit.commands.added-large-files]
+run = "poly hooks check --added-large-files --max-added-kb 500"
+exclude = [
+  "CHANGELOG.md",
+  "**/*.jinja",
+  "**/*.lock",
+  "**/Cargo.lock",
+  "**/package-lock.json",
+  "**/pnpm-lock.yaml",
+  "**/uv.lock",
+  ".alef/**",
+  ".basemind/**",
+  "crates/**",
+  "node_modules/**",
+  "schemas/**",
+  "target/**",
+  "tests/snapshots/**",
+  "crates/*-ffi/include/*.h",
+  "packages/go/include/*.h",
+]
+
 [[hooks.sources]]
 id = "ai-rulez"
 git = "https://github.com/Goldziher/ai-rulez.git"
