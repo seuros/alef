@@ -7,7 +7,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use heck::ToPascalCase;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 mod context;
@@ -45,6 +45,43 @@ pub use context::{CliSurface, DocsRenderContext, McpSurface};
 /// own doc for why. ~keep
 pub(crate) use render::with_html_header;
 
+/// The cfg-feature set the shared, language-neutral pages (`configuration.md`, `types.md`,
+/// `errors.md`) are filtered against: the union of every language `config` CONFIGURES
+/// (`config.languages`), never the `languages` a single `generate_docs` call was asked to
+/// RENDER. Those are different questions -- `alef docs --lang python` renders only the Python
+/// page for that one invocation, but the shared pages describe the surface across every
+/// binding the project configures, so a CLI filter that narrows what gets rendered must not
+/// also narrow what the shared pages describe. Deriving this from the rendered `languages`
+/// argument previously meant `alef docs --lang python` could silently drop a cfg item that only
+/// a *different* configured binding (e.g. `wasm`) enables. Reuses
+/// [`language_pages::effective_docs_features`], the same per-language derivation
+/// `generate_lang_doc` filters its own page with, so the two surfaces can never independently
+/// drift on what one configured language makes reachable. ~keep
+fn canonical_docs_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
+    let mut canonical_features: HashSet<String> = HashSet::new();
+    let mut has_configured_language = false;
+
+    for &lang in &config.languages {
+        // Mirrors the `Language::C | Language::Jni` skip in `generate_docs`'s own render loop
+        // (see that loop's comment for why neither owns a reference page): neither is ever a
+        // real entry an operator configures either, but skip explicitly rather than assume. ~keep
+        if matches!(lang, Language::C | Language::Jni) {
+            continue;
+        }
+        has_configured_language = true;
+        canonical_features.extend(language_pages::effective_docs_features(api, config, lang));
+    }
+
+    // No configured language means there is nothing to prove any feature reachable through, so
+    // the union above cannot be trusted to mean "nothing is enabled" -- fall back to the
+    // unfiltered surface rather than let an empty set filter every cfg-gated item out. ~keep
+    if !has_configured_language {
+        return api.clone();
+    }
+    let enabled_features: HashSet<&str> = canonical_features.iter().map(String::as_str).collect();
+    api.with_cfg_filtered_deep(&enabled_features)
+}
+
 /// Generate API reference documentation for the given languages.
 ///
 /// Produces one `api-{lang}.md` per language, plus shared `configuration.md`,
@@ -76,9 +113,14 @@ pub fn generate_docs(
         )?);
     }
 
-    files.push(shared_pages::generate_configuration_doc(api, config, output_dir)?);
-    files.push(shared_pages::generate_types_doc(api, config, output_dir)?);
-    files.push(shared_pages::generate_errors_doc(api, output_dir)?);
+    let canonical_api = &canonical_docs_api(api, config);
+    files.push(shared_pages::generate_configuration_doc(
+        canonical_api,
+        config,
+        output_dir,
+    )?);
+    files.push(shared_pages::generate_types_doc(canonical_api, config, output_dir)?);
+    files.push(shared_pages::generate_errors_doc(canonical_api, output_dir)?);
 
     for file in &mut files {
         file.content = doc_cleaning::wrap_bare_urls(&file.content);

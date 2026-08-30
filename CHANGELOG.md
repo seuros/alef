@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of calling collection-only `isEmpty()` methods.
 - Generate Go assertions from the binding's emitted pointer/value field shape, avoiding invalid
   dereferences when Rust optional vectors lower to Go slices.
+- Filter the shared, language-neutral `configuration.md`/`types.md` reference pages by the union
+  of every configured language's reachable cfg features, so they no longer advertise an
+  enum variant, or a field's default value, gated behind a feature no configured binding
+  actually compiles.
 
 ## [0.79.2] - 2026-08-30
 
