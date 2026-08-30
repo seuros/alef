@@ -251,6 +251,17 @@ fn find_subscript_close(content: &str) -> Option<usize> {
 // `super::accessors::swift_build_accessor` caller keeps working unchanged.
 pub(super) use super::accessor_walk::swift_build_accessor;
 
+pub(super) struct SwiftTraversalContains<'a> {
+    pub(super) array_part: &'a str,
+    pub(super) element_part: &'a str,
+    pub(super) full_field: &'a str,
+    pub(super) value_expression: &'a str,
+    pub(super) result_variable: &'a str,
+    pub(super) negate: bool,
+    pub(super) message: &'a str,
+    pub(super) field_resolver: &'a FieldResolver,
+}
+
 /// Generate a `[String]` (or `[String]?`) expression for a `RustVec<RustString>`
 /// field so that `contains` membership checks work against plain Swift Strings.
 ///
@@ -274,37 +285,33 @@ pub(super) use super::accessor_walk::swift_build_accessor;
 /// `array_part` — left side of `[].` (e.g. `"links"`)
 /// `element_part` — right side (e.g. `"url"` or `"link_type"`)
 /// `full_field` — original assertion.field (used for enum lookup against the full path)
-#[allow(clippy::too_many_arguments)]
-pub(super) fn swift_traversal_contains_assert(
-    array_part: &str,
-    element_part: &str,
-    full_field: &str,
-    val_expr: &str,
-    result_var: &str,
-    negate: bool,
-    msg: &str,
-    field_resolver: &FieldResolver,
-) -> String {
-    let array_accessor = field_resolver.accessor(array_part, "swift", result_var);
-    let resolved_full = field_resolver.resolve(full_field);
+pub(super) fn swift_traversal_contains_assert(context: SwiftTraversalContains<'_>) -> String {
+    let array_accessor = context
+        .field_resolver
+        .accessor(context.array_part, "swift", context.result_variable);
+    let resolved_full = context.field_resolver.resolve(context.full_field);
     let resolved_elem_part = resolved_full
         .find("[].")
         .map(|d| &resolved_full[d + 3..])
-        .unwrap_or(element_part);
+        .unwrap_or(context.element_part);
     // The split above consumes the first `[].` only, so a doubly-nested path leaves a second
     // wildcard in the element sub-path that `accessor` would lower to index 0 — the
     // `contains(where:)` closure would then range over `pages` while reading `links[0]`. Return
     // the refusal as this function's rendered line; every caller writes the return value out. ~keep
-    if let Some(line) = nested_wildcard_skip_line("        ", "//", full_field, resolved_elem_part) {
+    if let Some(line) = nested_wildcard_skip_line("        ", "//", context.full_field, resolved_elem_part) {
         return line;
     }
-    let elem_accessor = field_resolver.element_accessor(resolved_elem_part, "swift", "$0");
+    let elem_accessor = context
+        .field_resolver
+        .element_accessor(resolved_elem_part, "swift", "$0");
     // `field_resolver.is_enum` consults the hand-maintained `fields_enum` config first and falls
     // back to the IR-derived classification when the config is silent — see `render_assertion`'s
     // `field_is_enum` comment for the failure mode a config-only check produced. ~keep
-    let elem_is_enum = field_resolver.is_enum(full_field);
-    let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
-        || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));
+    let elem_is_enum = context.field_resolver.is_enum(context.full_field);
+    let elem_is_optional = context.field_resolver.is_optional(resolved_elem_part)
+        || context
+            .field_resolver
+            .is_optional(context.field_resolver.resolve(resolved_elem_part));
     let elem_str = if elem_is_enum {
         // Enum-typed fields are bridged as `String` (RustString in Swift).
         // A single `.toString()` converts RustString → Swift String.
@@ -314,8 +321,15 @@ pub(super) fn swift_traversal_contains_assert(
     } else {
         format!("{elem_accessor}.toString()")
     };
-    let assert_fn = if negate { "XCTAssertFalse" } else { "XCTAssertTrue" };
-    format!("        {assert_fn}({array_accessor}.contains(where: {{ {elem_str}.contains({val_expr}) }}), \"{msg}\")")
+    let assert_fn = if context.negate {
+        "XCTAssertFalse"
+    } else {
+        "XCTAssertTrue"
+    };
+    format!(
+        "        {assert_fn}({array_accessor}.contains(where: {{ {elem_str}.contains({}) }}), \"{}\")",
+        context.value_expression, context.message
+    )
 }
 
 /// Returns `(map_expr, is_optional)` where `map_expr` is the `.map { … }` chain
@@ -723,7 +737,7 @@ mod materialise_vec_temporaries_tests {
 
 #[cfg(test)]
 mod nested_wildcard_tests {
-    use super::swift_traversal_contains_assert;
+    use super::{SwiftTraversalContains, swift_traversal_contains_assert};
     use crate::e2e::field_access::FieldResolver;
     use std::collections::{HashMap, HashSet};
 
@@ -733,16 +747,16 @@ mod nested_wildcard_tests {
     }
 
     fn render(full_field: &str, array_part: &str, element_part: &str, resolver: &FieldResolver) -> String {
-        swift_traversal_contains_assert(
+        swift_traversal_contains_assert(SwiftTraversalContains {
             array_part,
             element_part,
             full_field,
-            "\"example.test\"",
-            "result",
-            false,
-            "expected to contain",
-            resolver,
-        )
+            value_expression: "\"example.test\"",
+            result_variable: "result",
+            negate: false,
+            message: "expected to contain",
+            field_resolver: resolver,
+        })
     }
 
     /// Baseline: a single wildcard still builds a `contains(where:)` over the whole array, so

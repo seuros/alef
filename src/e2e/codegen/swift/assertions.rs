@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use super::accessors::{
-    materialise_vec_temporaries, swift_array_contains_expr, swift_array_count_expr, swift_array_is_empty_expr,
-    swift_array_not_empty_predicate, swift_count_target, swift_stringy_aggregator_contains_assert,
-    swift_traversal_contains_assert,
+    SwiftTraversalContains, materialise_vec_temporaries, swift_array_contains_expr, swift_array_count_expr,
+    swift_array_is_empty_expr, swift_array_not_empty_predicate, swift_count_target,
+    swift_stringy_aggregator_contains_assert, swift_traversal_contains_assert,
 };
 use super::values::{escape_swift, json_to_swift, swift_numeric_literal_cast};
 
@@ -1012,16 +1012,16 @@ fn emit_wildcard_contains(
     } else {
         format!("expected to contain: \\({swift_val})")
     };
-    let line = swift_traversal_contains_assert(
+    let line = swift_traversal_contains_assert(SwiftTraversalContains {
         array_part,
-        elem_part,
-        field,
-        &swift_val,
-        result_var,
+        element_part: elem_part,
+        full_field: field,
+        value_expression: &swift_val,
+        result_variable: result_var,
         negate,
-        &msg,
+        message: &msg,
         field_resolver,
-    );
+    });
     let _ = writeln!(out, "{line}");
 }
 
