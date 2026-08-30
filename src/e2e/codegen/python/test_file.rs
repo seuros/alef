@@ -287,6 +287,11 @@ pub(super) fn render_test_file(
                     // This is a constructor call like ExtractionConfig(...), so import the type
                     used_config_types.insert(opts_type.to_string());
                 }
+                // Nested config/struct fields also need imports; split out to keep this
+                // already-over-cap file's growth minimal. ~keep
+                import_lines::collect_nested_config_types(
+                    arg, value, constructor_type, type_defs, enums, enum_fields, &mut used_config_types,
+                );
             }
 
             // For handle args, collect constructor types referenced by element_type

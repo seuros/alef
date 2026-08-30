@@ -1,6 +1,6 @@
 //! Typed Python value rendering for generated test functions.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use heck::ToSnakeCase;
 
@@ -39,6 +39,175 @@ pub(in crate::e2e::codegen::python) fn resolve_field_enum_type(
     } else {
         None
     }
+}
+
+/// Resolve the nested-struct type for a field if that field's type (after unwrapping
+/// `Optional`) names another type known to `type_defs` -- i.e. a type this backend also
+/// generates a pyclass constructor for. A field in that shape must be constructed with its own
+/// class rather than passed through as a plain dict: pyo3 does not accept a dict where a native
+/// class instance is required.
+pub(in crate::e2e::codegen::python) fn resolve_field_struct_type<'a>(
+    field_name: &str,
+    options_type: Option<&str>,
+    type_defs: &'a [crate::core::ir::TypeDef],
+) -> Option<&'a crate::core::ir::TypeDef> {
+    use crate::core::ir::TypeRef;
+
+    let opts_type = options_type?;
+    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
+    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
+
+    let inner_name = match &field.ty {
+        TypeRef::Named(n) => Some(n.as_str()),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(n) => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }?;
+
+    type_defs.iter().find(|t| t.name == inner_name)
+}
+
+/// Resolve the nested-struct element type for a field typed `Vec<Struct>` (optionally wrapped in
+/// `Optional`) -- the shape a "batch" item's own nested list field takes.
+pub(in crate::e2e::codegen::python) fn resolve_field_element_struct_type<'a>(
+    field_name: &str,
+    options_type: Option<&str>,
+    type_defs: &'a [crate::core::ir::TypeDef],
+) -> Option<&'a crate::core::ir::TypeDef> {
+    use crate::core::ir::TypeRef;
+
+    let opts_type = options_type?;
+    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
+    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
+
+    let vec_inner = match &field.ty {
+        TypeRef::Vec(inner) => Some(inner.as_ref()),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Vec(vec_inner) => Some(vec_inner.as_ref()),
+            _ => None,
+        },
+        _ => None,
+    }?;
+
+    match vec_inner {
+        TypeRef::Named(name) => type_defs.iter().find(|t| &t.name == name),
+        _ => None,
+    }
+}
+
+/// Render one field's JSON value as a Python expression for a `kwargs`-mode constructor call,
+/// recursing into nested config/struct fields so a field whose type is itself a generated
+/// pyclass (e.g. `captioning: CaptioningConfig` inside `ExtractionConfig`) is constructed with
+/// that class instead of a raw dict literal. `used_struct_types` records every nested
+/// constructor name this rendering references, so a caller collecting imports can run the
+/// identical traversal instead of a second copy that could disagree with what actually gets
+/// emitted (the same technique `handle_values::collect_used_nested_types` uses). ~keep
+#[allow(clippy::too_many_arguments)]
+pub(in crate::e2e::codegen::python) fn render_kwarg_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> String {
+    if let Some(enum_type) = enum_fields.get(field_name) {
+        if let Some(s) = value.as_str() {
+            return format!("{enum_type}(\"{s}\")");
+        }
+    } else if let Some(auto_enum_type) = resolve_field_enum_type(field_name, containing_type, type_defs, enums)
+        && let Some(s) = value.as_str()
+    {
+        return format!("{auto_enum_type}(\"{s}\")");
+    }
+
+    if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
+        return docs_file_expression(&file.path);
+    }
+
+    if let Some(nested) = resolve_field_struct_type(field_name, containing_type, type_defs)
+        && let Some(obj) = value.as_object()
+    {
+        return render_struct_constructor(
+            nested,
+            obj,
+            type_defs,
+            enums,
+            enum_fields,
+            docs_files,
+            pointer,
+            used_struct_types,
+        );
+    }
+
+    if let Some(elem) = resolve_field_element_struct_type(field_name, containing_type, type_defs)
+        && let Some(arr) = value.as_array()
+        && arr.iter().all(|item| item.is_object())
+    {
+        let items: Vec<String> = arr
+            .iter()
+            .filter_map(|item| item.as_object())
+            .enumerate()
+            .map(|(index, obj)| {
+                let item_pointer = format!("{pointer}/{index}");
+                render_struct_constructor(
+                    elem,
+                    obj,
+                    type_defs,
+                    enums,
+                    enum_fields,
+                    docs_files,
+                    &item_pointer,
+                    used_struct_types,
+                )
+            })
+            .collect();
+        return format!("[{}]", items.join(", "));
+    }
+
+    json_to_python_literal(value)
+}
+
+/// Build a `TypeName(field=value, ...)` constructor call for `type_def`, recursing through
+/// [`render_kwarg_field_value`] for each field so arbitrarily deep nested config types resolve
+/// the same way at every depth.
+#[allow(clippy::too_many_arguments)]
+fn render_struct_constructor(
+    type_def: &crate::core::ir::TypeDef,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> String {
+    used_struct_types.insert(type_def.name.clone());
+    let kwargs: Vec<String> = obj
+        .iter()
+        .map(|(field_name, field_value)| {
+            let snake_key = field_name.to_snake_case();
+            let field_pointer = format!("{pointer}/{}", escape_json_pointer(field_name));
+            let rendered = render_kwarg_field_value(
+                field_name,
+                field_value,
+                Some(type_def.name.as_str()),
+                type_defs,
+                enums,
+                enum_fields,
+                docs_files,
+                &field_pointer,
+                used_struct_types,
+            );
+            format!("{snake_key}={rendered}")
+        })
+        .collect();
+    format!("{}({})", type_def.name, kwargs.join(", "))
 }
 
 /// Returns `true` if the arg was fully emitted (caller should `continue`).
@@ -140,7 +309,10 @@ pub(super) fn emit_json_object_arg(
                     .iter()
                     .filter_map(|item| item.as_object())
                     .enumerate()
-                    .map(|(index, obj)| emit_python_typed_instance(obj, elem_type, docs_files, &format!("/{index}")))
+                    .map(|(index, obj)| {
+                        let pointer = format!("/{index}");
+                        emit_python_typed_instance(obj, elem_type, type_defs, enums, enum_fields, docs_files, &pointer)
+                    })
                     .collect();
                 arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
                 kwarg_exprs.push(var_name.to_string());
@@ -148,36 +320,23 @@ pub(super) fn emit_json_object_arg(
             }
             // "kwargs" mode
             if let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) {
+                let mut used_struct_types = BTreeSet::new();
                 let kwargs: Vec<String> = obj
                     .iter()
                     .map(|(k, v)| {
                         let snake_key = k.to_snake_case();
-                        let py_val = if let Some(enum_type) = enum_fields.get(k) {
-                            // Explicit override: use the configured enum type
-                            if let Some(s) = v.as_str() {
-                                format!("{enum_type}(\"{s}\")")
-                            } else {
-                                json_to_python_literal(v)
-                            }
-                        } else if let Some(auto_enum_type) =
-                            resolve_field_enum_type(k, Some(opts_type), type_defs, enums)
-                        {
-                            // Auto-detect: if field type is an enum, emit as EnumType("variant").
-                            // Constructor-call form works for both (str, Enum) subclasses (where
-                            // lookup-by-value resolves to the canonical variant) and #[pyclass]
-                            // tagged-union structs (which expose a serde-backed constructor).
-                            // Attribute access (EnumType.VARIANT) fails for pyclass-emitted
-                            // enums because they have no class-level variant constants.
-                            if let Some(s) = v.as_str() {
-                                format!("{auto_enum_type}(\"{s}\")")
-                            } else {
-                                json_to_python_literal(v)
-                            }
-                        } else if let Some(file) = docs_files.iter().find(|file| file.field == format!("/{k}")) {
-                            docs_file_expression(&file.path)
-                        } else {
-                            json_to_python_literal(v)
-                        };
+                        let field_pointer = format!("/{}", escape_json_pointer(k));
+                        let py_val = render_kwarg_field_value(
+                            k,
+                            v,
+                            Some(opts_type),
+                            type_defs,
+                            enums,
+                            enum_fields,
+                            docs_files,
+                            &field_pointer,
+                            &mut used_struct_types,
+                        );
                         format!("{snake_key}={py_val}")
                     })
                     .collect();
@@ -276,23 +435,36 @@ fn emit_python_object_item(obj: &serde_json::Map<String, serde_json::Value>) -> 
     format!("{{{}}}", items.join(", "))
 }
 
-/// Emit a Python constructor call for a typed instance (e.g., BatchFileItem(...)).
+/// Emit a Python constructor call for a typed instance (e.g., BatchFileItem(...)), recursing
+/// into any of its own fields that are themselves generated pyclasses (e.g. a batch item whose
+/// `captioning` field is a `CaptioningConfig`) via [`render_kwarg_field_value`].
 fn emit_python_typed_instance(
     obj: &serde_json::Map<String, serde_json::Value>,
     elem_type: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
     docs_files: &[FixtureDocsFileInput],
     pointer: &str,
 ) -> String {
+    let mut used_struct_types = BTreeSet::new();
     let kwargs: Vec<String> = obj
         .iter()
         .map(|(k, v)| {
             let snake_key = k.to_snake_case();
             let field_pointer = format!("{pointer}/{}", escape_json_pointer(k));
-            let value = docs_files
-                .iter()
-                .find(|file| file.field == field_pointer)
-                .map_or_else(|| json_to_python_literal(v), |file| docs_file_expression(&file.path));
-            format!("{snake_key}={value}")
+            let rendered = render_kwarg_field_value(
+                k,
+                v,
+                Some(elem_type),
+                type_defs,
+                enums,
+                enum_fields,
+                docs_files,
+                &field_pointer,
+                &mut used_struct_types,
+            );
+            format!("{snake_key}={rendered}")
         })
         .collect();
     format!("{}({})", elem_type, kwargs.join(", "))
@@ -450,6 +622,122 @@ mod tests {
         assert_eq!(
             bindings,
             [r#"    input = DocumentInput(bytes=Path("document.pdf").read_bytes())"#]
+        );
+    }
+
+    /// Regression for the nested-config construction defect: a config field whose own type is
+    /// itself a generated pyclass (e.g. `captioning: CaptioningConfig` inside
+    /// `ExtractionConfig`) must be constructed with that class, not emitted as a raw dict --
+    /// pyo3 rejects a dict where a native class instance is required.
+    #[test]
+    fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_field() {
+        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+        let inner_type = TypeDef {
+            name: "CaptioningConfig".to_string(),
+            rust_path: "demo::CaptioningConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "model".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let outer_type = TypeDef {
+            name: "ExtractionConfig".to_string(),
+            rust_path: "demo::ExtractionConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "captioning".to_string(),
+                ty: TypeRef::Named("CaptioningConfig".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let type_defs = vec![outer_type, inner_type];
+        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+        let mut bindings = Vec::new();
+        let mut exprs = Vec::new();
+        let value = serde_json::json!({"captioning": {"model": "gpt-vision"}});
+        let done = emit_json_object_arg(
+            &mut bindings,
+            &mut exprs,
+            &value,
+            "opts",
+            Some("ExtractionConfig"),
+            "kwargs",
+            &HashMap::new(),
+            &None,
+            "fixture",
+            false,
+            &type_defs,
+            &enums,
+            &[],
+        );
+
+        assert!(done);
+        assert_eq!(
+            bindings,
+            [r#"    opts = ExtractionConfig(captioning=CaptioningConfig(model="gpt-vision"))"#],
+            "nested struct field must be constructed with its own class, got: {bindings:?}"
+        );
+    }
+
+    /// Batch-call counterpart of the nested-config regression above: a "batch" argument passes
+    /// an array of typed items via `element_type` (see `emit_python_typed_instance`), and each
+    /// item's own nested struct fields must resolve the same way a single top-level config does.
+    #[test]
+    fn emit_json_object_arg_batch_mode_constructs_nested_struct_field_in_each_item() {
+        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+        let inner_type = TypeDef {
+            name: "CaptioningConfig".to_string(),
+            rust_path: "demo::CaptioningConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "model".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let item_type = TypeDef {
+            name: "BatchFileItem".to_string(),
+            rust_path: "demo::BatchFileItem".to_string(),
+            fields: vec![FieldDef {
+                name: "captioning".to_string(),
+                ty: TypeRef::Named("CaptioningConfig".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let type_defs = vec![item_type, inner_type];
+        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+        let mut bindings = Vec::new();
+        let mut exprs = Vec::new();
+        let value = serde_json::json!([{"captioning": {"model": "gpt-vision"}}]);
+        let element_type = Some("BatchFileItem".to_string());
+        let done = emit_json_object_arg(
+            &mut bindings,
+            &mut exprs,
+            &value,
+            "items",
+            None,
+            "kwargs",
+            &HashMap::new(),
+            &element_type,
+            "fixture",
+            false,
+            &type_defs,
+            &enums,
+            &[],
+        );
+
+        assert!(done);
+        assert_eq!(
+            bindings,
+            [r#"    items = [BatchFileItem(captioning=CaptioningConfig(model="gpt-vision"))]"#],
+            "each batch item's nested struct field must be constructed with its own class, got: {bindings:?}"
         );
     }
 
