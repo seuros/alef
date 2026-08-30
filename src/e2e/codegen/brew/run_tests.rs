@@ -17,8 +17,9 @@ pub(super) fn render_env_block(env: &HashMap<String, String>) -> String {
     let _ = writeln!(out, "# uses setdefault semantics: only applied when not already set.");
     for key in keys {
         let value = &env[key];
-        let _ = writeln!(out, ": \"${{{key}:={value}}}\"");
-        let _ = writeln!(out, "export {key}");
+        let _ = writeln!(out, "if [[ -z \"${{{key}+x}}\" ]]; then");
+        let _ = writeln!(out, "  export {key}={}", crate::core::config::shell::quote_word(value));
+        let _ = writeln!(out, "fi");
     }
     let _ = writeln!(out);
     out
@@ -145,12 +146,17 @@ pub(super) fn render_run_tests(categories: &[String], env: &HashMap<String, Stri
     // language entry; require exactly that binary on PATH so another installed
     // CLI cannot mask a missing configured binary.
     let _ = writeln!(out, "# Verify the brew-installed CLI is on PATH.");
-    let _ = writeln!(out, "if ! command -v {binary_name} &>/dev/null; then");
+    let _ = writeln!(
+        out,
+        "BINARY_NAME={}",
+        crate::core::config::shell::quote_word(binary_name)
+    );
+    let _ = writeln!(out, "if ! command -v \"$BINARY_NAME\" &>/dev/null; then");
     let _ = writeln!(
         out,
         "  echo 'error: brew test_app requires the Homebrew formula to be installed' >&2"
     );
-    let _ = writeln!(out, "  echo '       run: brew install {binary_name}' >&2");
+    let _ = writeln!(out, "  printf '       run: brew install %s\\n' \"$BINARY_NAME\" >&2");
     let _ = writeln!(out, "  exit 1");
     let _ = writeln!(out, "fi");
     let _ = writeln!(out);
@@ -241,9 +247,9 @@ mod tests {
         env.insert("E2E_ALLOW_PRIVATE_NETWORK".to_string(), "true".to_string());
         env.insert("ALEF_FOO".to_string(), "bar".to_string());
         let block = render_env_block(&env);
-        assert!(block.contains(": \"${ALEF_FOO:=bar}\""), "got: {block}");
+        assert!(block.contains("export ALEF_FOO='bar'"), "got: {block}");
         assert!(
-            block.contains(": \"${E2E_ALLOW_PRIVATE_NETWORK:=true}\""),
+            block.contains("export E2E_ALLOW_PRIVATE_NETWORK='true'"),
             "got: {block}"
         );
         assert!(block.contains("export ALEF_FOO"), "got: {block}");
@@ -282,13 +288,13 @@ mod tests {
             "expected brew CLI preflight check; got:\n{script}"
         );
         assert!(
-            script.contains("brew install sample-cli"),
+            script.contains("brew install %s") && script.contains("BINARY_NAME='sample-cli'"),
             "expected install instruction in brew CLI preflight; got:\n{script}"
         );
         // The check must require only the configured binary name so another
         // installed CLI cannot mask a missing configured binary.
         assert!(
-            script.contains("if ! command -v sample-cli &>/dev/null; then"),
+            script.contains("BINARY_NAME='sample-cli'") && script.contains("command -v \"$BINARY_NAME\""),
             "expected single-binary preflight; got:\n{script}"
         );
         assert!(
@@ -302,11 +308,11 @@ mod tests {
         let categories = vec!["smoke".to_string()];
         let script = render_run_tests(&categories, &HashMap::new(), "mytool");
         assert!(
-            script.contains("if ! command -v mytool &>/dev/null; then"),
+            script.contains("BINARY_NAME='mytool'") && script.contains("command -v \"$BINARY_NAME\""),
             "expected preflight to use parameterized binary; got:\n{script}"
         );
         assert!(
-            script.contains("brew install mytool"),
+            script.contains("brew install %s") && script.contains("\"$BINARY_NAME\""),
             "expected install hint to use parameterized binary; got:\n{script}"
         );
         assert!(
@@ -322,7 +328,7 @@ mod tests {
         let categories = vec!["smoke".to_string()];
         let script = render_run_tests(&categories, &env, "sample-cli");
         assert!(
-            script.contains(": \"${E2E_ALLOW_PRIVATE_NETWORK:=true}\""),
+            script.contains("export E2E_ALLOW_PRIVATE_NETWORK='true'"),
             "got: {script}"
         );
         assert!(script.contains("export E2E_ALLOW_PRIVATE_NETWORK"), "got: {script}");
@@ -331,6 +337,20 @@ mod tests {
         let env_pos = script.find("${E2E_ALLOW_PRIVATE_NETWORK").unwrap();
         let mock_pos = script.find("MOCK_SERVER_URL").unwrap();
         assert!(env_pos < mock_pos, "env block must precede mock-server bootstrap");
+    }
+
+    #[test]
+    fn render_env_block_keeps_hostile_values_in_single_quoted_data() {
+        let mut env = HashMap::new();
+        env.insert(
+            "ALEF_EXACT".to_string(),
+            "literal'; touch /tmp/alef-brew-env; #".to_string(),
+        );
+        let block = render_env_block(&env);
+        assert!(
+            block.contains("export ALEF_EXACT='literal'\\''; touch /tmp/alef-brew-env; #'"),
+            "got: {block}"
+        );
     }
 
     /// Executing the emitted runner is the only way to prove the harness reports

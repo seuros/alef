@@ -44,9 +44,34 @@ sources = ["src/lib.rs"]
     let command = build_command_for_lang(Language::Node, &config, None, false);
 
     assert!(
-        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        command.contains("--package-json-path 'crates/sample-lib-node/package.json'"),
         "napi build must be told explicitly which package.json names the binding crate, \
          rather than letting it default to the repo root's: {command}"
+    );
+}
+
+#[test]
+fn generated_publish_command_quotes_derived_crate_paths() {
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+node = "crates/evil; touch ALEF_PUBLISH_PWNED; #/src"
+"#,
+    )
+    .unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+    let command = build_command_for_lang(Language::Node, &config, None, false);
+
+    assert!(
+        command.contains("'crates/evil; touch ALEF_PUBLISH_PWNED; #/Cargo.toml'"),
+        "got: {command}"
     );
 }
 

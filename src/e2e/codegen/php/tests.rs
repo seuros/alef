@@ -651,7 +651,7 @@ mod composer_json_tests {
         );
         // Version is baked in so callers can run `bash install.sh` with no args.
         assert!(
-            content.contains(r#"VERSION="${1:-1.4.0-rc.32}""#),
+            content.contains("PINNED_VERSION='1.4.0-rc.32'") && content.contains(r#"VERSION="${1:-$PINNED_VERSION}""#),
             "install.sh must contain version default, got:\n{content}"
         );
     }
@@ -670,7 +670,7 @@ mod composer_json_tests {
         for (input, expected) in tests {
             let content = render_install_sh("test/pkg", "ext", input);
             assert!(
-                content.contains(&format!(r#"VERSION="${{1:-{expected}}}""#)),
+                content.contains(&format!("PINNED_VERSION='{expected}'")),
                 "install.sh must strip constraint from '{}' to '{}', got:\n{}",
                 input,
                 expected,
@@ -707,17 +707,32 @@ mod composer_json_tests {
         );
         // Script must append the extension line (idempotently).
         assert!(
-            content.contains("extension=my_ext"),
+            content.contains("EXTENSION_NAME='my_ext'") && content.contains("extension=$EXTENSION_NAME"),
             "install.sh must append 'extension=my_ext' to php.ini, got:\n{content}"
         );
         assert!(
-            content.contains("^extension=my_ext"),
+            content.contains("grep -Fqx \"extension=$EXTENSION_NAME\""),
             "install.sh must guard against duplicate extension entries, got:\n{content}"
         );
         assert!(
             content.contains(">> \"$PHP_INI\""),
             "install.sh must append to php.ini, got:\n{content}"
         );
+    }
+
+    #[test]
+    fn registry_install_sh_keeps_config_values_out_of_shell_syntax() {
+        let malicious = "literal'$(touch /tmp/alef-php-install); #";
+        let content = render_install_sh(malicious, malicious, malicious);
+        let escaped = crate::core::config::shell::quote_word(malicious);
+        for key in ["PKG_NAME", "EXTENSION_NAME", "PINNED_VERSION"] {
+            assert!(content.contains(&format!("{key}={escaped}")), "got: {content}");
+        }
+        let status = std::process::Command::new("bash")
+            .args(["-n", "-c", &content])
+            .status()
+            .expect("bash should parse generated script");
+        assert!(status.success());
     }
 
     /// Regression for alef task #477: `render_install_sh`'s `GeneratedFile` uses

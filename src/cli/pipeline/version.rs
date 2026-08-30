@@ -3,7 +3,7 @@ use anyhow::Context as _;
 use std::sync::LazyLock;
 use tracing::{debug, info, warn};
 
-use super::helpers::{run_command, run_optional};
+use super::helpers::run_optional;
 use super::version_core::{
     bump_version, package_json_is_private, patch_workspace_dep_versions, read_version, to_pep440,
     write_version_to_cargo_toml,
@@ -857,7 +857,9 @@ pub fn sync_versions(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("{}-ffi", config.core_crate_dir()));
         info!("Rebuilding FFI ({ffi_crate}) to refresh C headers...");
-        let _ = run_command(&format!("cargo build -p {ffi_crate}"));
+        let _ = std::process::Command::new("cargo")
+            .args(["build", "-p", &ffi_crate])
+            .status();
     }
 
     let _ = crate::core::cache_dir::ensure_cache_dir(std::path::Path::new(".alef"));

@@ -16,11 +16,6 @@ mod timeout_tests;
 mod process_exec;
 pub(crate) use process_exec::run_argv_step_streamed;
 
-/// Run a shell command, logging and failing on non-zero exit.
-pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
-    run_command_with_env(cmd, &[])
-}
-
 /// Run a shell command with environment variables scoped to the child process.
 pub(crate) fn run_command_with_env(cmd: &str, environment: &[(&str, &str)]) -> anyhow::Result<()> {
     info!("Running: {cmd}");

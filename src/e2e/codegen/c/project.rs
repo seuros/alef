@@ -236,9 +236,10 @@ pub(super) fn render_download_script(github_repo: &str, version: &str, ffi_pkg_n
     out.push_str(&hash::header(CommentStyle::Hash));
     let _ = writeln!(out, "set -euo pipefail");
     let _ = writeln!(out);
-    let _ = writeln!(out, "REPO_URL=\"{github_repo}\"");
-    let _ = writeln!(out, "VERSION=\"{version}\"");
-    let _ = writeln!(out, "FFI_PKG_NAME=\"{ffi_pkg_name}\"");
+    let quote = crate::core::config::shell::quote_word;
+    let _ = writeln!(out, "REPO_URL={}", quote(github_repo));
+    let _ = writeln!(out, "VERSION={}", quote(version));
+    let _ = writeln!(out, "FFI_PKG_NAME={}", quote(ffi_pkg_name));
     let _ = writeln!(out, "FFI_DIR=\"ffi\"");
     let _ = writeln!(out);
     let _ = writeln!(out, "# Detect OS and architecture.");
@@ -555,7 +556,7 @@ mod tests {
         );
         // Verify FFI_PKG_NAME is set with underscores
         assert!(
-            script.contains("FFI_PKG_NAME=\"example_language_pack_ffi\""),
+            script.contains("FFI_PKG_NAME='example_language_pack_ffi'"),
             "FFI_PKG_NAME must use underscores (lib_name format); got: {script}"
         );
         // Verify ASSET_STEM is computed from FFI_PKG_NAME
@@ -563,5 +564,20 @@ mod tests {
             script.contains("ASSET_STEM=\"${FFI_PKG_NAME}-v${VERSION}-${TRIPLE}\""),
             "asset stem must use FFI_PKG_NAME variable; got: {script}"
         );
+    }
+
+    #[test]
+    fn download_script_quotes_all_configured_assignments() {
+        let malicious = "literal'$(touch /tmp/alef-c-download); #";
+        let script = render_download_script(malicious, malicious, malicious);
+        let escaped = crate::core::config::shell::quote_word(malicious);
+        for key in ["REPO_URL", "VERSION", "FFI_PKG_NAME"] {
+            assert!(script.contains(&format!("{key}={escaped}")), "got: {script}");
+        }
+        let status = std::process::Command::new("bash")
+            .args(["-n", "-c", &script])
+            .status()
+            .expect("bash should parse generated script");
+        assert!(status.success());
     }
 }

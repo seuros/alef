@@ -2,6 +2,17 @@ use crate::core::config::{Language, ResolvedCrateConfig};
 use anyhow::Context as _;
 use tracing::{debug, info, warn};
 
+fn run_argv_captured(program: &str, args: &[&std::ffi::OsStr]) -> anyhow::Result<(String, String)> {
+    let output = std::process::Command::new(program).args(args).output()?;
+    if !output.status.success() {
+        anyhow::bail!("{program} exited with {}", output.status.code().unwrap_or(-1));
+    }
+    Ok((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 /// Sync generated SwiftPM `from:` bounds for this crate's first-party package.
 ///
 /// Generated test app and e2e manifests may include external SwiftPM packages.
@@ -54,8 +65,6 @@ pub(super) fn sync_swift_package_versions(
 ///
 /// Returns `Ok(Some(checksum))` when substitution succeeds, `Ok(None)` when skipped.
 pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow::Result<Option<String>> {
-    use super::helpers::run_command_captured;
-
     let pkg_swift_path = std::path::Path::new("Package.swift");
     let pkg_content = match std::fs::read_to_string(pkg_swift_path) {
         Ok(c) => c,
@@ -112,8 +121,15 @@ pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow:
         }
         None => {
             info!("Building swift artifactbundle for `{swift_crate}`…");
-            let build_cmd = format!("cargo build -p {swift_crate} --release --target aarch64-apple-darwin");
-            match run_command_captured(&build_cmd) {
+            let args = [
+                std::ffi::OsStr::new("build"),
+                std::ffi::OsStr::new("-p"),
+                std::ffi::OsStr::new(&swift_crate),
+                std::ffi::OsStr::new("--release"),
+                std::ffi::OsStr::new("--target"),
+                std::ffi::OsStr::new("aarch64-apple-darwin"),
+            ];
+            match run_argv_captured("cargo", &args) {
                 Ok(_) => {}
                 Err(e) => {
                     // Fires on every non-macOS host and every pre-release repo without Xcode; a
@@ -146,8 +162,12 @@ pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow:
         }
     };
 
-    let checksum_cmd = format!("swift package compute-checksum {}", zip_path.display());
-    let checksum = match run_command_captured(&checksum_cmd) {
+    let args = [
+        std::ffi::OsStr::new("package"),
+        std::ffi::OsStr::new("compute-checksum"),
+        zip_path.as_os_str(),
+    ];
+    let checksum = match run_argv_captured("swift", &args) {
         Ok((stdout, _)) => stdout.trim().to_string(),
         Err(_) => {
             info!("`swift` not found — computing SHA-256 in-process");

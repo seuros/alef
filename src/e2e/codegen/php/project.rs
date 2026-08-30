@@ -133,6 +133,10 @@ pub(super) fn strip_version_constraint(version: &str) -> &str {
 
 pub(super) fn render_install_sh(pkg_name: &str, extension_name: &str, pkg_version: &str) -> String {
     let clean_version = strip_version_constraint(pkg_version);
+    let quote = crate::core::config::shell::quote_word;
+    let pkg_name = quote(pkg_name);
+    let extension_name = quote(extension_name);
+    let clean_version = quote(clean_version);
     // `generated_header: false` on this GeneratedFile (see php.rs) means ownership tracking
     // relies entirely on `hash::content_has_alef_marker` recognizing text embedded in the
     // rendered content itself -- so the marker line must come from the shared authority
@@ -141,14 +145,17 @@ pub(super) fn render_install_sh(pkg_name: &str, extension_name: &str, pkg_versio
     let header = hash::header(CommentStyle::Hash);
     format!(
         r#"#!/usr/bin/env bash
-{header}# Installs the {pkg_name} extension via PIE before `composer install` runs.
+{header}# Installs the configured extension via PIE before `composer install` runs.
 # Requires `php` on PATH; downloads and runs PIE if needed.
 # Version is alef-injected at generate time so the script is self-contained.
 set -euo pipefail
 
 # Version override: pass as $1 to test an arbitrary tag; defaults to the
 # alef-pinned version from `[crates.e2e.registry.packages.php].version`.
-VERSION="${{1:-{clean_version}}}"
+PKG_NAME={pkg_name}
+EXTENSION_NAME={extension_name}
+PINNED_VERSION={clean_version}
+VERSION="${{1:-$PINNED_VERSION}}"
 
 # PIE >= 1.3.7 supports the array-form `php-ext.download-url-method`
 # our composer.json emits; 1.4.0+ is preferred. Download PIE if we don't
@@ -186,10 +193,10 @@ EXT_DIR="$(php -r 'echo ini_get("extension_dir");')"
 # PIE's `install` has no `--version` option (it parses `--version`/`-V` as
 # "print PIE's own version" and exits without installing). The target version is
 # part of the package coordinate: `vendor/package:constraint`.
-"$PIE" install "{pkg_name}:$VERSION" --skip-enable-extension
+"$PIE" install "$PKG_NAME:$VERSION" --skip-enable-extension
 
 # Verify the .so/.dylib/.dll exists after install (or was already present).
-test -f "$EXT_DIR/{extension_name}.so" || test -f "$EXT_DIR/{extension_name}.dylib" || test -f "$EXT_DIR/{extension_name}.dll"
+test -f "$EXT_DIR/$EXTENSION_NAME.so" || test -f "$EXT_DIR/$EXTENSION_NAME.dylib" || test -f "$EXT_DIR/$EXTENSION_NAME.dll"
 
 # Enable the extension in php.ini (PIE with --skip-enable-extension doesn't do this automatically).
 # Find the loaded php.ini, check if already enabled, and append if missing.
@@ -201,17 +208,17 @@ else
     echo "::warning::php.ini at $PHP_INI not found; extension may not be auto-loaded by default" >&2
   else
     # Guard against duplicate: check if extension line already exists (uncommented).
-    if ! grep -q "^extension={extension_name}" "$PHP_INI"; then
-      echo "extension={extension_name}" >> "$PHP_INI"
+    if ! grep -Fqx "extension=$EXTENSION_NAME" "$PHP_INI"; then
+      printf 'extension=%s\n' "$EXTENSION_NAME" >> "$PHP_INI"
     fi
   fi
 fi
 
 # Export the installed extension path for downstream test runners (composer test).
 # The test app's run_tests.php checks for PIE_INSTALLED_EXTENSION_PATH and loads the extension via `-d`.
-export PIE_INSTALLED_EXTENSION_PATH="$EXT_DIR/{extension_name}.so"
+export PIE_INSTALLED_EXTENSION_PATH="$EXT_DIR/$EXTENSION_NAME.so"
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  export PIE_INSTALLED_EXTENSION_PATH="$EXT_DIR/{extension_name}.dylib"
+  export PIE_INSTALLED_EXTENSION_PATH="$EXT_DIR/$EXTENSION_NAME.dylib"
 fi
 
 # Verify the extension loads. Use `extension_loaded()` via `php -r` instead of
@@ -220,15 +227,15 @@ fi
 # conf.d entry behind), because PHP prints "Module ... is already loaded" to
 # stderr and the test harness 2>&1 capture treats it as fatal. `extension_loaded`
 # checks runtime state directly and is unaffected by load source or stderr noise.
-if php -r 'exit(extension_loaded("{extension_name}") ? 0 : 1);' 2>/dev/null; then
-  echo "{extension_name} extension loaded via php.ini"
-elif php -d extension={extension_name} -r 'exit(extension_loaded("{extension_name}") ? 0 : 1);' 2>/dev/null; then
-  echo "{extension_name} extension loaded via -d flag"
+if ALEF_EXTENSION_NAME="$EXTENSION_NAME" php -r 'exit(extension_loaded(getenv("ALEF_EXTENSION_NAME")) ? 0 : 1);' 2>/dev/null; then
+  echo "$EXTENSION_NAME extension loaded via php.ini"
+elif ALEF_EXTENSION_NAME="$EXTENSION_NAME" php -d "extension=$EXTENSION_NAME" -r 'exit(extension_loaded(getenv("ALEF_EXTENSION_NAME")) ? 0 : 1);' 2>/dev/null; then
+  echo "$EXTENSION_NAME extension loaded via -d flag"
 else
-  echo "::error::{extension_name} extension failed to load after PIE install" >&2
+  echo "::error::$EXTENSION_NAME extension failed to load after PIE install" >&2
   exit 1
 fi
-echo "{extension_name} extension installed and loaded"
+echo "$EXTENSION_NAME extension installed and loaded"
 "#
     )
 }

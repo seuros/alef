@@ -267,9 +267,10 @@ fn build_command_for_lang(
             // that `pyproject.toml` here — it is not beside the manifest this command names — so
             // the feature has to be passed explicitly, derived from the manifest that declares
             // it. ~keep
-            let manifest = format!("crates/{pkg}/Cargo.toml");
+            let manifest_path = format!("crates/{pkg}/Cargo.toml");
             let features_flag =
-                crate::core::config::python_build::extension_module_feature_flag(std::path::Path::new(&manifest));
+                crate::core::config::python_build::extension_module_feature_flag(std::path::Path::new(&manifest_path));
+            let manifest = crate::core::config::shell::quote_word(&manifest_path);
             crate::core::config::python_build::run_through_python_package_manager(
                 format!("maturin build --release --manifest-path {manifest}{features_flag}{target_flag}"),
                 &config.tools,
@@ -277,6 +278,9 @@ fn build_command_for_lang(
         }
         Language::Node => {
             let pkg = crate_name_from_output(config, Language::Node).unwrap_or_else(|| format!("{crate_name}-node"));
+            let crate_dir = crate::core::config::shell::quote_word(&format!("crates/{pkg}"));
+            let manifest = crate::core::config::shell::quote_word(&format!("crates/{pkg}/Cargo.toml"));
+            let package_json = crate::core::config::shell::quote_word(&format!("crates/{pkg}/package.json"));
             let napi_target = target.map(|t| format!(" --target {}", t.triple)).unwrap_or_default();
             let dts = tv::npm::NAPI_AUTO_DTS_FILENAME;
             // `--package-json-path` pins napi-rs to the binding crate's own `package.json`
@@ -284,29 +288,34 @@ fn build_command_for_lang(
             // runs from), which otherwise bakes the wrong package name into the generated loader
             // whenever the repo also has a workspace-root `package.json`. See alef#368.
             format!(
-                "napi build --manifest-path crates/{pkg}/Cargo.toml \
-                 -o crates/{pkg} --package-json-path crates/{pkg}/package.json --platform --no-js \
+                "napi build --manifest-path {manifest} \
+                 -o {crate_dir} --package-json-path {package_json} --platform --no-js \
                  --dts {dts} --release{napi_target}"
             )
         }
         Language::Wasm => {
             let pkg = crate_name_from_output(config, Language::Wasm).unwrap_or_else(|| format!("{crate_name}-wasm"));
-            format!("wasm-pack build crates/{pkg} --release")
+            let crate_dir = crate::core::config::shell::quote_word(&format!("crates/{pkg}"));
+            format!("wasm-pack build {crate_dir} --release")
         }
         Language::Ruby => {
             let pkg = crate_name_from_output(config, Language::Ruby).unwrap_or_else(|| format!("{crate_name}-rb"));
+            let pkg = crate::core::config::shell::quote_word(&pkg);
             format!("{cargo} build --release -p {pkg}{target_flag}")
         }
         Language::Php => {
             let pkg = crate_name_from_output(config, Language::Php).unwrap_or_else(|| format!("{crate_name}-php"));
+            let pkg = crate::core::config::shell::quote_word(&pkg);
             format!("{cargo} build --release -p {pkg}{target_flag}")
         }
         Language::Ffi => {
             let pkg = crate_name_from_output(config, Language::Ffi).unwrap_or_else(|| format!("{crate_name}-ffi"));
+            let pkg = crate::core::config::shell::quote_word(&pkg);
             format!("{cargo} build --release -p {pkg}{target_flag}")
         }
         Language::Go | Language::Java | Language::Csharp => {
             let pkg = crate_name_from_output(config, Language::Ffi).unwrap_or_else(|| format!("{crate_name}-ffi"));
+            let pkg = crate::core::config::shell::quote_word(&pkg);
             format!("{cargo} build --release -p {pkg}{target_flag}")
         }
         Language::Elixir => {
@@ -314,6 +323,7 @@ fn build_command_for_lang(
         }
         Language::R => {
             let pkg = crate_name_from_output(config, Language::R).unwrap_or_else(|| format!("{crate_name}-r"));
+            let pkg = crate::core::config::shell::quote_word(&pkg);
             format!("{cargo} build --release -p {pkg}{target_flag}")
         }
         Language::Rust => {

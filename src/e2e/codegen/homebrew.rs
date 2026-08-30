@@ -181,10 +181,12 @@ fn stub_readme() -> String {
 fn render_brewfile(tap: &str, cli_formula: &str, ffi_formula: Option<&str>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Brewfile — managed by alef. DO NOT EDIT.");
-    let _ = writeln!(out, "tap \"{tap}\"");
-    let _ = writeln!(out, "brew \"{tap}/{cli_formula}\"");
+    let _ = writeln!(out, "tap {}", crate::e2e::escape::ruby_string_literal(tap));
+    let formula = format!("{tap}/{cli_formula}");
+    let _ = writeln!(out, "brew {}", crate::e2e::escape::ruby_string_literal(&formula));
     if let Some(ffi) = ffi_formula {
-        let _ = writeln!(out, "brew \"{tap}/{ffi}\"");
+        let formula = format!("{tap}/{ffi}");
+        let _ = writeln!(out, "brew {}", crate::e2e::escape::ruby_string_literal(&formula));
     }
     out
 }
@@ -208,11 +210,12 @@ fn render_run_tests(
     );
     let _ = writeln!(out, "set -euo pipefail");
     let _ = writeln!(out);
-    let _ = writeln!(out, "VERSION=\"{version}\"");
-    let _ = writeln!(out, "TAP=\"{tap}\"");
-    let _ = writeln!(out, "CLI_FORMULA=\"{cli_formula}\"");
+    let quote = crate::core::config::shell::quote_word;
+    let _ = writeln!(out, "VERSION={}", quote(version));
+    let _ = writeln!(out, "TAP={}", quote(tap));
+    let _ = writeln!(out, "CLI_FORMULA={}", quote(cli_formula));
     if let Some(ffi) = ffi_formula {
-        let _ = writeln!(out, "FFI_FORMULA=\"{ffi}\"");
+        let _ = writeln!(out, "FFI_FORMULA={}", quote(ffi));
         // Fully-qualified name disambiguates when multiple taps export the same
         // formula short-name on a developer's machine.
         let _ = writeln!(out, "FFI_FORMULA_QUALIFIED=\"$TAP/$FFI_FORMULA\"");
@@ -245,46 +248,34 @@ fn render_run_tests(
 
     // Emit each CLI test.
     for test in cli_tests {
-        let _ = writeln!(out, "# Test: {}.", test.name);
-        let _ = writeln!(
-            out,
-            "_output_{}=$(eval \"{}\" 2>&1 || true)",
-            sanitize_var_name(&test.name),
-            test.command
-        );
+        let suffix = sanitize_var_name(&test.name);
+        let _ = writeln!(out, "# Test: {}.", test.name.replace(['\r', '\n'], " "));
+        let _ = writeln!(out, "_command_{suffix}={}", quote(&test.command));
+        let _ = writeln!(out, "_output_{suffix}=$(eval \"$_command_{suffix}\" 2>&1 || true)");
         if let Some(ref expected) = test.expect_contains {
-            let _ = writeln!(
-                out,
-                "if [[ \"$_output_{}\" == *\"{}\"* ]]; then",
-                sanitize_var_name(&test.name),
-                expected
-            );
-            let _ = writeln!(out, "  pass \"{}\"", test.name);
+            let _ = writeln!(out, "_expected_{suffix}={}", quote(expected));
+            let _ = writeln!(out, "if [[ \"$_output_{suffix}\" == *\"$_expected_{suffix}\"* ]]; then");
+            let _ = writeln!(out, "  pass {}", quote(&test.name));
             let _ = writeln!(out, "else");
             let _ = writeln!(
                 out,
-                "  fail \"{}\" \"expected '{}' in output, got: $_output_{}\"",
-                test.name,
-                expected,
-                sanitize_var_name(&test.name)
+                "  fail {} \"expected '$_expected_{suffix}' in output, got: $_output_{suffix}\"",
+                quote(&test.name)
             );
             let _ = writeln!(out, "fi");
         } else {
             // No expected substring — just require zero exit code.
             let _ = writeln!(
                 out,
-                "_exit_{}=$(eval \"{}\" >/dev/null 2>&1; echo $?)",
-                sanitize_var_name(&test.name),
-                test.command
+                "_exit_{suffix}=$(eval \"$_command_{suffix}\" >/dev/null 2>&1; echo $?)"
             );
-            let _ = writeln!(out, "if [ \"$_exit_{}\" -eq 0 ]; then", sanitize_var_name(&test.name));
-            let _ = writeln!(out, "  pass \"{}\"", test.name);
+            let _ = writeln!(out, "if [ \"$_exit_{suffix}\" -eq 0 ]; then");
+            let _ = writeln!(out, "  pass {}", quote(&test.name));
             let _ = writeln!(out, "else");
             let _ = writeln!(
                 out,
-                "  fail \"{}\" \"command exited with code $_exit_{}\"",
-                test.name,
-                sanitize_var_name(&test.name)
+                "  fail {} \"command exited with code $_exit_{suffix}\"",
+                quote(&test.name)
             );
             let _ = writeln!(out, "fi");
         }
@@ -320,7 +311,8 @@ fn render_run_tests(
             "  FFI_PREFIX=$(brew --prefix \"$FFI_FORMULA_QUALIFIED\" 2>/dev/null || true)"
         );
         let _ = writeln!(out, "  FFI_CFLAGS=\"-I$FFI_PREFIX/include\"");
-        let _ = writeln!(out, "  FFI_LIBS=\"-L$FFI_PREFIX/lib -l{ffi_lib_name}\"");
+        let _ = writeln!(out, "  FFI_LIB_NAME={}", quote(ffi_lib_name));
+        let _ = writeln!(out, "  FFI_LIBS=\"-L$FFI_PREFIX/lib -l${{FFI_LIB_NAME}}\"");
         let _ = writeln!(out, "fi");
         let _ = writeln!(out);
         // shellcheck disable comment for intentional word-splitting on CFLAGS/LIBS.
@@ -501,16 +493,16 @@ mod tests {
     #[test]
     fn render_brewfile_without_ffi_omits_ffi_line() {
         let out = render_brewfile("myorg/tap", "mytool", None);
-        assert!(out.contains("tap \"myorg/tap\""));
-        assert!(out.contains("brew \"myorg/tap/mytool\""));
+        assert!(out.contains("tap 'myorg/tap'"));
+        assert!(out.contains("brew 'myorg/tap/mytool'"));
         assert!(!out.contains("libmytool"), "must not emit a default lib formula");
     }
 
     #[test]
     fn render_brewfile_with_ffi_includes_ffi_line() {
         let out = render_brewfile("myorg/tap", "mytool", Some("libmytool"));
-        assert!(out.contains("brew \"myorg/tap/mytool\""));
-        assert!(out.contains("brew \"myorg/tap/libmytool\""));
+        assert!(out.contains("brew 'myorg/tap/mytool'"));
+        assert!(out.contains("brew 'myorg/tap/libmytool'"));
     }
 
     // --- render_run_tests without FFI ---
@@ -537,8 +529,8 @@ mod tests {
     fn render_run_tests_no_ffi_includes_cli_version_check() {
         let tests = default_cli_tests();
         let out = render_run_tests("myorg/tap", "mytool", None, "1.2.3", "mytool", &tests);
-        assert!(out.contains("VERSION=\"1.2.3\""));
-        assert!(out.contains("CLI_FORMULA=\"mytool\""));
+        assert!(out.contains("VERSION='1.2.3'"));
+        assert!(out.contains("CLI_FORMULA='mytool'"));
         // default --version check uses $VERSION as expected substring
         assert!(out.contains("$VERSION"));
     }
@@ -549,7 +541,7 @@ mod tests {
     fn render_run_tests_with_ffi_includes_ffi_section() {
         let tests = default_cli_tests();
         let out = render_run_tests("myorg/tap", "mytool", Some("libmytool"), "1.0.0", "mytool", &tests);
-        assert!(out.contains("FFI_FORMULA=\"libmytool\""));
+        assert!(out.contains("FFI_FORMULA='libmytool'"));
         assert!(out.contains("ffi_smoke"));
         assert!(out.contains("pkg-config"));
     }
@@ -630,17 +622,17 @@ mod tests {
         let out = render_run_tests("myorg/tap", "mytool", None, "1.9.0-rc.25", "mytool", &tests);
         // Version must be parameterized into the script.
         assert!(
-            out.contains("VERSION=\"1.9.0-rc.25\""),
+            out.contains("VERSION='1.9.0-rc.25'"),
             "must set VERSION variable to the provided version"
         );
         // The $VERSION variable must be used in the test expectation.
         assert!(
-            out.contains("*\"$VERSION\"*"),
+            out.contains("_expected_version='$VERSION'"),
             "must reference $VERSION in the version test expectation"
         );
         // The $CLI_FORMULA variable must be used to call the binary.
         assert!(
-            out.contains("eval \"$CLI_FORMULA --version\""),
+            out.contains("_command_version='$CLI_FORMULA --version'") && out.contains("eval \"$_command_version\""),
             "must use $CLI_FORMULA variable"
         );
     }
@@ -650,7 +642,24 @@ mod tests {
         let tests = default_cli_tests();
         let out = render_run_tests("myorg/tap", "mytool", None, "2.0.0", "mytool", &tests);
         // The default --version test should check for the parameterized VERSION.
-        assert!(out.contains("VERSION=\"2.0.0\""));
-        assert!(out.contains("if [[ \"$_output_version\" == *\"$VERSION\"* ]]"));
+        assert!(out.contains("VERSION='2.0.0'"));
+        assert!(out.contains("if [[ \"$_output_version\" == *\"$_expected_version\"* ]]"));
+    }
+
+    #[test]
+    fn homebrew_config_values_are_emitted_as_inert_literals() {
+        let malicious = "value'$(touch /tmp/alef-homebrew)'#{system('false')}";
+        let brewfile = render_brewfile(malicious, malicious, Some(malicious));
+        assert!(
+            brewfile.contains(r"\#{system('false')}"),
+            "Ruby interpolation markers must be escaped: {brewfile}"
+        );
+
+        let script = render_run_tests(malicious, malicious, Some(malicious), malicious, malicious, &[]);
+        let status = std::process::Command::new("bash")
+            .args(["-n", "-c", &script])
+            .status()
+            .expect("bash should parse generated script");
+        assert!(status.success(), "generated shell must remain syntactically valid");
     }
 }
