@@ -234,8 +234,9 @@ fn test_gen_elixir_enum_module_with_serde_rename_special_chars() {
     let result = gen_elixir_enum_module(&image_source_enum, "SampleFixture");
 
     assert!(
-        result.contains(":img | :\"og:image\" | :\"twitter:image\""),
-        "should emit quoted atoms in @type for serde_rename with colons; got:\n{result}"
+        result.contains(":img | :og_image | :twitter_image"),
+        "@type t must advertise the atoms the NIF actually produces (from the Rust variant \
+         names), not the serde wire names; got:\n{result}"
     );
 
     assert!(
@@ -257,12 +258,28 @@ fn test_gen_elixir_enum_module_with_serde_rename_special_chars() {
     );
 
     assert!(
-        result.contains(r#"@og_image :"og:image""#),
-        "should emit @og_image with quoted atom value; got:\n{result}"
+        result.contains("@og_image :og_image"),
+        "the attribute's VALUE is the runtime atom, not the wire name; got:\n{result}"
     );
     assert!(
-        result.contains(r#"@twitter_image :"twitter:image""#),
-        "should emit @twitter_image with quoted atom value; got:\n{result}"
+        result.contains("@twitter_image :twitter_image"),
+        "the attribute's VALUE is the runtime atom, not the wire name; got:\n{result}"
+    );
+
+    // The reachability pin. `og_image/0` returns whatever `@og_image` holds, so a `wire_value/1`
+    // clause keyed on a different spelling is unreachable through the module's own public
+    // surface -- and nothing catches the value that does arrive, because `wire_value/1` has no
+    // fallback clause. This composition (`wire_value(og_image())`) is the shape that raised
+    // `FunctionClauseError` before the fix; asserting the two spellings match is what makes it
+    // impossible to reintroduce. ~keep
+    assert!(
+        result.contains(r#"def wire_value(:og_image), do: "og:image""#),
+        "wire_value/1 must have a clause for the atom og_image/0 actually returns, and map it \
+         to the serde wire name; got:\n{result}"
+    );
+    assert!(
+        result.contains(r#"def wire_value(:twitter_image), do: "twitter:image""#),
+        "got:\n{result}"
     );
 }
 

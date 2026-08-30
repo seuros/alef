@@ -115,6 +115,27 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_safe_param_name(name: &
     }
 }
 
+/// The Elixir atom an enum variant carries at runtime, ready to follow a `:`.
+///
+/// One expression, used by every surface of the generated enum module that names a variant: the
+/// `@type t` union, the `@variant` attribute's value, and `wire_value/1`'s clause heads. They must
+/// agree, and the value they must agree ON is fixed by Rustler, not by us -- a `NifUnitEnum`
+/// decodes to `pascal_to_snake(variant.name)`, because serde and rustler are independent proc
+/// macros over the same variant and `serde_rename` never reaches the rustler one.
+///
+/// Spelling any of these surfaces from `serde_rename` instead makes the module contradict itself.
+/// It did: for `#[serde(rename = "og:image")] OgImage`, the accessor returned `:"og:image"` while
+/// the only `wire_value/1` clause matched `:og_image`, so `Enum.wire_value(Enum.og_image())` --
+/// the module's own two public functions, composed -- raised `FunctionClauseError`, and the
+/// `@type t` advertised an atom the NIF never produces. Confirmed on Elixir 1.20.4. The clause
+/// was not merely wrong, it was unreachable through the module's public surface, and there is no
+/// fallback clause behind it to catch the value that actually arrives. Per the repo's
+/// `centralized-naming` rule, `serde_rename` defines wire names only; `wire_value/1` is where the
+/// wire name is exposed, and it maps FROM this atom TO that string. ~keep
+pub(in crate::backends::rustler::gen_bindings) fn elixir_variant_atom(rust_variant_name: &str) -> String {
+    elixir_safe_atom(&crate::codegen::naming::pascal_to_snake(rust_variant_name))
+}
+
 /// Return an Elixir atom value (without leading `:`, as the template adds it).
 /// If the atom contains non-identifier characters, it is quoted as `"atom:value"`.
 ///

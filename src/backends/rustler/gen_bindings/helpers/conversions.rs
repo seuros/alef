@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use super::context::emit_elixir_doc_attr;
 use super::json_values::{
     elixir_field_default, elixir_field_name_with_type, elixir_safe_atom, elixir_safe_attr_name, elixir_safe_param_name,
-    elixir_safe_type_name, elixir_struct_field_typespec, elixir_typespec,
+    elixir_safe_type_name, elixir_struct_field_typespec, elixir_typespec, elixir_variant_atom,
 };
 
 /// Generate a `defmodule {AppModule}.{TypeName}` file with a `defstruct` for a non-opaque type.
@@ -473,16 +473,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
     if is_simple {
         let atom_arms: Vec<String> = declared_variants
             .iter()
-            .map(|v| {
-                let atom_value = match v.serde_rename.as_deref() {
-                    Some(rename) => rename.to_owned(),
-                    None => {
-                        let snake_name = crate::codegen::naming::pascal_to_snake(&v.name);
-                        elixir_safe_param_name(&snake_name)
-                    }
-                };
-                format!(":{}", elixir_safe_atom(&atom_value))
-            })
+            .map(|v| format!(":{}", elixir_variant_atom(&v.name)))
             .collect();
         if !enum_def.doc.is_empty() {
             let first_para = doc_first_paragraph_joined(&enum_def.doc);
@@ -522,11 +513,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             let safe_name = elixir_safe_param_name(&snake_name);
             let attr_name = elixir_safe_attr_name(&safe_name);
-            let atom_value = variant
-                .serde_rename
-                .clone()
-                .unwrap_or_else(|| crate::codegen::naming::pascal_to_snake(&variant.name));
-            let atom_literal = elixir_safe_atom(&atom_value);
+            let atom_literal = elixir_variant_atom(&variant.name);
             out.push_str(&template_env::render(
                 "elixir_enum_attr.jinja",
                 minijinja::context! {
@@ -566,7 +553,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             // serde_rename-derived atom here would leave a variant's true runtime atom with no
             // wire_value/1 clause, raising FunctionClauseError instead of returning the wire
             // string. ~keep
-            let atom_literal = elixir_safe_atom(&crate::codegen::naming::pascal_to_snake(&variant.name));
+            let atom_literal = elixir_variant_atom(&variant.name);
             let wire = crate::codegen::naming::wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
@@ -594,7 +581,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
         let struct_type_discriminator = elixir_safe_atom(flat_data_enum_discriminator(enum_def));
         for variant in &declared_variants {
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
-            let variant_atom = format!(":{}", elixir_safe_atom(&snake_name));
+            let variant_atom = format!(":{}", elixir_variant_atom(&variant.name));
             let type_name = elixir_safe_type_name(&elixir_safe_param_name(&snake_name));
             if !variant.doc.is_empty() {
                 let first_para = doc_first_paragraph_joined(&variant.doc);
@@ -726,7 +713,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             // serde_rename-derived atom here would leave a variant's true runtime atom with no
             // wire_value/1 clause, raising FunctionClauseError instead of returning the wire
             // string. ~keep
-            let atom_literal = elixir_safe_atom(&crate::codegen::naming::pascal_to_snake(&variant.name));
+            let atom_literal = elixir_variant_atom(&variant.name);
             let wire = crate::codegen::naming::wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
