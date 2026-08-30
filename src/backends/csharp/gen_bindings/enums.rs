@@ -2,7 +2,7 @@
 
 use super::{csharp_file_header, is_tuple_field};
 use crate::backends::csharp::type_map::csharp_type;
-use crate::codegen::naming::{csharp_type_name, to_csharp_name, wire_variant_value};
+use crate::codegen::naming::{csharp_type_name, to_csharp_name, wire_field_name, wire_variant_value};
 use crate::codegen::serde_enum_repr::SerdeEnumRepr;
 use crate::core::ir::EnumDef;
 
@@ -239,8 +239,21 @@ fn gen_tagged_union(enum_def: &EnumDef, namespace: &str) -> String {
                             minijinja::context! { cs_type, comma },
                         ));
                     } else {
-                        let json_name = field.name.trim_start_matches('_');
-                        let cs_name = to_csharp_name(json_name);
+                        let raw_field_name = field.name.trim_start_matches('_');
+                        // The public C# property identifier stays derived from the raw Rust
+                        // field name, independent of the wire name below — casing and wire
+                        // naming are separate surfaces. ~keep
+                        let cs_name = to_csharp_name(raw_field_name);
+                        // The wire name follows the full field-naming precedence: this field's
+                        // own `serde_rename` wins over the enum's `rename_all_fields` (the
+                        // struct-variant field-casing container rule), which wins over the raw
+                        // Rust name. Neither `serde_rename_all` -- that rule cases variant
+                        // names, a separate serde namespace -- factors in here. ~keep
+                        let json_name = wire_field_name(
+                            raw_field_name,
+                            field.serde_rename.as_deref(),
+                            enum_def.rename_all_fields.as_deref(),
+                        );
                         let clashes = cs_name == pascal || cs_name == cs_type || variant_names.contains(&cs_name);
                         if clashes {
                             out.push_str(&render(
@@ -391,3 +404,6 @@ fn gen_untagged_wrapper(enum_def: &EnumDef, namespace: &str, emit_text: bool) ->
         })),
     )
 }
+
+#[cfg(test)]
+mod enums_tests;
