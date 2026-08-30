@@ -62,25 +62,26 @@ tests, and release metadata from one `alef.toml`.
 
 ## Installation
 
-Building from source requires Rust 1.88 or newer. The prebuilt binaries below need no toolchain.
+To build from source, install Rust 1.88 or newer:
 
 ```bash
 cargo install alef --locked
 ```
 
-If you use [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall), Alef also publishes
-binary-install metadata:
+To install a published binary without a Rust toolchain, use
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
 
 ```bash
 cargo binstall alef
 ```
 
-Or install a prebuilt binary from a package manager:
+Homebrew installs a bottle when one is available and otherwise may build the formula from source:
 
 ```bash
-brew trust xberg-io/tap
 brew install xberg-io/tap/alef
 ```
+
+Scoop installs the published Windows binary:
 
 ```powershell
 scoop bucket add xberg https://github.com/xberg-io/scoop-bucket
@@ -94,7 +95,7 @@ Create or edit `alef.toml` in your Rust workspace:
 ```toml
 [workspace]
 languages = ["python", "node", "ffi", "go"]
-alef_version = "0.24.12"
+alef_version = "0.79.2"
 
 [[crates]]
 name = "sample_core"
