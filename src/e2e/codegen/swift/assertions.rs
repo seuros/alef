@@ -262,7 +262,18 @@ pub(super) fn render_assertion(
             hasher.finish() & 0xffff_ffff,
         )
     };
-    let (vec_setup, field_expr, is_map_subscript) = materialise_vec_temporaries(&field_expr_raw, &local_suffix);
+    // `None` is a mixed map-then-vec chain `json_bridged_traversal_skip` above missed (no IR
+    // data on this resolver) — see `materialise_vec_temporaries`'s own doc. ~keep
+    let Some((vec_setup, field_expr, is_map_subscript)) = materialise_vec_temporaries(&field_expr_raw, &local_suffix)
+    else {
+        let field_label = assertion
+            .field
+            .as_deref()
+            .filter(|f| !f.is_empty())
+            .unwrap_or(BARE_RESULT_TOKEN);
+        out.push_str(&super::leaf_shape::mixed_map_then_vec_traversal_skip(field_label));
+        return;
+    };
     // Wildcard paths never reach here — they return via `render_wildcard_assertion` above —
     // so `field_expr` is always the expression the arms below assert on and its setup lines
     // are never dead. The previous suppression list named `is_empty`, which had no traversal

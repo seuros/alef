@@ -193,6 +193,19 @@ field_skip_variants! {
         "field ",
         " has no countable Swift leaf (swift-bridge JSON-bridges it to RustString)",
     ),
+    /// ~keep A string-key (map) subscript decodes its parent's JSON-bridged `RustString` getter
+    /// into `[String: String]`, so the value it yields is a plain Swift `String` — nothing a
+    /// further `RustVec` subscript can act on. `json_bridged_traversal_skip` already refuses this
+    /// shape when the swift-bridge scan positively classified the map field as JSON-bridged, but
+    /// that classification is only ever populated from IR data; a resolver built without IR
+    /// (config-only fixtures, or a call site that never wired `with_ir_fields`) never refuses, so
+    /// the mixed path still reaches `swift/accessors.rs::materialise_vec_temporaries`, which
+    /// reports the hazard by returning `None` instead of hoisting a `RustVec` subscript against a
+    /// `String`.
+    MixedMapThenVecTraversalInSwift: LanguageLimitation => (
+        "field ",
+        " mixes a JSON-bridged map subscript with a further RustVec subscript in Swift",
+    ),
     /// ~keep Was `NestedArrayWildcardNotSupportedInZig` (" not supported in zig"), emitted by the
     /// one backend that had ever guarded the case. Every other backend now refuses it too, so the
     /// wording is language-neutral and single-sourced through `nested_wildcard_skip_line`. The

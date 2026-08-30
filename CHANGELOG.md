@@ -34,7 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actually compiles.
 - Hoist every `RustVec` temporary in a nested indexed Swift accessor chain (not only the
   outermost one), preventing dangling-pointer reads when a generated e2e assertion indexes
-  through two `RustVec`-backed segments.
+  through two `RustVec`-backed segments. Scan subscripts quote/escape-aware so a map key
+  containing `]` closes correctly, and refuse (rather than emit broken Swift for) a mixed
+  map-then-vec chain that reaches accessor-building without IR data to refuse it earlier.
 
 ## [0.79.2] - 2026-08-30
 

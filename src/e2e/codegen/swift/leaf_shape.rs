@@ -24,7 +24,7 @@ const COUNT_SUFFIXES: [&str; 3] = ["length", "count", "size"];
 pub(super) fn json_bridged_traversal_skip(field_resolver: &FieldResolver, field: Option<&str>) -> Option<String> {
     let field = field.filter(|f| !f.is_empty())?;
     let bridged = field_resolver.swift_json_bridged_traversal_prefix(field)?;
-    Some(skip_line(&bridged))
+    Some(skip_line(FieldSkip::CountOnJsonBridgedLeafInSwift, &bridged))
 }
 
 /// Render the skip line for a count suffix whose collection leaf is not a countable `RustVec`.
@@ -46,7 +46,7 @@ pub(super) fn non_countable_leaf_count_skip(field_resolver: &FieldResolver, fiel
     if collection.is_empty() || field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(collection)) {
         return None;
     }
-    Some(skip_line(field))
+    Some(skip_line(FieldSkip::CountOnJsonBridgedLeafInSwift, field))
 }
 
 /// Render the skip line for an emptiness assertion whose field every collection oracle calls a
@@ -76,7 +76,7 @@ pub(super) fn unspellable_collection_emptiness_skip(
     if !is_collection || !field_resolver.leaf_is_json_bridged_via_swift_map(resolved) {
         return None;
     }
-    Some(skip_line(field))
+    Some(skip_line(FieldSkip::CountOnJsonBridgedLeafInSwift, field))
 }
 
 /// The skip line a count/emptiness arm renders when [`super::accessors::swift_count_target`]
@@ -92,6 +92,7 @@ pub(super) fn unspellable_collection_emptiness_skip(
 /// this line load-bearing at all.
 pub(super) fn non_countable_leaf_skip_line(field: Option<&str>) -> String {
     skip_line(
+        FieldSkip::CountOnJsonBridgedLeafInSwift,
         field
             .filter(|f| !f.is_empty())
             .unwrap_or(super::assertions::BARE_RESULT_TOKEN),
@@ -113,9 +114,77 @@ pub(super) fn leaf_getter_is_optional(field_resolver: &FieldResolver, field: Opt
         .unwrap_or(false)
 }
 
-fn skip_line(field: &str) -> String {
-    format!(
-        "        // skipped: {}\n",
-        FieldSkip::CountOnJsonBridgedLeafInSwift.message(field)
-    )
+fn skip_line(kind: FieldSkip, field: &str) -> String {
+    format!("        // skipped: {}\n", kind.message(field))
+}
+
+/// Render the skip line for a field-access chain this generator refuses to build at all: a
+/// string-key (JSON-bridged map) subscript followed by a further `RustVec` subscript.
+///
+/// ~keep [`json_bridged_traversal_skip`] already refuses this shape when the swift-bridge scan
+/// positively classified the map field as JSON-bridged, before an accessor is ever built. A
+/// resolver built without IR data (config-only fixtures, or a call site that never wired
+/// `with_ir_fields`) never populates that classification, so the mixed path can still reach
+/// [`super::accessors::materialise_vec_temporaries`], which reports the hazard by returning
+/// `None` rather than hoisting a `RustVec` subscript against the plain Swift `String` a decoded
+/// map value actually is. See that function's own doc for the full mechanism.
+pub(super) fn mixed_map_then_vec_traversal_skip(field: &str) -> String {
+    skip_line(FieldSkip::MixedMapThenVecTraversalInSwift, field)
+}
+
+#[cfg(test)]
+mod mixed_map_then_vec_tests {
+    use super::json_bridged_traversal_skip;
+    use crate::e2e::field_access::{FieldResolver, SwiftFirstClassMap};
+    use std::collections::{HashMap, HashSet};
+
+    fn ir_backed_resolver() -> FieldResolver {
+        let swift_first_class_map = SwiftFirstClassMap {
+            json_bridged_field_names: HashSet::from(["labels".to_string()]),
+            ..SwiftFirstClassMap::default()
+        };
+        FieldResolver::new_with_swift_first_class(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            swift_first_class_map,
+        )
+    }
+
+    /// The confirmed-safe direction: when the swift-bridge scan positively classifies `labels`
+    /// as JSON-bridged (real IR data wired in), a mixed map-then-vec fixture path is refused
+    /// HERE, before any accessor is built — `accessors::materialise_vec_temporaries`'s own
+    /// defensive refusal never has to run for a resolver built this way. ~keep
+    #[test]
+    fn ir_backed_json_bridged_map_field_is_refused_before_an_accessor_is_built() {
+        let resolver = ir_backed_resolver();
+
+        let skip = json_bridged_traversal_skip(&resolver, Some("labels[key].items[0]"));
+
+        let Some(skip) = skip else {
+            panic!("IR-backed json-bridged map field must be refused before accessor-building");
+        };
+        assert!(skip.contains("'labels'"), "got: {skip}");
+    }
+
+    /// The reachable gap review flagged: an IR-less / config-opaque resolver never populates
+    /// `json_bridged_field_names` (it stays empty), so this same fixture shape is NOT refused
+    /// here — it falls through to accessor building, where
+    /// `accessors::materialise_vec_temporaries` must catch it instead (see that module's own
+    /// `mixed_map_then_vec_subscript_is_refused` test). ~keep
+    #[test]
+    fn opaque_resolver_does_not_refuse_here_the_gap_is_closed_downstream() {
+        let empty = HashSet::new();
+        let resolver = FieldResolver::new(&HashMap::new(), &empty, &empty, &empty, &empty);
+
+        let skip = json_bridged_traversal_skip(&resolver, Some("labels[key].items[0]"));
+
+        assert!(
+            skip.is_none(),
+            "an IR-less resolver has no positive fact to refuse on; got: {skip:?}"
+        );
+    }
 }

@@ -249,6 +249,7 @@ impl E2eCodegen for SwiftE2eCodegen {
     }
 }
 
+mod accessor_walk;
 mod accessors;
 mod args;
 mod assertions;
@@ -278,6 +279,8 @@ mod is_true_tests;
 mod json_bridged_snippet_tests;
 #[cfg(test)]
 mod json_bridged_traversal_tests;
+#[cfg(test)]
+mod materialise_vec_optional_tests;
 #[cfg(test)]
 mod optional_display_tests;
 #[cfg(test)]

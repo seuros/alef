@@ -19,187 +19,237 @@ use std::collections::HashMap;
 /// returning empty/garbage. Hoisting the Vec into a `let` binding ties the
 /// Vec's lifetime to the enclosing function scope, so the ref stays valid.
 ///
-/// Every `()[...]` occurrence in the expression is materialised in turn, left to
-/// right, so a nested indexed chain (e.g. `result.items()[0].nested()[1].value()`,
-/// produced when a field-access path traverses two `RustVec`-backed segments) hoists
-/// BOTH temporaries. Hoisting only the outer one still leaves the inner `.nested()`
-/// call — itself a fresh `RustVec` temporary — subscripted inline, which reproduces
-/// the exact dangling-pointer hazard this function exists to prevent, just one level
-/// deeper. Each hoist's `let` reads from the previous hoist's local (or from the
-/// original expression for the first), so the locals chain correctly. ~keep
-/// Returns `(setup_lines, rewritten_expr, is_map_subscript)`. `is_map_subscript` is
-/// true when the LAST subscript's key was a string literal, indicating the deepest
-/// accessor returns a JSON-encoded Map (RustString) and the rewritten expression
-/// already evaluates to `String?` so callers should NOT append `.toString()`.
-pub(super) fn materialise_vec_temporaries(expr: &str, name_suffix: &str) -> (Vec<String>, String, bool) {
+/// Every `()[...]` or `()?[...]` occurrence in the expression is materialised in turn, left to
+/// right, so a nested indexed chain (e.g. `result.items()[0].nested()[1].value()`, produced when
+/// a field-access path traverses two `RustVec`-backed segments) hoists BOTH temporaries. Hoisting
+/// only the outer one still leaves the inner `.nested()` call — itself a fresh `RustVec`
+/// temporary — subscripted inline, which reproduces the exact dangling-pointer hazard this
+/// function exists to prevent, just one level deeper. Each hoist's `let` reads from the previous
+/// hoist's local (or from the original expression for the first), so the locals chain correctly.
+///
+/// ~keep Hoisting an OPTIONAL subscript into a `let` changes what is optional and where. The
+/// `let` RHS never includes a trailing `?` — `let x = a?` alone is not valid Swift, `?` must be
+/// immediately followed by a member/subscript access — so the `?` is re-inserted in the
+/// REWRITTEN expression right after the local name, before its subscript (`local?[N]`, never
+/// `local[N]`). Once a chain crosses ONE optional point, every LATER hoist in the SAME call must
+/// also emit `?`, even when that later hoist's OWN marker in the source text is a plain `()[`:
+/// the original generator writes the FIRST `?` only and lets Swift's optional chaining
+/// auto-propagate through everything textually after it in ONE continuous expression (`a?.b.c`
+/// needs no second `?` before `.c`). Splitting that expression across separate `let` bindings
+/// breaks the continuity — `let x = a?.b; x.c` is a hard compile error, `x` is now a standalone
+/// `Optional<B>` and plain `.c` on an Optional does not compile; `x?.c` is required. A
+/// `carried_optional` flag tracks this: once any earlier hoist's own marker was optional, every
+/// later hoist emits `?` regardless of its own marker. A string-key (map) hoist is the one
+/// exception — its `let` always resolves through `?? [:]`, so the local is never optional and
+/// never gets a `?`; see `build_hoist_setup`. ~keep
+///
+/// Refusal (`None`) is the SAME posture for two different failures: a malformed subscript with
+/// no matching `]` at all, and a mixed map-then-vec chain (a string-key subscript followed by a
+/// further `()[`/`()?[` later in the tail — decoding a map value never yields anything a further
+/// `RustVec` hoist can act on). Both return `None` rather than a partially-rewritten expression,
+/// so a caller has exactly one way to learn "this could not be safely rewritten." Otherwise
+/// returns `Some((setup_lines, rewritten_expr, is_map_subscript))`, where `is_map_subscript` is
+/// true when the LAST subscript's key was a string literal, indicating the deepest accessor
+/// returns a JSON-encoded Map (RustString) and the rewritten expression already evaluates to
+/// `String?` so callers should NOT append `.toString()`. ~keep
+pub(super) fn materialise_vec_temporaries(expr: &str, name_suffix: &str) -> Option<(Vec<String>, String, bool)> {
     let mut setups = Vec::new();
     let mut current = expr.to_string();
     let mut is_string_key = false;
     let mut hoist_count = 0usize;
+    let mut carried_optional = false;
 
-    while let Some(idx) = current.find("()[") {
-        let after_open = idx + 3; // position after `()[`
-        let Some(close_rel) = current[after_open..].find(']') else {
-            break;
-        };
-        let subscript_end = after_open + close_rel; // index of `]`
-        let prefix = current[..idx + 2].to_string(); // includes `()`
-        let subscript = current[idx + 2..=subscript_end].to_string(); // `[N]`
-        let tail = current[subscript_end + 1..].to_string(); // everything after `]`
-        let method_dot = current[..idx].rfind('.').unwrap_or(0);
-        let method = current[method_dot + 1..idx].to_string();
+    while let Some((idx, marker_optional)) = find_next_subscript_marker(&current) {
+        let is_optional = marker_optional || carried_optional;
         hoist_count += 1;
-        let local = format!("_vec_{method}_{name_suffix}_{hoist_count}");
-
-        // String-key subscript (e.g. `["title"]`) signals a Map-like access. swift-bridge
-        // serialises non-leaf Maps (e.g. `HashMap<String, String>`) as JSON-encoded
-        // RustString rather than exposing a Swift dictionary. Decode the RustString to
-        // `[String: String]` before subscripting so `_vec_X["title"]` works.
-        let inner = subscript.trim_start_matches('[').trim_end_matches(']');
-        is_string_key = inner.starts_with('"') && inner.ends_with('"');
-        let setup = if is_string_key {
-            format!(
-                "let {local} = (try? JSONSerialization.jsonObject(with: ({prefix}.toString() ?? \"{{}}\").data(using: .utf8)!) as? [String: String]) ?? [:]"
-            )
-        } else {
-            format!("let {local} = {prefix}")
-        };
-        setups.push(setup);
-        current = format!("{local}{subscript}{tail}");
+        match hoist_one_subscript(&current, idx, marker_optional, is_optional, name_suffix, hoist_count) {
+            HoistOutcome::Refuse => return None,
+            HoistOutcome::Hoisted {
+                setup,
+                next,
+                is_string_key: key,
+            } => {
+                setups.push(setup);
+                current = next;
+                is_string_key = key;
+                carried_optional = carried_optional || marker_optional;
+            }
+        }
     }
 
-    (setups, current, is_string_key)
+    Some((setups, current, is_string_key))
 }
 
-/// Returns `(accessor_expr, has_optional)` where `has_optional` is true when
-/// at least one `?.` was inserted.
+/// The result of attempting to hoist the ONE subscript marker located at a known position.
+/// See [`materialise_vec_temporaries`]'s doc for why both failure shapes below collapse to the
+/// same `Refuse` outcome rather than two different ones.
+enum HoistOutcome {
+    Hoisted {
+        setup: String,
+        next: String,
+        is_string_key: bool,
+    },
+    Refuse,
+}
+
+/// Process the subscript marker [`find_next_subscript_marker`] already located at `idx`: find
+/// its closing bracket, split the expression into prefix/subscript/tail, and either hoist it
+/// into a `let` or refuse the whole expression when it cannot be safely rewritten.
 ///
-/// Note: Once we emit a `?` to unwrap an Optional, Swift's type system treats
-/// the result as non-Optional for the remainder of the chain, even if the Rust
-/// IR type annotation says the next field is Optional. We track whether the chain
-/// is already in an "unwrapped" state via `already_unwrapped` — after the first
-/// `?`, subsequent optional fields should NOT emit another `?` because the Swift
-/// expression is already concrete.
-pub(super) fn swift_build_accessor(field: &str, result_var: &str, field_resolver: &FieldResolver) -> (String, bool) {
-    let resolved = field_resolver.resolve(field);
-    let parts: Vec<&str> = resolved.split('.').collect();
+/// A string-key subscript (e.g. `["title"]`) signals Map-like access — swift-bridge serialises
+/// non-leaf Maps as JSON-encoded `RustString`, decoded by [`build_hoist_setup`]. Once decoded,
+/// the value is a plain Swift `String` with nothing a further `RustVec` hoist can act on, so a
+/// string-key subscript followed by another `()[`/`()?[` in the tail refuses (`Refuse`) rather
+/// than emitting broken Swift — the IR-backed `json_bridged_traversal_skip` (leaf_shape.rs)
+/// catches this earlier when it has IR data; a config-only/opaque resolver never does, so this
+/// is the fallback net. Map hoists never carry a trailing `?` (their local is never optional —
+/// see `build_hoist_setup`); a plain vec hoist carries one exactly when `is_optional`.
+fn hoist_one_subscript(
+    current: &str,
+    idx: usize,
+    marker_optional: bool,
+    is_optional: bool,
+    name_suffix: &str,
+    hoist_count: usize,
+) -> HoistOutcome {
+    let bracket_start = if marker_optional { idx + 3 } else { idx + 2 }; // `?[` adds one byte ~keep
+    let after_open = bracket_start + 1; // first char inside the brackets ~keep
+    let Some(close_rel) = find_subscript_close(&current[after_open..]) else {
+        return HoistOutcome::Refuse;
+    };
+    let subscript_end = after_open + close_rel; // index of `]` ~keep
+    let prefix = &current[..idx + 2]; // includes `()`, never the trailing `?` ~keep
+    let subscript = &current[bracket_start..=subscript_end]; // `[N]` or `["key"]` ~keep
+    let tail = &current[subscript_end + 1..]; // everything after `]` ~keep
+    let method_dot = current[..idx].rfind('.').unwrap_or(0);
+    let method = &current[method_dot + 1..idx];
+    let local = format!("_vec_{method}_{name_suffix}_{hoist_count}");
 
-    // Track the current IR type as we walk segments so each segment can be
-    // emitted with property syntax (first-class Codable struct) or method-call
-    // syntax (typealias-to-`RustBridge.X`). Mirrors the per-segment dispatch in
-    // `render_swift_with_first_class_map`.
-    let mut current_type: Option<String> = field_resolver.swift_root_type().cloned();
-    // Once a chain crosses a `[N]` subscript, we are operating on a RustVec
-    // element, which is always the OPAQUE `RustBridge.T` (swift-bridge does not
-    // convert RustVec elements into the first-class Codable struct). Pin
-    // opaque method-call syntax after the first index step.
-    let mut via_rust_vec = false;
-    // Once a chain crosses an opaque (typealias-to-`RustBridge.X`) segment, every
-    // subsequent accessor must also be opaque (method-call syntax). Calling a
-    // method on `RustBridge.X` returns the OPAQUE wrapper of the next type, even
-    // when that next type is independently eligible for first-class emission.
-    // See `field_access::render_swift_with_first_class_map` for the matching
-    // invariant. Without this, `metrics.total_lines` on an opaque parent emits
-    // `.metrics().totalLines` instead of `.metrics().totalLines()`.
-    let mut via_opaque = false;
+    let inner = subscript.trim_start_matches('[').trim_end_matches(']');
+    let is_string_key = inner.starts_with('"') && inner.ends_with('"');
+    if is_string_key && (tail.contains("()[") || tail.contains("()?[")) {
+        return HoistOutcome::Refuse;
+    }
 
-    let mut out = result_var.to_string();
-    let mut has_optional = false;
-    // Once we emit a `?` to unwrap an Optional, subsequent segments should NOT
-    // emit additional `?` operators. In Swift, `.summary()?.strategy()` unwraps
-    // to a concrete `SummaryResult`, so `.strategy()` is called on the unwrapped
-    // value and does not need another `?` even if the full path `summary.strategy`
-    // is marked optional in the fixture config.
-    let mut already_unwrapped = false;
-    let mut path_so_far = String::new();
-    let total = parts.len();
-    for (i, part) in parts.iter().enumerate() {
-        let is_leaf = i == total - 1;
-        // Handle array index subscripts within a segment, e.g. `data[0]`.
-        // `data[0]` must become `.data()[0]` (opaque) or `.data[0]` (first-class).
-        // Split at the first `[` if present.
-        let (field_name, subscript): (&str, Option<&str>) = if let Some(bracket_pos) = part.find('[') {
-            (&part[..bracket_pos], Some(&part[bracket_pos..]))
-        } else {
-            (part, None)
-        };
+    let setup = build_hoist_setup(&local, prefix, is_string_key, is_optional);
+    let next = if !is_string_key && is_optional {
+        format!("{local}?{subscript}{tail}")
+    } else {
+        format!("{local}{subscript}{tail}")
+    };
 
-        if !path_so_far.is_empty() {
-            path_so_far.push('.');
+    HoistOutcome::Hoisted {
+        setup,
+        next,
+        is_string_key,
+    }
+}
+
+/// Build the `let` line for one hoisted temporary.
+///
+/// ~keep A string-key (map) subscript decodes its prefix's JSON-bridged `RustString` getter into
+/// `[String: String]`; when that getter is itself reached through an optional chain
+/// (`is_optional`), the decode must call `?.toString()` rather than `.toString()` — the prefix's
+/// type is `Optional<RustString>` at that point, and a plain `.toString()` on an Optional does
+/// not compile. A plain (non-map) hoist just captures whatever `prefix` evaluates to, optional or
+/// not — assigning an Optional expression to a `let` needs no unwrap, so no such branch exists
+/// for it.
+fn build_hoist_setup(local: &str, prefix: &str, is_string_key: bool, is_optional: bool) -> String {
+    if !is_string_key {
+        return format!("let {local} = {prefix}");
+    }
+    let to_string_call = if is_optional {
+        format!("{prefix}?.toString()")
+    } else {
+        format!("{prefix}.toString()")
+    };
+    format!(
+        "let {local} = (try? JSONSerialization.jsonObject(with: ({to_string_call} ?? \"{{}}\").data(using: .utf8)!) as? [String: String]) ?? [:]"
+    )
+}
+
+/// Find the next `()[` or `()?[` subscript-open marker in `s`, ignoring any such text that
+/// occurs INSIDE an already-quoted string-key subscript. Returns `(start_index, is_optional)`.
+///
+/// ~keep A map key's own content can legitimately contain the literal text `()[` — nothing
+/// escapes brackets when `quoted_key_literal` writes a key out (only `\`, `"`, and whitespace
+/// control characters are escaped). Once hoisted, that content sits verbatim inside `current`'s
+/// rewritten quoted subscript, e.g. `_vec_labels_X_1["a()[b"]`. A quote-BLIND scan for `()[` on
+/// the next loop iteration would match the fake occurrence embedded in that key before reaching
+/// a real subsequent subscript — or, when the key was the terminal subscript, would find a fake
+/// "next marker" where none exists at all, splitting the key's own content into garbage. Tracking
+/// whether the scan is currently inside a quoted region (toggling on unescaped `"`, skipping the
+/// byte after `\`) confines every pattern match to text that is actually expression structure,
+/// never a key's payload. This only finds where a marker STARTS; [`find_subscript_close`] (run
+/// afterward, on content immediately following the opening `[`) finds where that ONE subscript's
+/// content ENDS — a narrower, already-open-bracket job with no outer quote-tracking of its own.
+fn find_next_subscript_marker(s: &str) -> Option<(usize, bool)> {
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    let mut in_quotes = false;
+    while i < bytes.len() {
+        if in_quotes {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'"' => {
+                    in_quotes = false;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+            continue;
         }
-        // Build the base path (without subscript) for the optional check. When the
-        // segment is e.g. `tool_calls[0]`, we want to check `is_optional` against
-        // "choices[0].message.tool_calls" not "choices[0].message.tool_calls[0]".
-        let base_path = {
-            let mut p = path_so_far.clone();
-            p.push_str(field_name);
-            p
-        };
-        // Now push the full part (with subscript if any) so path_so_far is correct
-        // for subsequent segment checks.
-        path_so_far.push_str(part);
-
-        // First-class struct fields → property access (no `()`); typealias-to-
-        // opaque fields → method-call access (`()`). Once we've indexed through
-        // a RustVec, every subsequent segment is on an opaque element.
-        // When current_type is None (opaque parent that doesn't appear in field_types),
-        // treat it as opaque and use method-call syntax.
-        let is_first_class = current_type
-            .as_ref()
-            .is_some_and(|t| field_resolver.swift_is_first_class(Some(t)));
-        let property_syntax = !via_rust_vec && !via_opaque && is_first_class;
-        if !property_syntax {
-            via_opaque = true;
-        }
-        out.push('.');
-        // Swift bindings (both first-class `public let` props and swift-bridge
-        // method names) always use lowerCamelCase — never raw snake_case from IR.
-        out.push_str(&field_name.to_lower_camel_case());
-        if let Some(sub) = subscript {
-            // When the getter for this subscripted field is itself optional
-            // (e.g. tool_calls returns Optional<RustVec<T>>), insert `?` before
-            // the subscript so Swift unwraps the Optional before indexing.
-            // Only emit `?` if we haven't already unwrapped in this chain.
-            let field_is_optional = field_resolver.is_optional(&base_path);
-            let access = if property_syntax { "" } else { "()" };
-            if field_is_optional && !already_unwrapped {
-                out.push_str(&format!("{access}?"));
-                has_optional = true;
-                already_unwrapped = true;
-            } else {
-                out.push_str(access);
-            }
-            out.push_str(sub);
-            // Do NOT append a trailing `?` after the subscript index: in Swift,
-            // `optionalVec?[N]` via `Collection.subscript` returns the element
-            // type `T` directly. The parent `has_optional` flag is still set
-            // when `field_is_optional` is true, which causes the enclosing
-            // expression to be wrapped in `(... ?? fallback)` correctly.
-            // Indexing into a Vec<Named> yields a Named element. Only pin opaque
-            // syntax when the array itself was opaque (method-call); when the
-            // owner is first-class, the array is a Swift `[T]` whose elements
-            // are first-class T (property access).
-            current_type = field_resolver.swift_advance(current_type.as_deref(), field_name);
-            if !property_syntax {
-                via_rust_vec = true;
-            }
+        if bytes[i] == b'"' {
+            in_quotes = true;
+            i += 1;
+        } else if bytes[i..].starts_with(b"()?[") {
+            return Some((i, true));
+        } else if bytes[i..].starts_with(b"()[") {
+            return Some((i, false));
         } else {
-            if !property_syntax {
-                out.push_str("()");
-            }
-            // Insert `?` after the accessor for non-leaf optional fields so the
-            // next member access becomes `?.`. Only emit `?` if we haven't already
-            // unwrapped in this chain with a previous optional chaining operator.
-            if !is_leaf && field_resolver.is_optional(&base_path) && !already_unwrapped {
-                out.push('?');
-                has_optional = true;
-                already_unwrapped = true;
-            }
-            current_type = field_resolver.swift_advance(current_type.as_deref(), field_name);
+            i += 1;
         }
     }
-    (out, has_optional)
+    None
 }
+
+/// Find the byte offset (relative to `content`, which starts right after a subscript's opening
+/// `[`) of the `]` that closes THIS subscript, given an already-correct starting position.
+///
+/// ~keep A naive `content.find(']')` closes the subscript at the FIRST `]` in the content, which
+/// is wrong whenever the key itself contains a `]` (e.g. `labels["a]b"]` — `quoted_key_literal`
+/// escapes `\`, `"`, and whitespace control characters, but never `]`). The naive scan sees the
+/// `]` inside `"a]b"` and stops there, leaving the subscript malformed (`["a]`, missing its
+/// closing quote) and the misclassified `is_string_key` check (which trims one leading `[` and
+/// one trailing `]`, then checks both quote ends) sees `"a` — starts with `"` but does not end
+/// with one — so it reads as a NUMERIC subscript and skips the JSON-decode setup entirely.
+/// Scanning quote-aware — treating a leading `"` as the start of a string that runs to the next
+/// unescaped `"`, only then searching for the closing `]` — finds the true boundary of THIS
+/// subscript regardless of what its key contains. Unlike [`find_next_subscript_marker`], this
+/// function only ever sees content starting exactly at an open bracket, so it has no reason to
+/// distinguish real structure from a PREVIOUSLY-hoisted key's content sitting earlier in the
+/// string — that is a property of scanning arbitrary already-rewritten text for the NEXT
+/// marker's start, not of finding one already-located subscript's end.
+fn find_subscript_close(content: &str) -> Option<usize> {
+    let bytes = content.as_bytes();
+    if bytes.first() != Some(&b'"') {
+        return content.find(']');
+    }
+    let mut i = 1usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return content[i + 1..].find(']').map(|rel| i + 1 + rel),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+// ~keep `swift_build_accessor` and its per-segment helpers moved to `accessor_walk.rs` (this
+// file was approaching the file-size-ratchet cap); re-exported here so every existing
+// `super::accessors::swift_build_accessor` caller keeps working unchanged.
+pub(super) use super::accessor_walk::swift_build_accessor;
 
 /// Generate a `[String]` (or `[String]?`) expression for a `RustVec<RustString>`
 /// field so that `contains` membership checks work against plain Swift Strings.
@@ -344,7 +394,6 @@ pub(super) fn swift_stringy_aggregator_contains_assert(
     field_resolver: &FieldResolver,
     swift_val: &str,
 ) -> Option<String> {
-    use crate::e2e::field_access::StringyFieldKind;
     let field = field?;
     let resolved = field_resolver.resolve(field);
     // Only handle simple top-level array fields (no nested chains) for now.
@@ -362,33 +411,37 @@ pub(super) fn swift_stringy_aggregator_contains_assert(
     let array_accessor = field_resolver.accessor(field, "swift", result_var);
     let mut texts_lines: Vec<String> = Vec::new();
     for sf in stringy {
-        let call = swift_ident(&sf.name.to_lower_camel_case());
-        match sf.kind {
-            StringyFieldKind::Plain => {
-                texts_lines.push(format!("                texts.append(item.{call}().toString())"));
-            }
-            StringyFieldKind::Optional => {
-                texts_lines.push(format!(
-                    "                if let v = item.{call}() {{ texts.append(v.toString()) }}"
-                ));
-            }
-            StringyFieldKind::Vec => {
-                // `item.field()` returns `RustVec<RustString>`. Mapping its
-                // elements yields `RustStringRef` — a swift-bridge wrapper
-                // around the borrowed RustString — which has `as_str()`
-                // (snake_case, defined in `SwiftBridgeCore.swift`), NOT
-                // `toString()` (only `RustString` has the latter via the
-                // extension that calls `self.as_str().toString()`).
-                texts_lines.push(format!(
-                    "                texts.append(contentsOf: item.{call}().map {{ $0.as_str().toString() }})"
-                ));
-            }
-        }
+        texts_lines.push(stringy_field_text_line(sf));
     }
     let texts_block = texts_lines.join("\n");
     Some(format!(
         "        XCTAssertTrue({array_accessor}.contains(where: {{ item in\n            var texts = [String]()\n{texts_block}\n            return texts.contains(where: {{ $0.contains({swift_val}) }})\n        }}), \"expected to contain: \\({swift_val})\")"
     ))
+}
+
+/// ~keep One `texts.append(...)` line for a single stringy field of a `contains`-aggregated
+/// element type, per its [`StringyFieldKind`] — the per-field body
+/// [`swift_stringy_aggregator_contains_assert`]'s loop used to inline directly.
+fn stringy_field_text_line(sf: &crate::e2e::field_access::StringyField) -> String {
+    use crate::e2e::field_access::StringyFieldKind;
+    let call = swift_ident(&sf.name.to_lower_camel_case());
+    match sf.kind {
+        StringyFieldKind::Plain => {
+            format!("                texts.append(item.{call}().toString())")
+        }
+        StringyFieldKind::Optional => {
+            format!("                if let v = item.{call}() {{ texts.append(v.toString()) }}")
+        }
+        StringyFieldKind::Vec => {
+            // `item.field()` returns `RustVec<RustString>`. Mapping its
+            // elements yields `RustStringRef` — a swift-bridge wrapper
+            // around the borrowed RustString — which has `as_str()`
+            // (snake_case, defined in `SwiftBridgeCore.swift`), NOT
+            // `toString()` (only `RustString` has the latter via the
+            // extension that calls `self.as_str().toString()`).
+            format!("                texts.append(contentsOf: item.{call}().map {{ $0.as_str().toString() }})")
+        }
+    }
 }
 
 /// Generate a `.count` expression for an array field that may be nested inside optional parents.
@@ -556,11 +609,11 @@ mod materialise_vec_temporaries_tests {
     /// fields) only had its OUTER `()[...]` hoisted to a local. The inner `.nested()` call
     /// is itself a fresh `RustVec` temporary that was left subscripted inline — the exact
     /// dangling-pointer hazard this function exists to prevent, one level deeper. Both
-    /// temporaries must be hoisted, each reading from the previous hoist's local.
+    /// temporaries must be hoisted, each reading from the previous hoist's local. ~keep
     #[test]
     fn nested_indexed_rust_vec_hoists_every_temporary() {
         let (setup, rewritten, is_map_subscript) =
-            materialise_vec_temporaries("result.items()[0].nested()[1].value()", "count_min_ab12");
+            materialise_vec_temporaries("result.items()[0].nested()[1].value()", "count_min_ab12").unwrap();
 
         assert_eq!(
             setup,
@@ -575,11 +628,11 @@ mod materialise_vec_temporaries_tests {
 
     /// Control: a single-level indexed `RustVec` access — the case this function already
     /// handled correctly — must keep hoisting exactly one temporary and leave the tail
-    /// after the subscript untouched.
+    /// after the subscript untouched. ~keep
     #[test]
     fn single_indexed_rust_vec_hoists_one_temporary() {
         let (setup, rewritten, is_map_subscript) =
-            materialise_vec_temporaries("result.items()[0].value()", "count_min_ab12");
+            materialise_vec_temporaries("result.items()[0].value()", "count_min_ab12").unwrap();
 
         assert_eq!(
             setup,
@@ -590,15 +643,81 @@ mod materialise_vec_temporaries_tests {
     }
 
     /// Control: a chain with no `()[...]` subscript at all must be returned unchanged,
-    /// with no setup lines emitted.
+    /// with no setup lines emitted. ~keep
     #[test]
     fn non_indexed_chain_is_unchanged() {
         let (setup, rewritten, is_map_subscript) =
-            materialise_vec_temporaries("result.items().value()", "count_min_ab12");
+            materialise_vec_temporaries("result.items().value()", "count_min_ab12").unwrap();
 
         assert!(setup.is_empty());
         assert_eq!(rewritten, "result.items().value()");
         assert!(!is_map_subscript);
+    }
+
+    /// The confirmed defect: a naive `find(']')` closes a terminal map-key subscript at the
+    /// FIRST `]`, which is inside the key itself when the key contains one — `quoted_key_literal`
+    /// escapes `\`, `"`, and whitespace control characters, but never `]`. Pre-fix this
+    /// misidentified the subscript as `["a]` (unterminated), read `is_string_key` as false (the
+    /// trimmed inner text `"a` starts with `"` but does not end with one), and skipped the
+    /// JSON-decode setup entirely, emitting the malformed tail `b"]` into the rewritten
+    /// expression. ~keep
+    #[test]
+    fn terminal_map_key_containing_a_bracket_is_recognised_as_a_string_key() {
+        let (setup, rewritten, is_map_subscript) =
+            materialise_vec_temporaries("result.labels()[\"a]b\"]", "equals_ff01").unwrap();
+
+        assert_eq!(
+            setup,
+            vec![
+                "let _vec_labels_equals_ff01_1 = (try? JSONSerialization.jsonObject(with: \
+                 (result.labels().toString() ?? \"{}\").data(using: .utf8)!) as? [String: String]) ?? [:]"
+                    .to_string(),
+            ]
+        );
+        assert_eq!(rewritten, "_vec_labels_equals_ff01_1[\"a]b\"]");
+        assert!(is_map_subscript);
+    }
+
+    /// Pins the documented LAST-subscript semantics against pre-`a531f1441` code, which only
+    /// hoisted the FIRST `()[...]` occurrence and would never have reached this expression's
+    /// second (map) subscript at all: a chain that indexes a `RustVec` and THEN ends in a
+    /// terminal string-key map subscript must report `is_map_subscript == true` (the deepest/
+    /// last accessor is the map read). Neither subscript here embeds a bracket in its own
+    /// content, so this does NOT exercise the quote-aware bracket scanner
+    /// (`find_subscript_close`/`find_next_subscript_marker`) — see
+    /// `terminal_map_key_containing_a_bracket_is_recognised_as_a_string_key` above for that, and
+    /// `materialise_vec_optional_tests.rs` for the outer-scanner-specific coverage. ~keep
+    #[test]
+    fn vec_then_terminal_map_subscript_proves_last_subscript_wins() {
+        let (setup, rewritten, is_map_subscript) =
+            materialise_vec_temporaries("result.items()[0].labels()[\"a\"]", "count_min_9f01").unwrap();
+
+        assert_eq!(
+            setup,
+            vec![
+                "let _vec_items_count_min_9f01_1 = result.items()".to_string(),
+                "let _vec_labels_count_min_9f01_2 = (try? JSONSerialization.jsonObject(with: \
+                 (_vec_items_count_min_9f01_1[0].labels().toString() ?? \"{}\").data(using: .utf8)!) as? \
+                 [String: String]) ?? [:]"
+                    .to_string(),
+            ]
+        );
+        assert_eq!(rewritten, "_vec_labels_count_min_9f01_2[\"a\"]");
+        assert!(is_map_subscript);
+    }
+
+    /// The reachable hazard flagged in review: a string-key (JSON-bridged map) subscript
+    /// followed by a FURTHER `RustVec` subscript. Once the map subscript decodes into
+    /// `[String: String]`, the value it yields is a plain Swift `String` — a further `()[`
+    /// hoist against it would compile against the wrong type. `json_bridged_traversal_skip`
+    /// (leaf_shape.rs) refuses this shape earlier when IR data positively classified the map
+    /// field as JSON-bridged, but a config-only/opaque resolver (no IR wired in) never does, so
+    /// this function must refuse it directly rather than emit broken Swift. ~keep
+    #[test]
+    fn mixed_map_then_vec_subscript_is_refused() {
+        let result = materialise_vec_temporaries("result.labels()[\"a\"].items()[0]", "not_empty_77aa");
+
+        assert!(result.is_none(), "got: {result:?}");
     }
 }
 
