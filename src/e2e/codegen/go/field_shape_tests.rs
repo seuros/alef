@@ -1,14 +1,59 @@
 use std::collections::HashSet;
 
 use crate::core::config::e2e::CallConfig;
-use crate::core::ir::{EnumDef, EnumVariant, FieldDef, FunctionDef, TypeDef, TypeRef};
+use crate::core::ir::{DefaultValue, EnumDef, EnumVariant, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
+use super::assertion_field_shape::resolve_assertion_field_shape;
 use super::test_function::{GoTestFunctionContext, render_test_function};
 
-fn render_field_assertion(field: FieldDef, enums: &[EnumDef], configured_optional: bool) -> String {
+fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
+    let Ok(go) = which::which("go") else {
+        return;
+    };
+    let directory = tempfile::tempdir().expect("create generated Go fixture");
+    std::fs::write(
+        directory.path().join("go.mod"),
+        "module example.com/sample\n\ngo 1.24\n",
+    )
+    .unwrap();
+    std::fs::write(directory.path().join("sample.go"), sample_source).unwrap();
+    let mut imports = vec!["\"testing\"", "sample \"example.com/sample\""];
+    if rendered.contains("strings.") {
+        imports.push("\"strings\"");
+    }
+    let assertion_stub = if rendered.contains("assert.") {
+        "type assertions struct{}\nvar assert assertions\nfunc (assertions) NotNil(*testing.T, any, ...string) {}\nfunc (assertions) GreaterOrEqual(*testing.T, any, any, ...string) {}\n"
+    } else {
+        ""
+    };
+    let source = format!(
+        "package sample_test\nimport ({})\n{assertion_stub}\n{rendered}",
+        imports.join("\n")
+    );
+    std::fs::write(directory.path().join("shape_test.go"), source).unwrap();
+    let output = std::process::Command::new(go)
+        .args(["test", "./..."])
+        .current_dir(directory.path())
+        .output()
+        .expect("run Go compiler");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}\n{rendered}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn render_field_assertion(
+    field: FieldDef,
+    enums: &[EnumDef],
+    configured_optional: bool,
+    assertion_type: &str,
+    value: Option<serde_json::Value>,
+) -> String {
     let mut optional = HashSet::new();
     if configured_optional {
         optional.insert(field.name.clone());
@@ -27,9 +72,9 @@ fn render_field_assertion(field: FieldDef, enums: &[EnumDef], configured_optiona
         id: "field_shape".into(),
         description: "field shape".into(),
         assertions: vec![Assertion {
-            assertion_type: "equals".into(),
+            assertion_type: assertion_type.into(),
             field: Some(field.name.clone()),
-            value: Some(serde_json::json!({"value": "sample"})),
+            value,
             ..Default::default()
         }],
         ..Default::default()
@@ -87,11 +132,17 @@ fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
         },
         &[choice],
         true,
+        "is_true",
+        None,
     );
 
     assert!(
         !output.contains("*result.Choice"),
         "sealed interfaces are not pointers:\n{output}"
+    );
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n",
     );
 }
 
@@ -127,11 +178,17 @@ fn required_unresolved_named_field_uses_raw_message_pointer_shape() {
         },
         &[],
         false,
+        "contains",
+        Some(serde_json::json!("sample")),
     );
 
     assert!(
         output.contains("*result.Payload"),
         "unresolved named fields are pointers:\n{output}"
+    );
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\nimport \"encoding/json\"\ntype Envelope struct { Payload *json.RawMessage }\nfunc Inspect() (*Envelope, error) { raw := json.RawMessage(`{\"value\":\"sample\"}`); return &Envelope{Payload: &raw}, nil }\n",
     );
 }
 
@@ -194,5 +251,88 @@ fn optional_vec_assertions_follow_go_slice_shape_over_global_optionality() {
     assert!(
         !output.contains("len(*result.Items)"),
         "must not dereference slice:\n{output}"
+    );
+}
+
+#[test]
+fn optional_local_has_plain_value_shape() {
+    let types = vec![TypeDef {
+        name: "Envelope".into(),
+        fields: vec![FieldDef {
+            name: "title".into(),
+            ty: TypeRef::String,
+            optional: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let resolver = FieldResolver::new(
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .with_ir_result_fields(
+        FieldResolver::ir_result_field_facts_with_enums(&types, &[], "go"),
+        Some("Envelope".into()),
+    );
+    let assertion = Assertion {
+        assertion_type: "equals".into(),
+        field: Some("title".into()),
+        value: Some(serde_json::json!("sample")),
+        ..Default::default()
+    };
+    let locals = std::collections::HashMap::from([("title".into(), "title".into())]);
+    let shape = resolve_assertion_field_shape(&assertion, &resolver, &locals);
+
+    assert!(!shape.is_optional);
+    assert!(!shape.is_pointer);
+    assert!(!shape.is_nullable);
+}
+
+#[test]
+fn required_default_string_count_dereferences_authoritative_pointer() {
+    let output = render_field_assertion(
+        FieldDef {
+            name: "label".into(),
+            ty: TypeRef::String,
+            default: Some("default_label".into()),
+            typed_default: Some(DefaultValue::StringLiteral("default".into())),
+            ..Default::default()
+        },
+        &[],
+        false,
+        "count_min",
+        Some(serde_json::json!(1)),
+    );
+
+    assert!(output.contains("len(*result.Label)"), "{output}");
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n",
+    );
+}
+
+#[test]
+fn required_default_number_comparison_dereferences_authoritative_pointer() {
+    let output = render_field_assertion(
+        FieldDef {
+            name: "limit".into(),
+            ty: TypeRef::Primitive(PrimitiveType::I64),
+            default: Some("default_limit".into()),
+            typed_default: Some(DefaultValue::IntLiteral(5)),
+            ..Default::default()
+        },
+        &[],
+        false,
+        "greater_than",
+        Some(serde_json::json!(1)),
+    );
+
+    assert!(output.contains("*result.Limit < 2"), "{output}");
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Envelope struct { Limit *int64 }\nfunc Inspect() (*Envelope, error) { value := int64(5); return &Envelope{Limit: &value}, nil }\n",
     );
 }

@@ -459,9 +459,8 @@ pub(super) fn render_assertion(
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);
                 let field_is_array = result_is_array || field_resolver.is_array(resolved_name);
-                let is_opt =
-                    is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
-                let field_for_contains = if is_opt && field_is_array {
+                let is_nullable = field_is_nullable;
+                let field_for_contains = if is_nullable && field_is_array {
                     format!("jsonString({field_expr})")
                 } else if field_is_pointer {
                     format!("string(*{field_expr})")
@@ -470,7 +469,7 @@ pub(super) fn render_assertion(
                 } else {
                     format!("string({field_expr})")
                 };
-                if is_opt {
+                if is_nullable {
                     let _ = writeln!(
                         out_ref,
                         "\tif {field_expr} == nil || !strings.Contains({field_for_contains}, {go_val}) {{"
@@ -495,11 +494,10 @@ pub(super) fn render_assertion(
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);
                 let field_is_array = result_is_array || field_resolver.is_array(resolved_name);
-                let is_opt =
-                    is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
+                let is_nullable = field_is_nullable;
                 for val in values {
                     let go_val = json_to_go(val);
-                    let field_for_contains = if is_opt && field_is_array {
+                    let field_for_contains = if is_nullable && field_is_array {
                         format!("jsonString({field_expr})")
                     } else if field_is_pointer {
                         format!("string(*{field_expr})")
@@ -508,7 +506,7 @@ pub(super) fn render_assertion(
                     } else {
                         format!("string({field_expr})")
                     };
-                    if is_opt {
+                    if is_nullable {
                         let _ = writeln!(
                             out_ref,
                             "\tif {field_expr} == nil || !strings.Contains({field_for_contains}, {go_val}) {{"
@@ -529,9 +527,8 @@ pub(super) fn render_assertion(
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);
                 let field_is_array = result_is_array || field_resolver.is_array(resolved_name);
-                let is_opt =
-                    is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
-                let field_for_contains = if is_opt && field_is_array {
+                let is_nullable = field_is_nullable;
+                let field_for_contains = if is_nullable && field_is_array {
                     format!("jsonString({field_expr})")
                 } else if field_is_pointer {
                     format!("string(*{field_expr})")
@@ -540,7 +537,12 @@ pub(super) fn render_assertion(
                 } else {
                     format!("string({field_expr})")
                 };
-                let _ = writeln!(out_ref, "\tif strings.Contains({field_for_contains}, {go_val}) {{");
+                let condition = if is_nullable {
+                    format!("{field_expr} != nil && strings.Contains({field_for_contains}, {go_val})")
+                } else {
+                    format!("strings.Contains({field_for_contains}, {go_val})")
+                };
+                let _ = writeln!(out_ref, "\tif {condition} {{");
                 let _ = writeln!(
                     out_ref,
                     "\t\tt.Errorf(\"expected NOT to contain %s, got %v\", {go_val}, {field_expr})"
@@ -562,12 +564,13 @@ pub(super) fn render_assertion(
             // numeric scalar always carries a value in Go (there is no zero-length state
             // to detect), so the check degrades to a no-op, matching how `not_empty`
             // already treats "no meaningful check applies" for e.g. `not_error`.
-            let is_numeric_scalar = !is_optional && !field_is_array && numeric_scalar_fields.contains(resolved_field);
-            if is_optional && !field_is_array {
+            let is_numeric_scalar =
+                !field_is_pointer && !field_is_array && numeric_scalar_fields.contains(resolved_field);
+            if field_is_pointer && !field_is_array {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil {{");
-            } else if is_optional && field_is_slice {
+            } else if field_is_nullable && field_is_slice {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len({field_expr}) == 0 {{");
-            } else if is_optional {
+            } else if field_is_nullable {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len(*{field_expr}) == 0 {{");
             } else if is_numeric_scalar {
                 return;
@@ -585,11 +588,11 @@ pub(super) fn render_assertion(
             };
             let simple_scalar_result =
                 result_is_simple && !result_is_array && assertion.field.as_ref().is_none_or(|f| f.is_empty());
-            if simple_scalar_result || is_optional && !field_is_array {
+            if simple_scalar_result || field_is_pointer && !field_is_array {
                 let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-            } else if is_optional && field_is_slice {
+            } else if field_is_nullable && field_is_slice {
                 let _ = writeln!(out_ref, "\tif {field_expr} != nil && len({field_expr}) != 0 {{");
-            } else if is_optional {
+            } else if field_is_nullable {
                 let _ = writeln!(out_ref, "\tif {field_expr} != nil && len(*{field_expr}) != 0 {{");
             } else {
                 let _ = writeln!(out_ref, "\tif len({field_expr}) != 0 {{");
@@ -602,9 +605,8 @@ pub(super) fn render_assertion(
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);
                 let field_is_array = field_resolver.is_array(resolved_name);
-                let is_opt =
-                    is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
-                let field_for_contains = if is_opt && field_is_array {
+                let is_nullable = field_is_nullable;
+                let field_for_contains = if is_nullable && field_is_array {
                     format!("jsonString({field_expr})")
                 } else if field_is_pointer {
                     format!("string(*{field_expr})")
@@ -617,10 +619,12 @@ pub(super) fn render_assertion(
                 let _ = writeln!(out_ref, "\t\tfound := false");
                 for val in values {
                     let go_val = json_to_go(val);
-                    let _ = writeln!(
-                        out_ref,
-                        "\t\tif strings.Contains({field_for_contains}, {go_val}) {{ found = true }}"
-                    );
+                    let condition = if is_nullable {
+                        format!("{field_expr} != nil && strings.Contains({field_for_contains}, {go_val})")
+                    } else {
+                        format!("strings.Contains({field_for_contains}, {go_val})")
+                    };
+                    let _ = writeln!(out_ref, "\t\tif {condition} {{ found = true }}");
                 }
                 let _ = writeln!(out_ref, "\t\tif !found {{");
                 let _ = writeln!(
@@ -634,7 +638,7 @@ pub(super) fn render_assertion(
         "greater_than" => {
             if let Some(val) = &assertion.value {
                 let go_val = json_to_go(val);
-                if is_optional {
+                if field_is_nullable {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     if let Some(n) = val.as_u64() {
                         let next = n + 1;
@@ -669,7 +673,7 @@ pub(super) fn render_assertion(
                     let _ = writeln!(out_ref, "\t\t\tt.Errorf(\"expected < {go_val}, got %v\", {field_expr})");
                     let _ = writeln!(out_ref, "\t\t}}");
                     let _ = writeln!(out_ref, "\t}}");
-                } else if is_optional && !field_expr.starts_with("len(") {
+                } else if field_is_nullable && !field_expr.starts_with("len(") {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let _ = writeln!(out_ref, "\t\tif {deref_field_expr} >= {go_val} {{");
                     let _ = writeln!(
@@ -697,7 +701,7 @@ pub(super) fn render_assertion(
                     );
                     let _ = writeln!(out_ref, "\t\t}}");
                     let _ = writeln!(out_ref, "\t}}");
-                } else if is_optional && !field_expr.starts_with("len(") {
+                } else if field_is_nullable && !field_expr.starts_with("len(") {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let _ = writeln!(out_ref, "\t\tif {deref_field_expr} < {go_val} {{");
                     let _ = writeln!(
@@ -716,7 +720,7 @@ pub(super) fn render_assertion(
         "less_than_or_equal" => {
             if let Some(val) = &assertion.value {
                 let go_val = json_to_go(val);
-                if is_optional && !field_expr.starts_with("len(") {
+                if field_is_nullable && !field_expr.starts_with("len(") {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let _ = writeln!(out_ref, "\t\tif {deref_field_expr} > {go_val} {{");
                     let _ = writeln!(
@@ -754,7 +758,7 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if is_optional {
+                if field_is_nullable {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let len_expr = if field_is_slice {
                         format!("len({field_expr})")
@@ -778,7 +782,7 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if is_optional {
+                if field_is_nullable {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let len_expr = if field_is_slice {
                         format!("len({field_expr})")
@@ -806,6 +810,8 @@ pub(super) fn render_assertion(
                 // interpretation that holds for any T, matching the Rust backend's
                 // `.is_some()` convention for the same assertion type. ~keep
                 let _ = writeln!(out_ref, "\tassert.NotNil(t, {field_expr}, \"expected true (non-nil)\")");
+            } else if field_is_pointer {
+                let _ = writeln!(out_ref, "\tassert.True(t, {deref_field_expr}, \"expected true\")");
             } else {
                 let _ = writeln!(out_ref, "\tassert.True(t, {field_expr}, \"expected true\")");
             }
@@ -813,6 +819,8 @@ pub(super) fn render_assertion(
         "is_false" => {
             if is_optional {
                 let _ = writeln!(out_ref, "\tassert.Nil(t, {field_expr}, \"expected false (nil)\")");
+            } else if field_is_pointer {
+                let _ = writeln!(out_ref, "\tassert.False(t, {deref_field_expr}, \"expected false\")");
             } else {
                 let _ = writeln!(out_ref, "\tassert.False(t, {field_expr}, \"expected false\")");
             }
@@ -904,7 +912,7 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if is_optional {
+                if field_is_nullable {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let len_expr = if field_is_pointer {
                         format!("len(*{field_expr})")
@@ -933,7 +941,7 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if is_optional {
+                if field_is_nullable {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
                     let len_expr = if field_is_pointer {
                         format!("len(*{field_expr})")

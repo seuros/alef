@@ -25,7 +25,7 @@
 //! `OptionalityRule` carries which of those rules the target binding applies, and the NAPI arm
 //! calls the binding backend's own predicate so the two can never drift.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::codegen::shared::binding_fields;
 use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
@@ -98,76 +98,90 @@ pub(super) fn build_ir_result_field_map_with_enums(
         .map(|definition| definition.name.as_str())
         .collect();
 
-    let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut optional_fields: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut pointer_fields: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut declared_fields: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut unresolvable_named_fields: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut display_safe_fields: HashMap<String, HashSet<String>> = HashMap::new();
-
+    let names = GoFieldTypeNames {
+        structs: &struct_names,
+        enums: &enum_names,
+        passthrough_enums: &passthrough_enum_names,
+        data_enums: &data_enum_names,
+    };
+    let mut map = IrResultFieldMap::default();
     for type_def in type_defs {
         for field in binding_fields(&type_def.fields) {
-            declared_fields
-                .entry(type_def.name.clone())
-                .or_default()
-                .insert(field.name.clone());
-            if rule.applies_to(field, type_def) {
-                optional_fields
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone());
-            }
-            if crate::backends::go::go_struct_field_type(
-                type_def,
-                field,
-                &enum_names,
-                &passthrough_enum_names,
-                &data_enum_names,
-                &struct_names,
-            )
-            .starts_with('*')
-            {
-                pointer_fields
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone());
-            }
-            if type_ref_is_display_safe(&field.ty) {
-                display_safe_fields
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone());
-            }
-            let Some(named) = named_type(&field.ty) else {
-                continue;
-            };
-            if struct_names.contains(named) {
-                field_types
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone(), named.to_string());
-            } else {
-                // Names ANOTHER user type (not a scalar, `serde_json::Value`, or other type with
-                // no name at all -- those never reach this branch, `named_type` returned `None`
-                // for them above) that this crate's own struct list does not carry as a struct.
-                // The overwhelmingly common case is a tagged union. ~keep
-                unresolvable_named_fields
-                    .entry(type_def.name.clone())
-                    .or_default()
-                    .insert(field.name.clone());
-            }
+            record_ir_result_field(&mut map, type_def, field, rule, &names);
         }
     }
+    map
+}
 
-    IrResultFieldMap {
-        field_types,
-        optional_fields,
-        pointer_fields,
-        declared_fields,
-        unresolvable_named_fields,
-        display_safe_fields,
-        root_type: None,
+struct GoFieldTypeNames<'a> {
+    structs: &'a HashSet<&'a str>,
+    enums: &'a HashSet<&'a str>,
+    passthrough_enums: &'a HashSet<&'a str>,
+    data_enums: &'a HashSet<&'a str>,
+}
+
+fn record_ir_result_field(
+    map: &mut IrResultFieldMap,
+    type_def: &TypeDef,
+    field: &FieldDef,
+    rule: OptionalityRule,
+    names: &GoFieldTypeNames<'_>,
+) {
+    map.declared_fields
+        .entry(type_def.name.clone())
+        .or_default()
+        .insert(field.name.clone());
+    if rule.applies_to(field, type_def) {
+        map.optional_fields
+            .entry(type_def.name.clone())
+            .or_default()
+            .insert(field.name.clone());
     }
+    let go_type = crate::backends::go::go_struct_field_type(
+        type_def,
+        field,
+        names.enums,
+        names.passthrough_enums,
+        names.data_enums,
+        names.structs,
+    );
+    if go_type.starts_with('*') {
+        map.pointer_fields
+            .entry(type_def.name.clone())
+            .or_default()
+            .insert(field.name.clone());
+    }
+    record_ir_result_field_kind(map, type_def, field, names.structs);
+}
+
+fn record_ir_result_field_kind(
+    map: &mut IrResultFieldMap,
+    type_def: &TypeDef,
+    field: &FieldDef,
+    struct_names: &HashSet<&str>,
+) {
+    if type_ref_is_display_safe(&field.ty) {
+        map.display_safe_fields
+            .entry(type_def.name.clone())
+            .or_default()
+            .insert(field.name.clone());
+    }
+    let Some(named) = named_type(&field.ty) else {
+        return;
+    };
+    let target = if struct_names.contains(named) {
+        &mut map.field_types
+    } else {
+        map.unresolvable_named_fields
+            .entry(type_def.name.clone())
+            .or_default()
+            .insert(field.name.clone());
+        return;
+    };
+    target
+        .entry(type_def.name.clone())
+        .or_default()
+        .insert(field.name.clone(), named.to_string());
 }
 
 /// Whether `ty` is a Rust type alef can positively vouch for as implementing `Display`: a bare

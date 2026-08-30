@@ -238,18 +238,23 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             } else {
                 format!("json:\"{}\"", json_name)
             };
-            let go_field_type: String = if matches!(&field.ty, TypeRef::Bytes) {
-                "[]int".to_string()
-            } else if field.optional || use_default_pointer {
-                go_optional_field_type(field).to_string()
+            let auxiliary_field_type: Cow<'static, str> = if matches!(&field.ty, TypeRef::Bytes) {
+                Cow::Borrowed("[]int")
             } else {
-                go_field_type(field).to_string()
+                go_struct_field_type(
+                    typ,
+                    field,
+                    enum_names,
+                    passthrough_enum_names,
+                    data_enum_names,
+                    struct_names,
+                )
             };
             out.push_str(&crate::backends::go::template_env::render(
                 "struct_marshal_aux_field.jinja",
                 context! {
                     field_name => &go_field,
-                    field_type => &go_field_type,
+                    field_type => &auxiliary_field_type,
                     json_tag => &json_tag,
                 },
             ));

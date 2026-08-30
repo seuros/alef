@@ -31,12 +31,14 @@ pub(super) fn resolve_assertion_field_shape(
         .or_else(|| resolved.strip_suffix(".count"))
         .or_else(|| resolved.strip_suffix(".size"))
         .unwrap_or(resolved);
-    let is_optional = field_resolver.is_optional(check_path) && !optional_locals.contains_key(field);
+    let uses_plain_local = optional_locals.contains_key(field);
+    let is_optional = field_resolver.is_optional(check_path) && !uses_plain_local;
     let is_array_for_len = field_resolver.is_array(check_path);
     let is_slice = field_resolver.is_array(resolved);
-    let is_pointer = field_resolver
-        .target_field_is_pointer(check_path)
-        .unwrap_or(is_optional && !is_array_for_len);
+    let is_pointer = !uses_plain_local
+        && field_resolver
+            .target_field_is_pointer(check_path)
+            .unwrap_or(is_optional && !is_array_for_len);
 
     AssertionFieldShape {
         is_optional,
