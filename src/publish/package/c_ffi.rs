@@ -100,7 +100,13 @@ pub fn package_c_ffi(
 
 fn copy_required_headers(config: &ResolvedCrateConfig, ffi_crate_dir: &Path, include_dir: &Path) -> Result<()> {
     let source_dir = ffi_crate_dir.join("include");
-    for header_name in required_header_names(config)? {
+    let header_names = required_header_names(config)?;
+    for header_name in &header_names {
+        crate::core::config::abi_grammar::validate_c_header_filename(header_name)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("validating required C FFI header `{header_name}`"))?;
+    }
+    for header_name in header_names {
         let source = source_dir.join(&header_name);
         fs::copy(&source, include_dir.join(&header_name))
             .with_context(|| format!("copying required C FFI header {}", source.display()))?;
@@ -116,9 +122,6 @@ fn required_header_names(config: &ResolvedCrateConfig) -> Result<BTreeSet<String
     let e2e = config.e2e.as_ref().context("C e2e enabled without e2e config")?;
     for call in std::iter::once(&e2e.call).chain(e2e.calls.values()) {
         if let Some(header) = call.overrides.get("c").and_then(|override_| override_.header.as_ref()) {
-            crate::core::config::abi_grammar::validate_c_header_filename(header)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("validating required C e2e header `{header}`"))?;
             headers.insert(header.clone());
         }
     }
@@ -304,7 +307,35 @@ header = "sample.h"
         let error = copy_required_headers(&resolved, directory.path(), directory.path())
             .expect_err("package staging must validate active headers");
 
-        assert!(error.to_string().contains("validating required C e2e header"));
+        assert!(error.to_string().contains("validating required C FFI header"));
+        assert!(!directory.path().join("escape.h").exists());
+    }
+
+    #[test]
+    fn package_header_stage_rejects_mutated_canonical_header() {
+        let config: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+header_name = "sample.h"
+"#,
+        )
+        .expect("config parses");
+        let mut resolved = config.resolve().expect("valid config resolves").remove(0);
+        resolved.ffi.as_mut().unwrap().header_name = Some("../../escape.h".to_string());
+        let directory = TempDir::new().expect("temporary directory");
+
+        let error = copy_required_headers(&resolved, directory.path(), directory.path())
+            .expect_err("package staging must revalidate the canonical header");
+
+        assert!(error.to_string().contains("validating required C FFI header"));
         assert!(!directory.path().join("escape.h").exists());
     }
 }
