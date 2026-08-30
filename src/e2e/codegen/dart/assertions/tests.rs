@@ -498,7 +498,7 @@ mod tagged_union_assertion_tests {
                 name: "FormatMetadata".to_string(),
                 variants: vec![EnumVariant {
                     name: "Html".to_string(),
-                    fields: vec![field("0", TypeRef::Named("HtmlMetadata".to_string()))],
+                    fields: vec![field("_0", TypeRef::Named("HtmlMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -516,7 +516,7 @@ mod tagged_union_assertion_tests {
                 name: "DirectOuter".to_string(),
                 variants: vec![EnumVariant {
                     name: "Wrapped".to_string(),
-                    fields: vec![field("0", TypeRef::Named("DirectInner".to_string()))],
+                    fields: vec![field("_0", TypeRef::Named("DirectInner".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()
@@ -525,7 +525,7 @@ mod tagged_union_assertion_tests {
                 name: "DirectInner".to_string(),
                 variants: vec![EnumVariant {
                     name: "Value".to_string(),
-                    fields: vec![field("0", TypeRef::Named("StatsMetadata".to_string()))],
+                    fields: vec![field("_0", TypeRef::Named("StatsMetadata".to_string()))],
                     ..EnumVariant::default()
                 }],
                 ..EnumDef::default()

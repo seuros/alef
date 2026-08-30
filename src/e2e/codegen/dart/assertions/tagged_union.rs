@@ -95,8 +95,9 @@ fn dart_payload_accessor(field_resolver: &FieldResolver, owner: &str, path: &str
 }
 
 fn dart_union_payload_accessor(payload_field: &str) -> String {
-    if payload_field.starts_with(|character: char| character.is_ascii_digit()) {
-        dart_tuple_field_identifier(payload_field)
+    let tuple_index = payload_field.strip_prefix('_').unwrap_or(payload_field);
+    if !tuple_index.is_empty() && tuple_index.chars().all(|character| character.is_ascii_digit()) {
+        dart_tuple_field_identifier(tuple_index)
     } else {
         field_to_dart_accessor(payload_field)
     }
