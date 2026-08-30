@@ -47,7 +47,7 @@
 
 use super::optional_renderers::{push_key_field_name, push_key_index_suffix};
 use super::renderers::quoted_key_literal;
-use super::types::{PathSegment, PythonTypedDictMap};
+use super::types::{PathSegment, PythonMapValueEdges, PythonTypedDictMap};
 use std::collections::HashSet;
 
 /// Render a Python accessor expression, wrapping every point where the chain crosses an
@@ -63,12 +63,14 @@ pub(super) fn render_python_with_optionals(
     result_var: &str,
     optional_fields: &HashSet<String>,
     typeddict_map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
 ) -> String {
     render_python_with_optionals_from_owner(
         segments,
         result_var,
         optional_fields,
         typeddict_map,
+        map_value_edges,
         typeddict_map.root_type.clone(),
     )
 }
@@ -83,9 +85,17 @@ pub(super) fn render_python_element_with_optionals(
     element_var: &str,
     optional_fields: &HashSet<String>,
     typeddict_map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
     owner_type: Option<String>,
 ) -> String {
-    render_python_with_optionals_from_owner(segments, element_var, optional_fields, typeddict_map, owner_type)
+    render_python_with_optionals_from_owner(
+        segments,
+        element_var,
+        optional_fields,
+        typeddict_map,
+        map_value_edges,
+        owner_type,
+    )
 }
 
 fn render_python_with_optionals_from_owner(
@@ -93,6 +103,7 @@ fn render_python_with_optionals_from_owner(
     result_var: &str,
     optional_fields: &HashSet<String>,
     typeddict_map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
     owner_type: Option<String>,
 ) -> String {
     let last_index = segments.len().saturating_sub(1);
@@ -106,12 +117,14 @@ fn render_python_with_optionals_from_owner(
         push_key_index_suffix(&mut path_so_far, segment);
     }
 
-    let mut expression = render_python_accessor_from_owner(segments, result_var, typeddict_map, owner_type.clone());
+    let mut expression =
+        render_python_accessor_from_owner(segments, result_var, typeddict_map, map_value_edges, owner_type.clone());
     for &index in crossings.iter().rev() {
         let condition = render_python_accessor_from_owner(
             &field_only_prefix(segments, index),
             result_var,
             typeddict_map,
+            map_value_edges,
             owner_type.clone(),
         );
         expression = format!("({expression} if {condition} else None)");
@@ -126,8 +139,8 @@ fn render_python_with_optionals_from_owner(
 /// conditions [`PythonTypedDictMap::advance`] answers `None` for: an unresolved root, or a
 /// segment the map never recorded a traversal edge for. [`PythonTypedDictMap::is_typeddict`]
 /// treats `None` as "attribute access", the correct default for an opaque/native `#[pyclass]`
-/// element type. A `map[key]` hop advances through
-/// [`PythonTypedDictMap::advance_map_value`] instead, per [`advance_through_map_access`].
+/// element type. A `map[key]` hop advances through the resolver's private map-value edges instead,
+/// per [`advance_through_map_access`].
 ///
 /// ~keep `array_segments` must be parsed from the path the CONTAINER was actually rendered from
 /// (`FieldResolver::result_relative_path`, envelope projection applied), not from the raw fixture
@@ -136,6 +149,7 @@ fn render_python_with_optionals_from_owner(
 pub(super) fn python_element_owner_type(
     array_segments: &[PathSegment],
     typeddict_map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
 ) -> Option<String> {
     let mut current_type = typeddict_map.root_type.clone();
     for segment in array_segments {
@@ -144,7 +158,7 @@ pub(super) fn python_element_owner_type(
                 current_type = typeddict_map.advance(current_type.as_deref(), name);
             }
             PathSegment::MapAccess { field, .. } => {
-                current_type = advance_through_map_access(current_type, field, typeddict_map);
+                current_type = advance_through_map_access(current_type, field, map_value_edges);
             }
             PathSegment::Length => {}
         }
@@ -161,8 +175,16 @@ pub(super) fn python_element_owner_type(
 /// or foreign type), retaining the existing owner classification preserves the renderer's prior
 /// behaviour without pretending the IR derived a named target. The only owner this changes is
 /// the one the IR can actually derive.
-fn advance_through_map_access(current_type: Option<String>, field: &str, map: &PythonTypedDictMap) -> Option<String> {
-    let advanced = map.advance_map_value(current_type.as_deref(), field);
+fn advance_through_map_access(
+    current_type: Option<String>,
+    field: &str,
+    map_value_edges: &PythonMapValueEdges,
+) -> Option<String> {
+    let advanced = current_type
+        .as_deref()
+        .and_then(|owner| map_value_edges.get(owner))
+        .and_then(|fields| fields.get(field))
+        .cloned();
     advanced.or(current_type)
 }
 
@@ -177,8 +199,13 @@ fn advance_through_map_access(current_type: Option<String>, field: &str, map: &P
 /// `TypedDict` correctly switches back to attribute access at that link, and does not need a
 /// special case: the cursor just stops finding `is_typeddict(current_type) == true` for it.
 #[cfg(test)]
-pub(super) fn render_python_accessor(segments: &[PathSegment], result_var: &str, map: &PythonTypedDictMap) -> String {
-    render_python_accessor_from_owner(segments, result_var, map, map.root_type.clone())
+pub(super) fn render_python_accessor(
+    segments: &[PathSegment],
+    result_var: &str,
+    map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
+) -> String {
+    render_python_accessor_from_owner(segments, result_var, map, map_value_edges, map.root_type.clone())
 }
 
 /// `render_python_accessor`, but starting the owner-type cursor at `owner_type` instead of
@@ -188,6 +215,7 @@ fn render_python_accessor_from_owner(
     segments: &[PathSegment],
     result_var: &str,
     map: &PythonTypedDictMap,
+    map_value_edges: &PythonMapValueEdges,
     owner_type: Option<String>,
 ) -> String {
     let mut out = result_var.to_string();
@@ -211,7 +239,7 @@ fn render_python_accessor_from_owner(
                 // type here: everything after `extras[key]` belongs to the value, and classifying
                 // it against the type that merely OWNS `extras` answers a question about the
                 // wrong type. See [`advance_through_map_access`] for the no-edge case.
-                current_type = advance_through_map_access(current_type, field, map);
+                current_type = advance_through_map_access(current_type, field, map_value_edges);
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     let idx: usize = key.parse().unwrap_or(0);
                     out.push_str(&format!("[{idx}]"));
@@ -284,7 +312,7 @@ mod tests {
         let map = typeddict_map(&["ApiResult"], &[], "ApiResult");
         let segments = parse_path("status_code");
         assert_eq!(
-            render_python_accessor(&segments, "result", &map),
+            render_python_accessor(&segments, "result", &map, &PythonMapValueEdges::new()),
             r#"result["status_code"]"#
         );
     }
@@ -295,7 +323,10 @@ mod tests {
     fn a_scalar_field_on_a_non_typeddict_result_stays_attribute_access() {
         let map = PythonTypedDictMap::default();
         let segments = parse_path("status_code");
-        assert_eq!(render_python_accessor(&segments, "result", &map), "result.status_code");
+        assert_eq!(
+            render_python_accessor(&segments, "result", &map, &PythonMapValueEdges::new()),
+            "result.status_code"
+        );
     }
 
     /// A `TypedDict` result with an `Optional` field: the narrowing ternary's condition AND
@@ -307,7 +338,7 @@ mod tests {
         let optional: HashSet<String> = ["markdown".to_string()].into_iter().collect();
         let segments = parse_path("markdown");
         assert_eq!(
-            render_python_with_optionals(&segments, "result", &optional, &map),
+            render_python_with_optionals(&segments, "result", &optional, &map, &PythonMapValueEdges::new()),
             r#"result["markdown"]"#,
             "a crossing at the LAST segment needs no ternary guard"
         );
@@ -326,7 +357,7 @@ mod tests {
         let optional: HashSet<String> = ["markdown".to_string()].into_iter().collect();
         let segments = parse_path("markdown.content");
         assert_eq!(
-            render_python_with_optionals(&segments, "result", &optional, &map),
+            render_python_with_optionals(&segments, "result", &optional, &map, &PythonMapValueEdges::new()),
             r#"(result["markdown"]["content"] if result["markdown"] else None)"#
         );
     }
@@ -339,7 +370,7 @@ mod tests {
         let map = typeddict_map(&["ApiResult"], &[("ApiResult", "metadata", "Metadata")], "ApiResult");
         let segments = parse_path("metadata.title");
         assert_eq!(
-            render_python_accessor(&segments, "result", &map),
+            render_python_accessor(&segments, "result", &map, &PythonMapValueEdges::new()),
             r#"result["metadata"].title"#
         );
     }
@@ -352,7 +383,7 @@ mod tests {
         let map = typeddict_map(&["ApiResult"], &[], "ApiResult");
         let segments = parse_path("pages[0]");
         assert_eq!(
-            render_python_accessor(&segments, "result", &map),
+            render_python_accessor(&segments, "result", &map, &PythonMapValueEdges::new()),
             r#"result["pages"][0]"#
         );
     }
@@ -365,7 +396,7 @@ mod tests {
         let optional: HashSet<String> = ["choices[0].message.tool_calls".to_string()].into_iter().collect();
         let segments = parse_path("choices[0].message.tool_calls[0].function.name");
         assert_eq!(
-            render_python_with_optionals(&segments, "result", &optional, &map),
+            render_python_with_optionals(&segments, "result", &optional, &map, &PythonMapValueEdges::new()),
             "(result.choices[0].message.tool_calls[0].function.name if result.choices[0].message.tool_calls else None)"
         );
     }
@@ -386,7 +417,10 @@ mod tests {
             "Envelope",
         );
         let segments = parse_path("results[0].records");
-        assert_eq!(python_element_owner_type(&segments, &map), Some("Entry".to_string()));
+        assert_eq!(
+            python_element_owner_type(&segments, &map, &PythonMapValueEdges::new()),
+            Some("Entry".to_string())
+        );
     }
 
     /// An `ArrayField` segment advances by its field NAME; the index is list subscripting and
@@ -397,7 +431,7 @@ mod tests {
     fn element_owner_type_advances_through_an_indexed_segment_by_field_name() {
         let map = typeddict_map(&["Report"], &[("Report", "records", "Entry")], "Report");
         assert_eq!(
-            python_element_owner_type(&parse_path("records[0]"), &map),
+            python_element_owner_type(&parse_path("records[0]"), &map, &PythonMapValueEdges::new()),
             Some("Entry".to_string())
         );
     }
@@ -408,7 +442,10 @@ mod tests {
     #[test]
     fn element_owner_type_is_none_for_a_segment_with_no_recorded_edge() {
         let map = typeddict_map(&["Envelope"], &[("Envelope", "results", "Report")], "Envelope");
-        assert_eq!(python_element_owner_type(&parse_path("records"), &map), None);
+        assert_eq!(
+            python_element_owner_type(&parse_path("records"), &map, &PythonMapValueEdges::new()),
+            None
+        );
     }
 
     /// An unresolved root type yields `None` rather than guessing: `advance` short-circuits on a
@@ -416,14 +453,24 @@ mod tests {
     #[test]
     fn element_owner_type_is_none_when_the_root_type_is_unresolved() {
         let map = PythonTypedDictMap::default();
-        assert_eq!(python_element_owner_type(&parse_path("results.records"), &map), None);
+        assert_eq!(
+            python_element_owner_type(&parse_path("results.records"), &map, &PythonMapValueEdges::new()),
+            None
+        );
     }
 
-    fn with_map_values(mut map: PythonTypedDictMap, edges: &[(&str, &str, &str)]) -> PythonTypedDictMap {
-        for (owner, field, target) in edges {
-            map.record_map_value(owner, field, target);
+    fn with_map_values(
+        map: PythonTypedDictMap,
+        values: &[(&str, &str, &str)],
+    ) -> (PythonTypedDictMap, PythonMapValueEdges) {
+        let mut edges = PythonMapValueEdges::new();
+        for (owner, field, target) in values {
+            edges
+                .entry(owner.to_string())
+                .or_default()
+                .insert(field.to_string(), target.to_string());
         }
-        map
+        (map, edges)
     }
 
     /// DIRECTION ONE — the map's VALUE is a `TypedDict` while the struct that OWNS the map is not.
@@ -436,12 +483,12 @@ mod tests {
     /// fixture where both agree cannot tell the fixed renderer from the broken one.
     #[test]
     fn a_typeddict_map_value_under_a_non_typeddict_owner_is_subscripted() {
-        let map = with_map_values(
+        let (map, edges) = with_map_values(
             typeddict_map(&["Meta"], &[], "Report"),
             &[("Report", "entries", "Meta")],
         );
         assert_eq!(
-            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map, &edges),
             r#"result.entries.get("alpha")["title"]"#
         );
     }
@@ -457,12 +504,12 @@ mod tests {
     /// exist.
     #[test]
     fn a_native_map_value_under_a_typeddict_owner_uses_attribute_access() {
-        let map = with_map_values(
+        let (map, edges) = with_map_values(
             typeddict_map(&["ApiResult"], &[], "ApiResult"),
             &[("ApiResult", "entries", "Meta")],
         );
         assert_eq!(
-            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map, &edges),
             r#"result["entries"].get("alpha").title"#
         );
     }
@@ -473,12 +520,12 @@ mod tests {
     /// starts answering `None` for a derived map value is caught here rather than in a consumer.
     #[test]
     fn a_typeddict_map_value_under_a_typeddict_owner_stays_subscripted() {
-        let map = with_map_values(
+        let (map, edges) = with_map_values(
             typeddict_map(&["ApiResult", "Meta"], &[], "ApiResult"),
             &[("ApiResult", "entries", "Meta")],
         );
         assert_eq!(
-            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map),
+            render_python_accessor(&parse_path("entries[alpha].title"), "result", &map, &edges),
             r#"result["entries"].get("alpha")["title"]"#
         );
     }
@@ -493,7 +540,12 @@ mod tests {
     fn a_map_with_no_recorded_value_edge_retains_the_owner_classification() {
         let map = typeddict_map(&["ApiResult"], &[], "ApiResult");
         assert_eq!(
-            render_python_accessor(&parse_path("extras[alpha].title"), "result", &map),
+            render_python_accessor(
+                &parse_path("extras[alpha].title"),
+                "result",
+                &map,
+                &PythonMapValueEdges::new(),
+            ),
             r#"result["extras"].get("alpha")["title"]"#
         );
     }
@@ -506,7 +558,7 @@ mod tests {
     /// "attribute access" for every element of every map-nested container.
     #[test]
     fn element_owner_type_advances_through_a_map_access_segment() {
-        let map = with_map_values(
+        let (map, edges) = with_map_values(
             typeddict_map(
                 &["Envelope", "Report", "Entry"],
                 &[("Report", "records", "Entry")],
@@ -515,7 +567,7 @@ mod tests {
             &[("Envelope", "reports", "Report")],
         );
         assert_eq!(
-            python_element_owner_type(&parse_path("reports[alpha].records"), &map),
+            python_element_owner_type(&parse_path("reports[alpha].records"), &map, &edges),
             Some("Entry".to_string())
         );
     }
@@ -525,12 +577,12 @@ mod tests {
     /// before, and a map-value edge on the same owner name does not answer for them.
     #[test]
     fn element_owner_type_ignores_map_value_edges_for_plain_field_hops() {
-        let map = with_map_values(
+        let (map, edges) = with_map_values(
             typeddict_map(&["Envelope"], &[("Envelope", "results", "Report")], "Envelope"),
             &[("Envelope", "results", "Decoy")],
         );
         assert_eq!(
-            python_element_owner_type(&parse_path("results[0]"), &map),
+            python_element_owner_type(&parse_path("results[0]"), &map, &edges),
             Some("Report".to_string()),
             "a field hop never reads the internal map-value edge namespace"
         );

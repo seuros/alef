@@ -1,10 +1,10 @@
 use super::super::ir_collection::build_ir_collection_map;
 use super::super::ir_enum::build_ir_enum_map;
 use super::super::ir_result_fields::{OptionalityRule, build_ir_result_field_map, is_optional_path};
-use super::super::python_typeddict::build_python_typeddict_map;
+use super::super::python_typeddict::{build_python_typeddict_facts, build_python_typeddict_map};
 use super::super::types::{
-    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, PythonTypedDictMap,
-    SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, PythonTypedDictFacts,
+    PythonTypedDictMap, SwiftFirstClassMap,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -103,6 +103,7 @@ impl FieldResolver {
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
+            python_map_value_edges: HashMap::new(),
         }
     }
 
@@ -142,6 +143,7 @@ impl FieldResolver {
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
+            python_map_value_edges: HashMap::new(),
         }
     }
 
@@ -191,6 +193,7 @@ impl FieldResolver {
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
+            python_map_value_edges: HashMap::new(),
         }
     }
 
@@ -246,6 +249,7 @@ impl FieldResolver {
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
+            python_map_value_edges: HashMap::new(),
         }
     }
 
@@ -285,6 +289,7 @@ impl FieldResolver {
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
+            python_map_value_edges: HashMap::new(),
         }
     }
 
@@ -392,6 +397,16 @@ impl FieldResolver {
         build_python_typeddict_map(type_defs, output_style, reexported_types)
     }
 
+    /// Compute the complete internal Python accessor facts, including map-value traversal edges
+    /// that are intentionally absent from the public [`PythonTypedDictMap`] representation.
+    pub(crate) fn python_typeddict_facts(
+        type_defs: &[crate::core::ir::TypeDef],
+        output_style: crate::core::config::PythonDtoStyle,
+        reexported_types: &[String],
+    ) -> PythonTypedDictFacts {
+        build_python_typeddict_facts(type_defs, output_style, reexported_types)
+    }
+
     /// Attach the Python `TypedDict` classification to this resolver, anchored at `root_type` —
     /// the IR type name backing the current call's result variable, if resolved.
     ///
@@ -405,6 +420,21 @@ impl FieldResolver {
     pub fn with_python_typeddict_map(mut self, mut map: PythonTypedDictMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.python_typeddict_map = map;
+        self.python_map_value_edges.clear();
+        self
+    }
+
+    /// Attach complete internally generated Python accessor facts and anchor them to one call's
+    /// declared result type. Existing callers that attach only a public [`PythonTypedDictMap`]
+    /// retain their previous behavior and cannot inject or observe private map-value edges.
+    pub(crate) fn with_python_typeddict_facts(
+        mut self,
+        mut facts: PythonTypedDictFacts,
+        root_type: Option<String>,
+    ) -> Self {
+        facts.typeddict_map.root_type = root_type;
+        self.python_typeddict_map = facts.typeddict_map;
+        self.python_map_value_edges = facts.map_value_edges;
         self
     }
 

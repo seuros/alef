@@ -149,6 +149,13 @@ pub struct FieldResolver {
     /// type, which is exactly the pre-existing behaviour (attribute access everywhere) for any
     /// resolver built before this map existed.
     pub(super) python_typeddict_map: PythonTypedDictMap,
+    /// IR-derived owner transitions for one key access through a map-typed Python field.
+    ///
+    /// ~keep This stays separate from [`PythonTypedDictMap::field_types`]: that map is public API
+    /// and represents ordinary field hops, while these edges describe a different operation and
+    /// must not become observable through the pre-0.79.3 public map shape. Only the Python
+    /// accessor renderer consumes this resolver-private metadata.
+    pub(super) python_map_value_edges: PythonMapValueEdges,
 }
 
 /// IR field facts keyed by owner type and anchored at the type a specific call returns, so a
@@ -492,23 +499,12 @@ impl SwiftFirstClassMap {
 ///   subscript access for fields on this type".
 /// * `field_types[type_name][field_name]` — the IR-resolved `Named` type that `field_name`
 ///   traverses into (seeing through `Option`/`Vec`, matching `ir_enum`/`ir_collection`).
-/// * Map-value traversal edges share `field_types`' storage under an internal NUL-prefixed key.
-///   Rust field identifiers cannot contain NUL, so a plain field hop and a map key hop remain
-///   collision-free while the public struct shape stays source-compatible. `extras` on
-///   `HashMap<String, Meta>` is a `dict` after a field hop and a `Meta` only after a key hop;
-///   [`Self::advance_map_value`] is the only reader of that internal namespace. ~keep
 /// * `root_type` — the IR type name backing the result variable.
 #[derive(Debug, Clone, Default)]
 pub struct PythonTypedDictMap {
     pub typeddict_types: HashSet<String>,
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub root_type: Option<String>,
-}
-
-const MAP_VALUE_EDGE_PREFIX: &str = "\0map-value:";
-
-fn map_value_edge_key(field_name: &str) -> String {
-    format!("{MAP_VALUE_EDGE_PREFIX}{field_name}")
 }
 
 impl PythonTypedDictMap {
@@ -531,31 +527,21 @@ impl PythonTypedDictMap {
         self.field_types.get(owner).and_then(|m| m.get(field_name).cloned())
     }
 
-    /// Returns the IR `Named` type one KEY access into map-typed `field_name` lands on, or `None`
-    /// when the field is not a map, its values name no IR type, or the owner is unknown.
-    ///
-    /// `None` here means "the IR cannot judge what a key access lands on", NOT "the value is not a
-    /// `TypedDict`" — the two are different answers, and the MapAccess renderer keeps its previous
-    /// owner rather than substituting `is_typeddict(None)`'s attribute-access default for a fact
-    /// it never derived. ~keep
-    pub(crate) fn advance_map_value(&self, owner_type: Option<&str>, field_name: &str) -> Option<String> {
-        let owner = owner_type?;
-        self.field_types
-            .get(owner)
-            .and_then(|fields| fields.get(&map_value_edge_key(field_name)).cloned())
-    }
-
-    pub(crate) fn record_map_value(&mut self, owner_type: &str, field_name: &str, target_type: &str) {
-        self.field_types
-            .entry(owner_type.to_string())
-            .or_default()
-            .insert(map_value_edge_key(field_name), target_type.to_string());
-    }
-
     /// True when no per-type information is recorded.
     pub fn is_empty(&self) -> bool {
         self.typeddict_types.is_empty() && self.field_types.is_empty()
     }
+}
+
+pub(crate) type PythonMapValueEdges = HashMap<String, HashMap<String, String>>;
+
+/// Internal, reusable Python accessor facts built once from a crate's IR and anchored per call.
+/// Its fields are deliberately unavailable outside Alef even though [`PythonTypedDictMap`] stays
+/// publicly constructible for source compatibility.
+#[derive(Clone, Default)]
+pub(crate) struct PythonTypedDictFacts {
+    pub(super) typeddict_map: PythonTypedDictMap,
+    pub(super) map_value_edges: PythonMapValueEdges,
 }
 
 /// Dart opaque type classification + chain-resolution metadata, mirroring

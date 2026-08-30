@@ -107,8 +107,8 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     )
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
-    .with_python_typeddict_map(
-        FieldResolver::python_typeddict_fields(type_defs, config.dto.python_output_style(), reexported_types),
+    .with_python_typeddict_facts(
+        FieldResolver::python_typeddict_facts(type_defs, config.dto.python_output_style(), reexported_types),
         call_root_type.clone(),
     )
     .with_ir_result_fields(

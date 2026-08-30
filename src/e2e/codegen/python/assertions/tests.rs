@@ -128,8 +128,8 @@ fn map_owner_type_defs() -> Vec<TypeDef> {
 }
 
 fn production_map_resolver(reexported_types: &[String]) -> FieldResolver {
-    empty_resolver().with_python_typeddict_map(
-        FieldResolver::python_typeddict_fields(&map_owner_type_defs(), PythonDtoStyle::TypedDict, reexported_types),
+    empty_resolver().with_python_typeddict_facts(
+        FieldResolver::python_typeddict_facts(&map_owner_type_defs(), PythonDtoStyle::TypedDict, reexported_types),
         Some("Report".to_string()),
     )
 }

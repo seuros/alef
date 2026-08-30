@@ -85,7 +85,11 @@ impl FieldResolver {
     pub fn python_element_accessor(&self, element_path: &str, array_path: &str, element_var: &str) -> String {
         let array_effective = self.result_relative_path(array_path);
         let array_segments = parse_path(&array_effective);
-        let owner_type = python_element_owner_type(&array_segments, &self.python_typeddict_map);
+        let owner_type = python_element_owner_type(
+            &array_segments,
+            &self.python_typeddict_map,
+            &self.python_map_value_edges,
+        );
 
         let effective = self.resolve(element_path);
         let segments = parse_path(effective);
@@ -95,6 +99,7 @@ impl FieldResolver {
             element_var,
             &self.optional_fields,
             &self.python_typeddict_map,
+            &self.python_map_value_edges,
             owner_type,
         )
     }
@@ -159,9 +164,13 @@ impl FieldResolver {
             "php" if !self.php_getter_map.is_empty() => {
                 render_php_with_getters(&segments, result_var, &self.php_getter_map, &self.optional_fields)
             }
-            "python" => {
-                render_python_with_optionals(&segments, result_var, &self.optional_fields, &self.python_typeddict_map)
-            }
+            "python" => render_python_with_optionals(
+                &segments,
+                result_var,
+                &self.optional_fields,
+                &self.python_typeddict_map,
+                &self.python_map_value_edges,
+            ),
             _ => render_accessor(&segments, language, result_var),
         }
     }

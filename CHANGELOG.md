@@ -59,9 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type. `extras[key].title` previously classified `title` against the struct that owns `extras`,
   so a map of `TypedDict` values under a non-`TypedDict` owner rendered `.title` on a plain
   `dict`, and a map of native `#[pyclass]` values under a `TypedDict` owner rendered `["title"]`
-  on an unsubscriptable object. The map's value type is now recorded as its own traversal edge
-  (`PythonTypedDictMap::map_value_types`), so the classification is derived rather than inherited;
-  a map whose values name no IR type still keeps the previous owner, since nothing was derived.
+  on an unsubscriptable object. The map's value type is now recorded as a private resolver
+  traversal edge, so the classification is derived rather than inherited; a map whose values
+  name no IR type still keeps the previous owner, since nothing was derived.
 - Resolve the Python wildcard element's `TypedDict`-vs-attribute owner from the same
   result-relative path the container half is rendered from. On an envelope-projected container
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the

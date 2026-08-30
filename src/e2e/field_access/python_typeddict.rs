@@ -19,7 +19,7 @@ use crate::core::config::PythonDtoStyle;
 use crate::core::ir::TypeDef;
 use crate::e2e::codegen::call_ir::{map_value_named_type, named_type};
 
-use super::types::PythonTypedDictMap;
+use super::types::{PythonMapValueEdges, PythonTypedDictFacts, PythonTypedDictMap};
 
 /// Build the `TypedDict`-membership set and `(type, field) -> next type` traversal edges
 /// [`PythonTypedDictMap`] needs, by inspecting every `TypeDef` this crate declares.
@@ -39,37 +39,45 @@ use super::types::PythonTypedDictMap;
 /// `extras[key]` actually is. The map's VALUE type is recorded as its own edge so that question
 /// has a derived answer instead of a retained one. The two edge sets stay separate because they
 /// answer different hops — see [`PythonTypedDictMap`].
-pub(super) fn build_python_typeddict_map(
+pub(super) fn build_python_typeddict_facts(
     type_defs: &[TypeDef],
     output_style: PythonDtoStyle,
     reexported_types: &[String],
-) -> PythonTypedDictMap {
+) -> PythonTypedDictFacts {
     let struct_names: HashSet<&str> = type_defs.iter().map(|t| t.name.as_str()).collect();
     let reexported: ahash::AHashSet<&str> = reexported_types.iter().map(String::as_str).collect();
 
-    let mut map = PythonTypedDictMap::default();
+    let mut facts = PythonTypedDictFacts::default();
 
     for type_def in type_defs {
         if type_def.is_return_type && is_dataclass_backed_config(type_def, output_style, &reexported) {
-            map.typeddict_types.insert(type_def.name.clone());
+            facts.typeddict_map.typeddict_types.insert(type_def.name.clone());
         }
         for field in &type_def.fields {
             record_edge(
-                &mut map.field_types,
+                &mut facts.typeddict_map.field_types,
                 type_def,
                 field,
                 named_type(&field.ty),
                 &struct_names,
             );
-            record_map_value_edge(&mut map, type_def, field, &struct_names);
+            record_map_value_edge(&mut facts.map_value_edges, type_def, field, &struct_names);
         }
     }
 
-    map
+    facts
+}
+
+pub(super) fn build_python_typeddict_map(
+    type_defs: &[TypeDef],
+    output_style: PythonDtoStyle,
+    reexported_types: &[String],
+) -> PythonTypedDictMap {
+    build_python_typeddict_facts(type_defs, output_style, reexported_types).typeddict_map
 }
 
 fn record_map_value_edge(
-    map: &mut PythonTypedDictMap,
+    edges: &mut PythonMapValueEdges,
     type_def: &TypeDef,
     field: &crate::core::ir::FieldDef,
     struct_names: &HashSet<&str>,
@@ -78,7 +86,7 @@ fn record_map_value_edge(
         return;
     };
     if struct_names.contains(named) {
-        map.record_map_value(&type_def.name, &field.name, named);
+        record_edge(edges, type_def, field, Some(named), struct_names);
     }
 }
 
@@ -184,13 +192,17 @@ mod tests {
     /// the internal map-value namespace empty and the renderer with nothing to advance to.
     #[test]
     fn a_map_valued_field_records_the_value_type_as_a_map_value_edge() {
-        let map = build_python_typeddict_map(
+        let facts = build_python_typeddict_facts(
             &map_field_type_defs(string_map(TypeRef::Named("Metadata".to_string()))),
             PythonDtoStyle::TypedDict,
             &[],
         );
         assert_eq!(
-            map.advance_map_value(Some("ParseOutput"), "extras").as_deref(),
+            facts
+                .map_value_edges
+                .get("ParseOutput")
+                .and_then(|fields| fields.get("extras"))
+                .map(String::as_str),
             Some("Metadata")
         );
     }
@@ -218,15 +230,18 @@ mod tests {
             TypeRef::Vec(Box::new(named())),
             TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(named())))),
         ] {
-            let map = build_python_typeddict_map(&map_field_type_defs(wrapped), PythonDtoStyle::TypedDict, &[]);
+            let facts = build_python_typeddict_facts(&map_field_type_defs(wrapped), PythonDtoStyle::TypedDict, &[]);
             assert_eq!(
-                map.field_types.get("ParseOutput").and_then(|f| f.get("extras")),
+                facts
+                    .typeddict_map
+                    .field_types
+                    .get("ParseOutput")
+                    .and_then(|f| f.get("extras")),
                 Some(&"Metadata".to_string()),
                 "an Option/Vec of a named type is still a plain traversal edge"
             );
-            assert_eq!(
-                map.advance_map_value(Some("ParseOutput"), "extras"),
-                None,
+            assert!(
+                facts.map_value_edges.is_empty(),
                 "an Option/Vec of a named type is not a map and traverses no key access"
             );
         }
@@ -237,11 +252,11 @@ mod tests {
     /// target.
     #[test]
     fn a_map_of_scalars_records_no_map_value_edge() {
-        let map = build_python_typeddict_map(
+        let facts = build_python_typeddict_facts(
             &map_field_type_defs(string_map(TypeRef::String)),
             PythonDtoStyle::TypedDict,
             &[],
         );
-        assert_eq!(map.advance_map_value(Some("ParseOutput"), "extras"), None);
+        assert!(facts.map_value_edges.is_empty());
     }
 }
