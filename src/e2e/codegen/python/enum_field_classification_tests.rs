@@ -19,7 +19,7 @@ use crate::core::ir::{EnumDef, EnumVariant, FieldDef, FunctionDef, TypeDef, Type
 use crate::e2e::config::{CallConfig, E2eConfig};
 use crate::e2e::fixture::{Assertion, Fixture};
 
-use super::test_function::render_test_function;
+use super::test_function::{RenderTestFunctionContext, render_test_function};
 
 /// The `_alef_e2e_text(...)` serde-wire coercion helper Python wraps enum-typed fields in
 /// before comparing against the fixture's wire-format expected value — the generated-code
@@ -132,24 +132,28 @@ fn render(
     functions: &[FunctionDef],
 ) -> String {
     let mut out = String::new();
-    render_test_function(
-        &mut out,
-        fixture,
+    let config = ResolvedCrateConfig::default();
+    let enum_fields = std::collections::HashMap::new();
+    let handle_nested_types = std::collections::HashMap::new();
+    let handle_dict_types = std::collections::HashSet::new();
+    let convertible_types = ahash::AHashSet::new();
+    let context = RenderTestFunctionContext {
         e2e_config,
-        &ResolvedCrateConfig::default(),
+        config: &config,
         type_defs,
         enums,
         functions,
-        &[],
-        None,
-        "kwargs",
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashSet::new(),
-        false,
-        &ahash::AHashSet::new(),
-        false,
-    );
+        errors: &[],
+        options_type: None,
+        options_via: "kwargs",
+        enum_fields: &enum_fields,
+        handle_nested_types: &handle_nested_types,
+        handle_dict_types: &handle_dict_types,
+        force_bind_result: false,
+        convertible_types: &convertible_types,
+        crate_has_serde: false,
+    };
+    render_test_function(&mut out, fixture, context);
     out
 }
 
