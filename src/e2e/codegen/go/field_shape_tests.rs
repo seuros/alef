@@ -10,10 +10,7 @@ use super::assertion_field_shape::resolve_assertion_field_shape;
 use super::test_function::{GoTestFunctionContext, render_test_function};
 
 fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
-    let Ok(go) = which::which("go") else {
-        eprintln!("Go compiler unavailable; skipping rendered assertion compile fixture");
-        return;
-    };
+    let go = which::which("go").expect("Go is required for rendered assertion compile fixtures");
     let directory = tempfile::tempdir().expect("create generated Go fixture");
     std::fs::write(
         directory.path().join("go.mod"),

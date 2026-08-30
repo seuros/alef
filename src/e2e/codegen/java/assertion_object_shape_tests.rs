@@ -26,12 +26,16 @@ fn envelope_types(ty: TypeRef, optional: bool) -> Vec<TypeDef> {
 }
 
 fn envelope_resolver(types: &[TypeDef], optional: bool, array: bool) -> FieldResolver {
-    let optional_fields = optional
-        .then(|| HashSet::from(["details".to_string()]))
-        .unwrap_or_default();
-    let array_fields = array
-        .then(|| HashSet::from(["details".to_string()]))
-        .unwrap_or_default();
+    let optional_fields = if optional {
+        HashSet::from(["details".to_string()])
+    } else {
+        HashSet::new()
+    };
+    let array_fields = if array {
+        HashSet::from(["details".to_string()])
+    } else {
+        HashSet::new()
+    };
     FieldResolver::new(
         &HashMap::new(),
         &optional_fields,

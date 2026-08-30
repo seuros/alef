@@ -4,11 +4,8 @@ use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 
 use super::gen_struct_type;
 
-fn go_compile(generated: &str, declarations: &str) -> Option<std::process::Output> {
-    let Ok(go) = which::which("go") else {
-        eprintln!("Go compiler unavailable; skipping generated-Go compile fixture");
-        return None;
-    };
+fn go_compile(generated: &str, declarations: &str) -> std::process::Output {
+    let go = which::which("go").expect("Go is required for generated-Go compile fixtures");
     let directory = tempfile::tempdir().expect("create Go compile fixture");
     std::fs::write(directory.path().join("go.mod"), "module example.com/shape\n\ngo 1.24\n").expect("write Go module");
     std::fs::write(
@@ -16,20 +13,16 @@ fn go_compile(generated: &str, declarations: &str) -> Option<std::process::Outpu
         format!("package shape\n\nimport \"encoding/json\"\n\n{declarations}\n{generated}"),
     )
     .expect("write generated Go source");
-    Some(
-        std::process::Command::new(go)
-            .arg("test")
-            .arg("./...")
-            .current_dir(directory.path())
-            .output()
-            .expect("run Go compiler"),
-    )
+    std::process::Command::new(go)
+        .arg("test")
+        .arg("./...")
+        .current_dir(directory.path())
+        .output()
+        .expect("run Go compiler")
 }
 
 fn assert_go_compiles(generated: &str, declarations: &str) {
-    let Some(output) = go_compile(generated, declarations) else {
-        return;
-    };
+    let output = go_compile(generated, declarations);
     assert!(
         output.status.success(),
         "generated Go failed to compile:\n{}\n{generated}",
@@ -39,9 +32,7 @@ fn assert_go_compiles(generated: &str, declarations: &str) {
 
 #[test]
 fn generated_go_compile_check_rejects_broken_source() {
-    let Some(output) = go_compile("func broken() { missingSymbol() }", "") else {
-        return;
-    };
+    let output = go_compile("func broken() { missingSymbol() }", "");
     assert!(!output.status.success(), "compile control unexpectedly passed");
 }
 
