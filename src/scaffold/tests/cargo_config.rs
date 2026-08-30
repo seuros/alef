@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::config::{ScaffoldCargo, ScaffoldCargoEnvValue};
+use crate::scaffold::languages::STALE_WASM_CARGO_CONFIG;
 
 fn cargo_only_config(cargo: ScaffoldCargo) -> ResolvedCrateConfig {
     let mut cfg = test_config();

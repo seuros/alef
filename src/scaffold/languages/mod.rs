@@ -40,9 +40,11 @@ pub(crate) use python::{scaffold_python, scaffold_python_cargo};
 pub(crate) use r::{scaffold_r, scaffold_r_cargo};
 pub(crate) use ruby::{ruby_native_manifest_path, scaffold_ruby, scaffold_ruby_cargo};
 pub(crate) use swift::{migrate_swift_placeholder_test, scaffold_swift};
+#[cfg(test)]
+pub(crate) use wasm::STALE_WASM_CARGO_CONFIG;
 pub(crate) use wasm::{
-    STALE_WASM_CARGO_CONFIG, migrate_wasm_cargo_config_allow_multiple_definition, migrate_wasm_package_json,
-    scaffold_wasm, wasm_cargo_config_file,
+    migrate_wasm_cargo_config_allow_multiple_definition, migrate_wasm_package_json, scaffold_wasm,
+    wasm_cargo_config_file,
 };
 pub(crate) use zig::scaffold_zig;
 pub(crate) use zig_migrations::{

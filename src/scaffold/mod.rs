@@ -38,8 +38,8 @@ pub(crate) use manifest_header::{
     detect_workspace_inheritance_for_crate, readme_language_configured,
 };
 
-pub use text_helpers::{parse_author, xml_escape};
 pub(crate) use text_helpers::capitalize_first;
+pub use text_helpers::{parse_author, xml_escape};
 
 pub(crate) use cargo_deps::{
     dependency_sort_key, join_sorted_target_dep_blocks, render_core_dep, render_core_dep_with_overrides,
@@ -98,11 +98,10 @@ pub fn scaffold(
 }
 
 use languages::{
-    STALE_WASM_CARGO_CONFIG, scaffold_csharp, scaffold_dart, scaffold_elixir, scaffold_elixir_cargo, scaffold_ffi,
-    scaffold_gleam, scaffold_go, scaffold_java, scaffold_jni, scaffold_kotlin, scaffold_node, scaffold_node_cargo,
-    scaffold_php, scaffold_php_cargo, scaffold_poly_config, scaffold_python, scaffold_python_cargo, scaffold_r,
-    scaffold_r_cargo, scaffold_ruby, scaffold_ruby_cargo, scaffold_swift, scaffold_wasm, scaffold_zig,
-    wasm_cargo_config_file,
+    scaffold_csharp, scaffold_dart, scaffold_elixir, scaffold_elixir_cargo, scaffold_ffi, scaffold_gleam, scaffold_go,
+    scaffold_java, scaffold_jni, scaffold_kotlin, scaffold_node, scaffold_node_cargo, scaffold_php, scaffold_php_cargo,
+    scaffold_poly_config, scaffold_python, scaffold_python_cargo, scaffold_r, scaffold_r_cargo, scaffold_ruby,
+    scaffold_ruby_cargo, scaffold_swift, scaffold_wasm, scaffold_zig, wasm_cargo_config_file,
 };
 
 fn scaffold_language(
