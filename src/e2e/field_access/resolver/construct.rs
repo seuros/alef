@@ -429,6 +429,7 @@ impl FieldResolver {
         build_ir_result_field_map(type_defs, OptionalityRule::for_language(language))
     }
 
+    #[cfg(test)]
     pub(crate) fn ir_result_field_facts_with_enums(
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
@@ -438,6 +439,19 @@ impl FieldResolver {
             type_defs,
             enums,
             OptionalityRule::for_language(language),
+        )
+    }
+
+    pub(crate) fn go_ir_result_field_facts(
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        excluded_names: &HashSet<String>,
+    ) -> IrResultFieldMap {
+        super::super::ir_result_fields::build_go_ir_result_field_map(
+            type_defs,
+            enums,
+            OptionalityRule::DeclaredType,
+            excluded_names,
         )
     }
 

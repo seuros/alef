@@ -17,6 +17,7 @@ use super::E2eCodegen;
 use super::client;
 
 mod assertion_field_shape;
+mod assertion_render_helpers;
 
 #[cfg(test)]
 mod field_shape_tests;

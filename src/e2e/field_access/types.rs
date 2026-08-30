@@ -187,6 +187,7 @@ pub struct IrResultFieldMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub optional_fields: HashMap<String, HashSet<String>>,
     pub pointer_fields: HashMap<String, HashSet<String>>,
+    pub data_interface_fields: HashMap<String, HashSet<String>>,
     pub declared_fields: HashMap<String, HashSet<String>>,
     pub unresolvable_named_fields: HashMap<String, HashSet<String>>,
     pub display_safe_fields: HashMap<String, HashSet<String>>,

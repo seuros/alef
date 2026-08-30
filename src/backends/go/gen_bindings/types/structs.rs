@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use minijinja::context;
 
-use crate::backends::go::type_map::{go_field_type, go_optional_field_type, go_type};
+use crate::backends::go::type_map::{go_field_type, go_optional_field_type};
 use crate::codegen::c_consumer;
 use crate::codegen::naming::{go_type_name, to_go_name, wire_field_name};
 use crate::codegen::shared::binding_fields;
@@ -62,7 +62,8 @@ pub(crate) fn go_struct_field_type(
     struct_names: &std::collections::HashSet<&str>,
 ) -> Cow<'static, str> {
     let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
-    let is_sealed_interface = matches!(&field.ty, TypeRef::Named(name) if data_enum_names.contains(name.as_str()));
+    let named_type = direct_named_field_type(&field.ty);
+    let is_sealed_interface = named_type.is_some_and(|name| data_enum_names.contains(name));
     let is_unresolved_named = matches!(&field.ty, TypeRef::Named(name)
         if !enum_names.contains(name.as_str())
             && !passthrough_enum_names.contains(name.as_str())
@@ -71,13 +72,54 @@ pub(crate) fn go_struct_field_type(
 
     if is_unresolved_named {
         Cow::Borrowed("*json.RawMessage")
-    } else if is_sealed_interface {
-        go_type(&field.ty)
+    } else if let Some(name) = named_type.filter(|_| is_sealed_interface) {
+        Cow::Owned(go_type_name(name))
     } else if field.optional || use_default_pointer {
         go_optional_field_type(field)
     } else {
         go_field_type(field)
     }
+}
+
+fn direct_named_field_type(field_type: &TypeRef) -> Option<&str> {
+    match field_type {
+        TypeRef::Named(name) => Some(name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => Some(name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn go_struct_field_json_tag(
+    typ: &TypeDef,
+    field: &FieldDef,
+    enum_names: &std::collections::HashSet<&str>,
+    passthrough_enum_names: &std::collections::HashSet<&str>,
+    data_enum_names: &std::collections::HashSet<&str>,
+    struct_names: &std::collections::HashSet<&str>,
+    bytes_shadow: bool,
+) -> String {
+    let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
+    let named_enum_default = !field.optional
+        && !use_default_pointer
+        && (field.default.is_some() || typ.serde_container_default)
+        && matches!(&field.ty, TypeRef::Named(name) if enum_names.contains(name.as_str()));
+    let unresolved_named = matches!(&field.ty, TypeRef::Named(name)
+        if !enum_names.contains(name.as_str())
+            && !passthrough_enum_names.contains(name.as_str())
+            && !data_enum_names.contains(name.as_str())
+            && !struct_names.contains(name.as_str()));
+    let collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
+    let omit = !(bytes_shadow && matches!(&field.ty, TypeRef::Bytes))
+        && (field.optional || collection || use_default_pointer || named_enum_default || unresolved_named);
+    let json_name = wire_field_name(
+        &field.name,
+        field.serde_rename.as_deref(),
+        typ.serde_rename_all.as_deref(),
+    );
+    format!("json:\"{json_name}{}\"", if omit { ",omitempty" } else { "" })
 }
 
 /// Generate a Go struct type definition with json tags for marshaling.
@@ -134,25 +176,6 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             continue;
         }
 
-        let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
-
-        // A unit enum is emitted as a Go string type, so its zero value is `""` — never a valid
-        // variant. When the key is wire-optional (its own `#[serde(default)]`, or the
-        // container's, which covers every field) it must carry `omitempty`, so an unset field is
-        // dropped and filled by the Rust default instead of marshaling `""` and failing
-        // deserialization with `unknown variant`. The value stays non-pointer: dropping `""` is
-        // exactly the wanted behavior, so no pointer is needed to express "unset". ~keep
-        let is_named_enum = !field.optional
-            && !use_default_pointer
-            && (field.default.is_some() || typ.serde_container_default)
-            && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
-
-        let is_unresolved_named = matches!(&field.ty, TypeRef::Named(n)
-            if !enum_names.contains(n.as_str())
-                && !passthrough_enum_names.contains(n.as_str())
-                && !data_enum_names.contains(n.as_str())
-                && !struct_names.contains(n.as_str()));
-
         let field_type = go_struct_field_type(
             typ,
             field,
@@ -162,19 +185,15 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             struct_names,
         );
 
-        // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
-        let json_name = wire_field_name(
-            &field.name,
-            field.serde_rename.as_deref(),
-            typ.serde_rename_all.as_deref(),
+        let json_tag = go_struct_field_json_tag(
+            typ,
+            field,
+            enum_names,
+            passthrough_enum_names,
+            data_enum_names,
+            struct_names,
+            false,
         );
-        let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
-        let json_tag = if field.optional || is_collection || use_default_pointer || is_named_enum || is_unresolved_named
-        {
-            format!("json:\"{},omitempty\"", json_name)
-        } else {
-            format!("json:\"{}\"", json_name)
-        };
 
         let doc_lines: Vec<&str> = if !field.doc.is_empty() {
             field.doc.lines().map(|l| l.trim()).collect()
@@ -220,24 +239,15 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                 continue;
             }
             let go_field = to_go_name(&field.name);
-            // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
-            let json_name = wire_field_name(
-                &field.name,
-                field.serde_rename.as_deref(),
-                typ.serde_rename_all.as_deref(),
+            let json_tag = go_struct_field_json_tag(
+                typ,
+                field,
+                enum_names,
+                passthrough_enum_names,
+                data_enum_names,
+                struct_names,
+                true,
             );
-            let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
-            let is_named_enum = !field.optional
-                && !use_default_pointer
-                && (field.default.is_some() || typ.serde_container_default)
-                && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
-            let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
-            let is_bytes = matches!(&field.ty, TypeRef::Bytes);
-            let json_tag = if !is_bytes && (field.optional || is_collection || use_default_pointer || is_named_enum) {
-                format!("json:\"{},omitempty\"", json_name)
-            } else {
-                format!("json:\"{}\"", json_name)
-            };
             let auxiliary_field_type: Cow<'static, str> = if matches!(&field.ty, TypeRef::Bytes) {
                 Cow::Borrowed("[]int")
             } else {

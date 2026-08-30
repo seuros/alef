@@ -9,6 +9,7 @@ pub(super) struct AssertionFieldShape {
     pub is_nullable: bool,
     pub is_array_for_len: bool,
     pub is_slice: bool,
+    pub is_data_interface: bool,
 }
 
 pub(super) fn resolve_assertion_field_shape(
@@ -23,6 +24,7 @@ pub(super) fn resolve_assertion_field_shape(
             is_nullable: false,
             is_array_for_len: false,
             is_slice: false,
+            is_data_interface: false,
         };
     };
     let resolved = field_resolver.resolve(field);
@@ -46,5 +48,6 @@ pub(super) fn resolve_assertion_field_shape(
         is_nullable: is_optional || is_pointer,
         is_array_for_len,
         is_slice,
+        is_data_interface: field_resolver.target_field_is_data_interface(check_path),
     }
 }

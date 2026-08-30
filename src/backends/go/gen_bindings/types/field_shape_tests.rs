@@ -4,9 +4,10 @@ use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 
 use super::gen_struct_type;
 
-fn assert_go_compiles(generated: &str, declarations: &str) {
+fn go_compile(generated: &str, declarations: &str) -> Option<std::process::Output> {
     let Ok(go) = which::which("go") else {
-        return;
+        eprintln!("Go compiler unavailable; skipping generated-Go compile fixture");
+        return None;
     };
     let directory = tempfile::tempdir().expect("create Go compile fixture");
     std::fs::write(directory.path().join("go.mod"), "module example.com/shape\n\ngo 1.24\n").expect("write Go module");
@@ -15,17 +16,33 @@ fn assert_go_compiles(generated: &str, declarations: &str) {
         format!("package shape\n\nimport \"encoding/json\"\n\n{declarations}\n{generated}"),
     )
     .expect("write generated Go source");
-    let output = std::process::Command::new(go)
-        .arg("test")
-        .arg("./...")
-        .current_dir(directory.path())
-        .output()
-        .expect("run Go compiler");
+    Some(
+        std::process::Command::new(go)
+            .arg("test")
+            .arg("./...")
+            .current_dir(directory.path())
+            .output()
+            .expect("run Go compiler"),
+    )
+}
+
+fn assert_go_compiles(generated: &str, declarations: &str) {
+    let Some(output) = go_compile(generated, declarations) else {
+        return;
+    };
     assert!(
         output.status.success(),
         "generated Go failed to compile:\n{}\n{generated}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn generated_go_compile_check_rejects_broken_source() {
+    let Some(output) = go_compile("func broken() { missingSymbol() }", "") else {
+        return;
+    };
+    assert!(!output.status.success(), "compile control unexpectedly passed");
 }
 
 fn envelope_with(field: FieldDef) -> TypeDef {
@@ -53,7 +70,7 @@ fn optional_data_enum_field_uses_non_pointer_interface() {
     };
     let type_def = envelope_with(FieldDef {
         name: "choice".into(),
-        ty: TypeRef::Named("Choice".into()),
+        ty: TypeRef::Optional(Box::new(TypeRef::Named("Choice".into()))),
         optional: true,
         ..Default::default()
     });
@@ -105,7 +122,10 @@ fn required_unresolved_named_field_uses_raw_message_pointer() {
         "{output}"
     );
     assert_eq!(output.matches("Payload *json.RawMessage").count(), 2, "{output}");
-    assert_go_compiles(&output, "");
+    assert_go_compiles(
+        &output,
+        "func init() { data, _ := json.Marshal(Envelope{}); var object map[string]any; _ = json.Unmarshal(data, &object); if _, present := object[\"payload\"]; present { panic(\"nil payload was not omitted\") } }",
+    );
 }
 
 #[test]
@@ -146,7 +166,7 @@ fn data_interface_with_bytes() -> (TypeDef, EnumDef) {
         fields: vec![
             FieldDef {
                 name: "choice".into(),
-                ty: TypeRef::Named("Choice".into()),
+                ty: TypeRef::Optional(Box::new(TypeRef::Named("Choice".into()))),
                 optional: true,
                 ..Default::default()
             },

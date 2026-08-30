@@ -11,6 +11,7 @@ use super::test_function::{GoTestFunctionContext, render_test_function};
 
 fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
     let Ok(go) = which::which("go") else {
+        eprintln!("Go compiler unavailable; skipping rendered assertion compile fixture");
         return;
     };
     let directory = tempfile::tempdir().expect("create generated Go fixture");
@@ -24,13 +25,21 @@ fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
     if rendered.contains("strings.") {
         imports.push("\"strings\"");
     }
+    if rendered.contains("jsonString(") {
+        imports.push("\"encoding/json\"");
+    }
     let assertion_stub = if rendered.contains("assert.") {
-        "type assertions struct{}\nvar assert assertions\nfunc (assertions) NotNil(*testing.T, any, ...string) {}\nfunc (assertions) GreaterOrEqual(*testing.T, any, any, ...string) {}\n"
+        "type assertions struct{}\nvar assert assertions\nfunc (assertions) NotNil(*testing.T, any, ...string) {}\nfunc (assertions) GreaterOrEqual(*testing.T, any, any, ...string) {}\nfunc (assertions) LessOrEqual(*testing.T, any, any, ...string) {}\nfunc (assertions) Equal(*testing.T, any, any, ...string) {}\n"
+    } else {
+        ""
+    };
+    let json_stub = if rendered.contains("jsonString(") {
+        "func jsonString(value any) string { data, _ := json.Marshal(value); return string(data) }\n"
     } else {
         ""
     };
     let source = format!(
-        "package sample_test\nimport ({})\n{assertion_stub}\n{rendered}",
+        "package sample_test\nimport ({})\n{assertion_stub}{json_stub}\n{rendered}",
         imports.join("\n")
     );
     std::fs::write(directory.path().join("shape_test.go"), source).unwrap();
@@ -49,6 +58,7 @@ fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
 
 fn render_field_assertion(
     field: FieldDef,
+    assertion_field: &str,
     enums: &[EnumDef],
     configured_optional: bool,
     assertion_type: &str,
@@ -68,17 +78,24 @@ fn render_field_assertion(
         fields_optional: optional,
         ..Default::default()
     };
+    let uses_values = matches!(assertion_type, "contains_all" | "contains_any" | "not_contains");
+    let values = uses_values.then(|| vec![value.clone().expect("string family value")]);
     let fixture = Fixture {
         id: "field_shape".into(),
         description: "field shape".into(),
         assertions: vec![Assertion {
             assertion_type: assertion_type.into(),
-            field: Some(field.name.clone()),
-            value,
+            field: Some(assertion_field.into()),
+            value: (!uses_values).then_some(value).flatten(),
+            values,
             ..Default::default()
         }],
         ..Default::default()
     };
+    render_fixture(config, fixture, field, enums)
+}
+
+fn render_fixture(config: E2eConfig, fixture: Fixture, field: FieldDef, enums: &[EnumDef]) -> String {
     let type_defs = vec![TypeDef {
         name: "Envelope".into(),
         fields: vec![field],
@@ -130,6 +147,7 @@ fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
             optional: true,
             ..Default::default()
         },
+        "choice",
         &[choice],
         true,
         "is_true",
@@ -176,6 +194,7 @@ fn required_unresolved_named_field_uses_raw_message_pointer_shape() {
             ty: TypeRef::Named("ForeignPayload".into()),
             ..Default::default()
         },
+        "payload",
         &[],
         false,
         "contains",
@@ -215,37 +234,13 @@ fn optional_vec_assertions_follow_go_slice_shape_over_global_optionality() {
         }],
         ..Default::default()
     };
-    let type_defs = vec![TypeDef {
-        name: "Envelope".into(),
-        fields: vec![FieldDef {
-            name: "items".into(),
-            ty: TypeRef::Vec(Box::new(TypeRef::String)),
-            optional: true,
-            ..Default::default()
-        }],
+    let field = FieldDef {
+        name: "items".into(),
+        ty: TypeRef::Vec(Box::new(TypeRef::String)),
+        optional: true,
         ..Default::default()
-    }];
-    let functions = vec![FunctionDef {
-        name: "inspect".into(),
-        return_type: TypeRef::Named("Envelope".into()),
-        ..Default::default()
-    }];
-    let mut output = String::new();
-    render_test_function(
-        &mut output,
-        &fixture,
-        GoTestFunctionContext {
-            import_alias: "sample",
-            e2e_config: &config,
-            adapters: &[],
-            data_enum_names: &HashSet::new(),
-            config: &Default::default(),
-            type_defs: &type_defs,
-            enums: &[],
-            errors: &[],
-            functions: &functions,
-        },
-    );
+    };
+    let output = render_fixture(config, fixture, field, &[]);
 
     assert!(output.contains("len(result.Items)"), "expected slice length:\n{output}");
     assert!(
@@ -301,6 +296,7 @@ fn required_default_string_count_dereferences_authoritative_pointer() {
             typed_default: Some(DefaultValue::StringLiteral("default".into())),
             ..Default::default()
         },
+        "label",
         &[],
         false,
         "count_min",
@@ -324,6 +320,7 @@ fn required_default_number_comparison_dereferences_authoritative_pointer() {
             typed_default: Some(DefaultValue::IntLiteral(5)),
             ..Default::default()
         },
+        "limit",
         &[],
         false,
         "greater_than",
@@ -335,4 +332,159 @@ fn required_default_number_comparison_dereferences_authoritative_pointer() {
         &output,
         "package sample\ntype Envelope struct { Limit *int64 }\nfunc Inspect() (*Envelope, error) { value := int64(5); return &Envelope{Limit: &value}, nil }\n",
     );
+}
+
+fn assert_pointer_pseudo_field_compiles(suffix: &str, assertion_type: &str) {
+    let field_path = format!("label.{suffix}");
+    let expected = match assertion_type {
+        "greater_than" => 0,
+        "less_than_or_equal" | "max_length" => 10,
+        "count_equals" => 6,
+        _ => 1,
+    };
+    let output = render_field_assertion(
+        FieldDef {
+            name: "label".into(),
+            ty: TypeRef::String,
+            default: Some("default_label".into()),
+            typed_default: Some(DefaultValue::StringLiteral("default".into())),
+            ..Default::default()
+        },
+        &field_path,
+        &[],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    assert!(!output.contains("len(*result.Label) != nil"), "{output}");
+    assert!(!output.contains("len(len(*result.Label))"), "{output}");
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n",
+    );
+}
+
+#[test]
+fn pointer_length_and_count_pseudo_fields_compile_as_scalars() {
+    for suffix in ["length", "count"] {
+        for assertion_type in [
+            "greater_than",
+            "less_than_or_equal",
+            "count_min",
+            "count_equals",
+            "min_length",
+            "max_length",
+        ] {
+            assert_pointer_pseudo_field_compiles(suffix, assertion_type);
+        }
+    }
+}
+
+fn assert_data_interface_string_family_compiles(assertion_type: &str, expected: &str) {
+    let choice = EnumDef {
+        name: "Choice".into(),
+        variants: vec![EnumVariant {
+            name: "Value".into(),
+            fields: vec![FieldDef {
+                name: "value".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let output = render_field_assertion(
+        FieldDef {
+            name: "choice".into(),
+            ty: TypeRef::Named("Choice".into()),
+            ..Default::default()
+        },
+        "choice",
+        &[choice],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    assert!(output.contains("jsonString(result.Choice)"), "{output}");
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n",
+    );
+}
+
+#[test]
+fn data_interface_string_assertion_families_compile_with_wire_json() {
+    for (assertion_type, expected) in [
+        ("equals", "value"),
+        ("contains", "value"),
+        ("contains_all", "value"),
+        ("not_contains", "absent"),
+        ("contains_any", "value"),
+    ] {
+        assert_data_interface_string_family_compiles(assertion_type, expected);
+    }
+}
+
+#[test]
+fn go_result_shapes_follow_emitted_type_partitions() {
+    let (types, enums, excluded) = partitioned_type_fixture();
+    let resolver = FieldResolver::new(
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .with_ir_result_fields(
+        FieldResolver::go_ir_result_field_facts(&types, &enums, &excluded),
+        Some("Envelope".into()),
+    );
+
+    for field in ["excluded", "opaque", "visitor", "enum_value"] {
+        assert_eq!(resolver.target_field_is_pointer(field), Some(true), "{field}");
+    }
+}
+
+fn partitioned_type_fixture() -> (Vec<TypeDef>, Vec<EnumDef>, HashSet<String>) {
+    let named_field = |name: &str, target: &str| FieldDef {
+        name: name.into(),
+        ty: TypeRef::Named(target.into()),
+        ..Default::default()
+    };
+    let types = vec![
+        TypeDef {
+            name: "Envelope".into(),
+            fields: vec![
+                named_field("excluded", "Excluded"),
+                named_field("opaque", "Opaque"),
+                named_field("visitor", "VisitorContext"),
+                named_field("enum_value", "HiddenChoice"),
+            ],
+            ..Default::default()
+        },
+        TypeDef {
+            name: "Excluded".into(),
+            ..Default::default()
+        },
+        TypeDef {
+            name: "Opaque".into(),
+            is_opaque: true,
+            ..Default::default()
+        },
+        TypeDef {
+            name: "VisitorContext".into(),
+            ..Default::default()
+        },
+    ];
+    let enums = vec![EnumDef {
+        name: "HiddenChoice".into(),
+        variants: vec![EnumVariant {
+            name: "Value".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let excluded = HashSet::from(["Excluded".into(), "VisitorContext".into(), "HiddenChoice".into()]);
+    (types, enums, excluded)
 }

@@ -81,28 +81,21 @@ pub(super) fn build_ir_result_field_map_with_enums(
     enums: &[EnumDef],
     rule: OptionalityRule,
 ) -> IrResultFieldMap {
-    let struct_names: HashSet<&str> = type_defs.iter().map(|type_def| type_def.name.as_str()).collect();
-    let enum_names: HashSet<&str> = enums
-        .iter()
-        .filter(|definition| crate::backends::go::is_unit_struct_field_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
-    let passthrough_enum_names: HashSet<&str> = enums
-        .iter()
-        .filter(|definition| crate::backends::go::is_passthrough_raw_message_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
-    let data_enum_names: HashSet<&str> = enums
-        .iter()
-        .filter(|definition| crate::backends::go::is_data_interface_struct_field_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
+    build_go_ir_result_field_map(type_defs, enums, rule, &HashSet::new())
+}
 
+pub(super) fn build_go_ir_result_field_map(
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    rule: OptionalityRule,
+    excluded_names: &HashSet<String>,
+) -> IrResultFieldMap {
+    let emitted = emitted_go_type_names(type_defs, enums, excluded_names);
     let names = GoFieldTypeNames {
-        structs: &struct_names,
-        enums: &enum_names,
-        passthrough_enums: &passthrough_enum_names,
-        data_enums: &data_enum_names,
+        structs: &emitted.structs,
+        enums: &emitted.enums,
+        passthrough_enums: &emitted.passthrough_enums,
+        data_enums: &emitted.data_enums,
     };
     let mut map = IrResultFieldMap::default();
     for type_def in type_defs {
@@ -111,6 +104,51 @@ pub(super) fn build_ir_result_field_map_with_enums(
         }
     }
     map
+}
+
+struct EmittedGoTypeNames<'a> {
+    structs: HashSet<&'a str>,
+    enums: HashSet<&'a str>,
+    passthrough_enums: HashSet<&'a str>,
+    data_enums: HashSet<&'a str>,
+}
+
+fn emitted_go_type_names<'a>(
+    type_defs: &'a [TypeDef],
+    enums: &'a [EnumDef],
+    excluded_names: &HashSet<String>,
+) -> EmittedGoTypeNames<'a> {
+    let structs = type_defs
+        .iter()
+        .filter(|type_def| !type_def.is_opaque && !type_def.is_trait)
+        .filter(|type_def| !excluded_names.contains(&type_def.name))
+        .map(|type_def| type_def.name.as_str())
+        .collect();
+    let enum_names = enums
+        .iter()
+        .filter(|definition| !excluded_names.contains(&definition.name))
+        .filter(|definition| crate::backends::go::is_unit_struct_field_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
+    let passthrough_enum_names = enums
+        .iter()
+        .filter(|definition| !excluded_names.contains(&definition.name))
+        .filter(|definition| crate::backends::go::is_passthrough_raw_message_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
+    let data_enum_names = enums
+        .iter()
+        .filter(|definition| !excluded_names.contains(&definition.name))
+        .filter(|definition| crate::backends::go::is_data_interface_struct_field_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
+
+    EmittedGoTypeNames {
+        structs,
+        enums: enum_names,
+        passthrough_enums: passthrough_enum_names,
+        data_enums: data_enum_names,
+    }
 }
 
 struct GoFieldTypeNames<'a> {
@@ -147,6 +185,12 @@ fn record_ir_result_field(
     );
     if go_type.starts_with('*') {
         map.pointer_fields
+            .entry(type_def.name.clone())
+            .or_default()
+            .insert(field.name.clone());
+    }
+    if named_type(&field.ty).is_some_and(|name| names.data_enums.contains(name)) {
+        map.data_interface_fields
             .entry(type_def.name.clone())
             .or_default()
             .insert(field.name.clone());
@@ -229,6 +273,16 @@ pub(super) fn pointer_at_path(map: &IrResultFieldMap, path: &str) -> Option<bool
     let (owner, leaf) = walk_to_owner_from(map, root, path)?;
     Some(
         map.pointer_fields
+            .get(owner)
+            .is_some_and(|fields| fields.contains(&leaf)),
+    )
+}
+
+pub(super) fn data_interface_at_path(map: &IrResultFieldMap, path: &str) -> Option<bool> {
+    let root = map.root_type.as_deref()?;
+    let (owner, leaf) = walk_to_owner_from(map, root, path)?;
+    Some(
+        map.data_interface_fields
             .get(owner)
             .is_some_and(|fields| fields.contains(&leaf)),
     )

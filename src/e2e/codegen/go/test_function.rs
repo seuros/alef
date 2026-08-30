@@ -144,7 +144,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     );
     let lang = call_resolver::LANG;
     let call_field_resolver =
-        call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs, enums);
+        call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs, enums, config);
     let field_resolver = &call_field_resolver;
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides

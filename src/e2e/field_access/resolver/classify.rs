@@ -187,6 +187,11 @@ impl FieldResolver {
         super::super::ir_result_fields::pointer_at_path(&self.ir_result_field_map, self.resolve(field))
     }
 
+    pub fn target_field_is_data_interface(&self, field: &str) -> bool {
+        super::super::ir_result_fields::data_interface_at_path(&self.ir_result_field_map, self.resolve(field))
+            .unwrap_or(false)
+    }
+
     /// Check whether `field`'s resolved leaf type is one alef cannot vouch for as implementing
     /// `Display` — a struct/enum from the crate's own IR, per
     /// [`ir_result_fields::leaf_is_named_type`](super::super::ir_result_fields::leaf_is_named_type).
