@@ -1,4 +1,5 @@
 use crate::backends::java::type_map::{java_boxed_type, java_type};
+use crate::codegen::java_literal::escape_java_string_literal;
 use crate::codegen::naming::{field_uses_duration_map_wire, to_class_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
@@ -243,13 +244,7 @@ pub(super) fn gen_builder_nested_class(
                     TypeRef::Path => "null".to_string(),
                     TypeRef::String | TypeRef::Char => match &field.typed_default {
                         Some(DefaultValue::StringLiteral(s)) => {
-                            let escaped = s
-                                .replace('\\', "\\\\")
-                                .replace('"', "\\\"")
-                                .replace('\n', "\\n")
-                                .replace('\r', "\\r")
-                                .replace('\t', "\\t");
-                            format!("\"{escaped}\"")
+                            format!("\"{}\"", escape_java_string_literal(s))
                         }
                         _ => "\"\"".to_string(),
                     },
@@ -285,7 +280,7 @@ pub(super) fn gen_builder_nested_class(
         };
         if let Some(wire) = wire_name {
             body.push_str("        @JsonProperty(\"");
-            body.push_str(&wire);
+            body.push_str(&escape_java_string_literal(&wire));
             body.push_str("\")\n");
         }
 
@@ -405,7 +400,7 @@ pub(super) fn gen_builder_nested_class(
                 field.serde_rename.clone().unwrap_or_else(|| field.name.clone())
             };
             body.push_str("        @JsonProperty(\"");
-            body.push_str(&wire);
+            body.push_str(&escape_java_string_literal(&wire));
             body.push_str("\")\n");
         }
         // A type-level @JsonDeserialize(builder = ...) routes deserialization through this

@@ -3,6 +3,7 @@ use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::EnumDef;
 
 use crate::backends::java::gen_bindings::helpers::is_tuple_field_name;
+use crate::codegen::java_literal::{escape_java_comment_text, escape_java_string_literal};
 use crate::codegen::naming::wire_variant_value;
 use crate::codegen::serde_enum_repr::{SerdeEnumRepr, serde_enum_repr};
 
@@ -24,11 +25,11 @@ fn variant_contexts<'a>(
 ) -> Vec<minijinja::Value> {
     variants
         .map(|variant| {
-            let discriminator = wire_variant_value(
+            let discriminator = escape_java_string_literal(&wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
                 enum_def.serde_rename_all.as_deref(),
-            );
+            ));
             let is_newtype = variant.fields.len() == 1 && is_tuple_field_name(&variant.fields[0].name);
             let is_unit = is_unit_variant(variant);
             let is_tuple = is_newtype && !is_unit;
@@ -139,14 +140,21 @@ pub(super) fn gen_sealed_union_deserializer(out: &mut String, _package: &str, en
     let excluded_variants: Vec<String> = enum_def
         .excluded_variants
         .iter()
-        .map(|v| wire_variant_value(&v.name, v.serde_rename.as_deref(), enum_def.serde_rename_all.as_deref()))
+        .map(|v| {
+            escape_java_string_literal(&wire_variant_value(
+                &v.name,
+                v.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            ))
+        })
         .collect();
     out.push_str(&crate::backends::java::template_env::render(
         "sealed_union_deserializer.jinja",
         minijinja::context! {
             class_name => &enum_def.name,
-            tag_field => tag_field_of(&repr),
-            content_field => repr.content(),
+            tag_field => escape_java_string_literal(tag_field_of(&repr)),
+            content_field => repr.content().map(escape_java_string_literal),
+            content_field_doc => repr.content().map(escape_java_comment_text),
             is_adjacent => repr.content().is_some(),
             needs_content => needs_content,
             variants => variants,
@@ -173,8 +181,10 @@ pub(super) fn gen_sealed_union_serializer(out: &mut String, _package: &str, enum
         "sealed_union_serializer.jinja",
         minijinja::context! {
             class_name => &enum_def.name,
-            tag_field => tag_field_of(&repr),
-            content_field => repr.content(),
+            tag_field => escape_java_string_literal(tag_field_of(&repr)),
+            tag_field_doc => escape_java_comment_text(tag_field_of(&repr)),
+            content_field => repr.content().map(escape_java_string_literal),
+            content_field_doc => repr.content().map(escape_java_comment_text),
             is_adjacent => repr.content().is_some(),
             variants => variants,
         },

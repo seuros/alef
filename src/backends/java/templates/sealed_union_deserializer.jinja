@@ -7,7 +7,7 @@ class {{ class_name }}Deserializer extends StdDeserializer<{{ class_name }}> {
   }
 
 {% if is_adjacent and needs_content %}
-  /** Rejects an adjacently tagged document whose "{{ content_field }}" payload is absent. */
+  /** Rejects an adjacently tagged document whose "{{ content_field_doc }}" payload is absent. */
   private static com.fasterxml.jackson.databind.JsonNode requireContent(
       final JsonParser parser,
       final com.fasterxml.jackson.databind.JsonNode contentNode,

@@ -8,6 +8,7 @@ use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, emit_javadoc, escape_javadoc_line, is_tuple_field_name, java_apply_rename_all,
     qualify_shadowed_type, safe_java_field_name,
 };
+use crate::codegen::java_literal::{escape_java_comment_text, escape_java_string_literal};
 use crate::codegen::naming::wire_field_name;
 use crate::codegen::serde_enum_repr::{SerdeEnumRepr, serde_enum_repr};
 
@@ -61,7 +62,7 @@ pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str
         variants_block.push_str("    ");
         variants_block.push_str(&variant.name);
         variants_block.push_str("(\"");
-        variants_block.push_str(&json_name);
+        variants_block.push_str(&escape_java_string_literal(&json_name));
         variants_block.push_str("\")");
         variants_block.push_str(comma);
         variants_block.push('\n');
@@ -72,9 +73,12 @@ pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str
         .excluded_variants
         .iter()
         .map(|v| {
-            v.serde_rename
-                .clone()
-                .unwrap_or_else(|| java_apply_rename_all(&v.name, enum_def.serde_rename_all.as_deref()))
+            // Rendered into a `//` comment by `simple_enum_class.jinja`, not into a literal. ~keep
+            escape_java_comment_text(
+                &v.serde_rename
+                    .clone()
+                    .unwrap_or_else(|| java_apply_rename_all(&v.name, enum_def.serde_rename_all.as_deref())),
+            )
         })
         .collect();
 
@@ -272,7 +276,7 @@ fn push_tagged_union_class_annotations(out: &mut String, enum_def: &EnumDef, tag
     emit_javadoc(out, &tagged_union_doc, "");
     if !needs_unwrapped {
         out.push_str("@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = \"");
-        out.push_str(tag_field);
+        out.push_str(&escape_java_string_literal(tag_field));
         out.push_str("\", visible = false)\n");
         out.push_str("@JsonSubTypes({\n");
         for (i, variant) in enum_def.variants.iter().enumerate() {
@@ -286,7 +290,7 @@ fn push_tagged_union_class_annotations(out: &mut String, enum_def: &EnumDef, tag
             out.push('.');
             out.push_str(&variant.name);
             out.push_str(".class, name = \"");
-            out.push_str(&discriminator);
+            out.push_str(&escape_java_string_literal(&discriminator));
             out.push_str("\")");
             out.push_str(comma);
             out.push('\n');
@@ -399,7 +403,8 @@ fn tagged_union_variant_field_parts(
                     f.serde_rename.as_deref(),
                     enum_def.rename_all_fields.as_deref(),
                 );
-                format!("@JsonProperty(\"{json_name}\") {ftype} {jname}")
+                let json_literal = escape_java_string_literal(&json_name);
+                format!("@JsonProperty(\"{json_literal}\") {ftype} {jname}")
             }
         })
         .collect()

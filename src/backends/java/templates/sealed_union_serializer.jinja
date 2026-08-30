@@ -1,5 +1,5 @@
 {% if is_adjacent %}
-/** Custom serializer for sealed interface with unwrapped variants. Emits serde's adjacently tagged shape: the discriminator under "{{ tag_field }}" and the whole payload under "{{ content_field }}". */
+/** Custom serializer for sealed interface with unwrapped variants. Emits serde's adjacently tagged shape: the discriminator under "{{ tag_field_doc }}" and the whole payload under "{{ content_field_doc }}". */
 {% else %}
 /** Custom serializer for sealed interface with unwrapped variants. Emits the discriminator tag alongside the inner record's fields (flat object). */
 {% endif %}

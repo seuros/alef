@@ -1,4 +1,5 @@
 use crate::backends::java::type_map::{java_boxed_type, java_type};
+use crate::codegen::java_literal::escape_java_string_literal;
 use crate::codegen::naming::field_uses_duration_map_wire;
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
@@ -170,7 +171,7 @@ pub(crate) fn gen_record_type(
             decl.push_str("@com.fasterxml.jackson.annotation.JsonAnyGetter ");
         } else if has_json_property && !is_visitor_field {
             decl.push_str("@JsonProperty(\"");
-            decl.push_str(&json_property_name);
+            decl.push_str(&escape_java_string_literal(&json_property_name));
             decl.push_str("\") ");
         }
         if has_nullable && !nullable_at_leading_pos {
