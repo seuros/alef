@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of every configured language's reachable cfg features, so they no longer advertise an
   enum variant, or a field's default value, gated behind a feature no configured binding
   actually compiles.
+- Hoist every `RustVec` temporary in a nested indexed Swift accessor chain (not only the
+  outermost one), preventing dangling-pointer reads when a generated e2e assertion indexes
+  through two `RustVec`-backed segments.
 
 ## [0.79.2] - 2026-08-30
 

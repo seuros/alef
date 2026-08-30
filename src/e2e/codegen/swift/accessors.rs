@@ -19,47 +19,56 @@ use std::collections::HashMap;
 /// returning empty/garbage. Hoisting the Vec into a `let` binding ties the
 /// Vec's lifetime to the enclosing function scope, so the ref stays valid.
 ///
-/// Only the first `()[...]` occurrence per expression is materialised — that
-/// covers all current fixture access patterns (single-level subscripts on a
-/// result field). Nested subscripts are rare and would need a more elaborate
-/// pass; if they appear, this returns conservative output (just the first
-/// hoist) which is still correct.
+/// Every `()[...]` occurrence in the expression is materialised in turn, left to
+/// right, so a nested indexed chain (e.g. `result.items()[0].nested()[1].value()`,
+/// produced when a field-access path traverses two `RustVec`-backed segments) hoists
+/// BOTH temporaries. Hoisting only the outer one still leaves the inner `.nested()`
+/// call — itself a fresh `RustVec` temporary — subscripted inline, which reproduces
+/// the exact dangling-pointer hazard this function exists to prevent, just one level
+/// deeper. Each hoist's `let` reads from the previous hoist's local (or from the
+/// original expression for the first), so the locals chain correctly. ~keep
 /// Returns `(setup_lines, rewritten_expr, is_map_subscript)`. `is_map_subscript` is
-/// true when the subscript key was a string literal, indicating the parent
+/// true when the LAST subscript's key was a string literal, indicating the deepest
 /// accessor returns a JSON-encoded Map (RustString) and the rewritten expression
 /// already evaluates to `String?` so callers should NOT append `.toString()`.
 pub(super) fn materialise_vec_temporaries(expr: &str, name_suffix: &str) -> (Vec<String>, String, bool) {
-    let Some(idx) = expr.find("()[") else {
-        return (Vec::new(), expr.to_string(), false);
-    };
-    let after_open = idx + 3; // position after `()[`
-    let Some(close_rel) = expr[after_open..].find(']') else {
-        return (Vec::new(), expr.to_string(), false);
-    };
-    let subscript_end = after_open + close_rel; // index of `]`
-    let prefix = &expr[..idx + 2]; // includes `()`
-    let subscript = &expr[idx + 2..=subscript_end]; // `[N]`
-    let tail = &expr[subscript_end + 1..]; // everything after `]`
-    let method_dot = expr[..idx].rfind('.').unwrap_or(0);
-    let method = &expr[method_dot + 1..idx];
-    let local = format!("_vec_{}_{}", method, name_suffix);
+    let mut setups = Vec::new();
+    let mut current = expr.to_string();
+    let mut is_string_key = false;
+    let mut hoist_count = 0usize;
 
-    // String-key subscript (e.g. `["title"]`) signals a Map-like access. swift-bridge
-    // serialises non-leaf Maps (e.g. `HashMap<String, String>`) as JSON-encoded
-    // RustString rather than exposing a Swift dictionary. Decode the RustString to
-    // `[String: String]` before subscripting so `_vec_X["title"]` works.
-    let inner = subscript.trim_start_matches('[').trim_end_matches(']');
-    let is_string_key = inner.starts_with('"') && inner.ends_with('"');
-    let setup = if is_string_key {
-        format!(
-            "let {local} = (try? JSONSerialization.jsonObject(with: ({prefix}.toString() ?? \"{{}}\").data(using: .utf8)!) as? [String: String]) ?? [:]"
-        )
-    } else {
-        format!("let {local} = {prefix}")
-    };
+    while let Some(idx) = current.find("()[") {
+        let after_open = idx + 3; // position after `()[`
+        let Some(close_rel) = current[after_open..].find(']') else {
+            break;
+        };
+        let subscript_end = after_open + close_rel; // index of `]`
+        let prefix = current[..idx + 2].to_string(); // includes `()`
+        let subscript = current[idx + 2..=subscript_end].to_string(); // `[N]`
+        let tail = current[subscript_end + 1..].to_string(); // everything after `]`
+        let method_dot = current[..idx].rfind('.').unwrap_or(0);
+        let method = current[method_dot + 1..idx].to_string();
+        hoist_count += 1;
+        let local = format!("_vec_{method}_{name_suffix}_{hoist_count}");
 
-    let rewritten = format!("{local}{subscript}{tail}");
-    (vec![setup], rewritten, is_string_key)
+        // String-key subscript (e.g. `["title"]`) signals a Map-like access. swift-bridge
+        // serialises non-leaf Maps (e.g. `HashMap<String, String>`) as JSON-encoded
+        // RustString rather than exposing a Swift dictionary. Decode the RustString to
+        // `[String: String]` before subscripting so `_vec_X["title"]` works.
+        let inner = subscript.trim_start_matches('[').trim_end_matches(']');
+        is_string_key = inner.starts_with('"') && inner.ends_with('"');
+        let setup = if is_string_key {
+            format!(
+                "let {local} = (try? JSONSerialization.jsonObject(with: ({prefix}.toString() ?? \"{{}}\").data(using: .utf8)!) as? [String: String]) ?? [:]"
+            )
+        } else {
+            format!("let {local} = {prefix}")
+        };
+        setups.push(setup);
+        current = format!("{local}{subscript}{tail}");
+    }
+
+    (setups, current, is_string_key)
 }
 
 /// Returns `(accessor_expr, has_optional)` where `has_optional` is true when
@@ -535,6 +544,61 @@ pub(super) fn swift_array_not_empty_predicate(field_expr: &str, accessor_is_opti
         format!("{field_expr}.isEmpty == false")
     } else {
         format!("!{field_expr}.isEmpty")
+    }
+}
+
+#[cfg(test)]
+mod materialise_vec_temporaries_tests {
+    use super::materialise_vec_temporaries;
+
+    /// The confirmed defect: a field-access chain that indexes into a `RustVec` twice
+    /// (e.g. `items[0].nested[1].value`, both `items` and `nested` swift-bridge `RustVec`
+    /// fields) only had its OUTER `()[...]` hoisted to a local. The inner `.nested()` call
+    /// is itself a fresh `RustVec` temporary that was left subscripted inline — the exact
+    /// dangling-pointer hazard this function exists to prevent, one level deeper. Both
+    /// temporaries must be hoisted, each reading from the previous hoist's local.
+    #[test]
+    fn nested_indexed_rust_vec_hoists_every_temporary() {
+        let (setup, rewritten, is_map_subscript) =
+            materialise_vec_temporaries("result.items()[0].nested()[1].value()", "count_min_ab12");
+
+        assert_eq!(
+            setup,
+            vec![
+                "let _vec_items_count_min_ab12_1 = result.items()".to_string(),
+                "let _vec_nested_count_min_ab12_2 = _vec_items_count_min_ab12_1[0].nested()".to_string(),
+            ]
+        );
+        assert_eq!(rewritten, "_vec_nested_count_min_ab12_2[1].value()");
+        assert!(!is_map_subscript);
+    }
+
+    /// Control: a single-level indexed `RustVec` access — the case this function already
+    /// handled correctly — must keep hoisting exactly one temporary and leave the tail
+    /// after the subscript untouched.
+    #[test]
+    fn single_indexed_rust_vec_hoists_one_temporary() {
+        let (setup, rewritten, is_map_subscript) =
+            materialise_vec_temporaries("result.items()[0].value()", "count_min_ab12");
+
+        assert_eq!(
+            setup,
+            vec!["let _vec_items_count_min_ab12_1 = result.items()".to_string()]
+        );
+        assert_eq!(rewritten, "_vec_items_count_min_ab12_1[0].value()");
+        assert!(!is_map_subscript);
+    }
+
+    /// Control: a chain with no `()[...]` subscript at all must be returned unchanged,
+    /// with no setup lines emitted.
+    #[test]
+    fn non_indexed_chain_is_unchanged() {
+        let (setup, rewritten, is_map_subscript) =
+            materialise_vec_temporaries("result.items().value()", "count_min_ab12");
+
+        assert!(setup.is_empty());
+        assert_eq!(rewritten, "result.items().value()");
+        assert!(!is_map_subscript);
     }
 }
 
