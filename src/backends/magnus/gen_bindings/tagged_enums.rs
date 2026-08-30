@@ -336,11 +336,17 @@ mod discriminator_key_parity_tests {
     /// discriminant field are two emitters reading one `EnumDef`. They must name the same key or
     /// a payload produced by one binding is undispatchable by the other.
     ///
-    /// This is the regression the module-level fix closes: `gen_tagged_enum_ruby_classes`
-    /// spelled its own fallback `"kind"` while every sibling emitter -- napi, wasm, php, swift,
-    /// extendr, rustler -- spelled theirs `"type"`. Neither side's own tests could see it,
-    /// because each compared its output against its own literal. Asking
-    /// [`tagged_object_tag_key`] from both places is what makes the two answers one answer.
+    /// `gen_tagged_enum_ruby_classes` spelled its own fallback `"kind"` while every sibling
+    /// emitter -- napi, wasm, php, swift, extendr, rustler -- spelled theirs `"type"`. Neither
+    /// side's own tests could see it, because each compared its output against its own literal.
+    /// Asking [`tagged_object_tag_key`] from both places is what makes the two answers one answer.
+    ///
+    /// The divergence was LATENT, not observed: `mod.rs`'s only call to
+    /// `gen_tagged_enum_ruby_classes` is guarded by `enum_def.serde_tag.is_some()`, so the
+    /// `"kind"` fallback could never be reached in production -- verified against the commit that
+    /// introduced it, where the guard already read the same. This test therefore pins a trap that
+    /// a future relaxation of that guard would have sprung, and the `None` row below is the one
+    /// that would have caught it. Do not read it as coverage for a shipped bug.
     #[test]
     fn should_key_the_ruby_dispatcher_on_the_same_field_the_napi_binding_declares() {
         for serde_tag in [None, Some("type"), Some("kind"), Some("discriminator")] {

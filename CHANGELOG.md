@@ -172,8 +172,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enum's variant-level `rename_all` is no longer applied to field keys.
 - Derive the synthesized discriminator key for a tagged-object enum lowering from one
   shared authority (`codegen::serde_enum_repr::tagged_object_tag_key`). The Ruby/Magnus
-  `from_hash` dispatcher previously fell back to `kind` while every other backend fell back
-  to `type` for the same IR enum.
+  `from_hash` dispatcher spelled its fallback `kind` while every other backend spelled theirs
+  `type` for the same IR enum. The magnus fallback was unreachable in production — its only
+  call site is guarded by `serde_tag.is_some()` — so this removes a latent trap rather than
+  fixing an observed cross-binding failure.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

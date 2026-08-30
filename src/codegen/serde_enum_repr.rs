@@ -92,12 +92,21 @@ pub const DEFAULT_TAGGED_OBJECT_TAG_KEY: &str = "type";
 /// `#[serde(tag = "...")]` when it has one, else [`DEFAULT_TAGGED_OBJECT_TAG_KEY`].
 ///
 /// Every emitter that names a discriminator must call this. Restating
-/// `enum_def.serde_tag.as_deref().unwrap_or(<literal>)` locally is how the same IR enum acquired
-/// two different keys: fourteen call sites across the napi, wasm, php, swift, extendr, rustler
-/// and elixir emitters spelled the fallback `"type"` while
-/// `backends::magnus::gen_bindings::tagged_enums` spelled it `"kind"`, so a Ruby
-/// `from_hash` dispatcher read `hash[:kind]` off an object every sibling emitter keys as
-/// `type`. Nothing detects that: each emitter's own tests agree with its own literal.
+/// `enum_def.serde_tag.as_deref().unwrap_or(<literal>)` locally is how the same IR enum could
+/// acquire two different keys: fourteen call sites across the napi, wasm, php, swift, extendr,
+/// rustler and elixir emitters spelled the fallback `"type"` while
+/// `backends::magnus::gen_bindings::tagged_enums` spelled it `"kind"`. Nothing detects that —
+/// each emitter's own tests agree with its own literal.
+///
+/// Scope, measured rather than assumed: the magnus `"kind"` fallback was **not reachable**, and
+/// never had been. Its only production call site, `backends::magnus::gen_bindings::mod.rs`'s
+/// `for enum_def in &api.enums` loop, is guarded by `enum_def.serde_tag.is_some() && …`, and that
+/// guard is verbatim identical in the commit that introduced the `"kind"` literal. When the guard
+/// admits an enum, `serde_tag` is `Some` and every backend reads it, so the fallback that
+/// differed was dead on that path. Magnus's `serde_tag.is_none()` path emits per-variant
+/// constructors and no discriminator at all. So this centralization removes a **latent** trap —
+/// any future relaxation of that guard would have silently produced `hash[:kind]` against
+/// `"type"`-keyed payloads — not an observed cross-binding failure.
 ///
 /// This is a WIRE name, never a host-language public identifier — do not case it through
 /// `naming::public_host_identifier`. ~keep
