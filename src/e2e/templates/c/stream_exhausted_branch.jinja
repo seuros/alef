@@ -1,0 +1,16 @@
+{#- The stream-exhausted branch of the C driver's `while (1)` loop.
+
+    Context variables:
+    - result_var: the per-iteration chunk-handle local
+    - prefix:     the crate's C ABI symbol prefix
+
+    A null handle means either "the iterator is exhausted" or "the iterator failed", and
+    `{prefix}_last_error_code()` is the only thing that tells the two apart. This used to set a
+    local named `stream_complete` instead of asserting, which read as the cross-backend
+    `stream_complete` field (defined as "the last chunk carries a terminal finish_reason") while
+    measuring something else entirely. Asserting here keeps the real check and drops the name. ~keep
+#}
+        if ({{ result_var }} == 0) {
+            assert({{ prefix }}_last_error_code() == 0 && "the stream ended with an error");
+            break;
+        }

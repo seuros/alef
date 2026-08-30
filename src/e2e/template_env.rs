@@ -587,6 +587,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/wasm/visitor_method.jinja"),
     ),
     (
+        "c/stream_exhausted_branch.jinja",
+        include_str!("templates/c/stream_exhausted_branch.jinja"),
+    ),
+    (
         "zig/json_assertion.jinja",
         include_str!("templates/zig/json_assertion.jinja"),
     ),

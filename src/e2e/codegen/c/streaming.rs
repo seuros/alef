@@ -105,12 +105,13 @@ pub(super) fn render_c_diagnostic_skip(out: &mut String, reason: &str) {
 /// obtain an opaque handle, loops over the corresponding `_next` function until
 /// it returns null,
 /// and aggregates per-chunk data into local variables (`chunks_count`,
-/// `stream_content`, `stream_complete`, `last_choices_json`, ...). Fixture
-/// assertions on streaming pseudo-fields (`chunks`, `stream_content`,
-/// `stream_complete`, `no_chunks_after_done`, `finish_reason`, `tool_calls`,
-/// `tool_calls[0].function.name`, `usage.total_tokens`) are translated to
-/// assertions on these locals. Chat-specific field extraction remains best
-/// effort and unsupported fields are skipped by `emit_chat_stream_assertion`.
+/// `stream_content`, `last_choices_json`, ...). Fixture
+/// assertions on streaming pseudo-fields (`chunks`, `no_chunks_after_done`) are
+/// translated to assertions on these locals. Chat-specific field extraction
+/// remains best effort and unsupported fields — `stream_content`,
+/// `stream_complete`, `finish_reason`, `tool_calls`,
+/// `tool_calls[0].function.name`, `usage.total_tokens` — are skipped by
+/// `emit_chat_stream_assertion`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_streaming_test_function(
     out: &mut String,
@@ -256,7 +257,6 @@ pub(super) fn render_streaming_test_function(
     let _ = writeln!(out, "    assert(stream_content != NULL);");
     let _ = writeln!(out, "    stream_content[0] = '\\0';");
     let _ = writeln!(out, "    size_t stream_content_len = 0;");
-    let _ = writeln!(out, "    int stream_complete = 0;");
     // `no_chunks_after_done` is a structural invariant, not tracked state: the `while` loop
     // below calls `stream_next` only until it returns 0/done and `break`s immediately, so no
     // code path can call `stream_next` again afterward -- there is no way for this loop to
@@ -278,13 +278,10 @@ pub(super) fn render_streaming_test_function(
         out,
         "        {prefix_upper}AlefHandle {result_var} = {stream_next}(stream_handle);"
     );
-    let _ = writeln!(out, "        if ({result_var} == 0) {{");
-    let _ = writeln!(
-        out,
-        "            if ({prefix}_last_error_code() == 0) {{ stream_complete = 1; }}"
-    );
-    let _ = writeln!(out, "            break;");
-    let _ = writeln!(out, "        }}");
+    out.push_str(&crate::e2e::template_env::render(
+        "c/stream_exhausted_branch.jinja",
+        minijinja::context! { result_var => result_var, prefix => prefix },
+    ));
     let _ = writeln!(out, "        chunks_count++;");
     let _ = writeln!(out, "        {prefix}_{item_type_snake}_free({result_var});");
     let _ = writeln!(out, "    }}");
@@ -303,13 +300,13 @@ pub(super) fn render_streaming_test_function(
     let _ = writeln!(
         out,
         "    /* suppress unused */ (void)no_chunks_after_done; \
-         (void)stream_complete; (void)chunks_count; (void)stream_content_len;"
+         (void)chunks_count; (void)stream_content_len;"
     );
     let _ = writeln!(out, "}}");
 }
 
 /// Emit a single fixture assertion for a streaming test, mapping fixture
-/// pseudo-field references (`chunks`, `stream_content`, `stream_complete`, ...)
+/// pseudo-field references (`chunks`, `no_chunks_after_done`, ...)
 /// to the local aggregator variables built by [`render_streaming_test_function`].
 fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
     let field = assertion.field.as_deref().unwrap_or("");
@@ -322,11 +319,20 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
 
     let (expr, kind) = match field {
         "chunks" => ("chunks_count", Kind::IntCount),
-        "stream_complete" => ("stream_complete", Kind::Bool),
         "no_chunks_after_done" => ("no_chunks_after_done", Kind::Bool),
-        "stream_content" | "finish_reason" | "tool_calls" | "tool_calls[0].function.name" | "usage.total_tokens" => {
-            ("", Kind::Unsupported)
-        }
+        // `stream_complete` joins the unsupported set rather than keeping a local of its own.
+        // The driver loop above frees each chunk handle without reading a single field from it,
+        // and `finish_reason` is unsupported on this backend for exactly that reason — so nothing
+        // here can observe the terminal marker the cross-backend field is defined by
+        // (`streaming_assertions/model.rs`'s field table). The local this used to resolve to was
+        // set from loop termination alone: a different fact wearing this field's name, and one
+        // the loop now asserts directly against the ABI's error code. ~keep
+        "stream_complete"
+        | "stream_content"
+        | "finish_reason"
+        | "tool_calls"
+        | "tool_calls[0].function.name"
+        | "usage.total_tokens" => ("", Kind::Unsupported),
         _ => ("", Kind::Unsupported),
     };
 
@@ -496,6 +502,113 @@ mod emit_chat_stream_assertion_tests {
         emit_chat_stream_assertion(&mut out, &assertion);
         assert_eq!(
             out, "    assert(chunks_count >= 2 && \"expected at least 2 chunks\");\n",
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stream_completion_signal_tests {
+    use super::{CStreamingAdapterMetadata, emit_chat_stream_assertion, render_streaming_test_function};
+    use crate::e2e::codegen::field_skip::FieldSkip;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn adapter() -> CStreamingAdapterMetadata {
+        CStreamingAdapterMetadata {
+            owner_type: "Client".to_string(),
+            item_type: "StreamChunk".to_string(),
+            request_type: "ChatRequest".to_string(),
+            adapter_name: "chat_stream".to_string(),
+        }
+    }
+
+    fn driver_body(assertions: Vec<Assertion>) -> String {
+        let fixture = Fixture {
+            id: "stream_terminates_cleanly".to_string(),
+            description: "streaming call terminates cleanly".to_string(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut out = String::new();
+        render_streaming_test_function(
+            &mut out,
+            &fixture,
+            "mylib",
+            "chunk",
+            &[],
+            "client_new",
+            &adapter(),
+            false,
+            None,
+            false,
+        );
+        out
+    }
+
+    /// The defect: the driver declared `int stream_complete = 0;` and set it to `1` on any clean
+    /// loop exit, then let a fixture's `stream_complete` assertion read it. Nothing in that path
+    /// ever inspects a chunk — the loop frees each handle without reading a field — so the local
+    /// answered "the iterator ran out without setting an error code" while wearing the name of a
+    /// field the cross-backend contract defines as "the last chunk carries a terminal
+    /// finish_reason". The real observation stays, as an assert on the ABI's own error code.
+    #[test]
+    fn the_driver_asserts_the_abi_error_code_instead_of_flagging_an_invented_completion() {
+        let body = driver_body(vec![]);
+
+        // Positive first: a driver loop was emitted at all, so the absences below mean something.
+        assert!(
+            body.contains("mylib_client_chat_stream_next(stream_handle);"),
+            "the driver loop must render before its contents are judged. Emitted:\n{body}"
+        );
+        assert!(
+            body.contains("assert(mylib_last_error_code() == 0 && \"the stream ended with an error\");"),
+            "loop termination must be asserted directly on the ABI error code. Emitted:\n{body}"
+        );
+        assert!(
+            !body.contains("stream_complete"),
+            "no local may carry the `stream_complete` name this backend cannot substantiate. \
+             Emitted:\n{body}"
+        );
+    }
+
+    /// The other half: with the local gone, a fixture that really does declare `stream_complete`
+    /// must leave a registered skip the ledger can count, not silently vanish and not resolve to
+    /// some other backend's aggregator name.
+    #[test]
+    fn a_stream_complete_assertion_renders_the_registered_skip() {
+        let assertion = Assertion {
+            assertion_type: "is_true".into(),
+            field: Some("stream_complete".into()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+
+        assert_eq!(
+            out,
+            format!(
+                "    /* skipped: {} */\n",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message("stream_complete")
+            ),
+            "got: {out}"
+        );
+    }
+
+    /// Negative control for the arm above. `no_chunks_after_done` is backed by a local the driver
+    /// really does establish structurally, so it must keep rendering a real `assert(...)` — a fix
+    /// that skipped every boolean streaming field would pass the test above and fail this one.
+    #[test]
+    fn no_chunks_after_done_still_renders_a_real_assertion() {
+        let assertion = Assertion {
+            assertion_type: "is_true".into(),
+            field: Some("no_chunks_after_done".into()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        emit_chat_stream_assertion(&mut out, &assertion);
+
+        assert_eq!(
+            out, "    assert(no_chunks_after_done && \"expected no_chunks_after_done to be true\");\n",
             "got: {out}"
         );
     }

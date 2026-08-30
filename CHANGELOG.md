@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
   raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
   element-anchored classification inert on exactly the projected shapes it was added for.
+- Stop emitting an invented `stream_complete` signal in generated C e2e streaming tests. The C
+  driver frees every chunk handle without reading a field, so it can never observe the terminal
+  `finish_reason` the cross-backend field is defined by; the local it resolved to was set from
+  loop termination alone. `stream_complete` now renders the registered skip (matching C# and
+  Ruby), and clean loop termination is asserted directly against the ABI's error code.
 - Assert on the captured error in generated Zig e2e tests whose fixture names an error variant the
   Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
   on any failure and asserted nothing; it now binds both ABI failure channels and requires the
