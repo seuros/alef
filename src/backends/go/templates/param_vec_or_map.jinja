@@ -2,5 +2,14 @@
 	if err != nil {
 		{{ err_action }}
 	}
+{% if empty_literal %}
+	// A nil Go slice or map marshals to "null", while a non-nil empty one marshals to
+	// "{{ empty_literal }}" — the form serde_json writes for an empty Rust collection, and the only
+	// one the FFI's from_str accepts. Normalise so both spellings of "empty" cross the ABI
+	// identically.
+	if string(jsonBytes{{ c_name }}) == "null" {
+		jsonBytes{{ c_name }} = []byte("{{ empty_literal }}")
+	}
+{% endif %}
 	{{ c_name }} := C.CString(string(jsonBytes{{ c_name }}))
 	defer C.free(unsafe.Pointer({{ c_name }}))

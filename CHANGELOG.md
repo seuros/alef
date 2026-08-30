@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
   raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
   element-anchored classification inert on exactly the projected shapes it was added for.
+- Normalize a required nil Go slice or map argument to the `[]`/`{}` wire form serde writes for an
+  empty Rust collection. Generated Go marshalled required `Vec`/`Map` parameters with a bare
+  `json.Marshal`,
+  which writes `null` for a nil value — a form the FFI shim's `serde_json::from_str` rejects — so
+  the same empty argument crossed the ABI two different ways depending on how the caller spelled
+  it. Optional collections and `serde_json::Value` parameters keep their `null` intact.
 - Stop emitting an invented `stream_complete` signal in generated C e2e streaming tests. The C
   driver frees every chunk handle without reading a field, so it can never observe the terminal
   `finish_reason` the cross-backend field is defined by; the local it resolved to was set from

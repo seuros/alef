@@ -444,3 +444,77 @@ fn optional_string_method_keeps_the_direct_pointer_shape() {
         "Optional<String> must not be typed as []byte in:\n{out}"
     );
 }
+
+/// The defect: a `Vec<T>` method parameter was marshalled with a bare `json.Marshal`, and Go
+/// writes `null` for a nil slice. Rust's serde writes `[]` for an empty `Vec`, and the FFI
+/// shim's `serde_json::from_str::<Vec<T>>` rejects `null` outright — so an empty argument
+/// crossed the ABI as either `[]` or `null` purely by how the caller had spelled "empty".
+/// `param_named_type.jinja` already normalised the same way for a nil DTO pointer.
+#[test]
+fn a_vec_param_normalizes_a_nil_slice_to_the_empty_array_rust_emits() {
+    let param = simple_param("tags", TypeRef::Vec(Box::new(TypeRef::String)));
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ffi_param_enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let out = gen_param_to_c(&param, "", false, "krz", &opaque, &enum_names, &ffi_param_enum_names);
+
+    // Positive first: the marshal really was emitted, so the presence check below means something.
+    assert!(
+        out.contains("jsonBytescTags, err := json.Marshal(tags)"),
+        "the param must still be marshalled: {out}"
+    );
+    assert!(
+        out.contains("if string(jsonBytescTags) == \"null\" {"),
+        "a nil slice must be detected before it crosses the ABI: {out}"
+    );
+    assert!(
+        out.contains("jsonBytescTags = []byte(\"[]\")"),
+        "a nil slice must be normalized to the `[]` serde writes for an empty Vec: {out}"
+    );
+}
+
+/// The map half of the same rule: serde writes `{}` for an empty `HashMap`, not `[]`.
+#[test]
+fn a_map_param_normalizes_a_nil_map_to_the_empty_object_rust_emits() {
+    let param = simple_param(
+        "labels",
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+    );
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ffi_param_enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let out = gen_param_to_c(&param, "", false, "krz", &opaque, &enum_names, &ffi_param_enum_names);
+
+    assert!(
+        out.contains("jsonBytescLabels, err := json.Marshal(labels)"),
+        "the param must still be marshalled: {out}"
+    );
+    assert!(
+        out.contains("jsonBytescLabels = []byte(\"{}\")"),
+        "a nil map must be normalized to the `{{}}` serde writes for an empty Map: {out}"
+    );
+}
+
+/// The negative control that keeps the fix from over-reaching. A `TypeRef::Json` parameter is a
+/// `serde_json::Value` on the Rust side, where `null` is a legitimate inhabitant — rewriting it
+/// to `[]` would change the argument's meaning, not normalize its spelling.
+#[test]
+fn a_json_param_keeps_a_null_value_intact() {
+    let param = simple_param("payload", TypeRef::Json);
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ffi_param_enum_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let out = gen_param_to_c(&param, "", false, "krz", &opaque, &enum_names, &ffi_param_enum_names);
+
+    assert!(
+        out.contains("jsonBytescPayload, err := json.Marshal(payload)"),
+        "the param must still be marshalled: {out}"
+    );
+    assert!(
+        !out.contains("== \"null\""),
+        "a JSON-valued param must not have its null rewritten: {out}"
+    );
+}
