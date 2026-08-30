@@ -877,6 +877,32 @@ pub(super) fn render_assertion(
     }
 }
 
+struct WildcardTraversal<'a> {
+    array_part: &'a str,
+    element_part: &'a str,
+    full_field: &'a str,
+    result_variable: &'a str,
+    field_resolver: &'a FieldResolver,
+}
+
+impl<'a> WildcardTraversal<'a> {
+    fn new(
+        array_part: &'a str,
+        element_part: &'a str,
+        full_field: &'a str,
+        result_variable: &'a str,
+        field_resolver: &'a FieldResolver,
+    ) -> Self {
+        Self {
+            array_part,
+            element_part,
+            full_field,
+            result_variable,
+            field_resolver,
+        }
+    }
+}
+
 /// Render an assertion whose field path traverses an array with `[].` (e.g. `links[].url`).
 ///
 /// `dot` is the byte offset of the `[].` separator in `field`, so `field[..dot]` is the array
@@ -904,6 +930,7 @@ fn render_wildcard_assertion(
 ) {
     let array_part = &field[..dot];
     let elem_part = &field[dot + 3..];
+    let traversal = WildcardTraversal::new(array_part, elem_part, field, result_var, field_resolver);
 
     // The split above consumes the FIRST `[].` only, so a doubly-nested path leaves a second
     // wildcard in `elem_part`. The `not_empty` arm builds its element accessor inline instead of
@@ -920,46 +947,19 @@ fn render_wildcard_assertion(
     match assertion.assertion_type.as_str() {
         "contains" => {
             if let Some(expected) = &assertion.value {
-                emit_wildcard_contains(
-                    out,
-                    expected,
-                    false,
-                    array_part,
-                    elem_part,
-                    field,
-                    result_var,
-                    field_resolver,
-                );
+                emit_wildcard_contains(out, expected, false, &traversal);
             }
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for value in values {
-                    emit_wildcard_contains(
-                        out,
-                        value,
-                        false,
-                        array_part,
-                        elem_part,
-                        field,
-                        result_var,
-                        field_resolver,
-                    );
+                    emit_wildcard_contains(out, value, false, &traversal);
                 }
             }
         }
         "not_contains" => {
             for expected in assertion.expected_values() {
-                emit_wildcard_contains(
-                    out,
-                    expected,
-                    true,
-                    array_part,
-                    elem_part,
-                    field,
-                    result_var,
-                    field_resolver,
-                );
+                emit_wildcard_contains(out, expected, true, &traversal);
             }
         }
         "not_empty" => {
@@ -995,16 +995,11 @@ fn render_wildcard_assertion(
 }
 
 /// Emit one `XCTAssert{True,False}(array.contains(where: { … }), …)` line for a wildcard path.
-#[allow(clippy::too_many_arguments)]
 fn emit_wildcard_contains(
     out: &mut String,
     value: &serde_json::Value,
     negate: bool,
-    array_part: &str,
-    elem_part: &str,
-    field: &str,
-    result_var: &str,
-    field_resolver: &FieldResolver,
+    traversal: &WildcardTraversal<'_>,
 ) {
     let swift_val = json_to_swift(value);
     let msg = if negate {
@@ -1013,14 +1008,14 @@ fn emit_wildcard_contains(
         format!("expected to contain: \\({swift_val})")
     };
     let line = swift_traversal_contains_assert(SwiftTraversalContains {
-        array_part,
-        element_part: elem_part,
-        full_field: field,
+        array_part: traversal.array_part,
+        element_part: traversal.element_part,
+        full_field: traversal.full_field,
         value_expression: &swift_val,
-        result_variable: result_var,
+        result_variable: traversal.result_variable,
         negate,
         message: &msg,
-        field_resolver,
+        field_resolver: traversal.field_resolver,
     });
     let _ = writeln!(out, "{line}");
 }
