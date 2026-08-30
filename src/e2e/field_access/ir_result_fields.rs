@@ -27,6 +27,7 @@
 
 use std::collections::HashSet;
 
+use crate::backends::go::emission_facts::GoEmissionFacts;
 use crate::codegen::shared::binding_fields;
 use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
 use crate::e2e::codegen::call_ir::named_type;
@@ -81,74 +82,31 @@ pub(super) fn build_ir_result_field_map_with_enums(
     enums: &[EnumDef],
     rule: OptionalityRule,
 ) -> IrResultFieldMap {
-    build_go_ir_result_field_map(type_defs, enums, rule, &HashSet::new())
+    let emitted = GoEmissionFacts::new(type_defs, enums, HashSet::new(), HashSet::new());
+    build_go_ir_result_field_map(type_defs, rule, &emitted)
 }
 
 pub(super) fn build_go_ir_result_field_map(
     type_defs: &[TypeDef],
-    enums: &[EnumDef],
     rule: OptionalityRule,
-    excluded_names: &HashSet<String>,
+    emitted: &GoEmissionFacts<'_>,
 ) -> IrResultFieldMap {
-    let emitted = emitted_go_type_names(type_defs, enums, excluded_names);
     let names = GoFieldTypeNames {
         structs: &emitted.structs,
-        enums: &emitted.enums,
+        enums: &emitted.unit_enums,
         passthrough_enums: &emitted.passthrough_enums,
         data_enums: &emitted.data_enums,
     };
     let mut map = IrResultFieldMap::default();
-    for type_def in type_defs {
+    for type_def in type_defs
+        .iter()
+        .filter(|definition| emitted.structs.contains(definition.name.as_str()))
+    {
         for field in binding_fields(&type_def.fields) {
             record_ir_result_field(&mut map, type_def, field, rule, &names);
         }
     }
     map
-}
-
-struct EmittedGoTypeNames<'a> {
-    structs: HashSet<&'a str>,
-    enums: HashSet<&'a str>,
-    passthrough_enums: HashSet<&'a str>,
-    data_enums: HashSet<&'a str>,
-}
-
-fn emitted_go_type_names<'a>(
-    type_defs: &'a [TypeDef],
-    enums: &'a [EnumDef],
-    excluded_names: &HashSet<String>,
-) -> EmittedGoTypeNames<'a> {
-    let structs = type_defs
-        .iter()
-        .filter(|type_def| !type_def.is_opaque && !type_def.is_trait)
-        .filter(|type_def| !excluded_names.contains(&type_def.name))
-        .map(|type_def| type_def.name.as_str())
-        .collect();
-    let enum_names = enums
-        .iter()
-        .filter(|definition| !excluded_names.contains(&definition.name))
-        .filter(|definition| crate::backends::go::is_unit_struct_field_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
-    let passthrough_enum_names = enums
-        .iter()
-        .filter(|definition| !excluded_names.contains(&definition.name))
-        .filter(|definition| crate::backends::go::is_passthrough_raw_message_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
-    let data_enum_names = enums
-        .iter()
-        .filter(|definition| !excluded_names.contains(&definition.name))
-        .filter(|definition| crate::backends::go::is_data_interface_struct_field_enum(definition))
-        .map(|definition| definition.name.as_str())
-        .collect();
-
-    EmittedGoTypeNames {
-        structs,
-        enums: enum_names,
-        passthrough_enums: passthrough_enum_names,
-        data_enums: data_enum_names,
-    }
 }
 
 struct GoFieldTypeNames<'a> {

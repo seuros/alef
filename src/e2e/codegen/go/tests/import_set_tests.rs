@@ -86,6 +86,7 @@ fn declared_api_key_var_without_mock_or_client_factory_still_imports_os() {
             enums: &enums,
             errors: &[],
             functions: &[],
+            crate_facts: None,
         },
     );
 

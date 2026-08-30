@@ -12,7 +12,8 @@ use std::fmt::Write as FmtWrite;
 
 use super::assertion_field_shape::resolve_assertion_field_shape;
 use super::assertion_render_helpers::{
-    contains_value_expression, render_count_assertion, render_guarded_scalar_comparison, string_value_expression,
+    contains_value_expression, render_count_assertion, render_guarded_scalar_comparison, render_length_assertion,
+    string_value_expression,
 };
 use super::json_values::json_to_go;
 use super::method_calls::build_go_method_call;
@@ -416,6 +417,9 @@ pub(super) fn render_assertion(
     let expression_is_length = field_expr.starts_with("len(");
     let field_is_pointer = receiver_is_pointer && !expression_is_length;
     let field_is_nullable = receiver_is_nullable && !expression_is_length;
+    let nullable_guard_expr = nil_guard_expr
+        .clone()
+        .or_else(|| field_is_nullable.then(|| field_expr.clone()));
 
     let field_is_slice = field_shape.is_slice;
     let deref_field_expr = if field_is_pointer && !field_expr.starts_with("len(") && !field_is_slice {
@@ -444,7 +448,7 @@ pub(super) fn render_assertion(
                 if expected.is_string() {
                     let string_field = string_value_expression(&field_expr, field_is_pointer, field_is_data_interface);
                     let expected_string = if field_is_data_interface {
-                        format!("jsonString({go_val})")
+                        format!("jsonString(t, {go_val})")
                     } else {
                         go_val.clone()
                     };
@@ -750,13 +754,7 @@ pub(super) fn render_assertion(
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_prefix = if field_is_pointer
-                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
-                {
-                    format!("string(*{field_expr})")
-                } else {
-                    format!("string({field_expr})")
-                };
+                let field_for_prefix = string_value_expression(&field_expr, field_is_pointer, field_is_data_interface);
                 let _ = writeln!(out_ref, "\tif !strings.HasPrefix({field_for_prefix}, {go_val}) {{");
                 let _ = writeln!(
                     out_ref,
@@ -769,14 +767,28 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                render_count_assertion(out_ref, &field_expr, n, field_is_nullable, field_is_slice, false);
+                render_count_assertion(
+                    out_ref,
+                    &field_expr,
+                    n,
+                    nullable_guard_expr.as_deref(),
+                    field_is_slice,
+                    false,
+                );
             }
         }
         "count_equals" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                render_count_assertion(out_ref, &field_expr, n, field_is_nullable, field_is_slice, true);
+                render_count_assertion(
+                    out_ref,
+                    &field_expr,
+                    n,
+                    nullable_guard_expr.as_deref(),
+                    field_is_slice,
+                    true,
+                );
             }
         }
         "is_true" => {
@@ -889,70 +901,34 @@ pub(super) fn render_assertion(
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if field_is_nullable {
-                    let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                    let len_expr = if field_is_pointer {
-                        format!("len(*{field_expr})")
-                    } else {
-                        format!("len({field_expr})")
-                    };
-                    let _ = writeln!(
-                        out_ref,
-                        "\t\tassert.GreaterOrEqual(t, {len_expr}, {n}, \"expected length >= {n}\")"
-                    );
-                    let _ = writeln!(out_ref, "\t}}");
-                } else if field_expr.starts_with("len(") {
-                    let _ = writeln!(
-                        out_ref,
-                        "\tassert.GreaterOrEqual(t, {field_expr}, {n}, \"expected length >= {n}\")"
-                    );
-                } else {
-                    let _ = writeln!(
-                        out_ref,
-                        "\tassert.GreaterOrEqual(t, len({field_expr}), {n}, \"expected length >= {n}\")"
-                    );
-                }
+                render_length_assertion(
+                    out_ref,
+                    &field_expr,
+                    n,
+                    nullable_guard_expr.as_deref(),
+                    field_is_pointer,
+                    true,
+                );
             }
         }
         "max_length" => {
             if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                if field_is_nullable {
-                    let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                    let len_expr = if field_is_pointer {
-                        format!("len(*{field_expr})")
-                    } else {
-                        format!("len({field_expr})")
-                    };
-                    let _ = writeln!(
-                        out_ref,
-                        "\t\tassert.LessOrEqual(t, {len_expr}, {n}, \"expected length <= {n}\")"
-                    );
-                    let _ = writeln!(out_ref, "\t}}");
-                } else if field_expr.starts_with("len(") {
-                    let _ = writeln!(
-                        out_ref,
-                        "\tassert.LessOrEqual(t, {field_expr}, {n}, \"expected length <= {n}\")"
-                    );
-                } else {
-                    let _ = writeln!(
-                        out_ref,
-                        "\tassert.LessOrEqual(t, len({field_expr}), {n}, \"expected length <= {n}\")"
-                    );
-                }
+                render_length_assertion(
+                    out_ref,
+                    &field_expr,
+                    n,
+                    nullable_guard_expr.as_deref(),
+                    field_is_pointer,
+                    false,
+                );
             }
         }
         "ends_with" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_suffix = if field_is_pointer
-                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
-                {
-                    format!("string(*{field_expr})")
-                } else {
-                    format!("string({field_expr})")
-                };
+                let field_for_suffix = string_value_expression(&field_expr, field_is_pointer, field_is_data_interface);
                 let _ = writeln!(out_ref, "\tif !strings.HasSuffix({field_for_suffix}, {go_val}) {{");
                 let _ = writeln!(
                     out_ref,
@@ -964,13 +940,7 @@ pub(super) fn render_assertion(
         "matches_regex" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_regex = if field_is_pointer
-                    && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
-                {
-                    format!("*{field_expr}")
-                } else {
-                    field_expr.clone()
-                };
+                let field_for_regex = string_value_expression(&field_expr, field_is_pointer, field_is_data_interface);
                 let _ = writeln!(
                     out_ref,
                     "\tassert.Regexp(t, {go_val}, {field_for_regex}, \"expected value to match regex\")"

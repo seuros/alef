@@ -688,6 +688,7 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
             enums: &enums,
             errors: &[],
             functions: &[],
+            crate_facts: None,
         },
     );
 

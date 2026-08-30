@@ -31,7 +31,7 @@ fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
         ""
     };
     let json_stub = if rendered.contains("jsonString(") {
-        "func jsonString(value any) string { data, _ := json.Marshal(value); return string(data) }\n"
+        "func jsonString(t *testing.T, value any) string { t.Helper(); data, err := json.Marshal(value); if err != nil { t.Fatal(err) }; return string(data) }\n"
     } else {
         ""
     };
@@ -361,9 +361,35 @@ fn assert_pointer_pseudo_field_compiles(suffix: &str, assertion_type: &str) {
     );
 }
 
+fn assert_pointer_pseudo_field_nil_safe(suffix: &str, assertion_type: &str) {
+    let field_path = format!("label.{suffix}");
+    let expected = match assertion_type {
+        "less_than_or_equal" | "max_length" => 10,
+        _ => 1,
+    };
+    let output = render_field_assertion(
+        FieldDef {
+            name: "label".into(),
+            ty: TypeRef::String,
+            default: Some("default_label".into()),
+            typed_default: Some(DefaultValue::StringLiteral("default".into())),
+            ..Default::default()
+        },
+        &field_path,
+        &[],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    assert_rendered_go_compiles(
+        &output,
+        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { return &Envelope{Label: nil}, nil }\n",
+    );
+}
+
 #[test]
 fn pointer_length_and_count_pseudo_fields_compile_as_scalars() {
-    for suffix in ["length", "count"] {
+    for suffix in ["length", "count", "size"] {
         for assertion_type in [
             "greater_than",
             "less_than_or_equal",
@@ -373,6 +399,7 @@ fn pointer_length_and_count_pseudo_fields_compile_as_scalars() {
             "max_length",
         ] {
             assert_pointer_pseudo_field_compiles(suffix, assertion_type);
+            assert_pointer_pseudo_field_nil_safe(suffix, assertion_type);
         }
     }
 }
@@ -403,7 +430,7 @@ fn assert_data_interface_string_family_compiles(assertion_type: &str, expected: 
         assertion_type,
         Some(serde_json::json!(expected)),
     );
-    assert!(output.contains("jsonString(result.Choice)"), "{output}");
+    assert!(output.contains("jsonString(t, result.Choice)"), "{output}");
     assert_rendered_go_compiles(
         &output,
         "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n",

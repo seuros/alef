@@ -120,6 +120,43 @@ fn required_unresolved_named_field_uses_raw_message_pointer() {
 }
 
 #[test]
+fn optional_non_emitted_named_fields_use_raw_message_in_struct_and_marshal_aux() {
+    for name in ["Excluded", "Opaque", "Foreign", "VisitorOwned"] {
+        let type_def = TypeDef {
+            name: "Envelope".into(),
+            fields: vec![
+                FieldDef {
+                    name: "payload".into(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Named(name.into()))),
+                    optional: true,
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "bytes".into(),
+                    ty: TypeRef::Bytes,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let output = gen_struct_type(
+            &type_def,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::from([type_def.name.as_str()]),
+            &[],
+        );
+        assert_eq!(
+            output.matches("Payload *json.RawMessage").count(),
+            2,
+            "{name}:\n{output}"
+        );
+        assert_go_compiles(&output, "");
+    }
+}
+
+#[test]
 fn marshal_auxiliary_data_interface_uses_authoritative_type() {
     let (type_def, choice) = data_interface_with_bytes();
     let output = gen_struct_type(

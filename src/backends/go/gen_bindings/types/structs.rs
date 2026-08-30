@@ -64,11 +64,12 @@ pub(crate) fn go_struct_field_type(
     let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
     let named_type = direct_named_field_type(&field.ty);
     let is_sealed_interface = named_type.is_some_and(|name| data_enum_names.contains(name));
-    let is_unresolved_named = matches!(&field.ty, TypeRef::Named(name)
-        if !enum_names.contains(name.as_str())
-            && !passthrough_enum_names.contains(name.as_str())
-            && !data_enum_names.contains(name.as_str())
-            && !struct_names.contains(name.as_str()));
+    let is_unresolved_named = named_type.is_some_and(|name| {
+        !enum_names.contains(name)
+            && !passthrough_enum_names.contains(name)
+            && !data_enum_names.contains(name)
+            && !struct_names.contains(name)
+    });
 
     if is_unresolved_named {
         Cow::Borrowed("*json.RawMessage")
@@ -95,22 +96,20 @@ fn direct_named_field_type(field_type: &TypeRef) -> Option<&str> {
 fn go_struct_field_json_tag(
     typ: &TypeDef,
     field: &FieldDef,
-    enum_names: &std::collections::HashSet<&str>,
-    passthrough_enum_names: &std::collections::HashSet<&str>,
-    data_enum_names: &std::collections::HashSet<&str>,
-    struct_names: &std::collections::HashSet<&str>,
+    sets: &GoStructTypeSets<'_>,
     bytes_shadow: bool,
 ) -> String {
-    let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
+    let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, sets.structs);
     let named_enum_default = !field.optional
         && !use_default_pointer
         && (field.default.is_some() || typ.serde_container_default)
-        && matches!(&field.ty, TypeRef::Named(name) if enum_names.contains(name.as_str()));
-    let unresolved_named = matches!(&field.ty, TypeRef::Named(name)
-        if !enum_names.contains(name.as_str())
-            && !passthrough_enum_names.contains(name.as_str())
-            && !data_enum_names.contains(name.as_str())
-            && !struct_names.contains(name.as_str()));
+        && matches!(&field.ty, TypeRef::Named(name) if sets.enums.contains(name.as_str()));
+    let unresolved_named = direct_named_field_type(&field.ty).is_some_and(|name| {
+        !sets.enums.contains(name)
+            && !sets.passthrough_enums.contains(name)
+            && !sets.data_enums.contains(name)
+            && !sets.structs.contains(name)
+    });
     let collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
     let omit = !(bytes_shadow && matches!(&field.ty, TypeRef::Bytes))
         && (field.optional || collection || use_default_pointer || named_enum_default || unresolved_named);
@@ -120,6 +119,307 @@ fn go_struct_field_json_tag(
         typ.serde_rename_all.as_deref(),
     );
     format!("json:\"{json_name}{}\"", if omit { ",omitempty" } else { "" })
+}
+
+struct GoStructTypeSets<'a> {
+    enums: &'a std::collections::HashSet<&'a str>,
+    passthrough_enums: &'a std::collections::HashSet<&'a str>,
+    data_enums: &'a std::collections::HashSet<&'a str>,
+    structs: &'a std::collections::HashSet<&'a str>,
+}
+
+fn render_struct_field(typ: &TypeDef, field: &FieldDef, sets: &GoStructTypeSets<'_>) -> String {
+    let field_type = go_struct_field_type(
+        typ,
+        field,
+        sets.enums,
+        sets.passthrough_enums,
+        sets.data_enums,
+        sets.structs,
+    );
+    let json_tag = go_struct_field_json_tag(typ, field, sets, false);
+    let doc_lines: Vec<&str> = field.doc.lines().map(str::trim).collect();
+    crate::backends::go::template_env::render(
+        "struct_field.jinja",
+        minijinja::context! {
+            doc_lines => doc_lines,
+            field_name => to_go_name(&field.name),
+            field_type => &field_type,
+            json_tag => &json_tag,
+        },
+    )
+}
+
+fn render_struct_fields(typ: &TypeDef, sets: &GoStructTypeSets<'_>, trait_bridges: &[TraitBridgeConfig]) -> String {
+    let mut out = String::new();
+    for field in binding_fields(&typ.fields).filter(|field| !is_tuple_field(field)) {
+        if is_options_field_bridge_field(typ, field, trait_bridges) {
+            let doc_lines: Vec<&str> = field.doc.lines().map(str::trim).collect();
+            if !doc_lines.is_empty() {
+                out.push_str(&crate::backends::go::template_env::render(
+                    "visitor_field_doc.jinja",
+                    minijinja::context! { doc_lines => &doc_lines },
+                ));
+            }
+            out.push_str(&crate::backends::go::template_env::render(
+                "visitor_field.jinja",
+                minijinja::context! { field_name => to_go_name(&field.name) },
+            ));
+            out.push('\n');
+        } else {
+            out.push_str(&render_struct_field(typ, field, sets));
+        }
+    }
+    out
+}
+
+fn render_marshal_aux_fields(
+    typ: &TypeDef,
+    sets: &GoStructTypeSets<'_>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    let mut out = String::new();
+    for field in binding_fields(&typ.fields).filter(|field| !is_tuple_field(field)) {
+        if is_options_field_bridge_field(typ, field, trait_bridges) {
+            continue;
+        }
+        let field_type = if matches!(&field.ty, TypeRef::Bytes) {
+            Cow::Borrowed("[]int")
+        } else {
+            go_struct_field_type(
+                typ,
+                field,
+                sets.enums,
+                sets.passthrough_enums,
+                sets.data_enums,
+                sets.structs,
+            )
+        };
+        let json_tag = go_struct_field_json_tag(typ, field, sets, true);
+        out.push_str(&crate::backends::go::template_env::render(
+            "struct_marshal_aux_field.jinja",
+            context! { field_name => to_go_name(&field.name), field_type => &field_type, json_tag => &json_tag },
+        ));
+    }
+    out
+}
+
+fn render_marshal_aux_assignments(
+    typ: &TypeDef,
+    sets: &GoStructTypeSets<'_>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    let mut out = String::new();
+    for field in binding_fields(&typ.fields).filter(|field| !is_tuple_field(field)) {
+        if is_options_field_bridge_field(typ, field, trait_bridges) {
+            continue;
+        }
+        let go_field = to_go_name(&field.name);
+        let template = if matches!(&field.ty, TypeRef::Bytes) {
+            let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, sets.structs);
+            if field.optional || use_default_pointer {
+                "struct_marshal_bytes_field_pointer.jinja"
+            } else {
+                "struct_marshal_bytes_field_nonpointer.jinja"
+            }
+        } else {
+            "struct_marshal_regular_field.jinja"
+        };
+        out.push_str(&crate::backends::go::template_env::render(
+            template,
+            context! { go_field => &go_field },
+        ));
+    }
+    out
+}
+
+fn render_struct_marshal_json(
+    typ: &TypeDef,
+    go_name: &str,
+    sets: &GoStructTypeSets<'_>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    if !binding_fields(&typ.fields).any(|field| !is_tuple_field(field) && matches!(&field.ty, TypeRef::Bytes)) {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_marshal_json_header.jinja",
+        context! { go_name => go_name },
+    ));
+    out.push_str(&render_marshal_aux_fields(typ, sets, trait_bridges));
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_marshal_aux_init.jinja",
+        minijinja::Value::default(),
+    ));
+    out.push_str(&render_marshal_aux_assignments(typ, sets, trait_bridges));
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_marshal_json_footer.jinja",
+        minijinja::Value::default(),
+    ));
+    out
+}
+
+struct DataEnumField {
+    go_name: String,
+    enum_go_name: String,
+    is_slice: bool,
+}
+
+fn data_enum_fields(
+    typ: &TypeDef,
+    data_enum_names: &std::collections::HashSet<&str>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> Vec<DataEnumField> {
+    binding_fields(&typ.fields)
+        .filter(|field| !is_tuple_field(field))
+        .filter(|field| !is_options_field_bridge_field(typ, field, trait_bridges))
+        .filter_map(|field| {
+            let (name, is_slice) = match &field.ty {
+                TypeRef::Named(name) if data_enum_names.contains(name.as_str()) => (name, false),
+                TypeRef::Optional(inner) => match inner.as_ref() {
+                    TypeRef::Named(name) if data_enum_names.contains(name.as_str()) => (name, false),
+                    _ => return None,
+                },
+                TypeRef::Vec(inner) => match inner.as_ref() {
+                    TypeRef::Named(name) if data_enum_names.contains(name.as_str()) => (name, true),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some(DataEnumField {
+                go_name: to_go_name(&field.name),
+                enum_go_name: go_type_name(name),
+                is_slice,
+            })
+        })
+        .collect()
+}
+
+fn render_unmarshal_raw_fields(
+    typ: &TypeDef,
+    fields: &[DataEnumField],
+    sets: &GoStructTypeSets<'_>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    let mut out = String::new();
+    for field in binding_fields(&typ.fields).filter(|field| !is_tuple_field(field)) {
+        if is_options_field_bridge_field(typ, field, trait_bridges) {
+            continue;
+        }
+        out.push_str(&render_unmarshal_raw_field(typ, field, fields, sets));
+    }
+    out
+}
+
+fn render_unmarshal_raw_field(
+    typ: &TypeDef,
+    field: &FieldDef,
+    fields: &[DataEnumField],
+    sets: &GoStructTypeSets<'_>,
+) -> String {
+    let go_name = to_go_name(&field.name);
+    let data_enum = fields.iter().find(|definition| definition.go_name == go_name);
+    let field_type = data_enum.map_or_else(
+        || {
+            go_struct_field_type(
+                typ,
+                field,
+                sets.enums,
+                sets.passthrough_enums,
+                sets.data_enums,
+                sets.structs,
+            )
+        },
+        |definition| {
+            Cow::Borrowed(if definition.is_slice {
+                "[]json.RawMessage"
+            } else {
+                "json.RawMessage"
+            })
+        },
+    );
+    let json_tag = data_enum.map_or_else(
+        || go_struct_field_json_tag(typ, field, sets, false),
+        |_| {
+            let json_name = wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                typ.serde_rename_all.as_deref(),
+            );
+            format!("json:\"{json_name},omitempty\"")
+        },
+    );
+    crate::backends::go::template_env::render(
+        "struct_unmarshal_raw_field.jinja",
+        minijinja::context! { go_field_name => &go_name, field_type => &field_type, json_tag => &json_tag },
+    )
+}
+
+fn render_unmarshal_assignments(
+    typ: &TypeDef,
+    fields: &[DataEnumField],
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    let mut out = String::new();
+    for field in binding_fields(&typ.fields).filter(|field| !is_tuple_field(field)) {
+        if is_options_field_bridge_field(typ, field, trait_bridges) {
+            continue;
+        }
+        let go_name = to_go_name(&field.name);
+        if fields.iter().all(|definition| definition.go_name != go_name) {
+            out.push_str(&crate::backends::go::template_env::render(
+                "struct_unmarshal_copy_field.jinja",
+                minijinja::context! { go_field_name => &go_name },
+            ));
+        }
+    }
+    for field in fields {
+        let template = if field.is_slice {
+            "struct_unmarshal_data_enum_slice.jinja"
+        } else {
+            "struct_unmarshal_data_enum_value.jinja"
+        };
+        out.push_str(&crate::backends::go::template_env::render(
+            template,
+            minijinja::context! {
+                go_name => &field.go_name,
+                enum_go_name => &field.enum_go_name,
+                unmarshal_fn => format!("Unmarshal{}", field.enum_go_name),
+            },
+        ));
+    }
+    out
+}
+
+fn render_struct_unmarshal_json(
+    typ: &TypeDef,
+    go_name: &str,
+    sets: &GoStructTypeSets<'_>,
+    trait_bridges: &[TraitBridgeConfig],
+) -> String {
+    let fields = data_enum_fields(typ, sets.data_enums, trait_bridges);
+    if fields.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_unmarshal_json_header.jinja",
+        minijinja::context! { go_name => go_name },
+    ));
+    out.push_str(&render_unmarshal_raw_fields(typ, &fields, sets, trait_bridges));
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_unmarshal_after_raw.jinja",
+        minijinja::Value::default(),
+    ));
+    out.push_str(&render_unmarshal_assignments(typ, &fields, trait_bridges));
+    out.push_str(&crate::backends::go::template_env::render(
+        "struct_unmarshal_json_footer.jinja",
+        minijinja::Value::default(),
+    ));
+    out
 }
 
 /// Generate a Go struct type definition with json tags for marshaling.
@@ -145,334 +445,21 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
         },
     ));
 
-    for field in binding_fields(&typ.fields) {
-        if is_tuple_field(field) {
-            continue;
-        }
-
-        let is_visitor_field = is_options_field_bridge_field(typ, field, trait_bridges);
-
-        if is_visitor_field {
-            let doc_lines: Vec<&str> = if !field.doc.is_empty() {
-                field.doc.lines().map(|l| l.trim()).collect()
-            } else {
-                vec![]
-            };
-            if !doc_lines.is_empty() {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "visitor_field_doc.jinja",
-                    minijinja::context! {
-                        doc_lines => &doc_lines,
-                    },
-                ));
-            }
-            out.push_str(&crate::backends::go::template_env::render(
-                "visitor_field.jinja",
-                minijinja::context! {
-                    field_name => to_go_name(&field.name),
-                },
-            ));
-            out.push('\n');
-            continue;
-        }
-
-        let field_type = go_struct_field_type(
-            typ,
-            field,
-            enum_names,
-            passthrough_enum_names,
-            data_enum_names,
-            struct_names,
-        );
-
-        let json_tag = go_struct_field_json_tag(
-            typ,
-            field,
-            enum_names,
-            passthrough_enum_names,
-            data_enum_names,
-            struct_names,
-            false,
-        );
-
-        let doc_lines: Vec<&str> = if !field.doc.is_empty() {
-            field.doc.lines().map(|l| l.trim()).collect()
-        } else {
-            vec![]
-        };
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_field.jinja",
-            minijinja::context! {
-                doc_lines => doc_lines,
-                field_name => to_go_name(&field.name),
-                field_type => &field_type,
-                json_tag => &json_tag,
-            },
-        ));
-    }
+    let sets = GoStructTypeSets {
+        enums: enum_names,
+        passthrough_enums: passthrough_enum_names,
+        data_enums: data_enum_names,
+        structs: struct_names,
+    };
+    out.push_str(&render_struct_fields(typ, &sets, trait_bridges));
 
     out.push_str(&crate::backends::go::template_env::render(
         "struct_type_end.jinja",
         minijinja::Value::default(),
     ));
 
-    let bytes_fields: Vec<&crate::core::ir::FieldDef> = typ
-        .fields
-        .iter()
-        .filter(|f| !f.binding_excluded)
-        .filter(|f| !is_tuple_field(f) && matches!(&f.ty, TypeRef::Bytes))
-        .collect();
-    if !bytes_fields.is_empty() {
-        out.push('\n');
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_marshal_json_header.jinja",
-            context! {
-                go_name => &go_name,
-            },
-        ));
-        for field in binding_fields(&typ.fields) {
-            if is_tuple_field(field) {
-                continue;
-            }
-            let is_visitor_field = is_options_field_bridge_field(typ, field, trait_bridges);
-            if is_visitor_field {
-                continue;
-            }
-            let go_field = to_go_name(&field.name);
-            let json_tag = go_struct_field_json_tag(
-                typ,
-                field,
-                enum_names,
-                passthrough_enum_names,
-                data_enum_names,
-                struct_names,
-                true,
-            );
-            let auxiliary_field_type: Cow<'static, str> = if matches!(&field.ty, TypeRef::Bytes) {
-                Cow::Borrowed("[]int")
-            } else {
-                go_struct_field_type(
-                    typ,
-                    field,
-                    enum_names,
-                    passthrough_enum_names,
-                    data_enum_names,
-                    struct_names,
-                )
-            };
-            out.push_str(&crate::backends::go::template_env::render(
-                "struct_marshal_aux_field.jinja",
-                context! {
-                    field_name => &go_field,
-                    field_type => &auxiliary_field_type,
-                    json_tag => &json_tag,
-                },
-            ));
-        }
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_marshal_aux_init.jinja",
-            minijinja::Value::default(),
-        ));
-        for field in binding_fields(&typ.fields) {
-            if is_tuple_field(field) {
-                continue;
-            }
-            let is_visitor_field = is_options_field_bridge_field(typ, field, trait_bridges);
-            if is_visitor_field {
-                continue;
-            }
-            let go_field = to_go_name(&field.name);
-            if matches!(&field.ty, TypeRef::Bytes) {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
-                let is_pointer = field.optional || use_default_pointer;
-                if is_pointer {
-                    out.push_str(&crate::backends::go::template_env::render(
-                        "struct_marshal_bytes_field_pointer.jinja",
-                        context! {
-                            go_field => &go_field,
-                        },
-                    ));
-                } else {
-                    out.push_str(&crate::backends::go::template_env::render(
-                        "struct_marshal_bytes_field_nonpointer.jinja",
-                        context! {
-                            go_field => &go_field,
-                        },
-                    ));
-                }
-            } else {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_marshal_regular_field.jinja",
-                    context! {
-                        go_field => &go_field,
-                    },
-                ));
-            }
-        }
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_marshal_json_footer.jinja",
-            minijinja::Value::default(),
-        ));
-    }
-
-    struct DataEnumField {
-        go_name: String,
-        enum_go_name: String,
-        is_optional: bool,
-        is_slice: bool,
-    }
-    let data_enum_fields: Vec<DataEnumField> = binding_fields(&typ.fields)
-        .filter(|f| !is_tuple_field(f))
-        .filter(|f| !is_options_field_bridge_field(typ, f, trait_bridges))
-        .filter_map(|f| {
-            // `RerankDocument` is `#[serde(untagged)]`) need per-element dispatch
-            let (enum_name_str, is_optional, is_slice) = match &f.ty {
-                TypeRef::Named(n) if data_enum_names.contains(n.as_str()) => (n.as_str(), false, false),
-                TypeRef::Optional(inner) => match inner.as_ref() {
-                    TypeRef::Named(n) if data_enum_names.contains(n.as_str()) => (n.as_str(), true, false),
-                    _ => return None,
-                },
-                TypeRef::Vec(inner) => match inner.as_ref() {
-                    TypeRef::Named(n) if data_enum_names.contains(n.as_str()) => (n.as_str(), false, true),
-                    _ => return None,
-                },
-                _ => return None,
-            };
-            Some(DataEnumField {
-                go_name: to_go_name(&f.name),
-                enum_go_name: go_type_name(enum_name_str),
-                is_optional,
-                is_slice,
-            })
-        })
-        .collect();
-
-    if !data_enum_fields.is_empty() {
-        out.push('\n');
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_unmarshal_json_header.jinja",
-            minijinja::context! {
-                go_name => &go_name,
-            },
-        ));
-
-        for field in binding_fields(&typ.fields) {
-            if is_tuple_field(field) {
-                continue;
-            }
-            let is_visitor_field = is_options_field_bridge_field(typ, field, trait_bridges);
-            if is_visitor_field {
-                continue;
-            }
-            let go_field_name = to_go_name(&field.name);
-            let json_name = wire_field_name(
-                &field.name,
-                field.serde_rename.as_deref(),
-                typ.serde_rename_all.as_deref(),
-            );
-            let data_enum_def = data_enum_fields.iter().find(|def| def.go_name == go_field_name);
-            if let Some(def) = data_enum_def {
-                let raw_type = if def.is_slice {
-                    "[]json.RawMessage"
-                } else {
-                    "json.RawMessage"
-                };
-                let json_tag = format!("json:\"{json_name},omitempty\"");
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_raw_field.jinja",
-                    minijinja::context! {
-                        go_field_name => &go_field_name,
-                        field_type => raw_type,
-                        json_tag => &json_tag,
-                    },
-                ));
-            } else {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
-                let is_named_enum = !field.optional
-                    && !use_default_pointer
-                    && (field.default.is_some() || typ.serde_container_default)
-                    && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
-                let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
-                let field_type = if field.optional || use_default_pointer {
-                    go_optional_field_type(field)
-                } else {
-                    go_field_type(field)
-                };
-                let json_tag = if field.optional || is_collection || use_default_pointer || is_named_enum {
-                    format!("json:\"{json_name},omitempty\"")
-                } else {
-                    format!("json:\"{json_name}\"")
-                };
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_raw_field.jinja",
-                    minijinja::context! {
-                        go_field_name => &go_field_name,
-                        field_type => &field_type,
-                        json_tag => &json_tag,
-                    },
-                ));
-            }
-        }
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_unmarshal_after_raw.jinja",
-            minijinja::Value::default(),
-        ));
-
-        for field in binding_fields(&typ.fields) {
-            if is_tuple_field(field) {
-                continue;
-            }
-            let is_visitor_field = is_options_field_bridge_field(typ, field, trait_bridges);
-            if is_visitor_field {
-                continue;
-            }
-            let go_field_name = to_go_name(&field.name);
-            let is_data_enum = data_enum_fields.iter().any(|def| def.go_name == go_field_name);
-            if !is_data_enum {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_copy_field.jinja",
-                    minijinja::context! {
-                        go_field_name => &go_field_name,
-                    },
-                ));
-            }
-        }
-
-        for def in &data_enum_fields {
-            let unmarshal_fn = format!("Unmarshal{}", def.enum_go_name);
-            if def.is_slice {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_data_enum_slice.jinja",
-                    minijinja::context! {
-                        go_name => &def.go_name,
-                        enum_go_name => &def.enum_go_name,
-                        unmarshal_fn => &unmarshal_fn,
-                    },
-                ));
-            } else if def.is_optional {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_data_enum_value.jinja",
-                    minijinja::context! {
-                        go_name => &def.go_name,
-                        unmarshal_fn => &unmarshal_fn,
-                    },
-                ));
-            } else {
-                out.push_str(&crate::backends::go::template_env::render(
-                    "struct_unmarshal_data_enum_value.jinja",
-                    minijinja::context! {
-                        go_name => &def.go_name,
-                        unmarshal_fn => &unmarshal_fn,
-                    },
-                ));
-            }
-        }
-
-        out.push_str(&crate::backends::go::template_env::render(
-            "struct_unmarshal_json_footer.jinja",
-            minijinja::Value::default(),
-        ));
-    }
+    out.push_str(&render_struct_marshal_json(typ, &go_name, &sets, trait_bridges));
+    out.push_str(&render_struct_unmarshal_json(typ, &go_name, &sets, trait_bridges));
 
     out
 }

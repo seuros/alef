@@ -8,6 +8,46 @@ use crate::core::ir::{EnumDef, FunctionDef, TypeDef};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 
+#[derive(Clone)]
+pub(in crate::e2e::codegen::go) struct GoCrateResolverFacts {
+    ir_reachable_fields: std::collections::HashSet<String>,
+    ir_known_excluded_fields: std::collections::HashSet<String>,
+    ir_optional_fields: std::collections::HashSet<String>,
+    ir_result_fields: crate::e2e::field_access::IrResultFieldMap,
+    reserved_type_names: std::collections::HashSet<String>,
+}
+
+impl GoCrateResolverFacts {
+    pub(in crate::e2e::codegen::go) fn new(
+        type_defs: &[TypeDef],
+        enums: &[EnumDef],
+        config: &ResolvedCrateConfig,
+    ) -> Self {
+        let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) =
+            FieldResolver::ir_field_sets(type_defs);
+        let emission = crate::backends::go::emission_facts::GoEmissionFacts::from_config(type_defs, enums, config);
+        let ir_result_fields = FieldResolver::go_ir_result_field_facts_from_emission(type_defs, &emission);
+        let reserved_type_names = emission
+            .structs
+            .iter()
+            .chain(emission.opaque.iter())
+            .chain(emission.enums.iter())
+            .map(|name| crate::codegen::naming::go_type_name(name))
+            .collect();
+        Self {
+            ir_reachable_fields,
+            ir_known_excluded_fields,
+            ir_optional_fields,
+            ir_result_fields,
+            reserved_type_names,
+        }
+    }
+
+    pub(super) fn reserved_type_names(&self) -> &std::collections::HashSet<String> {
+        &self.reserved_type_names
+    }
+}
+
 pub(super) const LANG: &str = "go";
 
 pub(in crate::e2e::codegen::go) fn fixture_has_go_callable(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
@@ -43,21 +83,18 @@ pub(in crate::e2e::codegen::go) fn fixture_has_go_callable(fixture: &Fixture, e2
 /// Anchoring `with_ir_result_fields` mirrors the rust/python/java/csharp/elixir generators and is
 /// purely additive: `result_field_oracle_knows` only ever REFUSES what it positively knows the
 /// root type lacks, so an unresolved root leaves every anchored answer disabled. ~keep
-pub(super) fn build_call_field_resolver(
+pub(super) fn build_call_field_resolver_with_facts(
     e2e_config: &E2eConfig,
     call_config: &CallConfig,
     functions: &[FunctionDef],
     type_defs: &[TypeDef],
-    enums: &[EnumDef],
-    config: &ResolvedCrateConfig,
+    facts: &GoCrateResolverFacts,
 ) -> FieldResolver {
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
         call_config,
         LANG,
         crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
     );
-    let excluded_names = go_excluded_type_names(config, type_defs);
     FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -66,42 +103,11 @@ pub(super) fn build_call_field_resolver(
         &std::collections::HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_ir_result_fields(
-        FieldResolver::go_ir_result_field_facts(type_defs, enums, &excluded_names),
-        call_root_type,
+    .with_ir_result_fields(facts.ir_result_fields.clone(), call_root_type)
+    .with_ir_fields(
+        facts.ir_reachable_fields.clone(),
+        facts.ir_known_excluded_fields.clone(),
+        facts.ir_optional_fields.clone(),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
     .with_result_is_byte_payload(call_config.effective_result_is_bytes(LANG))
-}
-
-fn go_excluded_type_names(config: &ResolvedCrateConfig, type_defs: &[TypeDef]) -> std::collections::HashSet<String> {
-    let has_bridge_params = config.trait_bridges.iter().any(|bridge| bridge.param_name.is_some());
-    let has_options_bridge = config.trait_bridges.iter().any(|bridge| {
-        bridge.bind_via == crate::core::config::BridgeBinding::OptionsField && bridge.is_active_for(LANG)
-    });
-    let mut excluded_names = if has_bridge_params || has_options_bridge {
-        config.bridge_associated_types()
-    } else {
-        std::collections::HashSet::new()
-    };
-    if let Some(ffi) = &config.ffi {
-        excluded_names.extend(ffi.exclude_types.iter().cloned());
-    }
-    if let Some(go) = &config.go {
-        excluded_names.extend(go.exclude_types.iter().cloned());
-    }
-    excluded_names.extend(
-        type_defs
-            .iter()
-            .filter(|type_def| type_def.binding_excluded)
-            .map(|type_def| type_def.name.clone()),
-    );
-    excluded_names.extend(
-        config
-            .opaque_types
-            .iter()
-            .filter(|(_, path)| path.contains('<'))
-            .map(|(name, _)| name.clone()),
-    );
-    excluded_names
 }

@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 pub(super) fn string_value_expression(field: &str, is_pointer: bool, is_data_interface: bool) -> String {
     if is_data_interface {
-        format!("jsonString({field})")
+        format!("jsonString(t, {field})")
     } else if is_pointer {
         format!("string(*{field})")
     } else {
@@ -17,7 +17,7 @@ pub(super) fn contains_value_expression(
     is_data_interface: bool,
 ) -> String {
     if is_data_interface || is_array {
-        format!("jsonString({field})")
+        format!("jsonString(t, {field})")
     } else {
         string_value_expression(field, is_pointer, false)
     }
@@ -49,7 +49,7 @@ pub(super) fn render_count_assertion(
     out: &mut String,
     field: &str,
     count: u64,
-    is_nullable: bool,
+    nullable_guard: Option<&str>,
     is_slice: bool,
     exact: bool,
 ) {
@@ -61,16 +61,51 @@ pub(super) fn render_count_assertion(
     let is_length = field.starts_with("len(");
     let length = if is_length {
         field.to_string()
-    } else if is_nullable && !is_slice {
+    } else if nullable_guard.is_some() && !is_slice {
         format!("len(*{field})")
     } else {
         format!("len({field})")
     };
-    if is_nullable {
-        let _ = writeln!(out, "\tif {field} != nil {{");
+    if let Some(guard) = nullable_guard {
+        let _ = writeln!(out, "\tif {guard} != nil {{");
         let _ = writeln!(out, "\t\tassert.{method}(t, {length}, {count}, \"{message}\")");
         let _ = writeln!(out, "\t}}");
     } else {
         let _ = writeln!(out, "\tassert.{method}(t, {length}, {count}, \"{message}\")");
+    }
+}
+
+pub(super) fn render_length_assertion(
+    out: &mut String,
+    field: &str,
+    length: u64,
+    nullable_guard: Option<&str>,
+    is_pointer: bool,
+    minimum: bool,
+) {
+    let (method, relation) = if minimum {
+        ("GreaterOrEqual", ">=")
+    } else {
+        ("LessOrEqual", "<=")
+    };
+    let expression = if field.starts_with("len(") {
+        field.to_string()
+    } else if is_pointer {
+        format!("len(*{field})")
+    } else {
+        format!("len({field})")
+    };
+    if let Some(guard) = nullable_guard {
+        let _ = writeln!(out, "\tif {guard} != nil {{");
+        let _ = writeln!(
+            out,
+            "\t\tassert.{method}(t, {expression}, {length}, \"expected length {relation} {length}\")"
+        );
+        let _ = writeln!(out, "\t}}");
+    } else {
+        let _ = writeln!(
+            out,
+            "\tassert.{method}(t, {expression}, {length}, \"expected length {relation} {length}\")"
+        );
     }
 }

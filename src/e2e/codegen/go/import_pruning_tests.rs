@@ -60,6 +60,7 @@ fn render_fixture(e2e_config: &E2eConfig, assertions: Vec<Assertion>) -> String 
             enums: &enums,
             errors: &errors,
             functions: &[],
+            crate_facts: None,
         },
     )
 }

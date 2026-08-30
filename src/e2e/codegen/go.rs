@@ -6,7 +6,6 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_filename;
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
 use heck::ToUpperCamelCase;
@@ -21,6 +20,8 @@ mod assertion_render_helpers;
 
 #[cfg(test)]
 mod field_shape_tests;
+#[cfg(test)]
+mod package_compile_tests;
 
 fn resolve_handle_config_type(
     arg: &crate::e2e::config::ArgMapping,
@@ -57,15 +58,9 @@ impl E2eCodegen for GoCodegen {
 
         // Identify data-enum (sum-type) names: enums where at least one variant has named fields.
         // These require special unmarshaling in Go (via Unmarshal<Type> discriminator).
-        let data_enum_names: std::collections::HashSet<&str> = enums
-            .iter()
-            .filter(|e| {
-                e.variants
-                    .iter()
-                    .any(|v| !v.fields.is_empty() && v.fields.iter().any(|f| !f.name.is_empty()))
-            })
-            .map(|e| e.name.as_str())
-            .collect();
+        let emission = crate::backends::go::emission_facts::GoEmissionFacts::from_config(type_defs, enums, config);
+        let data_enum_names = &emission.data_enums;
+        let crate_facts = test_function::call_resolver::GoCrateResolverFacts::new(type_defs, enums, config);
 
         // Resolve call config with overrides (for module path and import alias).
         let call = &e2e_config.call;
@@ -177,47 +172,12 @@ impl E2eCodegen for GoCodegen {
             generated_header: false,
         });
 
-        // Determine if any fixture needs jsonString helper across all groups.
         let emits_executable_test =
             |fixture: &Fixture| fixture.is_http_test() || fixture_has_go_callable(fixture, e2e_config);
-        let needs_json_stringify = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
-            emits_executable_test(f)
-                && f.assertions.iter().any(|a| {
-                    matches!(
-                        a.assertion_type.as_str(),
-                        "contains" | "contains_all" | "contains_any" | "not_contains"
-                    ) && {
-                        if a.field.as_ref().is_none_or(|f| f.is_empty()) {
-                            e2e_config
-                                .resolve_call_for_fixture(
-                                    f.call.as_deref(),
-                                    &f.id,
-                                    &f.resolved_category(),
-                                    &f.tags,
-                                    &f.input,
-                                )
-                                .result_is_array
-                        } else {
-                            let cc = e2e_config.resolve_call_for_fixture(
-                                f.call.as_deref(),
-                                &f.id,
-                                &f.resolved_category(),
-                                &f.tags,
-                                &f.input,
-                            );
-                            let per_call_resolver = FieldResolver::new(
-                                e2e_config.effective_fields(cc),
-                                e2e_config.effective_fields_optional(cc),
-                                e2e_config.effective_result_fields(cc),
-                                e2e_config.effective_fields_array(cc),
-                                &std::collections::HashSet::new(),
-                            );
-                            let resolved_name = per_call_resolver.resolve(a.field.as_deref().unwrap_or(""));
-                            per_call_resolver.is_array(resolved_name)
-                        }
-                    }
-                })
-        });
+        let needs_json_stringify = groups
+            .iter()
+            .flat_map(|group| group.fixtures.iter())
+            .any(emits_executable_test);
 
         // Generate helpers_test.go with jsonString if needed, emitted exactly once.
         if needs_json_stringify {
@@ -314,7 +274,8 @@ impl E2eCodegen for GoCodegen {
                     import_alias: &import_alias,
                     e2e_config,
                     adapters: &config.adapters,
-                    data_enum_names: &data_enum_names,
+                    data_enum_names,
+                    crate_facts: Some(&crate_facts),
                     config,
                     type_defs,
                     enums,
@@ -847,7 +808,7 @@ fn render_helpers_test_go() -> String {
     let mut out = String::new();
     let _ = writeln!(out, "package e2e_test");
     let _ = writeln!(out);
-    let _ = writeln!(out, "import \"encoding/json\"");
+    let _ = writeln!(out, "import (\n\t\"encoding/json\"\n\t\"testing\"\n)");
     let _ = writeln!(out);
     let _ = writeln!(out, "// jsonString converts a value to its JSON string representation.");
     let _ = writeln!(
@@ -855,10 +816,11 @@ fn render_helpers_test_go() -> String {
         "// Array fields use jsonString instead of fmt.Sprint to preserve structure."
     );
     let _ = writeln!(out, "//nolint:unused");
-    let _ = writeln!(out, "func jsonString(value any) string {{");
+    let _ = writeln!(out, "func jsonString(t *testing.T, value any) string {{");
+    let _ = writeln!(out, "\tt.Helper()");
     let _ = writeln!(out, "\tencoded, err := json.Marshal(value)");
     let _ = writeln!(out, "\tif err != nil {{");
-    let _ = writeln!(out, "\t\treturn \"\"");
+    let _ = writeln!(out, "\t\tt.Fatalf(\"marshal assertion value as JSON: %v\", err)");
     let _ = writeln!(out, "\t}}");
     let _ = writeln!(out, "\treturn string(encoded)");
     let _ = writeln!(out, "}}");

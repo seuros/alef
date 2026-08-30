@@ -2,7 +2,7 @@ use alef::backends::go::GoBackend;
 use alef::core::backend::Backend;
 use alef::core::config::new_config::NewAlefConfig;
 use alef::core::config::{BridgeBinding, ResolvedCrateConfig, TraitBridgeConfig};
-use alef::core::ir::{ApiSurface, MethodDef, ReceiverKind, TypeDef, TypeRef};
+use alef::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
 
 const PROVIDER_HEADER: &str = r#"
 #include <stdint.h>
@@ -36,31 +36,78 @@ module = "example.invalid/test-lib"
         options_type: Some("Options".to_string()),
         options_field: Some("visitor".to_string()),
         context_type: Some("NodeContext".to_string()),
-        result_type: Some("VisitResult".to_string()),
+        result_type: Some("VisitorChoice".to_string()),
         ..TraitBridgeConfig::default()
     }];
     resolved
 }
 
-fn node_context_api() -> ApiSurface {
+fn visitor_owned_field_api() -> ApiSurface {
     ApiSurface {
         crate_name: "test-lib".to_string(),
         version: "1.0.0".to_string(),
-        types: vec![TypeDef {
-            name: "NodeContext".to_string(),
-            rust_path: "test_lib::NodeContext".to_string(),
-            methods: vec![MethodDef {
-                name: "to_json".to_string(),
-                return_type: TypeRef::String,
-                receiver: Some(ReceiverKind::Ref),
-                cfg: None,
-                ..MethodDef::default()
+        types: vec![
+            envelope_type(),
+            node_context_type(),
+            TypeDef {
+                name: "Options".into(),
+                has_serde: true,
+                ..Default::default()
+            },
+        ],
+        enums: vec![EnumDef {
+            name: "VisitorChoice".into(),
+            variants: vec![EnumVariant {
+                name: "Continue".into(),
+                ..Default::default()
             }],
-            has_serde: true,
-            has_lifetime_params: true,
-            ..TypeDef::default()
+            ..Default::default()
         }],
         ..ApiSurface::default()
+    }
+}
+
+fn envelope_type() -> TypeDef {
+    TypeDef {
+        name: "Envelope".to_string(),
+        rust_path: "test_lib::Envelope".to_string(),
+        fields: vec![
+            optional_named_field("context", "NodeContext"),
+            optional_named_field("choice", "VisitorChoice"),
+            FieldDef {
+                name: "bytes".into(),
+                ty: TypeRef::Bytes,
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        ..TypeDef::default()
+    }
+}
+
+fn node_context_type() -> TypeDef {
+    TypeDef {
+        name: "NodeContext".to_string(),
+        rust_path: "test_lib::NodeContext".to_string(),
+        methods: vec![MethodDef {
+            name: "to_json".to_string(),
+            return_type: TypeRef::String,
+            receiver: Some(ReceiverKind::Ref),
+            cfg: None,
+            ..MethodDef::default()
+        }],
+        has_serde: true,
+        has_lifetime_params: true,
+        ..TypeDef::default()
+    }
+}
+
+fn optional_named_field(name: &str, target: &str) -> FieldDef {
+    FieldDef {
+        name: name.into(),
+        ty: TypeRef::Optional(Box::new(TypeRef::Named(target.into()))),
+        optional: true,
+        ..Default::default()
     }
 }
 
@@ -98,16 +145,13 @@ fn write_empty_native_archive(directory: &std::path::Path, library_dir: &str) ->
 }
 
 fn assert_real_go_build(binding: &str) {
-    let (Some(library_dir), Ok(go)) = (native_library_dir(), which::which("go")) else {
-        return;
-    };
+    let library_dir = native_library_dir().expect("generated Go binding compile fixture supports this target");
+    let go = which::which("go").expect("Go is required for generated binding compile fixtures");
     let directory = tempfile::tempdir().expect("temporary Go package directory");
     std::fs::create_dir_all(directory.path().join("include")).expect("create include directory");
     std::fs::write(directory.path().join("include/test.h"), PROVIDER_HEADER).expect("write provider header");
     std::fs::write(directory.path().join("binding.go"), binding).expect("write generated binding");
-    if !write_empty_native_archive(directory.path(), library_dir) {
-        return;
-    }
+    assert!(write_empty_native_archive(directory.path(), library_dir));
     let output = std::process::Command::new(go)
         .args(["build", "./..."])
         .env("GO111MODULE", "off")
@@ -125,7 +169,7 @@ fn assert_real_go_build(binding: &str) {
 #[test]
 fn options_field_associated_types_do_not_call_unprovided_ffi_symbols() {
     let files = GoBackend
-        .generate_bindings(&node_context_api(), &options_field_config())
+        .generate_bindings(&visitor_owned_field_api(), &options_field_config())
         .expect("Go bindings generate");
     let binding = files
         .iter()
@@ -137,5 +181,13 @@ fn options_field_associated_types_do_not_call_unprovided_ffi_symbols() {
         "options-field associated types are provided by visitor.go and must not bind unexported FFI symbols:\n{}",
         binding.content
     );
+    assert_eq!(
+        binding.content.matches("*json.RawMessage").count(),
+        4,
+        "{}",
+        binding.content
+    );
+    assert!(!binding.content.contains("type NodeContext struct"));
+    assert!(!binding.content.contains("type VisitorChoice "));
     assert_real_go_build(&binding.content);
 }

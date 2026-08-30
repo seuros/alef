@@ -1,6 +1,6 @@
 //! Go per-fixture test rendering.
 
-use crate::codegen::naming::{go_free_function_name, go_param_name, go_type_name, to_go_name};
+use crate::codegen::naming::{go_free_function_name, go_param_name, to_go_name};
 use crate::e2e::escape::go_string_literal;
 use crate::e2e::fixture::Fixture;
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -104,7 +104,18 @@ pub(super) struct GoTestFunctionContext<'a> {
     pub(super) functions: &'a [crate::core::ir::FunctionDef],
 }
 
+#[cfg(test)]
 pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context: GoTestFunctionContext<'_>) {
+    let facts = call_resolver::GoCrateResolverFacts::new(context.type_defs, context.enums, context.config);
+    render_test_function_with_facts(out, fixture, context, &facts);
+}
+
+pub(super) fn render_test_function_with_facts(
+    out: &mut String,
+    fixture: &Fixture,
+    context: GoTestFunctionContext<'_>,
+    crate_facts: &call_resolver::GoCrateResolverFacts,
+) {
     let GoTestFunctionContext {
         import_alias,
         e2e_config,
@@ -144,20 +155,13 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     );
     let lang = call_resolver::LANG;
     let call_field_resolver =
-        call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs, enums, config);
+        call_resolver::build_call_field_resolver_with_facts(e2e_config, call_config, functions, type_defs, crate_facts);
     let field_resolver = &call_field_resolver;
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides
         .and_then(|o| o.function.as_deref())
         .unwrap_or(&call_config.function);
-    // Best-effort mirror of `gen_go_file`'s `reserved_type_names`; ignores exclude_types. ~keep
-    let reserved_type_names: std::collections::HashSet<String> = type_defs
-        .iter()
-        .filter(|t| !t.is_trait)
-        .map(|t| go_type_name(&t.name))
-        .chain(enums.iter().map(|e| go_type_name(&e.name)))
-        .collect();
-    let function_name = go_free_function_name(base_function_name, &reserved_type_names);
+    let function_name = go_free_function_name(base_function_name, crate_facts.reserved_type_names());
     let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args = recipe.args;
@@ -972,7 +976,7 @@ impl client::TestClientRenderer for GoTestClientRenderer {
 }
 
 #[path = "test_function/call_resolver.rs"]
-mod call_resolver;
+pub(super) mod call_resolver;
 pub(super) use call_resolver::fixture_has_go_callable;
 
 #[cfg(test)]

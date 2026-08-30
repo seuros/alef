@@ -4,7 +4,7 @@ use crate::core::hash::{self, CommentStyle};
 use crate::e2e::fixture::Fixture;
 use std::fmt::Write as FmtWrite;
 
-use super::test_function::{GoTestFunctionContext, fixture_has_go_callable, render_test_function};
+use super::test_function::{GoTestFunctionContext, fixture_has_go_callable, render_test_function_with_facts};
 use super::visitors::{emit_go_visitor_struct, resolve_go_visitor_binding, visitor_struct_name};
 use crate::e2e::codegen::resolve_field;
 
@@ -19,6 +19,7 @@ pub(super) struct GoTestFileContext<'a> {
     pub(super) enums: &'a [crate::core::ir::EnumDef],
     pub(super) errors: &'a [crate::core::ir::ErrorDef],
     pub(super) functions: &'a [crate::core::ir::FunctionDef],
+    pub(super) crate_facts: Option<&'a super::test_function::call_resolver::GoCrateResolverFacts>,
 }
 
 /// Whether a fixture's `error` assertion declares a value THAT WILL RENDER AS AN ASSERTION,
@@ -48,6 +49,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         enums,
         errors,
         functions,
+        crate_facts,
     } = context;
     let mut out = String::new();
     let emits_executable_test =
@@ -161,6 +163,13 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
     });
 
     let mut body = String::new();
+    let computed_facts;
+    let crate_facts = if let Some(facts) = crate_facts {
+        facts
+    } else {
+        computed_facts = super::test_function::call_resolver::GoCrateResolverFacts::new(type_defs, enums, config);
+        &computed_facts
+    };
     for fixture in fixtures.iter() {
         if let Some(visitor_spec) = &fixture.visitor {
             let struct_name = visitor_struct_name(&fixture.id);
@@ -170,7 +179,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         }
     }
     for (i, fixture) in fixtures.iter().enumerate() {
-        render_test_function(
+        render_test_function_with_facts(
             &mut body,
             fixture,
             GoTestFunctionContext {
@@ -184,6 +193,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 errors,
                 functions,
             },
+            crate_facts,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(body);

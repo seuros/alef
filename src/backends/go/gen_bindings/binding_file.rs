@@ -6,7 +6,6 @@ use super::methods::{gen_method_wrapper, gen_streaming_method_wrapper};
 use super::types::{
     gen_config_options, gen_duration_millis_helper, gen_enum_type, gen_last_error_helper, gen_opaque_type,
     gen_opaque_type_free_only, gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
-    is_passthrough_raw_message_enum,
 };
 use crate::codegen::naming::{field_uses_duration_map_wire, go_type_name, to_go_name};
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig, TraitBridgeConfig};
@@ -268,46 +267,34 @@ pub(super) fn gen_go_file(
         }
     }
 
-    let bridge_associated_types = config.bridge_associated_types();
-    let visitor_types: std::collections::HashSet<&str> =
-        if visitor_bridge_cfg.is_some() || !bridge_param_names.is_empty() {
-            bridge_associated_types.iter().map(|s| s.as_str()).collect()
-        } else {
-            std::collections::HashSet::new()
-        };
+    let visitor_types = if visitor_bridge_cfg.is_some() || !bridge_param_names.is_empty() {
+        config.bridge_associated_types()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let emission = crate::backends::go::emission_facts::GoEmissionFacts::new(
+        &api.types,
+        &api.enums,
+        exclude_types.clone(),
+        visitor_types,
+    );
 
     // Go type identifiers the loop below emits; disambiguates collisions via `go_free_function_name`. ~keep
-    let reserved_type_names: HashSet<String> = api
-        .types
+    let reserved_type_names: HashSet<String> = emission
+        .structs
         .iter()
-        .filter(|typ| !typ.is_trait && !visitor_types.contains(typ.name.as_str()) && !exclude_types.contains(&typ.name))
-        .map(|typ| go_type_name(&typ.name))
-        .chain(
-            api.enums
-                .iter()
-                .filter(|e| !visitor_types.contains(e.name.as_str()) && !exclude_types.contains(&e.name))
-                .map(|e| go_type_name(&e.name)),
-        )
+        .chain(emission.opaque.iter())
+        .chain(emission.enums.iter())
+        .map(|name| go_type_name(name))
         .collect();
 
-    let unit_enum_names: std::collections::HashSet<&str> = api
-        .enums
-        .iter()
-        .filter(|e| !exclude_types.contains(&e.name) && super::types::is_unit_struct_field_enum(e))
-        .map(|e| e.name.as_str())
-        .collect();
-    let passthrough_enum_names: std::collections::HashSet<&str> = api
-        .enums
-        .iter()
-        .filter(|e| is_passthrough_raw_message_enum(e))
-        .filter(|e| !exclude_types.contains(&e.name))
-        .map(|e| e.name.as_str())
-        .collect();
+    let unit_enum_names = &emission.unit_enums;
+    let passthrough_enum_names = &emission.passthrough_enums;
     let text_types = &config.untagged_union_text_types;
     for enum_def in api
         .enums
         .iter()
-        .filter(|e| !visitor_types.contains(e.name.as_str()) && !exclude_types.contains(&e.name))
+        .filter(|definition| emission.enums.contains(definition.name.as_str()))
     {
         body.push_str(&gen_enum_type(enum_def, text_types));
         body.push_str("\n\n");
@@ -315,13 +302,7 @@ pub(super) fn gen_go_file(
 
     let error_names: std::collections::HashSet<&str> = api.errors.iter().map(|e| e.name.as_str()).collect();
 
-    let opaque_names: std::collections::HashSet<&str> = api
-        .types
-        .iter()
-        .filter(|t| t.is_opaque)
-        .filter(|t| !exclude_types.contains(&t.name))
-        .map(|t| t.name.as_str())
-        .collect();
+    let opaque_names = &emission.opaque;
 
     let opaque_names_ahash: ahash::AHashSet<String> = opaque_names.iter().map(|s| s.to_string()).collect();
 
@@ -334,26 +315,15 @@ pub(super) fn gen_go_file(
         .map(|e| e.name.clone())
         .collect();
 
-    let data_enum_names: std::collections::HashSet<&str> = api
-        .enums
-        .iter()
-        .filter(|e| !exclude_types.contains(&e.name) && super::types::is_data_interface_struct_field_enum(e))
-        .map(|e| e.name.as_str())
-        .collect();
-
-    let struct_names: std::collections::HashSet<&str> = api
-        .types
-        .iter()
-        .filter(|t| !t.is_opaque && !exclude_types.contains(&t.name))
-        .map(|t| t.name.as_str())
-        .collect();
+    let data_enum_names = &emission.data_enums;
+    let struct_names = &emission.structs;
 
     let mut emitted_struct_fields: std::collections::HashMap<&str, HashSet<String>> = std::collections::HashMap::new();
 
     for typ in api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !visitor_types.contains(typ.name.as_str()) && !exclude_types.contains(&typ.name))
+        .filter(|definition| emission.emits_type(&definition.name))
     {
         if typ.is_opaque {
             if error_names.contains(typ.name.as_str()) {
@@ -371,10 +341,10 @@ pub(super) fn gen_go_file(
             emitted_struct_fields.insert(typ.name.as_str(), go_struct_field_names(typ));
             body.push_str(&gen_struct_type(
                 typ,
-                &unit_enum_names,
-                &passthrough_enum_names,
-                &data_enum_names,
-                &struct_names,
+                unit_enum_names,
+                passthrough_enum_names,
+                data_enum_names,
+                struct_names,
                 &config.trait_bridges,
             ));
             body.push_str("\n\n");
@@ -387,10 +357,10 @@ pub(super) fn gen_go_file(
             if !typ.name.ends_with("Update") && functional_options.contains(&typ.name) {
                 body.push_str(&gen_config_options(
                     typ,
-                    &unit_enum_names,
-                    &passthrough_enum_names,
-                    &data_enum_names,
-                    &struct_names,
+                    unit_enum_names,
+                    passthrough_enum_names,
+                    data_enum_names,
+                    struct_names,
                     &config.trait_bridges,
                 ));
                 body.push_str("\n\n");
@@ -409,7 +379,7 @@ pub(super) fn gen_go_file(
                 &f.return_type,
                 &ffi_enum_names,
                 &ffi_param_enum_names,
-                &opaque_names,
+                opaque_names,
             )
             && !crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&f.name, &config.trait_bridges)
     }) {
@@ -423,7 +393,7 @@ pub(super) fn gen_go_file(
             body.push_str(&gen_capsule_function_wrapper(
                 func,
                 ffi_prefix,
-                &opaque_names,
+                opaque_names,
                 &ffi_enum_names,
                 &ffi_param_enum_names,
                 capsule_cfg,
@@ -436,7 +406,7 @@ pub(super) fn gen_go_file(
             body.push_str(&gen_convert_with_visitor_wrapper(
                 func,
                 ffi_prefix,
-                &opaque_names,
+                opaque_names,
                 value_only_types,
                 visitor_bridge_cfg.expect("checked above"),
                 &reserved_type_names,
@@ -446,7 +416,7 @@ pub(super) fn gen_go_file(
             body.push_str(&gen_function_wrapper(
                 func,
                 ffi_prefix,
-                &opaque_names,
+                opaque_names,
                 bridge_param_names,
                 bridge_type_aliases,
                 value_only_types,
@@ -472,7 +442,7 @@ pub(super) fn gen_go_file(
     for typ in api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !visitor_types.contains(typ.name.as_str()) && !exclude_types.contains(&typ.name))
+        .filter(|definition| emission.emits_type(&definition.name))
     {
         if typ.is_opaque && error_names.contains(typ.name.as_str()) {
             continue;
@@ -508,8 +478,8 @@ pub(super) fn gen_go_file(
                     method,
                     ffi_prefix,
                     item_type,
-                    &data_enum_names,
-                    &opaque_names,
+                    data_enum_names,
+                    opaque_names,
                     value_only_types,
                     &ffi_enum_names,
                     &ffi_param_enum_names,
@@ -528,7 +498,7 @@ pub(super) fn gen_go_file(
                 &method.return_type,
                 &ffi_enum_names,
                 &ffi_param_enum_names,
-                &opaque_names,
+                opaque_names,
             ) {
                 continue;
             }
@@ -536,7 +506,7 @@ pub(super) fn gen_go_file(
                 typ,
                 method,
                 ffi_prefix,
-                &opaque_names,
+                opaque_names,
                 value_only_types,
                 &ffi_enum_names,
                 &ffi_param_enum_names,
@@ -545,14 +515,17 @@ pub(super) fn gen_go_file(
         }
     }
 
-    let has_opaque_types = api.types.iter().any(|typ| typ.is_opaque);
+    let has_opaque_types = !emission.opaque.is_empty();
     let has_sync_functions = api.functions.iter().any(|function| !function.is_async);
     let has_non_static_methods = api
         .types
         .iter()
-        .filter(|typ| !visitor_types.contains(typ.name.as_str()))
+        .filter(|definition| emission.emits_type(&definition.name))
         .any(|typ| typ.methods.iter().any(|method| !method.is_static));
-    let needs_json = has_sync_functions || has_non_static_methods || needs_duration_helper;
+    let needs_json = has_sync_functions
+        || has_non_static_methods
+        || needs_duration_helper
+        || body_uses_qualified_name(&body, "json.");
 
     let mut imports = vec!["fmt"];
     if needs_json {
