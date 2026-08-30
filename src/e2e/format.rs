@@ -166,8 +166,19 @@ fn format_language(
 
     // User override takes precedence and replaces the poly pass entirely. Its
     // contents are opaque to us, so registry-mode failures are deferred.
+    //
+    // `dir` is substituted, not written by the user -- it is derived from
+    // `e2e_config.effective_output()`, a free-form `[e2e] output` path like any other
+    // `alef.toml` value. The override's shell TEXT is legitimately opaque and stays shell (a
+    // user wrote it, meaning it to run as shell), but the DATA alef substitutes into it is not
+    // the user's to have made shell-safe -- `{dir}` is shell-quoted here so a path containing
+    // `;`, backticks, or `$(...)` cannot be reinterpreted. Every documented/tested `{dir}`
+    // usage in this codebase places the placeholder bareword (`cd {dir} && ...`), where
+    // single-quoting is a no-op for an ordinary path and neutralizes a malicious one; an
+    // override that already wraps `{dir}` in its own quotes would double-quote (a real
+    // behavior change with no known/tested case of that usage today). ~keep
     if let Some(custom) = e2e_config.format.get(lang) {
-        let cmd = custom.replace("{dir}", &dir);
+        let cmd = custom.replace("{dir}", &shell_single_quote(&dir));
         tracing::debug!("Formatting {lang}: {cmd}");
         return match run_shell(&cmd, lang) {
             Ok(()) => Ok(()),
@@ -303,6 +314,14 @@ fn shell_directory(path: &Path) -> String {
     } else {
         text.into_owned()
     }
+}
+
+/// Wrap `value` in single quotes for safe interpolation into a POSIX shell command line,
+/// escaping any embedded `'` via the standard close-quote/escaped-quote/reopen-quote trick.
+/// Mirrors `cli::pipeline::helpers::inline_env_in_shell_cmd`'s value-side escaping, applied
+/// here to alef's own `{dir}` substitution instead of to an env var value.
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Strip Windows' extended-length prefix and switch to forward slashes, the drive-letter

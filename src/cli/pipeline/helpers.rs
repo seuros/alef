@@ -13,6 +13,9 @@ use tracing::info;
 #[cfg(all(test, unix))]
 mod timeout_tests;
 
+mod process_exec;
+pub(crate) use process_exec::run_argv_step_streamed;
+
 /// Run a shell command, logging and failing on non-zero exit.
 pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
     run_command_with_env(cmd, &[])
@@ -105,7 +108,17 @@ pub(crate) fn run_command_streamed_with_env(
     env_vars: &[(&str, String)],
 ) -> anyhow::Result<()> {
     let cmd_with_env = inline_env_in_shell_cmd(cmd, env_vars);
-    info!("Running: {cmd_with_env}");
+    // Log (and use for error text) the ORIGINAL `cmd` plus env var NAMES only, never
+    // `cmd_with_env` -- that string carries every env var's literal value (an e2e-policy
+    // token, a mock-server URL that may itself embed a secret query param), and this line was
+    // previously the only thing standing between such a value and CI log output. `description`
+    // below also becomes what `run_prepared_command` puts in its own error messages, so this
+    // redaction covers both the success and failure logging paths in one place.
+    let description = match env_key_names(env_vars) {
+        Some(keys) => format!("{cmd} (env: {keys})"),
+        None => cmd.to_string(),
+    };
+    info!("Running: {description}");
     let mut command = std::process::Command::new("sh");
     command.args(["-c", &cmd_with_env]);
 
@@ -116,39 +129,16 @@ pub(crate) fn run_command_streamed_with_env(
         command.env(key, value);
     }
 
-    let Some(prefix) = label else {
-        let status = command.status().with_context(|| format!("failed to spawn: {cmd}"))?;
-        if !status.success() {
-            anyhow::bail!("Command failed: {cmd}");
-        }
-        return Ok(());
-    };
+    process_exec::run_prepared_command(command, label, &description)
+}
 
-    let prefix = format!("[{prefix}] ");
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn: {cmd}"))?;
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let p1 = prefix.clone();
-    let h_out = stdout.map(|s| std::thread::spawn(move || pump_lines(s, &p1)));
-    let p2 = prefix.clone();
-    let h_err = stderr.map(|s| std::thread::spawn(move || pump_lines(s, &p2)));
-
-    let status = child.wait().with_context(|| format!("failed to wait on: {cmd}"))?;
-    if let Some(h) = h_out {
-        let _ = h.join();
+/// Comma-joined env var NAMES for logging, omitting every value. `None` when `env_vars` is
+/// empty (nothing to append to the logged command).
+fn env_key_names(env_vars: &[(&str, String)]) -> Option<String> {
+    if env_vars.is_empty() {
+        return None;
     }
-    if let Some(h) = h_err {
-        let _ = h.join();
-    }
-    if !status.success() {
-        anyhow::bail!("Command failed: {cmd}");
-    }
-    Ok(())
+    Some(env_vars.iter().map(|(key, _)| *key).collect::<Vec<_>>().join(", "))
 }
 
 fn pump_lines<R: std::io::Read>(reader: R, prefix: &str) {
@@ -203,10 +193,16 @@ fn run_command_streamed_full(
         return run_command_streamed_with_env(cmd, label, env_vars);
     };
     let cmd_with_env = inline_env_in_shell_cmd(cmd, env_vars);
+    // See `run_command_streamed_with_env`'s matching comment: log `cmd` plus env var NAMES
+    // only, never `cmd_with_env`, which carries every value verbatim.
+    let logged = match env_key_names(env_vars) {
+        Some(keys) => format!("{cmd} (env: {keys})"),
+        None => cmd.to_string(),
+    };
     if let Some(dir) = cwd {
-        info!("Running (timeout {secs}s, cwd={}): {cmd_with_env}", dir.display());
+        info!("Running (timeout {secs}s, cwd={}): {logged}", dir.display());
     } else {
-        info!("Running (timeout {secs}s): {cmd_with_env}");
+        info!("Running (timeout {secs}s): {logged}");
     }
     let prefix = label.map(|l| format!("[{l}] "));
 

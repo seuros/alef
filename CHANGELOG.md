@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Stop reaching `sh -c` with config-supplied values interpolated into shell text. The Go
+  test-app run default and every clean-command default (including destructive `rm -rf` paths)
+  now build typed argv (`ArgvRunConfig`/`ArgvStep`, run via `Command::new(..).args(..)` with
+  `current_dir`/`env`, never a shell) instead of splicing a free-form `[go] module` or
+  `output_dir` value into a `format!("cd {output_dir} && ...")` string. `[crates.e2e.env]` keys
+  are now validated once, at config resolution, to `[A-Za-z_][A-Za-z0-9_]*`, closing the same
+  injection for every downstream consumer (registry-mode test-app runs, local e2e test runs,
+  and generated-language env-var emission) without needing a per-site fix; test-app env values
+  are also now passed via `Command::env` instead of an unquoted `export K='V';` shell prefix.
+  `extra_lint_paths` entries are likewise validated once to `[A-Za-z0-9._/-]+`. Alef's own
+  `{dir}` substitution into e2e format-override commands is now shell-quoted (the user's
+  override text itself is left untouched, since it is meant to run as shell). Composed shell
+  commands are now logged with env var values redacted (names only) to avoid leaking secrets
+  into command-execution logs.
+
 ### Added
 
 - Recognize `scoop` as a release target in `alef release-metadata`, so consumers can use the

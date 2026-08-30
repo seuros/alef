@@ -81,6 +81,49 @@ fn a_verbatim_windows_path_is_rewritten_into_a_form_a_posix_shell_can_cd_into() 
     );
 }
 
+/// GREEN: `shell_single_quote` must neutralize shell metacharacters -- a value containing
+/// `;`, backticks, or `$(...)` must round-trip through a real `sh -c` invocation verbatim,
+/// never as separate commands. This is the fix for `format_language`'s `{dir}` substitution,
+/// which used to splice `dir` (derived from the free-form `[e2e] output` config value)
+/// straight into a user override's shell text with no quoting at all.
+#[test]
+fn shell_single_quote_neutralizes_metacharacters() {
+    for malicious in [
+        "e2e-out; touch pwned_from_dir",
+        "e2e-out`touch pwned_from_dir`",
+        "e2e-out$(touch pwned_from_dir)",
+    ] {
+        let quoted = shell_single_quote(malicious);
+        let output = std::process::Command::new("sh")
+            .args(["-c", &format!("printf %s {quoted}")])
+            .output()
+            .expect("sh should run");
+        assert!(
+            output.status.success(),
+            "quoted printf should succeed for {malicious:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            malicious,
+            "the whole payload must print back verbatim, not be shell-split"
+        );
+    }
+}
+
+/// GREEN: an embedded single quote in the value must itself be escaped correctly (the
+/// close-quote/escaped-quote/reopen-quote trick), not merely tolerated by accident.
+#[test]
+fn shell_single_quote_escapes_embedded_quotes() {
+    let malicious = "it's; touch pwned_from_dir";
+    let quoted = shell_single_quote(malicious);
+    let output = std::process::Command::new("sh")
+        .args(["-c", &format!("printf %s {quoted}")])
+        .output()
+        .expect("sh should run");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), malicious);
+}
+
 /// Build an `E2eConfig` whose output directory is `out`, defaults otherwise.
 fn e2e_config_for(out: &Path) -> E2eConfig {
     E2eConfig {
