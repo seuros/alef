@@ -3,7 +3,6 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
-use anyhow::Context as _;
 
 mod cargo_config;
 mod cargo_deps;
@@ -98,12 +97,6 @@ pub fn scaffold(
     Ok(files)
 }
 
-/// Copy the workspace-root `LICENSE` file into each per-language package directory.
-///
-/// Reads `<workspace_root>/LICENSE` (falling back to `./LICENSE` when no workspace root is
-/// configured). When the file is absent, this function warns and returns an empty list so
-/// the caller can continue without error.
-///
 use languages::{
     STALE_WASM_CARGO_CONFIG, scaffold_csharp, scaffold_dart, scaffold_elixir, scaffold_elixir_cargo, scaffold_ffi,
     scaffold_gleam, scaffold_go, scaffold_java, scaffold_jni, scaffold_kotlin, scaffold_node, scaffold_node_cargo,

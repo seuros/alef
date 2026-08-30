@@ -62,10 +62,6 @@ pub(crate) fn cargo_lints_clippy_block_with_rationale(config: &ResolvedCrateConf
     with_clippy_rationale(&config.cargo_lints.clippy_block())
 }
 
-///
-/// Checks for per-language feature overrides first, then falls back to `[crate] features`.
-/// Returns an empty string if no features are configured, otherwise returns
-/// `, features = ["feat1", "feat2"]`.
 /// Render `config.cargo_lints` for appending at the very END of a generated
 /// Cargo.toml, after every dependency table.
 ///

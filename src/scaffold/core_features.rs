@@ -4,6 +4,9 @@
 
 use crate::core::config::{Language, ResolvedCrateConfig};
 
+/// Checks for per-language feature overrides first, then falls back to `[crate] features`.
+/// Returns an empty string if no features are configured, otherwise returns
+/// `, features = ["feat1", "feat2"]`.
 pub(crate) fn core_dep_features(config: &ResolvedCrateConfig, lang: Language) -> String {
     core_dep_features_excluding(config, lang, &std::collections::HashSet::new())
 }

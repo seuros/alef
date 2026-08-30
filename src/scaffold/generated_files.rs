@@ -3,6 +3,12 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 
+/// Copy the workspace-root `LICENSE` file into each per-language package directory.
+///
+/// Reads `<workspace_root>/LICENSE` (falling back to `./LICENSE` when no workspace root is
+/// configured). When the file is absent, this function warns and returns an empty list so
+/// the caller can continue without error.
+///
 /// Emits one `GeneratedFile` per unique package directory that the languages list would
 /// populate. Files with `generated_header: false` so they are create-once seeds —
 /// `write_scaffold_files` skips them if they already exist, which keeps the copy
