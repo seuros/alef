@@ -14,8 +14,9 @@
 //! This module only ever reports. Deleting an orphan automatically is unrecoverable if the
 //! detection is wrong even once, and it can be wrong for reasons that have nothing to do with
 //! the file being stale: a create-once seed a backend emits only when absent (`rust-toolchain.toml`,
-//! the wasm `.cargo/config.toml` -- see `src/scaffold/mod.rs`'s `rust_toolchain_file`/
-//! `wasm_cargo_config_file`, both gated on the path already existing), or a tolerated stage
+//! the wasm `.cargo/config.toml` -- see `src/scaffold/mod.rs`'s `rust_toolchain_file` and
+//! `src/scaffold/languages/wasm.rs`'s `wasm_cargo_config_file`, both gated on the path already
+//! existing), or a tolerated stage
 //! failure (`collect_managed_surface`'s `stage_failures`) that made this run's surface incomplete
 //! rather than the file genuinely dropped. A missed report leaves a stale file a human eventually
 //! notices, exactly the status quo this module improves on; a wrong deletion destroys work with
@@ -29,8 +30,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Workspace-root paths a scaffold stage emits **only when the path is absent** (see
-/// `src/scaffold/mod.rs`'s `rust_toolchain_file`/`wasm_cargo_config_file`, both gated on
-/// `!Path::new(<path>).exists()`). Once created, such a file falls outside every later run's
+/// `src/scaffold/mod.rs`'s `rust_toolchain_file` and `src/scaffold/languages/wasm.rs`'s
+/// `wasm_cargo_config_file`, both gated on `!Path::new(<path>).exists()`). Once created, such a
+/// file falls outside every later run's
 /// in-memory `surface` by design -- it is meant to become user-owned after the first scaffold,
 /// so nothing regenerates or reports it missing if deleted either (see `missing_managed_paths`,
 /// which reads the same `surface`). Diffing that surface against disk would misreport this exact
