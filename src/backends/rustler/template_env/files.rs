@@ -399,4 +399,8 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "service_api_entrypoint_call.rs.jinja",
         include_str!("../templates/service_api_entrypoint_call.rs.jinja"),
     ),
+    (
+        "elixir_tagged_enum_encoder.ex.jinja",
+        include_str!("../templates/elixir_tagged_enum_encoder.ex.jinja"),
+    ),
 ];

@@ -186,7 +186,19 @@ pub(in crate::backends::rustler::gen_bindings) fn encoder_fn_name(enum_name: &st
 ///   * `%{}` (already a wire-shaped map) → passthrough
 ///
 /// `enum_def.serde_tag` is required (caller filters); if absent this returns an empty string.
+///
+/// This function prepares data only — the Elixir atom spelling, the escaped wire strings, and
+/// which shape each variant takes — and hands it to `elixir_tagged_enum_encoder.ex.jinja`, which
+/// owns every line, brace and indent of the emitted module. It used to build the same text with
+/// `push_str(&format!(...))`, against the repo's `jinja-templates` rule, and the split is not
+/// cosmetic: the tag interpolated straight into `%{"{tag}" => ...}` with no escaping at all, and
+/// the wire values got `\` and `"` but not `#`. Escaping now happens once, here, on values that
+/// then travel into the template untouched — the environment applies no autoescaping to a
+/// `.jinja` template (see `template_env`'s `rendering_a_text_template_does_not_autoescape`), so
+/// what Rust escapes is exactly what lands in the file, with no second pass to double it. ~keep
 pub(in crate::backends::rustler::gen_bindings) fn emit_tagged_enum_encoder(enum_def: &EnumDef) -> String {
+    use crate::backends::rustler::elixir_escape::{elixir_atom_body, escape_elixir_string_literal};
+    use crate::backends::rustler::template_env;
     use crate::codegen::naming::{pascal_to_snake, wire_field_name, wire_variant_value};
 
     let Some(tag) = enum_def.serde_tag.as_deref() else {
@@ -196,73 +208,44 @@ pub(in crate::backends::rustler::gen_bindings) fn emit_tagged_enum_encoder(enum_
         return String::new();
     }
 
-    let fn_name = encoder_fn_name(&enum_def.name);
     let rename_all = enum_def.serde_rename_all.as_deref();
-
-    let mut out = String::with_capacity(1024);
-    let mut first_clause = true;
-
-    for variant in &enum_def.variants {
-        if variant.binding_excluded {
-            continue;
-        }
-        let atom = pascal_to_snake(&variant.name);
-        let wire = wire_variant_value(&variant.name, variant.serde_rename.as_deref(), rename_all);
-        let wire_escaped = wire.replace('\\', "\\\\").replace('"', "\\\"");
-
-        if variant.fields.is_empty() {
-            if !first_clause {
-                out.push('\n');
+    let variants: Vec<minijinja::Value> = enum_def
+        .variants
+        .iter()
+        .filter(|variant| !variant.binding_excluded)
+        .map(|variant| {
+            let field_renames: Vec<minijinja::Value> = variant
+                .fields
+                .iter()
+                .filter(|field| !field.binding_excluded)
+                .filter_map(|field| {
+                    let wire_field = wire_field_name(&field.name, field.serde_rename.as_deref(), None);
+                    if wire_field == field.name {
+                        return None;
+                    }
+                    Some(minijinja::context! {
+                        atom => elixir_atom_body(&field.name),
+                        wire => escape_elixir_string_literal(&wire_field),
+                    })
+                })
+                .collect();
+            let wire = wire_variant_value(&variant.name, variant.serde_rename.as_deref(), rename_all);
+            minijinja::context! {
+                atom => elixir_atom_body(&pascal_to_snake(&variant.name)),
+                wire => escape_elixir_string_literal(&wire),
+                is_unit => variant.fields.is_empty(),
+                field_renames => field_renames,
             }
-            out.push_str(&format!(
-                "  defp {fn_name}(:{atom}), do: %{{\"{tag}\" => \"{wire_escaped}\"}}\n"
-            ));
-            out.push('\n');
-            out.push_str(&format!(
-                "  defp {fn_name}({{:{atom}, _}}), do: %{{\"{tag}\" => \"{wire_escaped}\"}}\n"
-            ));
-            first_clause = false;
-            continue;
-        }
+        })
+        .collect();
 
-        // explicit `#[serde(rename = "...")]` per field is honored. Unknown keys are
-        if !first_clause {
-            out.push('\n');
-        }
-        out.push_str(&format!("  defp {fn_name}({{:{atom}, %{{}} = data}}) do\n"));
-        out.push_str("    data\n");
-        out.push_str("    |> Enum.reduce(%{}, fn {k, v}, acc ->\n");
-        out.push_str("      key =\n");
-        out.push_str("        case k do\n");
-        for field in &variant.fields {
-            if field.binding_excluded {
-                continue;
-            }
-            let wire_field = wire_field_name(&field.name, field.serde_rename.as_deref(), None);
-            if wire_field != field.name {
-                let wire_field_escaped = wire_field.replace('\\', "\\\\").replace('"', "\\\"");
-                out.push_str(&format!("          :{} -> \"{}\"\n", field.name, wire_field_escaped));
-            }
-        }
-        out.push_str("          k when is_atom(k) -> Atom.to_string(k)\n");
-        out.push_str("          k when is_binary(k) -> k\n");
-        out.push_str("        end\n\n");
-        out.push_str("      Map.put(acc, key, v)\n");
-        out.push_str("    end)\n");
-        out.push_str(&format!("    |> Map.put(\"{tag}\", \"{wire_escaped}\")\n"));
-        out.push_str("  end\n");
-        first_clause = false;
-    }
-
-    if !first_clause {
-        out.push('\n');
-    }
-    out.push_str(&format!("  defp {fn_name}(%{{}} = m), do: m\n"));
-    out.push('\n');
-    out.push_str(&format!(
-        "  defp {fn_name}(other),\n    do: raise(ArgumentError, \"expected {} (atom, {{atom, map}}, or map), got: \" <> inspect(other))\n\n",
-        enum_def.name
-    ));
-
-    out
+    template_env::render(
+        "elixir_tagged_enum_encoder.ex.jinja",
+        minijinja::context! {
+            fn_name => encoder_fn_name(&enum_def.name),
+            enum_name => escape_elixir_string_literal(&enum_def.name),
+            tag => escape_elixir_string_literal(tag),
+            variants => variants,
+        },
+    )
 }

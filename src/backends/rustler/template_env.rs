@@ -27,6 +27,56 @@ pub(crate) fn render(template_name: &str, ctx: minijinja::Value) -> String {
     crate::core::keep_marker::strip_keep_markers(&rendered)
 }
 
+/// Escaping for the target language happens in Rust, before a value enters a template, so the
+/// template engine must not touch it again. Minijinja picks an autoescape mode from the template
+/// NAME, and every template here ends in `.jinja`, which selects no escaping -- but that is a
+/// default, not a declaration, and a value that arrived already escaped for Elixir would be
+/// silently corrupted (`"` -> `&quot;`) if it ever changed. These tests pin it. ~keep
+#[cfg(test)]
+mod autoescape_tests {
+    #[test]
+    fn rendering_a_text_template_does_not_autoescape() {
+        let mut env = super::make_env();
+        env.add_template("autoescape_probe.ex.jinja", "{{ probe }}")
+            .expect("probe template is valid");
+        let rendered = env
+            .get_template("autoescape_probe.ex.jinja")
+            .expect("probe template is registered")
+            .render(minijinja::context! { probe => "a<b>&\"c\"'d'" })
+            .expect("probe template renders");
+        assert_eq!(
+            rendered, "a<b>&\"c\"'d'",
+            "the environment must emit text verbatim; HTML-escaping here would corrupt every \
+             value the backends escape for their own target language before rendering"
+        );
+    }
+
+    /// The same property on the real template rather than a probe: an Elixir-escaped tag and
+    /// wire value must land in the output exactly as Rust produced them -- neither HTML-escaped
+    /// nor escaped a second time (`\#` becoming `\\#`, which would emit a literal backslash).
+    #[test]
+    fn the_tagged_enum_encoder_template_passes_escaped_values_through_unchanged() {
+        let rendered = super::render(
+            "elixir_tagged_enum_encoder.ex.jinja",
+            minijinja::context! {
+                fn_name => "encode_e",
+                enum_name => "E",
+                tag => "ta\\#{1}g",
+                variants => vec![minijinja::context! {
+                    atom => "a",
+                    wire => "wi\\#{1}re",
+                    is_unit => true,
+                    field_renames => Vec::<minijinja::Value>::new(),
+                }],
+            },
+        );
+        assert!(
+            rendered.contains("defp encode_e(:a), do: %{\"ta\\#{1}g\" => \"wi\\#{1}re\"}"),
+            "escaped values must survive rendering byte for byte; got:\n{rendered}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod template_registration_tests {
     use super::TEMPLATE_GROUPS;

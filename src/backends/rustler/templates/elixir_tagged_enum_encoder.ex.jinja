@@ -1,0 +1,35 @@
+{% for variant in variants %}
+{% if not loop.first %}
+
+{% endif %}
+{% if variant.is_unit %}
+  defp {{ fn_name }}(:{{ variant.atom }}), do: %{"{{ tag }}" => "{{ variant.wire }}"}
+
+  defp {{ fn_name }}({:{{ variant.atom }}, _}), do: %{"{{ tag }}" => "{{ variant.wire }}"}
+{% else %}
+  defp {{ fn_name }}({:{{ variant.atom }}, %{} = data}) do
+    data
+    |> Enum.reduce(%{}, fn {k, v}, acc ->
+      key =
+        case k do
+{% for rename in variant.field_renames %}
+          :{{ rename.atom }} -> "{{ rename.wire }}"
+{% endfor %}
+          k when is_atom(k) -> Atom.to_string(k)
+          k when is_binary(k) -> k
+        end
+
+      Map.put(acc, key, v)
+    end)
+    |> Map.put("{{ tag }}", "{{ variant.wire }}")
+  end
+{% endif %}
+{% endfor %}
+{% if variants %}
+
+{% endif %}
+  defp {{ fn_name }}(%{} = m), do: m
+
+  defp {{ fn_name }}(other),
+    do: raise(ArgumentError, "expected {{ enum_name }} (atom, {atom, map}, or map), got: " <> inspect(other))
+
