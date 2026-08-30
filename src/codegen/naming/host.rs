@@ -16,7 +16,6 @@ pub fn public_field_name(lang: Language, rust_field_name: &str, rename_fields_va
     let base = rename_fields_value.unwrap_or(rust_field_name);
     public_host_identifier(lang, PublicIdentifierKind::Field, base)
 }
-
 /// Resolve a public host-language identifier for a Rust name.
 pub fn public_host_identifier(lang: Language, kind: PublicIdentifierKind, rust_name: &str) -> String {
     let converted = match kind {
@@ -126,4 +125,3 @@ fn public_identifier_context(kind: PublicIdentifierKind) -> IdentifierContext {
         PublicIdentifierKind::Parameter => IdentifierContext::PublicParameter,
     }
 }
-
