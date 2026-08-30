@@ -823,5 +823,27 @@ pub(in crate::backends::pyo3) fn type_has_from_json(typ: &TypeDef, api: &ApiSurf
     crate::codegen::conversions::pyo3_from_json_eligible(typ, has_serde, &convertible)
 }
 
+/// The attribute name `field` is published under on the generated `#[pyclass]`.
+///
+/// `resolve_field_name` folds two different renames together and the runtime attribute follows
+/// only one of them. A configured `rename_fields` entry renames the *Rust* field, and the emitted
+/// `#[pyo3(get, name = ...)]` hands the original name back to Python; a reserved-word escape has
+/// nowhere else to go (`obj.global` is a `SyntaxError` however the attribute was registered), so
+/// the escaped spelling is what Python sees. Anything that needs to know what a caller can
+/// actually read off an instance -- the `#[pyclass]` emitter itself, and the e2e generator that
+/// probes a visitor-callback context object -- must ask here rather than re-deriving the rule and
+/// naming an attribute that does not exist at runtime. `pub(crate)` for the same reason
+/// [`crate_has_serde`] is. ~keep
+pub(crate) fn python_visible_field_name(
+    config: &ResolvedCrateConfig,
+    type_name: &str,
+    field: &crate::core::ir::FieldDef,
+) -> String {
+    match config.resolve_field_name(crate::core::config::Language::Python, type_name, &field.name) {
+        Some(binding_name) if crate::core::keywords::python_safe_name(&field.name).is_some() => binding_name,
+        _ => field.name.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,6 @@
 //! PyO3 (Python) backend: orchestration and `Backend` trait implementation.
 
+pub(crate) mod binding_exclusions;
 pub mod capsule;
 mod capsule_methods;
 mod cfg_fields;
@@ -24,7 +25,7 @@ pub mod types;
 pub(in crate::backends::pyo3) use types::{options_dataclass_type_names, type_has_from_json};
 // pub(crate): e2e::codegen::python calls this to mirror the pyo3 backend's crate-level serde
 // detection when computing the shared from_json eligibility predicate. ~keep
-pub(crate) use types::crate_has_serde;
+pub(crate) use types::{crate_has_serde, python_visible_field_name};
 pub(in crate::backends::pyo3) mod wire_schema;
 
 use crate::backends::pyo3::type_map::Pyo3Mapper;
@@ -279,19 +280,15 @@ impl Backend for Pyo3Backend {
             .filter(|b| crate::backends::pyo3::trait_bridge::active_bridge_trait(b, api).is_some())
             .filter_map(|b| crate::codegen::generators::trait_bridge::bridge_register_symbol(b))
             .collect();
-        let mut py_exclude_types: ahash::AHashSet<String> = config
-            .python
-            .as_ref()
-            .map(|c| c.exclude_types.iter().cloned().collect())
-            .unwrap_or_default();
-        py_exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
+        // Shared with the visitor trait bridge and the `.pyi` protocol stub, both of which write
+        // a generated class name and must not name one this loop skips. ~keep
+        let py_exclude_types = binding_exclusions::pyclass_absent_type_names(config, &api.types);
         // Types listed in capsule_types bypass #[pyclass] generation entirely — they are
         let capsule_types = config
             .python
             .as_ref()
             .map(|c| c.capsule_types.clone())
             .unwrap_or_default();
-        config_opaque::exclude_capsule_opaque_types(&mut py_exclude_types, config, &capsule_types);
 
         let mut error_type_names: AHashSet<String> = AHashSet::new();
         for error in &api.errors {
@@ -409,30 +406,19 @@ impl Backend for Pyo3Backend {
                             None
                         };
 
-                        if let Some(binding_name) = config_ref.resolve_field_name(
-                            crate::core::config::Language::Python,
-                            &type_name,
-                            &field.name,
-                        ) {
-                            // Two different renames are folded into `resolve_field_name`, and they
-                            // need opposite treatment on the Python side. A configured
-                            // `rename_fields` entry renames the Rust field only, so `pyo3(name)`
-                            // hands the original name back to Python. A reserved-word escape
-                            // cannot: Python has no `r#`/backtick escape, so `obj.global` is a
-                            // SyntaxError no matter how the attribute was registered, and the
-                            // `.pyi` stub already declares the escaped spelling
-                            // (`gen_stubs::python_safe_name`). Exposing the escaped name is what
-                            // makes the stub and the runtime attribute agree.
+                        if config_ref
+                            .resolve_field_name(crate::core::config::Language::Python, &type_name, &field.name)
+                            .is_some()
+                        {
+                            // `resolve_field_name` folds two renames that need opposite treatment
+                            // here; `python_visible_field_name` owns that rule so every reader of
+                            // the published attribute name gets the same answer.
                             //
                             // `serde(rename)` stays on the *wire* name in both cases, and prefers
                             // the core type's own `#[serde(rename)]` when it has one -- deriving
                             // the JSON key from the escaped Rust field name instead would silently
                             // move it. ~keep
-                            let python_name = if crate::core::keywords::python_safe_name(&field.name).is_some() {
-                                binding_name
-                            } else {
-                                field.name.clone()
-                            };
+                            let python_name = types::python_visible_field_name(config_ref, &type_name, field);
                             let wire_name = field.serde_rename.clone().unwrap_or_else(|| field.name.clone());
                             let mut attrs = vec![
                                 format!("pyo3(get, name = \"{python_name}\")"),
@@ -740,7 +726,7 @@ impl Backend for Pyo3Backend {
                     &pyo3_conversion_cfg,
                 ));
             }
-            if crate::codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
+            if crate::codegen::conversions::core_to_binding_from_impl_emitted(typ, &core_to_binding) {
                 builder.add_item(&crate::codegen::conversions::gen_from_core_to_binding_cfg(
                     typ,
                     &core_import,
