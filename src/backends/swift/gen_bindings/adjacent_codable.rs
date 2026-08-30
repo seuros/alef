@@ -79,7 +79,11 @@ fn payload_key_cases(en: &EnumDef) -> String {
         }
         for (idx, field) in variant.fields.iter().enumerate() {
             let swift_name = swift_associated_label(&field.name, idx);
-            let wire_name = crate::codegen::naming::wire_field_name(&field.name, field.serde_rename.as_deref(), None);
+            let wire_name = crate::codegen::naming::wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                en.rename_all_fields.as_deref(),
+            );
             keys.insert((swift_name, wire_name));
         }
     }
@@ -365,6 +369,43 @@ mod tests {
             out.contains("try payload.encodeIfPresent(label, forKey: .label)"),
             "an optional field must not be forced onto the wire: {out}"
         );
+    }
+
+    #[test]
+    fn should_apply_a_fields_own_serde_rename_to_its_struct_variant_payload_key() {
+        let mut fields = vec![field("depth", TypeRef::Primitive(PrimitiveType::I32))];
+        fields[0].serde_rename = Some("customDepth".to_string());
+        let out = render(&enum_of(vec![struct_variant("Descend", fields)]));
+        assert!(out.contains("case depth = \"customDepth\""), "{out}");
+        assert!(!out.contains("\"depth\""), "{out}");
+    }
+
+    /// `rename_all_fields` (struct-variant field casing) is a distinct serde namespace from
+    /// `rename_all` (variant-name casing, already applied via `serde_rename_all` on `enum_of`).
+    /// A field with no `serde_rename` of its own must still pick up the container's field rule.
+    #[test]
+    fn should_case_a_struct_variant_payload_key_with_the_enums_rename_all_fields() {
+        let fields = vec![field("depth", TypeRef::Primitive(PrimitiveType::I32))];
+        let mut en = enum_of(vec![struct_variant("Descend", fields)]);
+        en.rename_all_fields = Some("SCREAMING_SNAKE_CASE".to_string());
+        let out = render(&en);
+        assert!(
+            out.contains("case depth = \"DEPTH\""),
+            "the enum's rename_all_fields must case the payload key: {out}"
+        );
+        assert!(!out.contains("case depth = \"depth\""), "{out}");
+    }
+
+    #[test]
+    fn should_prefer_a_fields_own_serde_rename_over_the_enums_rename_all_fields() {
+        let mut fields = vec![field("depth", TypeRef::Primitive(PrimitiveType::I32))];
+        fields[0].serde_rename = Some("customDepth".to_string());
+        let mut en = enum_of(vec![struct_variant("Descend", fields)]);
+        en.rename_all_fields = Some("SCREAMING_SNAKE_CASE".to_string());
+        let out = render(&en);
+        assert!(out.contains("case depth = \"customDepth\""), "{out}");
+        assert!(!out.contains("\"DEPTH\""), "{out}");
+        assert!(!out.contains("case depth = \"depth\""), "{out}");
     }
 
     #[test]
