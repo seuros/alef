@@ -81,8 +81,7 @@ fn render_equals_assertion_renamed_enum_variant_compares_wire_value() {
 
     let renamed = render_kind_equals(&resolver, "key-value");
     assert_eq!(
-        renamed,
-        "    assert_eq!(format!(\"{:?}\", result.kind), r#\"KeyValue\"#, \"equals assertion failed\");\n",
+        renamed, "    assert_eq!(format!(\"{:?}\", result.kind), r#\"KeyValue\"#, \"equals assertion failed\");\n",
         "the renamed variant's wire value must be reconciled to its Rust identifier, got: {renamed}"
     );
 
@@ -91,8 +90,7 @@ fn render_equals_assertion_renamed_enum_variant_compares_wire_value() {
     // field indiscriminately.
     let unrenamed = render_kind_equals(&resolver, "Plain");
     assert_eq!(
-        unrenamed,
-        "    assert_eq!(format!(\"{:?}\", result.kind), r#\"Plain\"#, \"equals assertion failed\");\n",
+        unrenamed, "    assert_eq!(format!(\"{:?}\", result.kind), r#\"Plain\"#, \"equals assertion failed\");\n",
         "an unrenamed variant must keep its fixture literal verbatim, got: {unrenamed}"
     );
 
@@ -101,8 +99,7 @@ fn render_equals_assertion_renamed_enum_variant_compares_wire_value() {
     // passing one.
     let unknown = render_kind_equals(&resolver, "not-a-variant");
     assert_eq!(
-        unknown,
-        "    assert_eq!(format!(\"{:?}\", result.kind), r#\"not-a-variant\"#, \"equals assertion failed\");\n",
+        unknown, "    assert_eq!(format!(\"{:?}\", result.kind), r#\"not-a-variant\"#, \"equals assertion failed\");\n",
         "an unrecognized fixture value must not be rewritten, got: {unknown}"
     );
 
@@ -130,8 +127,7 @@ fn config_only_enum_classification_leaves_the_fixture_literal_untranslated() {
 
     let out = render_kind_equals(&resolver, "key-value");
     assert_eq!(
-        out,
-        "    assert_eq!(format!(\"{:?}\", result.kind), r#\"key-value\"#, \"equals assertion failed\");\n",
+        out, "    assert_eq!(format!(\"{:?}\", result.kind), r#\"key-value\"#, \"equals assertion failed\");\n",
         "no IR means no rename knowledge; the literal must be emitted verbatim, got: {out}"
     );
 }
