@@ -8,6 +8,7 @@
 //! app harness (server-pattern) for HTTP fixtures. The wasm-pack `--target nodejs`
 //! CJS bundle initializes synchronously and does not require vite-plugin-wasm.
 
+use crate::codegen::naming::underscore_camel_case;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_filename;
 
@@ -57,7 +58,7 @@ impl E2eCodegen for WasmCodegen {
         let function_name = overrides
             .and_then(|o| o.function.as_ref())
             .cloned()
-            .unwrap_or_else(|| snake_to_camel(&call.function));
+            .unwrap_or_else(|| underscore_camel_case(&call.function));
         let client_factory = overrides.and_then(|o| o.client_factory.as_deref());
 
         // Resolve package config — defaults to a co-located pkg/ directory shipped
@@ -510,22 +511,6 @@ fn render_wasm_excluded_category(category: &str, reasons: &[(String, String)]) -
         let _ = writeln!(out, "    it.skip({id:?}, () => {{}});");
     }
     out.push_str("});\n");
-    out
-}
-
-fn snake_to_camel(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut upper_next = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            upper_next = true;
-        } else if upper_next {
-            out.push(ch.to_ascii_uppercase());
-            upper_next = false;
-        } else {
-            out.push(ch);
-        }
-    }
     out
 }
 

@@ -747,28 +747,11 @@ pub(super) fn render_streaming_assertion_dart(out: &mut String, assertion: &Asse
     }
 }
 
-/// Converts a snake_case JSON key to Dart camelCase.
-pub(super) fn snake_to_camel(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut next_upper = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            next_upper = true;
-        } else if next_upper {
-            result.extend(ch.to_uppercase());
-            next_upper = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
 /// Convert a dot-separated fixture field path to a Dart accessor expression.
 ///
 /// Each segment is converted to camelCase (FRB v2 convention); array-index brackets
 /// (e.g. `choices[0]`) and map-key brackets (e.g. `tags[name]`) are preserved.
-/// This replaces the former single-pass `snake_to_camel` call which incorrectly
+/// This replaces the former single-pass `underscore_camel_case` call which incorrectly
 /// treated the entire path string as one identifier.
 ///
 /// Examples:

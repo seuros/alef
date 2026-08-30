@@ -41,7 +41,7 @@
 //! caller attribute a resulting failure to the actual cause. ~keep
 
 use super::cfg_gates::{cfg_gated_free_functions, free_pub_fn_name};
-use super::text_transformations::{contains_function_at_token_boundary, snake_to_camel};
+use super::text_transformations::{contains_function_at_token_boundary, frb_dart_function_name};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Names of every top-level (column 0) `pub fn` / `pub async fn` free function declared in
@@ -184,7 +184,7 @@ pub fn missing_bridge_functions(
         .into_iter()
         .filter(|name| !excluded.contains(name.as_str()))
         .filter(|name| {
-            let camel = snake_to_camel(name);
+            let camel = frb_dart_function_name(name);
             !contains_function_at_token_boundary(bridge_dart_source, &camel)
         })
         .collect()

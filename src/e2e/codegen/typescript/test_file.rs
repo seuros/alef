@@ -1,5 +1,6 @@
 //! Test file and test case rendering for TypeScript e2e tests.
 
+use crate::codegen::naming::underscore_camel_case;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{EnumDef, TypeDef, TypeRef};
 use crate::e2e::config::{ArgMapping, E2eConfig};
@@ -9,7 +10,7 @@ use crate::e2e::fixture::Fixture;
 use heck::ToUpperCamelCase;
 
 use super::assertions::render_assertion_with_streaming_item_type;
-use super::json::{js_object_key, json_to_js, json_to_js_camel, json_to_js_multiline, snake_to_camel};
+use super::json::{js_object_key, json_to_js, json_to_js_camel, json_to_js_multiline};
 use super::visitors::build_typescript_visitor;
 
 mod args;

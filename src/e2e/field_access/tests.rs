@@ -119,7 +119,7 @@ fn test_accessor_typescript() {
 }
 
 #[test]
-fn test_accessor_typescript_snake_to_camel() {
+fn test_accessor_typescript_camel_cases_field_segments() {
     let r = make_resolver();
     assert_eq!(
         r.accessor("og", "typescript", "result"),
@@ -136,7 +136,7 @@ fn test_accessor_typescript_snake_to_camel() {
 }
 
 #[test]
-fn test_accessor_typescript_map_snake_to_camel() {
+fn test_accessor_typescript_camel_cases_map_field_segments() {
     let r = make_resolver();
     assert_eq!(
         r.accessor("og_tag", "typescript", "result"),

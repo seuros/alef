@@ -356,7 +356,7 @@ fn resolve_owner_field<'a>(owner_type: Option<&'a TypeDef>, key: &str) -> Option
 fn node_field_public_key(owner_type: Option<&TypeDef>, key: &str) -> String {
     resolve_owner_field(owner_type, key)
         .map(|field| crate::codegen::naming::to_node_name(&field.name))
-        .unwrap_or_else(|| snake_to_camel(key))
+        .unwrap_or_else(|| underscore_camel_case(key))
 }
 
 /// Refuses `obj` if it contains a key that `type_name`'s declared fields (in `type_defs`) don't
@@ -513,7 +513,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                     _ => node_field_public_key(owner_type, key),
                 }
             } else {
-                snake_to_camel(key)
+                underscore_camel_case(key)
             };
             let field_expr = if lang == "node" {
                 // Apply the napi serde_tag rename recursively into nested objects
@@ -523,7 +523,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 // If the field is an enum (e.g. urlEscapeStyle, codeBlockStyle),
                 // napi-rs constants are PascalCase variant names. Fixtures may
                 // use the lowercase wire form (e.g. "percent"); convert it.
-                let camel_key = snake_to_camel(key);
+                let camel_key = underscore_camel_case(key);
                 let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
@@ -793,7 +793,7 @@ fn node_value_expression(
         let member = declared_enum_member_for_prefixed(type_name, enums, "", variant);
         return enum_member_reference(type_name, &member, referenced_enums);
     }
-    let camel_field = snake_to_camel(field);
+    let camel_field = underscore_camel_case(field);
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
@@ -828,7 +828,7 @@ fn node_value_expression(
                     let nested_field_type = nested_field.map(|field| &field.ty);
                     let js_key = nested_field
                         .map(|field| crate::codegen::naming::to_node_name(&field.name))
-                        .unwrap_or_else(|| snake_to_camel(name));
+                        .unwrap_or_else(|| underscore_camel_case(name));
                     format!(
                         "{}: {}",
                         js_key,

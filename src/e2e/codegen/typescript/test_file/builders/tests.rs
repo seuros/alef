@@ -933,7 +933,7 @@ fn a_field_keyed_by_its_wire_name_is_accepted() {
         &mut Default::default(),
     );
 
-    // ~keep Asserting the exact key, not just that "10" appears: `snake_to_camel` applied
+    // ~keep Asserting the exact key, not just that "10" appears: `underscore_camel_case` applied
     // directly to the wire-shaped fixture key ("maxCharacters", already camelCase) would leave
     // it unchanged and pass this assertion too if it only checked the value — see task #475,
     // where exactly that vacuous shape let a wire/host-name divergence ship as `Missing field`
@@ -946,7 +946,7 @@ fn a_field_keyed_by_its_wire_name_is_accepted() {
 /// napi-rs public JS name (`to_node_name(&field.name)`, always camelCase off the Rust field
 /// name — see `napi::gen_bindings::types`) must resolve the JS object-literal key through the
 /// Rust field, not a generic camelCase of the (possibly wire-shaped) fixture key. Before the
-/// fix, `snake_to_camel("type")` left the wire key unchanged, emitting `{ type: "function" }`
+/// fix, `underscore_camel_case("type")` left the wire key unchanged, emitting `{ type: "function" }`
 /// against a binding that exposes the field as `toolType`, which napi-rs rejected at runtime
 /// with `Missing field 'toolType'`.
 #[test]

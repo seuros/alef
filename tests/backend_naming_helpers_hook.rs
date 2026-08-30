@@ -149,3 +149,48 @@ fn accepts_the_allowlisted_canonical_and_wrapper_definitions() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn rejects_a_reintroduced_snake_to_camel_helper() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let e2e_dir = dir.path().join("src/e2e/codegen/typescript");
+    fs::create_dir_all(&e2e_dir).expect("create e2e dir");
+    fs::write(
+        e2e_dir.join("json.rs"),
+        "pub(super) fn snake_to_camel(s: &str) -> String { s.to_string() }\n",
+    )
+    .expect("write fixture");
+
+    let output = run_hook(dir.path(), &["src/e2e/codegen/typescript/json.rs"]);
+
+    assert!(
+        !output.status.success(),
+        "hook must reject a reintroduced `snake_to_camel`; \
+         `codegen::naming::underscore_camel_case` is the canonical transform"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr must be utf8");
+    assert!(
+        stderr.contains("backend-local helper `snake_to_camel`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn accepts_the_canonical_underscore_camel_case_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let case_dir = dir.path().join("src/codegen/naming");
+    fs::create_dir_all(&case_dir).expect("create naming dir");
+    fs::write(
+        case_dir.join("case.rs"),
+        "pub fn underscore_camel_case(name: &str) -> String { name.to_string() }\n",
+    )
+    .expect("write fixture");
+
+    let output = run_hook(dir.path(), &["src/codegen/naming/case.rs"]);
+
+    assert!(
+        output.status.success(),
+        "the canonical name must not be caught by the `to_camel_case` alternation; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

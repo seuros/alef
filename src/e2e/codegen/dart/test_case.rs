@@ -1,5 +1,6 @@
 //! Dart ordinary function-call e2e test rendering.
 
+use crate::codegen::naming::underscore_camel_case;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, TypeRef};
 use crate::e2e::codegen::call_ir::TargetParams;
@@ -8,7 +9,7 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 use std::fmt::Write as FmtWrite;
 
-use super::assertions::{render_assertion_dart, render_streaming_assertion_dart, snake_to_camel};
+use super::assertions::{render_assertion_dart, render_streaming_assertion_dart};
 use super::stubs::emit_test_backend;
 use super::values::{escape_dart, mime_from_extension, type_name_to_create_from_json_dart};
 
@@ -455,7 +456,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         format!("File('{}').readAsBytesSync()", file_path)
                     };
                     if is_frb_bridge_call {
-                        let dart_param_name = snake_to_camel(&arg_def.name);
+                        let dart_param_name = underscore_camel_case(&arg_def.name);
                         args.push(format!("{dart_param_name}: {arg_expr}"));
                     } else {
                         args.push(arg_expr);
@@ -464,7 +465,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             }
             "int" | "integer" | "i64" => {
                 // Scalar integer argument. Direct FRB calls use named parameters.
-                let dart_param_name = snake_to_camel(&arg_def.name);
+                let dart_param_name = underscore_camel_case(&arg_def.name);
                 match arg_value {
                     serde_json::Value::Number(n) => {
                         if is_frb_bridge_call {
@@ -488,7 +489,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             }
             "float" | "number" => {
                 // Scalar float/number argument. Direct FRB calls use named parameters.
-                let dart_param_name = snake_to_camel(&arg_def.name);
+                let dart_param_name = underscore_camel_case(&arg_def.name);
                 match arg_value {
                     serde_json::Value::Number(n) => {
                         if is_frb_bridge_call {
@@ -512,7 +513,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             }
             "bool" | "boolean" => {
                 // Scalar boolean argument. Direct FRB calls use named parameters.
-                let dart_param_name = snake_to_camel(&arg_def.name);
+                let dart_param_name = underscore_camel_case(&arg_def.name);
                 match arg_value {
                     serde_json::Value::Bool(b) => {
                         let bool_str = if *b { "true" } else { "false" };
@@ -544,7 +545,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 // The `mime_type` parameter is special: it's positional in facade extract methods
                 // but named in direct FRB bridge calls. The `client_factory` path is for stateful
                 // clients (e.g., demo-client) which always use named parameters.
-                let dart_param_name = snake_to_camel(&arg_def.name);
+                let dart_param_name = underscore_camel_case(&arg_def.name);
                 let mime_type_is_positional =
                     arg_def.name == "mime_type" && !is_frb_bridge_call && client_factory_for_args.is_none();
                 match arg_value {
@@ -593,7 +594,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     if arg_value.is_object() {
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         let escaped_json = escape_dart(&json_str);
-                        let var_name = snake_to_camel(&arg_def.name);
+                        let var_name = underscore_camel_case(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(elem_type);
                         let json_source = if crate::e2e::codegen::value_contains_mock_url_placeholder(arg_value) {
                             setup_lines.push(format!(
@@ -610,7 +611,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         };
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: {json_source});"));
                         if is_frb_bridge_call {
-                            let dart_param_name = snake_to_camel(&arg_def.name);
+                            let dart_param_name = underscore_camel_case(&arg_def.name);
                             args.push(format!("{dart_param_name}: {var_name}"));
                         } else {
                             args.push(var_name);
@@ -646,7 +647,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                             .collect();
                         let list_literal = format!("<String>[{}]", items.join(", "));
                         if is_frb_bridge_call {
-                            let dart_param_name = snake_to_camel(&arg_def.name);
+                            let dart_param_name = underscore_camel_case(&arg_def.name);
                             args.push(format!("{dart_param_name}: {list_literal}"));
                         } else {
                             args.push(list_literal);
@@ -679,7 +680,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         ));
                         // For generic arrays, emit named parameter if it's a direct FRB call
                         if is_frb_bridge_call {
-                            let dart_param_name = snake_to_camel(&arg_def.name);
+                            let dart_param_name = underscore_camel_case(&arg_def.name);
                             args.push(format!("{dart_param_name}: {var_name}"));
                         } else {
                             args.push(var_name);
@@ -708,7 +709,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 &fixture.docs_files_for_arg(&arg_def.field),
                             )
                         {
-                            let var_name = snake_to_camel(&arg_def.name);
+                            let var_name = underscore_camel_case(&arg_def.name);
                             setup_lines.push(format!("final {var_name} = {expression};"));
                             args.push(format!("req: {var_name}"));
                             continue;
@@ -717,7 +718,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         // Escape for Dart single-quoted string literal (handles embedded quotes,
                         // backslashes, and interpolation markers).
                         let escaped_json = escape_dart(&json_str);
-                        let var_name = snake_to_camel(&arg_def.name);
+                        let var_name = underscore_camel_case(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
                         // FRB bridge method param name is `req` for all single-request methods.
@@ -726,7 +727,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     }
                 } else if call_recipe.should_materialize_json_object(arg_def, arg_value) && arg_value.is_null() {
                     if let Some(opts_type) = options_type {
-                        let var_name = snake_to_camel(&arg_def.name);
+                        let var_name = underscore_camel_case(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                         // The declaration this call has to match is emitted by
@@ -746,7 +747,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         if is_config_positional {
                             args.push(var_name);
                         } else {
-                            let dart_param_name = snake_to_camel(&arg_def.name);
+                            let dart_param_name = underscore_camel_case(&arg_def.name);
                             args.push(format!("{dart_param_name}: {var_name}"));
                         }
                     }
@@ -771,13 +772,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 .unwrap_or(&arg_def.name);
                             let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                             let escaped_json = escape_dart(&json_str);
-                            let var_name = snake_to_camel(&arg_def.name);
+                            let var_name = underscore_camel_case(&arg_def.name);
                             let dart_fn = type_name_to_create_from_json_dart(opts_type);
                             setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
                             if is_config_positional(opts_type) {
                                 args.push(var_name);
                             } else {
-                                let dart_param_name = snake_to_camel(&arg_def.name);
+                                let dart_param_name = underscore_camel_case(&arg_def.name);
                                 args.push(format!("{dart_param_name}: {var_name}"));
                             }
                         } else {
@@ -792,13 +793,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 .or(arg_def.element_type.as_deref())
                                 .or(options_type);
                             if let Some(opts_type) = opts_type {
-                                let var_name = snake_to_camel(&arg_def.name);
+                                let var_name = underscore_camel_case(&arg_def.name);
                                 let dart_fn = type_name_to_create_from_json_dart(opts_type);
                                 setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                                 if is_config_positional(opts_type) {
                                     args.push(var_name);
                                 } else {
-                                    let dart_param_name = snake_to_camel(&arg_def.name);
+                                    let dart_param_name = underscore_camel_case(&arg_def.name);
                                     args.push(format!("{dart_param_name}: {var_name}"));
                                 }
                             }
@@ -818,13 +819,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                             call_recipe.json_object_arg_has_default(arg_def)
                                 || call_recipe.should_materialize_json_object(arg_def, arg_value)
                         }) {
-                            let var_name = snake_to_camel(&arg_def.name);
+                            let var_name = underscore_camel_case(&arg_def.name);
                             let dart_fn = type_name_to_create_from_json_dart(opts_type);
                             setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                             if is_config_positional(opts_type) {
                                 args.push(var_name);
                             } else {
-                                let dart_param_name = snake_to_camel(&arg_def.name);
+                                let dart_param_name = underscore_camel_case(&arg_def.name);
                                 args.push(format!("{dart_param_name}: {var_name}"));
                             }
                         }
@@ -839,7 +840,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     ));
                     // Direct FRB bridge calls use named parameters
                     if is_frb_bridge_call {
-                        let dart_param_name = snake_to_camel(&arg_def.name);
+                        let dart_param_name = underscore_camel_case(&arg_def.name);
                         args.push(format!("{dart_param_name}: {var_name}"));
                     } else {
                         args.push(var_name);
@@ -865,8 +866,8 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     {
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         let escaped_json = escape_dart(&json_str);
-                        let dart_param_name = snake_to_camel(&arg_def.name);
-                        let var_name = snake_to_camel(&arg_def.name);
+                        let dart_param_name = underscore_camel_case(&arg_def.name);
+                        let var_name = underscore_camel_case(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         if fixture.visitor.is_some() {
                             setup_lines.push(format!(

@@ -1,7 +1,7 @@
+use crate::codegen::naming::underscore_camel_case;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
-use super::super::json::snake_to_camel;
 use super::helpers::resolve_node_function_name;
 use super::wasm::wasm_class_name;
 
@@ -39,7 +39,7 @@ pub(super) fn wasm_visitor_binding(
 pub(super) fn apply_wasm_visitor_arg(args_str: &str, visitor_arg: &str, binding: &WasmVisitorBinding) -> String {
     let visitor_assignment = format!(
         "_u.{} = new {}({visitor_arg});",
-        snake_to_camel(&binding.options_field),
+        underscore_camel_case(&binding.options_field),
         binding.handle_type
     );
     let iife = format!(

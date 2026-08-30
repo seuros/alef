@@ -85,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every `codegen::naming::<item>` path is unchanged; this is a refactor with no behavior change.
   `hooks/check_backend_naming_helpers.py`'s allowlist now points at the canonical definitions'
   new files, so the hook no longer flags `wire_variant_value` and `pascal_to_snake` themselves.
+- Consolidate the four independent `snake_to_camel` definitions (TypeScript e2e, WASM e2e, Dart
+  e2e, Dart FRB rewrite) into `codegen::naming::underscore_camel_case`, and add `snake_to_camel`
+  to the naming-helper gate's banned set so a fifth cannot appear. The Dart FRB rewrite keeps a
+  context-specific `frb_dart_function_name` wrapper that delegates to it, because it models
+  flutter_rust_bridge's output rather than alef's naming policy. Output is unchanged.
 
 ### Fixed
 

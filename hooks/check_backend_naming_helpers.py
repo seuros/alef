@@ -22,6 +22,7 @@ BANNED_FUNCTIONS = {
     "variant_serde_name",
     "to_snake_case",
     "to_camel_case",
+    "snake_to_camel",
     "to_pascal_case",
     "pascal_case",
     "pascal_to_snake",

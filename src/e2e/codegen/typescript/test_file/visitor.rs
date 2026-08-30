@@ -39,7 +39,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn apply_wasm_visitor_arg(
 ) -> String {
     let visitor_assignment = format!(
         "_u.{} = new {}({visitor_arg});",
-        snake_to_camel(&binding.options_field),
+        underscore_camel_case(&binding.options_field),
         binding.handle_type
     );
     let iife = format!(

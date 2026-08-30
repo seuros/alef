@@ -640,3 +640,32 @@ mod duration_wire_tests {
         assert!(!field_uses_duration_map_wire(&field));
     }
 }
+
+#[test]
+fn underscore_camel_case_capitalizes_only_after_an_underscore() {
+    let cases = [
+        ("hello_world", "helloWorld"),
+        ("no_underscores_here", "noUnderscoresHere"),
+        ("already", "already"),
+        ("", ""),
+        ("a_b_c", "aBC"),
+        ("trailing_", "trailing"),
+        ("double__underscore", "doubleUnderscore"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(underscore_camel_case(input), expected, "input: {input}");
+    }
+}
+
+#[test]
+fn underscore_camel_case_preserves_case_that_heck_would_re_split() {
+    // These are the cases the helper exists for. `to_node_name` (heck) re-splits an existing
+    // case run and drops a leading underscore; a caller matching a name another generator
+    // already emitted must not. If these two ever agree, the separate helper is pointless.
+    let divergent = [("my_URL", "myURL", "myUrl"), ("_raw", "Raw", "raw"), ("parse_HTML", "parseHTML", "parseHtml")];
+    for (input, preserving, heck) in divergent {
+        assert_eq!(underscore_camel_case(input), preserving, "input: {input}");
+        assert_eq!(to_node_name(input), heck, "input: {input}");
+        assert_ne!(underscore_camel_case(input), to_node_name(input), "input: {input}");
+    }
+}

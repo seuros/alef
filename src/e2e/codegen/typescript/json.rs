@@ -1,5 +1,6 @@
 //! JSON-to-JavaScript literal conversion utilities.
 
+use crate::codegen::naming::underscore_camel_case;
 use crate::e2e::escape::{escape_js, expand_fixture_templates};
 
 /// Convert a `serde_json::Value` to a JavaScript literal string.
@@ -109,7 +110,7 @@ pub(super) fn json_to_js_camel(value: &serde_json::Value) -> String {
             let entries: Vec<String> = map
                 .iter()
                 .map(|(k, v)| {
-                    let key = js_object_key(&snake_to_camel(k));
+                    let key = js_object_key(&underscore_camel_case(k));
                     format!("{key}: {}", json_to_js_camel(v))
                 })
                 .collect();
@@ -122,23 +123,6 @@ pub(super) fn json_to_js_camel(value: &serde_json::Value) -> String {
         // Scalars and null delegate to the standard converter.
         other => json_to_js(other),
     }
-}
-
-/// Convert a snake_case string to camelCase.
-pub(super) fn snake_to_camel(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut capitalize_next = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
 }
 
 #[cfg(test)]
@@ -155,13 +139,6 @@ mod tests {
     #[test]
     fn json_to_js_null_returns_null_literal() {
         assert_eq!(json_to_js(&serde_json::Value::Null), "null");
-    }
-
-    #[test]
-    fn snake_to_camel_converts_underscores() {
-        assert_eq!(snake_to_camel("hello_world"), "helloWorld");
-        assert_eq!(snake_to_camel("no_underscores"), "noUnderscores");
-        assert_eq!(snake_to_camel("already"), "already");
     }
 
     #[test]

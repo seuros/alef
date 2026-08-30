@@ -28,7 +28,7 @@ pub mod symbols;
 pub mod ts_property_key;
 pub mod wire;
 
-pub use case::{pascal_to_screaming_snake, pascal_to_snake, to_class_name, to_constant_name};
+pub use case::{pascal_to_screaming_snake, pascal_to_snake, to_class_name, to_constant_name, underscore_camel_case};
 pub use host::{public_field_name, public_host_identifier, qualified_type_path};
 pub use identifiers::{
     dart_tuple_field_identifier, dart_type_identifier, dart_value_identifier, escape_identifier, escape_identifier_for,

@@ -102,7 +102,7 @@ fn render_value(
                     .iter()
                     .map(|(field, field_value)| {
                         let rendered = render_value(field, field_value, context, used_types, referenced_enums);
-                        format!("{}: {rendered}", js_object_key(&snake_to_camel(field)))
+                        format!("{}: {rendered}", js_object_key(&underscore_camel_case(field)))
                     })
                     .collect();
                 format!("{{ {} }}", entries.join(", "))

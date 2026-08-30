@@ -1,3 +1,4 @@
+use crate::codegen::naming::underscore_camel_case;
 use regex::Regex;
 
 /// Strip trailing whitespace from every line and ensure a final newline.
@@ -374,7 +375,7 @@ pub fn filter_excluded_functions(source: &str, exclude_functions: &std::collecti
         let mut should_skip_function = false;
         if !trimmed.is_empty() && !trimmed.starts_with("class") && !trimmed.starts_with("enum") {
             should_skip_function = exclude_functions.iter().any(|&excluded| {
-                let camel_excluded = snake_to_camel(excluded);
+                let camel_excluded = frb_dart_function_name(excluded);
                 contains_function_at_token_boundary(line, &camel_excluded)
             });
         }
@@ -444,33 +445,28 @@ pub(super) fn contains_function_at_token_boundary(haystack: &str, name: &str) ->
     false
 }
 
-/// Convert Rust snake_case to Dart lowerCamelCase.
+/// The Dart identifier flutter_rust_bridge gives a Rust free function named `name`.
 ///
-/// `pub(super)`: also used by [`super::bridge_coverage::missing_bridge_functions`], which
-/// needs the identical name-matching convention to look up a facade function's Dart name in
-/// bridge output.
-pub(super) fn snake_to_camel(name: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = false;
-
-    for c in name.chars() {
-        if c == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            for upper_c in c.to_uppercase() {
-                result.push(upper_c);
-            }
-            capitalize_next = false;
-        } else if result.is_empty() {
-            for lower_c in c.to_lowercase() {
-                result.push(lower_c);
-            }
-        } else {
-            result.push(c);
-        }
+/// This models *another generator's* output, not alef's naming policy, which is why it delegates
+/// to [`underscore_camel_case`] rather than to a host-identifier helper: both call sites search
+/// FRB's already-written Dart for a name, so the transform has to reproduce what FRB wrote. A
+/// host helper such as `naming::public_host_identifier(Language::Dart, ...)` goes through heck,
+/// which re-splits case runs (`parse_HTML` becomes `parseHtml`, not `parseHTML`); the resulting
+/// probe would silently match nothing, which reads as "the bridge is missing this function"
+/// rather than as a naming bug.
+///
+/// `pub(super)`: also used by [`super::bridge_coverage::missing_bridge_functions`], which needs
+/// the identical name-matching convention. ~keep
+pub(super) fn frb_dart_function_name(name: &str) -> String {
+    let camel = underscore_camel_case(name);
+    if name.starts_with('_') {
+        return camel;
     }
-
-    result
+    let mut chars = camel.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => camel,
+    }
 }
 
 /// Inject `text()` methods on sealed classes that are display-as-text types.
@@ -683,5 +679,21 @@ final class AssistantPart_Image extends AssistantPart {
 
         assert_eq!(result, source);
         assert!(!result.contains("extension AssistantContentTextExt"));
+    }
+
+    #[test]
+    fn frb_dart_function_name_lowercases_only_the_leading_character() {
+        let cases = [
+            ("process_text", "processText"),
+            ("extract_file", "extractFile"),
+            ("Foo_bar", "fooBar"),
+            ("parse_HTML", "parseHTML"),
+            ("_private_helper", "PrivateHelper"),
+            ("single", "single"),
+            ("", ""),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(frb_dart_function_name(input), expected, "input: {input}");
+        }
     }
 }

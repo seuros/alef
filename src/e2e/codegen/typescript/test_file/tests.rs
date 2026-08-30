@@ -567,7 +567,7 @@ fn wasm_visitor_arg_uses_configured_field_and_types() {
 }
 
 #[test]
-fn resolve_node_function_name_converts_snake_to_camel() {
+fn resolve_node_function_name_converts_to_lower_camel_case() {
     use crate::e2e::config::CallConfig;
     let cc = CallConfig {
         function: "process_text".to_string(),

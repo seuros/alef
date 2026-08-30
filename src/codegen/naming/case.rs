@@ -165,3 +165,34 @@ pub fn pascal_to_snake(name: &str) -> String {
 pub fn pascal_to_screaming_snake(name: &str) -> String {
     pascal_to_snake(name).to_ascii_uppercase()
 }
+
+/// Join a name's `_`-separated segments by capitalizing the first character after each
+/// underscore, leaving every other character's case untouched.
+///
+/// This is deliberately NOT [`super::languages::to_node_name`] (heck's `ToLowerCamelCase`), and
+/// the difference is load-bearing. heck re-splits an existing case run and drops a leading
+/// underscore, so it rewrites `my_URL` to `myUrl` and `_raw` to `raw`; this transform yields
+/// `myURL` and `Raw`. A caller whose output must match a name some *other* generator already
+/// emitted — a fixture JSON key echoing a serde wire name, an identifier flutter_rust_bridge
+/// wrote into its own Dart output — needs the preserving form, because heck's extra splitting
+/// silently produces a name that does not exist on the other side and the mismatch surfaces only
+/// as a failing generated test.
+///
+/// A caller naming an identifier *alef itself* emits must not use this. Go through the surface
+/// helper for that language ([`super::host::public_host_identifier`] or `to_node_name`) so the
+/// generator and the emitter cannot disagree. ~keep
+pub fn underscore_camel_case(name: &str) -> String {
+    let mut result = String::with_capacity(name.len());
+    let mut capitalize_next = false;
+    for ch in name.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}

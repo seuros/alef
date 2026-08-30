@@ -245,7 +245,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                             wasm_type_prefix,
                         };
                         for (key, val) in obj {
-                            let camel_key = snake_to_camel(key);
+                            let camel_key = underscore_camel_case(key);
                             let value_expr = build_handle_config_value(key, val, &context, &mut *referenced_enums);
                             setup_lines.push(format!("{name}Config.{camel_key} = {value_expr};", name = arg.name));
                         }

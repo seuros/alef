@@ -39,7 +39,7 @@ pub(in crate::e2e::codegen::typescript) fn resolve_node_function_name(
         .overrides
         .get("node")
         .and_then(|o| o.function.clone())
-        .unwrap_or_else(|| snake_to_camel(&call_config.function))
+        .unwrap_or_else(|| underscore_camel_case(&call_config.function))
 }
 
 /// Resolve the function name for a call config in one of the JavaScript-shaped bindings.
