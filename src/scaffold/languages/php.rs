@@ -468,7 +468,7 @@ const FIXED_PHPUNIT_CONSTRAINT: &str = "\"phpunit/phpunit\": \"^11.5 || ^12.0 ||
 /// ever replaces the one matched substring -- a consumer's own `require`/`autoload`/`scripts`
 /// customisations survive byte-for-byte. ~keep
 pub(crate) fn migrate_php_composer_phpunit_constraint(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

@@ -37,7 +37,7 @@ const STALE_SNIPPET_HOOK_RUN: &str = "alef snippets check --strict --cache off";
 /// table, or a table that no longer matches (idempotent: nothing left to remove on a second
 /// pass). ~keep
 pub(crate) fn migrate_poly_toml_drop_snippet_hook(base_dir: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(POLY_CONFIG_RELATIVE);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, POLY_CONFIG_RELATIVE.as_ref())?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

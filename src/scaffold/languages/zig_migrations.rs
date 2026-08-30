@@ -77,7 +77,7 @@ fn is_crate_name_derived_include_default(value: &str) -> bool {
 /// the option somewhere else — a vendored header tree, an absolute path, a sibling directory —
 /// keeps it, exactly as [`migrate_build_zig_test_target`] keeps every line it does not own.
 pub(crate) fn migrate_zig_build_ffi_include_default(base_dir: &Path, generated: &str) -> anyhow::Result<bool> {
-    let path = base_dir.join(BUILD_ZIG_RELATIVE);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, BUILD_ZIG_RELATIVE.as_ref())?;
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -140,7 +140,7 @@ pub(crate) fn migrate_zig_build_ffi_include_default(base_dir: &Path, generated: 
 /// module), and a prefix match would read those as the self-import and skip the one line
 /// that matters. ~keep
 pub(crate) fn migrate_build_zig_test_target(base_dir: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(BUILD_ZIG_RELATIVE);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, BUILD_ZIG_RELATIVE.as_ref())?;
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -229,7 +229,7 @@ const STALE_EXAMPLE_ZIG: &str = "const std = @import(\"std\");\n\npub fn main() 
 /// sufficient and maximally conservative: any consumer edit at all — even just adding a
 /// comment — fails the match and leaves the file completely untouched. ~keep
 pub(crate) fn migrate_zig_example(base_dir: &Path, relative_path: &Path, replacement: &str) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

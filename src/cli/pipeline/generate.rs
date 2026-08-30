@@ -18,7 +18,7 @@ mod user_owned;
 #[cfg(test)]
 mod user_owned_disposition_tests;
 mod validation;
-mod write;
+pub(crate) mod write;
 
 use crate::core::backend::GeneratedFile;
 use std::path::Path;

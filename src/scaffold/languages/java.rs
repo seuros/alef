@@ -269,7 +269,7 @@ const FIXED_LINE_LENGTH: &str = "<property name=\"max\" value=\"200\"/>\n       
 /// value alef would have -- either way, advancing it to alef's current correct value is the
 /// right outcome, and any other value (a deliberate customisation) is left untouched. ~keep
 pub(crate) fn migrate_java_checkstyle_line_length(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

@@ -106,7 +106,15 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
 /// directory has been created has already let the escape happen. `write_files_report` calls this
 /// while preparing content and creates directories only once the whole preparation loop has
 /// succeeded; `write_scaffold_files_report` calls it at the top of its per-file loop, ahead of
-/// that file's own `create_dir_all`. ~keep
+/// that file's own `create_dir_all`.
+///
+/// The scaffold in-place migrations under `crate::scaffold` are the third route in, and the one
+/// the report writers do not cover. Each repairs a `generated_header: false` create-once file
+/// through its own `NamedTempFile::new_in(path.parent())`, so each is a write sink in its own
+/// right; two of them (`.cargo/config.toml`, `poly.toml`) run unconditionally, on paths that
+/// never appear in the emitted file list and therefore never reach the loops above at all. They
+/// resolve their target by calling this function instead of `base_dir.join`, which puts the
+/// check ahead of both the `read_to_string` and the temporary. ~keep
 pub(crate) fn contained_output_path(base_dir: &Path, emitted_path: &Path) -> anyhow::Result<std::path::PathBuf> {
     validate_output_path(emitted_path)
         .and_then(|()| containment::ensure_no_symlink_escape(base_dir, emitted_path))

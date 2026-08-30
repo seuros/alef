@@ -7,6 +7,8 @@ mod go;
 mod java;
 mod jni;
 mod kotlin;
+#[cfg(test)]
+mod migration_containment_tests;
 mod node;
 mod php;
 mod poly;

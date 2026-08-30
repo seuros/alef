@@ -330,6 +330,9 @@ object Sample {{
     ])
 }
 
+/// Path of the create-once build manifest the migration below repairs, relative to the repo root.
+const BUILD_GRADLE_RELATIVE: &str = "packages/kotlin/build.gradle.kts";
+
 /// The stale `sourceSets { main { ... } }` sub-block [`scaffold_kotlin_jvm`] emitted before the
 /// fix that dropped it (the alef Kotlin backend already writes binding sources under the
 /// standard `src/main/kotlin/` layout, so this extra root `srcDir(".")` only dragged `build/`
@@ -359,7 +362,7 @@ const FIXED_MAVEN_PUBLISHING_COMMA: &str = "      sourcesJar = true,\n    ),\n  
 /// including any other hand customization, is never touched. Returns `false` (no-op, not an
 /// error) when the file doesn't exist or neither known-bad shape is present. ~keep
 pub(crate) fn migrate_kotlin_build_gradle(base_dir: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join("packages/kotlin/build.gradle.kts");
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, BUILD_GRADLE_RELATIVE.as_ref())?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

@@ -494,7 +494,7 @@ pub(crate) fn migrate_dart_placeholder_test(
     relative_path: &Path,
     replacement: &str,
 ) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -554,7 +554,7 @@ const STALE_PUBIGNORE: &str = "android/\nios/\nblobs/\nlib/src/native/\nrust/\ne
 /// left completely untouched, exactly like `migrate_swift_placeholder_test`'s "hand-written
 /// suite must survive byte for byte" guarantee. ~keep
 pub(crate) fn migrate_dart_pubignore(base_dir: &Path, relative_path: &Path, replacement: &str) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

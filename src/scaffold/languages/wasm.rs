@@ -188,7 +188,7 @@ pub(crate) fn migrate_wasm_package_json(base_dir: &Path, relative_path: &Path) -
 /// [`migrate_wasm_package_json`], which is the crate-visible entry point for every repair this
 /// module makes to a pre-existing `crates/*-wasm/package.json`. ~keep
 fn migrate_wasm_package_json_exports(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(relative_path);
+    let path = crate::cli::pipeline::generate::write::contained_output_path(base_dir, relative_path)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

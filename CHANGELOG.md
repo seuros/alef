@@ -335,6 +335,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing ancestor and compares it against the canonicalized base directory, before any directory
   is created; a base reached through a symlink (macOS `/tmp`, a symlinked checkout) and symlinks
   that stay inside the project are unaffected.
+- Route every in-place scaffold migration through the same output-containment guard as the two
+  report writers. Each migration repairs a create-once file through its own temporary-file write,
+  so each was an independent write sink the guard never saw, and the `.cargo/config.toml` and
+  `poly.toml` repairs run unconditionally on paths that never enter the emitted file list at all.
+  A symlinked `packages/`, `.cargo` or `poly.toml` therefore carried a repair outside the project
+  even when every path component was a compile-time literal.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.
