@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose value genuinely is the type's zero, is unchanged. Java, which keyed the same decision on
   the marker string rather than on `typed_default`, now consults `typed_default` too so all four
   backends agree from one signal.
+- Stop Go substituting its own zero for a scalar field carrying `#[serde(default = "path")]`.
+  `needs_omitempty_pointer` grouped `DefaultValue::FunctionCall`/`PublicFunctionCall` with
+  `Empty` in its `false` arm, so the field was emitted as a plain value with a plain JSON tag.
+  A `Vec`/`Map` field was covered by an unrelated rule (every collection already gets
+  `,omitempty`), but a `string`/number/`bool` field marshaled `""`/`0`/`false` onto the wire as
+  though the caller had chosen it, and the named default function never ran. Alef records the
+  function's *name*, never its return value, so that zero was a claim about a value alef does
+  not have. These now take pointer+`omitempty`, the same deferral `Unresolved` already uses: an
+  unset value drops the key, which is exactly the condition under which serde runs the named
+  default. The `New()` constructor agrees, seeding `nil` rather than the fabricated zero — which
+  also removes a `nil`-into-`string` assignment that did not compile once extraction stopped
+  letting a container's `#[derive(Default)]` overwrite the field's `FunctionCall` with `Empty`.
 - Stop reaching `sh -c` with config-supplied values interpolated into shell text. The Go
   test-app run default and every clean-command default (including destructive `rm -rf` paths)
   now build typed argv (`ArgvRunConfig`/`ArgvStep`, run via `Command::new(..).args(..)` with

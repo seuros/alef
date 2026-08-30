@@ -44,6 +44,9 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// - `TupleVariant(_, _)` / `StructVariant(_, _)` — a resolved enum-variant default this
 ///   renderer has no per-argument Go expression for, so it is unrenderable exactly like
 ///   `Unresolved` even though alef did read the value
+/// - `FunctionCall(_)` / `PublicFunctionCall(_)` — `#[serde(default = "path")]`; alef records
+///   the function's *name*, never its return value, so the Go zero is a claim about a value
+///   alef does not have
 ///
 /// A required field (fails the wire-optional check above) still needs pointer+omitempty when
 /// its type is itself a plain data struct — i.e. `field.ty` is `TypeRef::Named(name)` and
@@ -86,6 +89,23 @@ pub(crate) fn needs_omitempty_pointer(
         // which then gets marshaled onto the wire as though the caller had chosen it — the exact
         // silent-wrong-data defect this predicate exists to prevent. ~keep
         Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..)) => true,
+        // SECURITY. `#[serde(default = "path")]`: alef records the *name* of the function, never
+        // its return value, so the Go zero for this field is a claim about a value alef has not
+        // read. Grouping these with `Empty` below broke exactly the scalar shapes — a `Vec`/`Map`
+        // field already gets `,omitempty` from `go_struct_field_json_tag`'s `collection` rule and
+        // so already dropped an unset key. A `string`/number/`bool` field got neither the pointer
+        // nor the tag, so its Go zero (`""`, `0`, `false`) was marshaled onto the wire as though
+        // the caller had chosen it and `path()` never ran. The same `false` also reaches
+        // `config_gen::default_value_for_field(field, "go")` in the `New()` constructor, whose
+        // `FunctionCall` arm answers `"nil"` — valid for a pointer field, not assignable to a
+        // bare `string`/`int`, so after extraction stopped letting a container's
+        // `#[derive(Default)]` overwrite `FunctionCall` with `Empty` the emitted Go stopped
+        // compiling as well.
+        //
+        // Pointer+omitempty is the deferral: an unset Go value drops the key from
+        // `json.Marshal`, which is precisely the condition under which serde runs `path()` and
+        // supplies the real default. ~keep
+        Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_)) => true,
         Some(
             DefaultValue::BoolLiteral(false)
             | DefaultValue::IntLiteral(_)
@@ -93,9 +113,7 @@ pub(crate) fn needs_omitempty_pointer(
             | DefaultValue::StringLiteral(_)
             | DefaultValue::ListLiteral(_)
             | DefaultValue::Empty
-            | DefaultValue::None
-            | DefaultValue::FunctionCall(_)
-            | DefaultValue::PublicFunctionCall(_),
+            | DefaultValue::None,
         )
         | None => false,
     }

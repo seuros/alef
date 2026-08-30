@@ -31,6 +31,10 @@ pub(super) use structs::{gen_opaque_type, gen_opaque_type_free_only, gen_struct_
 mod field_shape_tests;
 
 #[cfg(test)]
+#[path = "types/named_serde_default_tests.rs"]
+mod named_serde_default_tests;
+
+#[cfg(test)]
 #[path = "types/sealed_variant_field_tests.rs"]
 mod sealed_variant_field_tests;
 
