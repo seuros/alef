@@ -16,6 +16,11 @@ const MOCK_HARNESS_MARKERS: &[&str] = &[
     "MOCK_SERVER_",
     "mockServerUrl",
     "mockServer.",
+    // ~keep The one harness name that is a HELPER rather than an env var: dart's test-file
+    // emitter defines `_fixtureUrl`, the snippet emitter does not, and a snippet that called it
+    // failed `dart analyze` with "The function '_fixtureUrl' isn't defined" while sailing past
+    // every marker above — the leak was real and invisible at the same time.
+    "_fixtureUrl(",
 ];
 
 /// Reject a snippet body that carries e2e mock-server scaffolding.

@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
   raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
   element-anchored classification inert on exactly the projected shapes it was added for.
+- Bind a generated Dart snippet's `mock_url`/`mock_url_list` argument to the URL its fixture
+  declares instead of `_fixtureUrl(...)`, a helper only the full e2e test-file emitter defines —
+  the snippet did not compile standalone. `_fixtureUrl(` also joins the mock-harness marker list,
+  so the same leak through a helper name is caught rather than published.
 - Emit BigInt literals for `u64`/`i64` values in generated WASM tests and snippets, derived from
   the IR rather than only from the hand-maintained `bigint_fields` list, and lowered straight from
   the JSON integer text so values past `Number.MAX_SAFE_INTEGER` keep every digit instead of

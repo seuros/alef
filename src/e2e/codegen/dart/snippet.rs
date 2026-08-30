@@ -711,4 +711,90 @@ mod tests {
              leading underscore only trips `no_leading_underscores_for_local_identifiers`:\n{body}"
         );
     }
+
+    fn mock_url_arg(name: &str, field: &str, arg_type: &str) -> crate::e2e::config::ArgMapping {
+        crate::e2e::config::ArgMapping {
+            name: name.into(),
+            field: field.into(),
+            arg_type: arg_type.into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    /// The half of the `_fixtureUrl` defect `snippet_omits_undefined_fixture_url_helper_from_
+    /// client_factory_call` never reached: that test's fixture declares no `mock_url` argument,
+    /// so it only exercised the ONE emission site the `is_snippet` flag already guarded. A
+    /// fixture that declares a `mock_url` arg whose URL is already meaningful (so
+    /// `mock_url_defaults` injects nothing and `preserve_input_urls` stays false) took the
+    /// unguarded arm and published `_fixtureUrl("...")` into a scope that never defines it.
+    #[test]
+    fn a_mock_url_arg_binds_the_fixtures_own_url_instead_of_the_undefined_helper() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "rejects_internal_host", "description": "Rejects an internal host",
+            "input": {"url": "https://docs.example.com/report.pdf"}
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "fetch_document".into();
+        e2e_config.call.args.push(mock_url_arg("url", "input.url", "mock_url"));
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        // Positive first: the argument really was bound, so the absence below means something.
+        assert!(
+            body.contains("final url = "),
+            "the mock_url arg must still be bound: {body}"
+        );
+        assert!(
+            body.contains("final url = 'https://docs.example.com/report.pdf';"),
+            "the snippet must show the URL the fixture declares: {body}"
+        );
+        assert!(
+            !body.contains("_fixtureUrl"),
+            "a standalone snippet must not call a helper only the test file defines: {body}"
+        );
+    }
+
+    /// The list counterpart, which had the same unguarded arm and additionally emitted a
+    /// `<var>Base` local built from `_fixtureUrl`.
+    #[test]
+    fn a_mock_url_list_arg_binds_the_fixtures_own_urls_instead_of_the_undefined_helper() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "batch_fetch", "description": "Fetch a batch",
+            "input": {"urls": ["https://docs.example.com/a.pdf", "https://docs.example.com/b.pdf"]}
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "fetch_batch".into();
+        e2e_config
+            .call
+            .args
+            .push(mock_url_arg("urls", "input.urls", "mock_url_list"));
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(
+            body.contains("final urls = <String>["),
+            "the list arg must still be bound: {body}"
+        );
+        assert!(
+            body.contains("'https://docs.example.com/a.pdf'"),
+            "the snippet must show the URLs the fixture declares: {body}"
+        );
+        assert!(
+            !body.contains("_fixtureUrl"),
+            "a standalone snippet must not call a helper only the test file defines: {body}"
+        );
+        assert!(
+            !body.contains("urlsBase"),
+            "the mock-server base local must not survive into a standalone snippet: {body}"
+        );
+    }
 }

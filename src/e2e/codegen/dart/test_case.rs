@@ -309,7 +309,9 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let name = arg_def.name.clone();
                 let field = arg_def.field.strip_prefix("input.").unwrap_or(&arg_def.field);
                 let value = fixture.input.get(field).unwrap_or(&serde_json::Value::Null);
-                if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value)
+                    .or_else(|| crate::e2e::codegen::snippet_url_literal(is_snippet, value))
+                {
                     setup_lines.push(format!("final {name} = '{}';", escape_dart(url)));
                 } else {
                     setup_lines.push(format!(r#"final {name} = _fixtureUrl("{fixture_id}");"#));
@@ -387,7 +389,10 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let var_name = &arg_def.name;
                 let paths_literal = paths.join(", ");
 
-                if is_preserved {
+                // ~keep `|| is_snippet`: the `else` arm below binds `_fixtureUrl`, which only the
+                // test-file emitter defines, so a standalone snippet taking it does not compile.
+                // The fixture's own declared list is what a reader should be shown anyway.
+                if is_preserved || is_snippet {
                     setup_lines.push(format!("final {var_name} = <String>[{paths_literal}];"));
                 } else {
                     setup_lines.push(format!(r#"final {var_name}Base = _fixtureUrl("{fixture_id}");"#));

@@ -293,6 +293,28 @@ pub(crate) fn preserved_url_literal(preserve: bool, value: &serde_json::Value) -
     value.as_str()
 }
 
+/// The host a standalone doc snippet names when its fixture declares no URL of its own.
+///
+/// ~keep RFC 2606 reserves `example.com` precisely so documentation can name a host without
+/// pointing a reader at anyone's real service.
+pub(crate) const SNIPPET_PLACEHOLDER_URL: &str = "https://example.com";
+
+/// The URL a `mock_url` argument must be bound to in a STANDALONE doc snippet.
+///
+/// ~keep A snippet has no mock server behind it and none of the test file's preamble. Binding
+/// the mock-server address there does not merely document the harness instead of the library:
+/// for a backend that reaches the address through a helper only the test-file emitter defines
+/// (dart's `_fixtureUrl`), the published snippet does not compile at all — and
+/// `mock_harness_guard`'s marker list cannot see a leak wearing a helper's name rather than an
+/// environment variable's. Prefer the URL the fixture itself declares; fall back to a reserved
+/// documentation host only when it declares nothing a reader could usefully be shown.
+pub(crate) fn snippet_url_literal(is_snippet: bool, value: &serde_json::Value) -> Option<&str> {
+    if !is_snippet {
+        return None;
+    }
+    Some(value.as_str().unwrap_or(SNIPPET_PLACEHOLDER_URL))
+}
+
 /// The literal URL list a `mock_url_list` argument must be given verbatim, if any.
 ///
 /// ~keep The list counterpart of [`preserved_url_literal`]. `value` is whatever the
