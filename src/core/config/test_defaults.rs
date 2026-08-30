@@ -122,6 +122,9 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
         }
         Language::Java => {
             let (cmd_path, cov_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.java] project_file` is consumer-configured and reaches `sh -c` as
+                // `mvn -f`'s value -- quote it the same way `output_dir` is quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("mvn -f {proj} test --batch-mode --no-transfer-progress"),
                     format!("mvn -f {proj} test jacoco:report --batch-mode --no-transfer-progress"),
@@ -143,6 +146,9 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
         }
         Language::Csharp => {
             let (cmd_path, cov_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.csharp] project_file` is consumer-configured and reaches `sh -c` as
+                // `dotnet test`'s value -- quote it the same way `output_dir` is quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("dotnet test {proj}"),
                     format!("dotnet test {proj} --collect:\"XPlat Code Coverage\""),
@@ -495,6 +501,86 @@ mod tests {
         let cov = c.coverage.unwrap().commands().join(" ");
         assert!(cmd.contains("mvn"));
         assert!(cov.contains("jacoco:report"));
+    }
+
+    /// `[crates.java] project_file` is consumer-configured and reaches `sh -c` as `mvn -f`'s
+    /// value -- same shell-quoting requirement as `output_dir`. ~keep
+    #[test]
+    fn java_project_file_is_quoted() {
+        let ctx = LangContext {
+            tools: &ToolsConfig::default(),
+            run_wrapper: None,
+            extra_lint_paths: &[],
+            project_file: Some("pom.xml"),
+        };
+        let c = default_test_config(Language::Java, "packages/java", &ctx);
+        let cmd = c.command.unwrap().commands().join(" ");
+        let cov = c.coverage.unwrap().commands().join(" ");
+        let proj = quoted("pom.xml");
+        assert!(
+            cmd.contains(&format!("-f {proj}")),
+            "test command should use project_file: {cmd}"
+        );
+        assert!(!cmd.contains("packages/java/pom.xml"), "should not use output_dir path");
+        assert!(
+            cov.contains(&format!("-f {proj}")),
+            "coverage command should use project_file: {cov}"
+        );
+    }
+
+    /// `[crates.csharp] project_file` is consumer-configured and reaches `sh -c` as `dotnet
+    /// test`'s value -- same shell-quoting requirement as `output_dir`. ~keep
+    #[test]
+    fn csharp_project_file_is_quoted() {
+        let ctx = LangContext {
+            tools: &ToolsConfig::default(),
+            run_wrapper: None,
+            extra_lint_paths: &[],
+            project_file: Some("my project.csproj"),
+        };
+        let c = default_test_config(Language::Csharp, "packages/csharp", &ctx);
+        let cmd = c.command.unwrap().commands().join(" ");
+        let cov = c.coverage.unwrap().commands().join(" ");
+        let proj = quoted("my project.csproj");
+        assert!(
+            cmd.contains(&format!("dotnet test {proj}")),
+            "test command should use quoted project_file: {cmd}"
+        );
+        assert!(!cmd.contains("packages/csharp"), "should not use output_dir path");
+        assert!(
+            cov.contains(&format!("dotnet test {proj}")),
+            "coverage command should use quoted project_file: {cov}"
+        );
+    }
+
+    /// A hostile `project_file` reaching `sh -c` must not execute a command substitution --
+    /// proved against a real `sh` rather than by reading, matching the java update-defaults
+    /// injection-witness test. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn java_project_file_keeps_a_hostile_value_out_of_shell_text() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let hostile = "pom.xml$(touch witness)#";
+        let witness = root.path().join("witness");
+        let ctx = LangContext {
+            tools: &ToolsConfig::default(),
+            run_wrapper: None,
+            extra_lint_paths: &[],
+            project_file: Some(hostile),
+        };
+        let c = default_test_config(Language::Java, "packages/java", &ctx);
+        let cmd = c.command.unwrap().commands().join(" ");
+
+        std::process::Command::new("sh")
+            .args(["-c", &cmd])
+            .current_dir(root.path())
+            .output()
+            .expect("shell should start");
+
+        assert!(
+            !witness.exists(),
+            "command substitution in project_file must not run: {cmd}"
+        );
     }
 
     #[test]

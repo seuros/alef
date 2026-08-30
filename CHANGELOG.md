@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package dir), `mix`, `mvn`, `dotnet`, `go`, `swift`, `zig`, and `gleam` arms all interpolated a
   `[crates.output]` path (or a directory found beside it on disk, or the FFI default's crate root)
   unquoted, the same defect shape the `gradle` arm above was fixed for.
+- Shell-quote `[crates.java]`/`[crates.csharp] project_file` everywhere it reaches a shell command,
+  not only in `build_defaults` as previously fixed: `test_defaults`'s `mvn -f`/`dotnet test` and
+  `lint_defaults`'s `mvn -f`/`dotnet format` interpolated the consumer-configured project file
+  unquoted. `lint_defaults`'s `output_dir` itself was also never quoted at all, unlike its
+  build/test/update/setup counterparts — every one of its per-language `format`/`check` defaults
+  (the ruff/oxlint/rubocop/composer/gofmt/mvn/dotnet/mix/Rscript/find-clang-format/cppcheck/
+  ktfmt/swift-format/dart/zig/gleam commands) spliced the configured output directory into shell
+  text unquoted.
 
 ### Added
 

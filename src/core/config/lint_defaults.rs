@@ -10,6 +10,7 @@ use super::tools::{
 /// (e.g. `packages/python`). It is substituted into command templates.
 /// `ctx` provides tool selection, run_wrapper, and extra_lint_paths.
 pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) -> LintConfig {
+    let output_dir = super::shell::quote_word(output_dir);
     match lang {
         Language::Python => {
             let format_cmd = wrap(
@@ -133,6 +134,9 @@ pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) 
         }
         Language::Java => {
             let (format_path, check_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.java] project_file` is consumer-configured and reaches `sh -c` as
+                // `mvn -f`'s value -- quote it the same way `output_dir` above is quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("mvn -f {proj} spotless:apply --batch-mode --no-transfer-progress"),
                     format!("mvn -f {proj} spotless:check checkstyle:check --batch-mode --no-transfer-progress"),
@@ -155,6 +159,10 @@ pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) 
         }
         Language::Csharp => {
             let (format_path, check_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.csharp] project_file` is consumer-configured and reaches `sh -c` as
+                // `dotnet format`'s value -- quote it the same way `output_dir` above is
+                // quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("dotnet format {proj}"),
                     format!("dotnet format {proj} --verify-no-changes"),
@@ -357,6 +365,16 @@ pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) 
 mod tests {
     use super::super::tools::ToolsConfig;
     use super::*;
+
+    /// The directory (or project file) as it is spelled *inside the emitted shell command* — a
+    /// quoted word, not a bare path. Expectations derive it from `quote_word` rather than
+    /// restating one quoting spelling, so a change to the escaping policy cannot silently repoint
+    /// a command at a different directory: the escaping itself is proved separately, and once, by
+    /// `shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile value
+    /// through a real shell. ~keep
+    fn quoted(dir: &str) -> String {
+        super::super::shell::quote_word(dir)
+    }
 
     fn all_languages() -> Vec<Language> {
         vec![
@@ -564,7 +582,7 @@ mod tests {
         let c = default_lint_config(Language::Python, "packages/python", &ctx);
         let fmt = c.format.unwrap().commands().join(" ");
         assert!(
-            fmt.contains("packages/python scripts"),
+            fmt.contains(&format!("{} scripts", quoted("packages/python"))),
             "format should include both paths: {fmt}"
         );
     }
@@ -580,12 +598,19 @@ mod tests {
         let c = default_lint_config(Language::Java, "packages/java", &ctx);
         let fmt = c.format.unwrap().commands().join(" ");
         let check = c.check.unwrap().commands().join(" ");
-        assert!(fmt.contains("-f pom.xml"), "format should use project_file: {fmt}");
+        let proj = quoted("pom.xml");
+        assert!(
+            fmt.contains(&format!("-f {proj}")),
+            "format should use project_file: {fmt}"
+        );
         assert!(
             !fmt.contains("packages/java/pom.xml"),
             "format should not use output_dir path"
         );
-        assert!(check.contains("-f pom.xml"), "check should use project_file: {check}");
+        assert!(
+            check.contains(&format!("-f {proj}")),
+            "check should use project_file: {check}"
+        );
     }
 
     #[test]
@@ -625,7 +650,7 @@ mod tests {
             "format should be wrapped with time: {fmt}"
         );
         assert!(
-            fmt.contains("packages/go vendor"),
+            fmt.contains(&format!("{} vendor", quoted("packages/go"))),
             "format should include extra paths: {fmt}"
         );
     }

@@ -188,6 +188,9 @@ pub(crate) fn default_build_config(
         },
         Language::Java => {
             let (build_path, release_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.java] project_file` is consumer-configured and reaches `sh -c` as
+                // `mvn -f`'s value -- quote it the same way `output_dir` above is quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("mvn -f {proj} package -DskipTests --batch-mode --no-transfer-progress"),
                     format!("mvn -f {proj} package -DskipTests --batch-mode --no-transfer-progress"),
@@ -210,6 +213,9 @@ pub(crate) fn default_build_config(
         }
         Language::Csharp => {
             let (build_path, release_path) = if let Some(proj) = ctx.project_file {
+                // `[crates.csharp] project_file` is consumer-configured and reaches `sh -c` as
+                // `dotnet build`'s value -- quote it the same way `output_dir` above is quoted. ~keep
+                let proj = super::shell::quote_word(proj);
                 (
                     format!("dotnet build {proj} --configuration Debug -q"),
                     format!("dotnet build {proj} --configuration Release -q"),
