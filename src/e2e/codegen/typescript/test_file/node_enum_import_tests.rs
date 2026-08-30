@@ -3,11 +3,12 @@ use super::*;
 fn render_format_enum() -> EnumDef {
     EnumDef {
         name: "RenderFormat".into(),
-        serde_tag: Some("type".into()),
+        serde_tag: Some("content-type".into()),
         serde_rename_all: Some("snake_case".into()),
         variants: vec![
             crate::core::ir::EnumVariant {
                 name: "PlainText".into(),
+                serde_rename: Some("text/plain".into()),
                 ..Default::default()
             },
             crate::core::ir::EnumVariant {
@@ -123,7 +124,7 @@ fn node_imports_tagged_enum_type_used_by_object_literal_cast() {
     let fixture = Fixture {
         id: "render_plain_text".into(),
         description: "render plain text".into(),
-        input: serde_json::json!({"options": {"format": "plain_text"}}),
+        input: serde_json::json!({"options": {"format": "text/plain"}}),
         assertions: vec![not_error_assertion()],
         ..Default::default()
     };
@@ -164,7 +165,10 @@ fn node_imports_tagged_enum_type_used_by_object_literal_cast() {
         binding_import.contains("type RenderFormat"),
         "tagged enum union must use a type-only import: {binding_import}"
     );
-    assert!(output.contains("{ type: \"plain_text\" } as RenderFormat"), "{output}");
+    assert!(
+        output.contains("{ \"content-type\": \"text/plain\" } as RenderFormat"),
+        "{output}"
+    );
     assert!(!output.contains("RenderFormat.PlainText"), "{output}");
 }
 
@@ -187,7 +191,7 @@ fn node_lowers_direct_array_of_tagged_unit_variants() {
     let fixture = Fixture {
         id: "render_many".into(),
         description: "render many formats".into(),
-        input: serde_json::json!({"formats": ["plain_text"]}),
+        input: serde_json::json!({"formats": ["text/plain"]}),
         assertions: vec![not_error_assertion()],
         ..Default::default()
     };
@@ -212,7 +216,7 @@ fn node_lowers_direct_array_of_tagged_unit_variants() {
     );
 
     assert!(
-        output.contains("[{ type: \"plain_text\" } as RenderFormat]"),
+        output.contains("[{ \"content-type\": \"text/plain\" } as RenderFormat]"),
         "{output}"
     );
     assert!(!output.contains("[\"plain_text\"]"), "{output}");
@@ -221,4 +225,149 @@ fn node_lowers_direct_array_of_tagged_unit_variants() {
         .find(|line| line.contains("from \"sample-bindings\""))
         .expect("generated test must import its bindings");
     assert!(binding_import.contains("type RenderFormat"), "{binding_import}");
+}
+
+#[test]
+fn node_preserves_direct_array_of_untagged_string_payloads() {
+    let argument = ArgMapping {
+        name: "inputs".into(),
+        field: "input.inputs".into(),
+        arg_type: "json_object".into(),
+        element_type: Some("EmbeddingInput".into()),
+        optional: false,
+        owned: false,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "embedMany".into();
+    e2e_config.call.args = vec![argument.clone()];
+    let fixture = Fixture {
+        id: "embed_many".into(),
+        description: "embed many inputs".into(),
+        input: serde_json::json!({"inputs": ["hello"]}),
+        assertions: vec![not_error_assertion()],
+        ..Default::default()
+    };
+    let untagged = EnumDef {
+        name: "EmbeddingInput".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Text".into(),
+            is_tuple: true,
+            fields: vec![crate::core::ir::FieldDef {
+                name: "_0".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let output = render_test_file(
+        "node",
+        "embedding",
+        &[&fixture],
+        "",
+        "sample-bindings",
+        "embedMany",
+        &[argument],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[untagged],
+        &[],
+        "",
+        &Default::default(),
+        &[],
+    );
+
+    assert!(output.contains("embedMany([\"hello\"])"), "{output}");
+    assert!(!output.contains("EmbeddingInput.Hello"), "{output}");
+}
+
+#[test]
+fn node_lowers_external_tagged_unit_and_payload_array_elements() {
+    let argument = ArgMapping {
+        name: "choices".into(),
+        field: "input.choices".into(),
+        arg_type: "json_object".into(),
+        element_type: Some("ExternalChoice".into()),
+        optional: false,
+        owned: false,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "chooseMany".into();
+    e2e_config.call.args = vec![argument.clone()];
+    let fixture = Fixture {
+        id: "choose_many".into(),
+        description: "choose unit and payload variants".into(),
+        input: serde_json::json!({
+            "choices": ["plain", {"type": "wrapped", "value": "payload"}]
+        }),
+        assertions: vec![not_error_assertion()],
+        ..Default::default()
+    };
+    let payload = TypeDef {
+        name: "ChoicePayload".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "value".into(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let choice = EnumDef {
+        name: "ExternalChoice".into(),
+        serde_rename_all: Some("snake_case".into()),
+        variants: vec![
+            crate::core::ir::EnumVariant {
+                name: "Plain".into(),
+                ..Default::default()
+            },
+            crate::core::ir::EnumVariant {
+                name: "Wrapped".into(),
+                is_tuple: true,
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "_0".into(),
+                    ty: TypeRef::Named("ChoicePayload".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let output = render_test_file(
+        "node",
+        "choice",
+        &[&fixture],
+        "",
+        "sample-bindings",
+        "chooseMany",
+        &[argument],
+        None,
+        None,
+        &e2e_config,
+        &[payload],
+        &[choice],
+        &[],
+        "",
+        &Default::default(),
+        &[],
+    );
+
+    assert!(
+        output.contains(
+            "[{ type: \"plain\" } as ExternalChoice, { type: \"wrapped\", wrapped: { value: \"payload\" } } as ExternalChoice]"
+        ),
+        "{output}"
+    );
 }

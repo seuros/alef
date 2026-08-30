@@ -7,7 +7,9 @@ mod type_map;
 
 pub use gen_bindings::NapiBackend;
 pub(crate) use gen_bindings::enums::is_tagged_data_enum;
+pub(crate) use gen_bindings::enums::is_untagged_data_enum;
 pub(crate) use gen_bindings::enums::string_enum_variant_js_value;
+pub(crate) use gen_bindings::enums::tagged_enum_binding_field_js_name;
 pub(crate) use gen_bindings::enums::tagged_enum_discriminant_js_name;
 /// Re-exported so the TypeScript e2e snippet generator's tests can typecheck a generated
 /// snippet against the exact `.d.ts` union type this function produces, rather than a

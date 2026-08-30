@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enum members.
 - Import tagged N-API enum unions as types wherever generated Node fixtures use object-literal
   casts, including unit variants passed in directly typed arrays.
+- Preserve raw payloads for untagged N-API enum arrays and honor custom, renamed, and synthesized
+  discriminators when lowering tagged enum array elements.
 
 ## [0.79.2] - 2026-08-30
 

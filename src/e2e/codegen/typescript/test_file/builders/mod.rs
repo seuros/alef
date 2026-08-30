@@ -80,7 +80,7 @@ fn build_node_tagged_enum_variant_literal(
     depth: usize,
     referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> Option<String> {
-    let tag_field = enum_def.serde_tag.as_deref()?;
+    let tag_field = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
     let tag_value_json = obj.get(tag_field)?;
     let tag_value = tag_value_json.as_str()?;
     let variant = enum_def.variants.iter().find(|v| {
@@ -98,11 +98,7 @@ fn build_node_tagged_enum_variant_literal(
         return None;
     };
 
-    let payload_key = field
-        .serde_rename
-        .clone()
-        .or_else(|| variant.serde_rename.clone())
-        .unwrap_or_else(|| crate::codegen::naming::to_node_name(&variant.name));
+    let payload_key = crate::backends::napi::tagged_enum_binding_field_js_name(enum_def, variant, field);
 
     let mut remaining = obj.clone();
     remaining.remove(tag_field);
@@ -124,8 +120,11 @@ fn build_node_tagged_enum_variant_literal(
     let cast_suffix = format!(" as {inner_type_name}");
     let nested_expr = nested_with_cast.strip_suffix(&cast_suffix).unwrap_or(&nested_with_cast);
 
+    let tag_key = js_object_key(tag_field);
+    let payload_key = js_object_key(&payload_key);
+    referenced_enums.insert(format!("type {type_name}"));
     Some(format!(
-        "{{ {tag_field}: {}, {payload_key}: {nested_expr} }} as {type_name}",
+        "{{ {tag_key}: {}, {payload_key}: {nested_expr} }} as {type_name}",
         json_to_js(tag_value_json)
     ))
 }
@@ -360,7 +359,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     if lang == "node"
         && let Some(enum_def) = enums
             .iter()
-            .find(|e| e.name == type_name && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
+            .find(|e| e.name == type_name && crate::backends::napi::is_tagged_data_enum(e))
         && let Some(nested_literal) = build_node_tagged_enum_variant_literal(
             obj,
             type_name,

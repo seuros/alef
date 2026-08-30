@@ -589,6 +589,123 @@ fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
     assert!(!expression.contains("WasmEmbeddingInput."), "{expression}");
 }
 
+#[test]
+fn fieldless_untagged_enum_is_not_a_node_raw_payload_union() {
+    let enums = [EnumDef {
+        name: "Mode".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Fast".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let mut referenced = Default::default();
+
+    let expression = node_enum_string_literal("Mode", &enums, "Fast", &mut referenced);
+
+    assert_eq!(expression, "Mode.Fast");
+    assert!(referenced.contains("Mode"));
+}
+
+#[test]
+fn fieldless_untagged_enum_is_not_a_wasm_raw_payload_union() {
+    let enums = [EnumDef {
+        name: "Mode".into(),
+        serde_untagged: true,
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Fast".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    assert!(!wasm_enum_bridged_as_raw_value("WasmMode", &enums, "Wasm"));
+}
+
+#[test]
+fn node_custom_tag_literal_compiles_against_declared_union() {
+    let enums = [EnumDef {
+        name: "RenderFormat".into(),
+        serde_tag: Some("content-type".into()),
+        variants: vec![
+            crate::core::ir::EnumVariant {
+                name: "PlainText".into(),
+                serde_rename: Some("text/plain".into()),
+                ..Default::default()
+            },
+            crate::core::ir::EnumVariant {
+                name: "Custom".into(),
+                is_tuple: true,
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "_0".into(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }];
+    let expression = node_enum_string_literal("RenderFormat", &enums, "text/plain", &mut Default::default());
+    let source = format!(
+        "type RenderFormat = {{ \"content-type\": \"text/plain\" }} | {{ \"content-type\": \"Custom\"; custom: string }};\nconst value: RenderFormat = {expression};"
+    );
+
+    assert_strict_typescript_compiles(&source);
+}
+
+#[test]
+fn node_adjacent_tagged_payload_uses_binding_content_field() {
+    let type_defs = [TypeDef {
+        name: "Payload".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "value".into(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let enums = [EnumDef {
+        name: "AdjacentChoice".into(),
+        serde_tag: Some("@type".into()),
+        serde_content: Some("payload-data".into()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "Wrapped".into(),
+            serde_rename: Some("wrapped-value".into()),
+            is_tuple: true,
+            fields: vec![crate::core::ir::FieldDef {
+                name: "_0".into(),
+                ty: TypeRef::Named("Payload".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let expression = ts_builder_expression(
+        serde_json::json!({"@type": "wrapped-value", "value": "payload"})
+            .as_object()
+            .expect("object"),
+        "AdjacentChoice",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &enums,
+        "",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert_eq!(
+        expression,
+        "{ \"@type\": \"wrapped-value\", \"payload-data\": { value: \"payload\" } } as AdjacentChoice"
+    );
+}
+
 /// The filter site directly: a fixture key `SampleOptions` doesn't declare must refuse
 /// generation rather than silently reach the emitted literal. See the `~keep` comment at the
 /// filter in `mod.rs` for why this is a refusal and not a drop, and

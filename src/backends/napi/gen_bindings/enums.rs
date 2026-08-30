@@ -58,7 +58,7 @@ pub(super) fn tagged_enum_binding_field_name(enum_def: &EnumDef, variant: &EnumV
     tagged_enum_field_name(variant, field)
 }
 
-pub(super) fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
+pub(crate) fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
     if enum_def.serde_content.is_some() && variant.fields.len() == 1 && tagged_enum_field_is_tuple(field) {
         return enum_def.serde_content.clone().expect("adjacent content is present");
     }
@@ -238,7 +238,7 @@ pub(crate) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
 /// variant -- routed through `gen_untagged_data_enum_as_value_wrapper` instead of a plain string
 /// enum or the tagged-object emitter. Same single-authority relationship as
 /// [`is_tagged_data_enum`]. ~keep
-pub(super) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
+pub(crate) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     enum_def.serde_untagged && has_data_variants
 }

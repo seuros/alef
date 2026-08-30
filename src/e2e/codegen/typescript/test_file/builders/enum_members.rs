@@ -43,7 +43,13 @@ pub(super) fn is_tagged_data_enum(type_name: &str, enums: &[EnumDef], wasm_type_
 /// whichever variant matched, not a named member — a string-typed instance is the
 /// raw JS value itself. Treating it as `EnumType.Variant` turned an empty string
 /// into `WasmEmbeddingInput.` (missing member, a syntax error). ~keep
-fn is_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
+fn is_node_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
+    enums
+        .iter()
+        .any(|e| e.name == enum_name && crate::backends::napi::is_untagged_data_enum(e))
+}
+
+fn is_wasm_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
     enums
         .iter()
         .any(|e| e.name == enum_name && crate::backends::wasm::gen_bindings::enums::is_untagged_data_enum(e))
@@ -61,7 +67,7 @@ fn is_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
 /// and reporting `true` would silently drop a member reference that used to be emitted. ~keep
 pub(super) fn wasm_enum_bridged_as_raw_value(enum_name: &str, enums: &[EnumDef], wasm_type_prefix: &str) -> bool {
     let stripped = enum_name.strip_prefix(wasm_type_prefix).unwrap_or(enum_name);
-    is_tagged_data_enum(enum_name, enums, wasm_type_prefix) || is_untagged_data_enum(stripped, enums)
+    is_tagged_data_enum(enum_name, enums, wasm_type_prefix) || is_wasm_untagged_data_enum(stripped, enums)
 }
 
 /// The member identifier the binding declares for the variant a fixture named by its wire value,
@@ -114,6 +120,7 @@ pub(super) fn node_tagged_unit_variant_literal(
         enum_def.serde_rename_all.as_deref(),
     );
     let tag = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
+    let tag = js_object_key(tag);
     let quoted = serde_json::to_string(&wire_value).expect("enum wire values serialize as JSON strings");
     referenced_enums.insert(format!("type {enum_name}"));
     Some(format!("{{ {tag}: {quoted} }} as {enum_name}"))
@@ -125,6 +132,9 @@ pub(in crate::e2e::codegen::typescript::test_file) fn node_enum_string_literal(
     wire_value: &str,
     referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> String {
+    if is_node_untagged_data_enum(enum_name, enums) {
+        return serde_json::to_string(wire_value).expect("enum payloads serialize as JSON strings");
+    }
     if let Some(literal) = node_tagged_unit_variant_literal(enum_name, enums, wire_value, referenced_enums) {
         return literal;
     }
