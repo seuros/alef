@@ -80,7 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TypeDef::serde_container_default`, the same two facts
   `backends::go::gen_bindings::types::helpers::needs_omitempty_pointer` already gates the
   equivalent Go decision on. A required sibling with no safe placeholder now correctly fails
-  generation with a `compile_error!` instead of emitting the empty-object probe.
+  generation with a `compile_error!` instead of emitting the empty-object probe. Repaired the
+  `grid_cell_type` test fixture, which modeled a `typed_default`-without-`default` field shape
+  real extraction never produces (`extract_field` always sets both from the same `#[serde(default
+  = "path")]` attribute), and added a production-extraction test proving that shape.
 - Stop the generated WASM crate's `[features] default = [...]` from re-enabling a core-crate
   feature its own dependency line had just disabled. `gen_cargo_toml` emits
   `default-features = false, features = [...]` on the core dep whenever `[crates.wasm] features`

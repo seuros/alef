@@ -869,6 +869,15 @@ fn serde_default_function_is_never_emitted_as_a_callable_in_generated_rust() {
 /// `Serialize`/`Deserialize`, with `row_span`/`col_span` behind
 /// `#[serde(default = "default_span")]` (private, `#[cfg(feature = "serde")]`-gated) and
 /// `content`/`row`/`col` genuinely required. `is_header` carries a bare `#[serde(default)]`.
+///
+/// `row_span`/`col_span` carry both `default` (the raw attribute text) and `typed_default`
+/// (`FunctionCall`), mirroring `extract::extractor::helpers::fields::extract_field`, which
+/// always sets both together from the same `#[serde(default = "path")]` attribute — never only
+/// one (see `codegen::config_gen::tests::derive_default_probe` and
+/// `extract::extractor::tests::defaults::derived::
+/// derive_default_seeds_empty_over_a_genuine_field_level_serde_default` for the production
+/// proof). A fixture carrying `typed_default` alone models a state real extraction never
+/// produces and would make `has_own_default` skip these fields for the wrong reason. ~keep
 fn grid_cell_type() -> TypeDef {
     let content = FieldDef {
         ..make_field("content", TypeRef::String)
@@ -880,10 +889,12 @@ fn grid_cell_type() -> TypeDef {
         ..make_field("col", TypeRef::Primitive(PrimitiveType::U32))
     };
     let row_span = FieldDef {
+        default: Some("serde(default = \"default_span\")".to_string()),
         typed_default: Some(DefaultValue::FunctionCall("default_span".to_string())),
         ..make_field("row_span", TypeRef::Primitive(PrimitiveType::U32))
     };
     let col_span = FieldDef {
+        default: Some("serde(default = \"default_span\")".to_string()),
         typed_default: Some(DefaultValue::FunctionCall("default_span".to_string())),
         ..make_field("col_span", TypeRef::Primitive(PrimitiveType::U32))
     };
@@ -892,32 +903,16 @@ fn grid_cell_type() -> TypeDef {
         ..make_field("is_header", TypeRef::Primitive(PrimitiveType::Bool))
     };
 
+    // `TypeDef` derives `Default`; every field left out below is at its Default::default()
+    // value (false/None/empty), same spread pattern as
+    // `codegen::config_gen::tests::derive_default_probe::derived_config_type`. ~keep
     TypeDef {
         name: "GridCell".to_string(),
         rust_path: "html_to_markdown::types::tables::GridCell".to_string(),
-        original_rust_path: String::new(),
         fields: vec![content, row, col, row_span, col_span, is_header],
-        methods: vec![],
-        is_opaque: false,
         is_clone: true,
-        is_copy: false,
-        doc: String::new(),
-        cfg: None,
-        is_trait: false,
-        has_default: false,
-        has_stripped_cfg_fields: false,
-        is_return_type: false,
-        serde_rename_all: None,
         has_serde: true,
-        serde_container_default: false,
-        serde_container_conversion: Default::default(),
-        super_traits: vec![],
-        binding_excluded: false,
-        binding_exclusion_reason: None,
-        is_variant_wrapper: false,
-        has_lifetime_params: false,
-        has_private_fields: false,
-        version: Default::default(),
+        ..Default::default()
     }
 }
 

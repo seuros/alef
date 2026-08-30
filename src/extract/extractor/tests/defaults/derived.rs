@@ -303,3 +303,53 @@ fn deriving_default_alone_does_not_set_the_container_serde_flag() {
         "derive(Default) is not #[serde(default)]: every field is still a required wire key"
     );
 }
+
+/// Proves the exact fixture shape `codegen::config_gen`'s JSON-probe predicate depends on,
+/// through real extraction rather than a hand-built `FieldDef` literal: on a `#[derive(Default)]`
+/// type, `#[derive(Default)]`'s blanket seeding (`extract::extractor::types::extract_struct`)
+/// unconditionally overwrites `typed_default` to `Empty` on every field — including one that
+/// already carries a genuine `#[serde(default = "path")]` — so `typed_default.is_some()` is true
+/// for a field serde will fill on a missing key (`count`) and one that is fully required
+/// (`label`) alike. Only `FieldDef::default`, set once by `extract_field` from the real
+/// attribute and never touched by the later derive/impl overwrite, tells the two apart. This is
+/// the production counterpart to the hand-built fixtures in
+/// `codegen::config_gen::tests::derive_default_probe` and the (now-repaired) `grid_cell_type` in
+/// `codegen::config_gen::tests::defaults` — it fails if extraction ever stops producing this
+/// shape, which would make those fixtures fictions again. ~keep
+#[test]
+fn derive_default_seeds_empty_over_a_genuine_field_level_serde_default() {
+    let source = r#"
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        pub struct DerivedConfig {
+            #[serde(default = "mylib::default_count")]
+            pub count: u32,
+            pub label: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "DerivedConfig").unwrap();
+    let count = config.fields.iter().find(|field| field.name == "count").unwrap();
+    let label = config.fields.iter().find(|field| field.name == "label").unwrap();
+
+    assert_eq!(
+        count.default.as_deref(),
+        Some("serde(default = \"mylib::default_count\")"),
+        "the genuine field-level serde default must survive the derive(Default) overwrite"
+    );
+    assert_eq!(
+        label.default, None,
+        "a field with no serde attribute of its own must not gain a default"
+    );
+    assert_eq!(
+        count.typed_default,
+        Some(crate::core::ir::DefaultValue::Empty),
+        "derive(Default) overwrites even a serde-defaulted field's typed_default to Empty"
+    );
+    assert_eq!(
+        label.typed_default,
+        Some(crate::core::ir::DefaultValue::Empty),
+        "typed_default alone cannot distinguish `count` (serde will fill it) from `label` \
+         (fully required): both read Empty"
+    );
+}
