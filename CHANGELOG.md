@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"gradle"` arm interpolated a consumer-configured `[crates.output]` path into `cd {dir} &&
   gradle …` unquoted, while the built-in default for the same language quoted it — so the two
   producers emitted different commands and only one of them was injection-safe.
+- Shell-quote every remaining consumer-configured directory `build_command_for` splices into
+  `sh -c` text: the `maturin`, `napi` (all three of `--manifest-path`/`-o`/`--package-json-path`),
+  `wasm-pack`, `cargo` (the FFI default's `--manifest-path` and every `cd`-based fallback branch —
+  the workspace-member `native/` dir, the workspace-root walk-up, and the excluded-from-workspace
+  package dir), `mix`, `mvn`, `dotnet`, `go`, `swift`, `zig`, and `gleam` arms all interpolated a
+  `[crates.output]` path (or a directory found beside it on disk, or the FFI default's crate root)
+  unquoted, the same defect shape the `gradle` arm above was fixed for.
 
 ### Added
 

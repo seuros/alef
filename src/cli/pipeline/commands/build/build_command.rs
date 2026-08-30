@@ -79,6 +79,10 @@ pub(super) fn build_command_for(
             // declares rather than restating the name. ~keep
             let manifest = Path::new(&py_crate_dir).join("Cargo.toml");
             let features_flag = crate::core::config::python_build::extension_module_feature_flag(&manifest);
+            // Quoted only around `py_crate_dir` itself: `sh` concatenates a quoted word with its
+            // unquoted `/Cargo.toml` suffix into one argument, the same shape as the `ffi` arm's
+            // `--manifest-path` (see `ffi_manifest_path_reaches_cargo_as_one_unquoted_path`). ~keep
+            let py_crate_dir = crate::core::config::shell::quote_word(&py_crate_dir);
             let command =
                 format!("maturin develop --manifest-path {py_crate_dir}/Cargo.toml{features_flag}{release_flag}");
             crate::core::config::python_build::run_through_python_package_manager(command, &config.tools)
@@ -104,6 +108,12 @@ pub(super) fn build_command_for(
             // file directly, so the fix holds regardless of `--cwd` and needs no `cd` into the
             // crate directory (which would also require rewriting `--manifest-path`/`-o` to be
             // relative to it). See alef#368. ~keep
+            // Each occurrence is quoted independently rather than once as a shared variable: the
+            // three flags place `node_crate_dir` in three separate shell words
+            // (`--manifest-path 'dir'/Cargo.toml`, `-o 'dir'`, `--package-json-path
+            // 'dir'/package.json`), and `sh` concatenates a quoted word with an unquoted suffix
+            // into one argument, same shape as the `ffi`/`maturin` manifest-path arms. ~keep
+            let node_crate_dir = crate::core::config::shell::quote_word(&node_crate_dir);
             format!(
                 "npx --yes -p @napi-rs/cli@{} napi build --platform --no-js --manifest-path {}/Cargo.toml -o {} \
                  --package-json-path {}/package.json --dts {}{}",
@@ -154,6 +164,10 @@ pub(super) fn build_command_for(
                 .map(|target| format!("wasm-pack build {profile} --target {target} --out-dir pkg/{target}"))
                 .collect::<Vec<_>>()
                 .join(" && ");
+            // `wasm_crate_dir` is a consumer-configured `[crates.output] wasm` path (or the
+            // `package_dir` fallback), reaching `sh -c` as the `cd` target -- quote it the same
+            // way the `gradle`/`dotnet`/`go` arms below do. ~keep
+            let wasm_crate_dir = crate::core::config::shell::quote_word(&wasm_crate_dir);
             format!("cd {wasm_crate_dir} && {builds}")
         }
         "cargo" => {
@@ -171,6 +185,11 @@ pub(super) fn build_command_for(
                 && let Some(root) =
                     crate::core::config::resolve_helpers::default_binding_crate_root(&config.name, "ffi")
             {
+                // `root` is derived from `config.name` (`[[crates]] name`), consumer-configured
+                // and reaching `sh -c` here -- quoted-prefix + unquoted `/Cargo.toml` suffix
+                // concatenates into one argument, the same shape as the `ffi` arm's own default
+                // in `build_defaults.rs`. ~keep
+                let root = crate::core::config::shell::quote_word(&root);
                 return format!("cargo build --manifest-path {root}/Cargo.toml{release_flag}");
             }
             if crate_dir.is_empty() && !bc.crate_suffix.is_empty() {
@@ -179,7 +198,9 @@ pub(super) fn build_command_for(
             let native_dir = Path::new(crate_dir).join("native");
             let native_manifest = native_dir.join("Cargo.toml");
             if native_manifest.exists() {
-                let dir = native_dir.display();
+                // `native_dir` is derived from `crate_dir`, itself a consumer-configured
+                // `[crates.output] ffi` path, reaching `sh -c` as the `cd` target. ~keep
+                let dir = crate::core::config::shell::quote_word(&native_dir.display().to_string());
                 format!("cd {dir} && cargo build{release_flag}")
             } else if let Some(standalone) = {
                 let mut p = std::path::PathBuf::from(crate_dir);
@@ -200,7 +221,10 @@ pub(super) fn build_command_for(
                 }
                 found
             } {
-                let dir = standalone.display();
+                // `standalone` walks up from `crate_dir` (a consumer-configured `[crates.output]
+                // ffi` path) looking for the enclosing workspace root -- still consumer-derived,
+                // still reaching `sh -c` as the `cd` target. ~keep
+                let dir = crate::core::config::shell::quote_word(&standalone.display().to_string());
                 format!("cd {dir} && cargo build{release_flag}")
             } else {
                 let mut p = std::path::PathBuf::from(crate_dir);
@@ -262,10 +286,13 @@ pub(super) fn build_command_for(
                 };
                 if is_excluded_from_workspace {
                     if let Some(pdir) = package_dir {
-                        let dir = pdir.display();
+                        // `pdir` is derived from `crate_dir`, a consumer-configured
+                        // `[crates.output] ffi` path, reaching `sh -c` as the `cd` target. ~keep
+                        let dir = crate::core::config::shell::quote_word(&pdir.display().to_string());
                         format!("cd {dir} && cargo build{release_flag}")
                     } else {
-                        format!("cd {crate_dir} && cargo build{release_flag}")
+                        let dir = crate::core::config::shell::quote_word(crate_dir);
+                        format!("cd {dir} && cargo build{release_flag}")
                     }
                 } else {
                     let crate_name = package_name.unwrap_or_else(|| {
@@ -297,6 +324,9 @@ pub(super) fn build_command_for(
                     }
                 }
             };
+            // Consumer-configured `[crates.output] elixir` path (or a `mix.exs` directory found
+            // beside it on disk), reaching `sh -c` as the `cd` target. ~keep
+            let build_dir = crate::core::config::shell::quote_word(&build_dir);
             format!("cd {build_dir} && mix compile")
         }
         "mvn" => {
@@ -317,6 +347,9 @@ pub(super) fn build_command_for(
                     }
                 }
             };
+            // Consumer-configured `[crates.output] java` path (or a `pom.xml` directory found
+            // beside it on disk), reaching `sh -c` as the `cd` target. ~keep
+            let build_dir = crate::core::config::shell::quote_word(&build_dir);
             format!("cd {build_dir} && mvn package -DskipTests --batch-mode --no-transfer-progress")
         }
         "dotnet" => {
@@ -361,6 +394,10 @@ pub(super) fn build_command_for(
                 found.unwrap_or_else(|| dir.to_string())
             };
             let dotnet_config = if release { "Release" } else { "Debug" };
+            // `build_dir` is derived from a consumer-configured `[crates.output] csharp` path
+            // (or a `.csproj` directory found beside it on disk), reaching `sh -c` as the `cd`
+            // target -- quote it the same way the `gradle` arm below does. ~keep
+            let build_dir = crate::core::config::shell::quote_word(&build_dir);
             format!("cd {build_dir} && dotnet build --configuration {dotnet_config} --verbosity quiet")
         }
         "go" => {
@@ -370,6 +407,9 @@ pub(super) fn build_command_for(
                 .as_ref()
                 .and_then(|p| p.to_str())
                 .unwrap_or("packages/go");
+            // Consumer-configured `[crates.output] go` path, reaching `sh -c` as the `cd`
+            // target. ~keep
+            let dir = crate::core::config::shell::quote_word(dir);
             format!("cd {dir} && go build ./...")
         }
         "gradle" => {
@@ -434,17 +474,21 @@ pub(super) fn build_command_for(
             format!("cd {build_dir} && gradle {task}")
         }
         "swift" => {
-            let package_dir = config.package_dir(lang);
+            // `package_dir` is a consumer-configured `[crates.output] swift` path (or its
+            // default), reaching `sh -c` as `--package-path`'s value -- quote it the same way
+            // `default_build_config`'s own Swift arm does, so the two producers stay
+            // byte-identical. ~keep
+            let package_dir = crate::core::config::shell::quote_word(&config.package_dir(lang));
             let configuration = if release { " --configuration release" } else { "" };
             format!("swift build --package-path {package_dir}{configuration}")
         }
         "zig" => {
-            let package_dir = config.package_dir(lang);
+            let package_dir = crate::core::config::shell::quote_word(&config.package_dir(lang));
             let release_flag = if release { " --release=fast" } else { "" };
             format!("cd {package_dir} && zig build{release_flag}")
         }
         "gleam" => {
-            let package_dir = config.package_dir(lang);
+            let package_dir = crate::core::config::shell::quote_word(&config.package_dir(lang));
             format!("cd {package_dir} && gleam build")
         }
         // Every backend registers a `tool` here from the fixed set matched above (or defines its

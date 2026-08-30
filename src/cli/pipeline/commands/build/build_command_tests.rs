@@ -123,7 +123,10 @@ sources = ["src/lib.rs"]
     let command = build_command_for(Language::Node, &build_config, &config, false);
 
     assert!(
-        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        command.contains(&format!(
+            "--package-json-path {}/package.json",
+            quoted("crates/sample-lib-node")
+        )),
         "napi build must be told explicitly which package.json names the binding crate, \
          rather than letting it default to the repo root's: {command}"
     );
@@ -157,14 +160,15 @@ sources = ["src/lib.rs"]
     };
 
     let command = build_command_for(Language::Node, &build_config, &config, false);
+    let node_dir = quoted("crates/sample-lib-node");
 
     assert!(
-        command.contains("--manifest-path crates/sample-lib-node/Cargo.toml"),
+        command.contains(&format!("--manifest-path {node_dir}/Cargo.toml")),
         "an unconfigured [crates.output] node must still resolve to the default crate \
          directory, not an empty path: {command}"
     );
     assert!(
-        command.contains("-o crates/sample-lib-node "),
+        command.contains(&format!("-o {node_dir} ")),
         "an unconfigured [crates.output] node must still pass the default crate directory \
          as the output dir, not an empty one: {command}"
     );
@@ -201,7 +205,10 @@ node = "crates/sample-lib-node/src"
     let command = build_command_for(Language::Node, &build_config, &config, false);
 
     assert!(
-        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        command.contains(&format!(
+            "--package-json-path {}/package.json",
+            quoted("crates/sample-lib-node")
+        )),
         "an explicit [crates.output] node must still resolve --package-json-path to the \
          binding crate's own manifest: {command}"
     );
@@ -460,6 +467,139 @@ fn unknown_build_tool_fails_instead_of_reporting_success() {
     );
 }
 
+/// The `mvn`/`mix`/`cargo` arms all resolve a build directory by walking up from a
+/// consumer-configured `[crates.output]` path looking for a marker file (`pom.xml`, `mix.exs`,
+/// `Cargo.toml`), then splice the result into `cd {dir} && …` -- the same shape the
+/// `gradle`/`dotnet`/`go` arms were fixed for. These were not covered by any literal-string test
+/// before this file (a text assertion could not tell a correct path from an injected one
+/// anyway), so each of the three gets a real-`sh` injection-witness test instead. ~keep
+#[cfg(unix)]
+#[test]
+fn mvn_build_command_keeps_a_hostile_output_dir_out_of_shell_text() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let hostile = "packages/java$(touch witness)#";
+    let package = root.path().join(hostile);
+    std::fs::create_dir_all(&package).expect("create hostile package dir");
+    std::fs::write(package.join("pom.xml"), "<project/>\n").expect("write pom.xml");
+    let witness = root.path().join("witness");
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["java"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+java = {hostile:?}
+"#
+    ))
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "mvn",
+        crate_suffix: "-java",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Java, &build_config, &config, false);
+    std::process::Command::new("sh")
+        .args(["-c", &command])
+        .current_dir(root.path())
+        .output()
+        .expect("shell should start");
+
+    assert!(!witness.exists(), "command substitution in the output path must not run: {command}");
+}
+
+#[cfg(unix)]
+#[test]
+fn mix_build_command_keeps_a_hostile_output_dir_out_of_shell_text() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let hostile = "packages/elixir$(touch witness)#";
+    let package = root.path().join(hostile);
+    std::fs::create_dir_all(&package).expect("create hostile package dir");
+    std::fs::write(package.join("mix.exs"), "").expect("write mix.exs");
+    let witness = root.path().join("witness");
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["elixir"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+elixir = {hostile:?}
+"#
+    ))
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "mix",
+        crate_suffix: "-elixir",
+        build_dep: BuildDependency::Rustler,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Elixir, &build_config, &config, false);
+    std::process::Command::new("sh")
+        .args(["-c", &command])
+        .current_dir(root.path())
+        .output()
+        .expect("shell should start");
+
+    assert!(!witness.exists(), "command substitution in the output path must not run: {command}");
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_ffi_native_dir_build_keeps_a_hostile_crate_dir_out_of_shell_text() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let hostile = "crates/sample-lib-ffi$(touch witness)#";
+    let crate_dir = root.path().join(hostile);
+    std::fs::create_dir_all(crate_dir.join("native")).expect("create native dir");
+    std::fs::write(crate_dir.join("native").join("Cargo.toml"), "[package]\nname = \"n\"\n")
+        .expect("write native Cargo.toml");
+    let witness = root.path().join("witness");
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+ffi = {hostile:?}
+"#
+    ))
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "cargo",
+        crate_suffix: "-ffi",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Ffi, &build_config, &config, false);
+    std::process::Command::new("sh")
+        .args(["-c", &command])
+        .current_dir(root.path())
+        .output()
+        .expect("shell should start");
+
+    assert!(!witness.exists(), "command substitution in the crate dir must not run: {command}");
+}
+
 fn wasm_config(extra: &str) -> ResolvedCrateConfig {
     let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
         r#"
@@ -502,11 +642,14 @@ fn wasm_build_command_builds_every_default_target_into_its_own_pkg_subdir() {
 
     assert_eq!(
         command,
-        "cd crates/sample-lib-wasm && \
-         wasm-pack build --dev --target web --out-dir pkg/web && \
-         wasm-pack build --dev --target bundler --out-dir pkg/bundler && \
-         wasm-pack build --dev --target nodejs --out-dir pkg/nodejs && \
-         wasm-pack build --dev --target deno --out-dir pkg/deno"
+        format!(
+            "cd {} && \
+             wasm-pack build --dev --target web --out-dir pkg/web && \
+             wasm-pack build --dev --target bundler --out-dir pkg/bundler && \
+             wasm-pack build --dev --target nodejs --out-dir pkg/nodejs && \
+             wasm-pack build --dev --target deno --out-dir pkg/deno",
+            quoted("crates/sample-lib-wasm")
+        )
     );
 }
 
@@ -545,7 +688,10 @@ fn wasm_build_command_honours_a_narrowed_target_set() {
 
     assert_eq!(
         command,
-        "cd crates/sample-lib-wasm && wasm-pack build --dev --target web --out-dir pkg/web"
+        format!(
+            "cd {} && wasm-pack build --dev --target web --out-dir pkg/web",
+            quoted("crates/sample-lib-wasm")
+        )
     );
     assert!(!command.contains("nodejs"), "{command}");
 }
@@ -588,13 +734,14 @@ sources = ["src/lib.rs"]
         post_build: Vec::new(),
     };
 
+    let swift_dir = quoted("packages/swift");
     assert_eq!(
         build_command_for(Language::Swift, &build_config, &config, false),
-        "swift build --package-path packages/swift"
+        format!("swift build --package-path {swift_dir}")
     );
     assert_eq!(
         build_command_for(Language::Swift, &build_config, &config, true),
-        "swift build --package-path packages/swift --configuration release"
+        format!("swift build --package-path {swift_dir} --configuration release")
     );
 }
 
@@ -619,13 +766,14 @@ sources = ["src/lib.rs"]
         post_build: Vec::new(),
     };
 
+    let zig_dir = quoted("packages/zig");
     assert_eq!(
         build_command_for(Language::Zig, &build_config, &config, false),
-        "cd packages/zig && zig build"
+        format!("cd {zig_dir} && zig build")
     );
     assert_eq!(
         build_command_for(Language::Zig, &build_config, &config, true),
-        "cd packages/zig && zig build --release=fast"
+        format!("cd {zig_dir} && zig build --release=fast")
     );
 }
 
@@ -650,13 +798,14 @@ sources = ["src/lib.rs"]
         post_build: Vec::new(),
     };
 
+    let gleam_dir = quoted("packages/gleam");
     assert_eq!(
         build_command_for(Language::Gleam, &build_config, &config, false),
-        "cd packages/gleam && gleam build"
+        format!("cd {gleam_dir} && gleam build")
     );
     assert_eq!(
         build_command_for(Language::Gleam, &build_config, &config, true),
-        "cd packages/gleam && gleam build"
+        format!("cd {gleam_dir} && gleam build")
     );
 }
 

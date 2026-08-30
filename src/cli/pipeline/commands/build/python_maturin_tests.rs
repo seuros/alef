@@ -16,6 +16,16 @@ use crate::core::backend::{BuildConfig, BuildDependency};
 use crate::core::config::python_build::PYO3_EXTENSION_MODULE_FEATURE;
 use crate::core::config::{LangContext, ToolsConfig, build_defaults};
 
+/// A directory as it is spelled *inside the emitted shell command* — a quoted word, not a bare
+/// path. Expectations derive it from `quote_word` rather than restating one quoting spelling, so
+/// a change to the escaping policy cannot silently repoint a command at a different directory:
+/// the escaping itself is proved separately, and once, by
+/// `core::config::shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile
+/// value through a real shell. ~keep
+fn quoted(dir: &str) -> String {
+    crate::core::config::shell::quote_word(dir)
+}
+
 fn maturin_build_config() -> BuildConfig {
     BuildConfig {
         tool: "maturin",
@@ -100,7 +110,7 @@ fn python_build_command_is_unchanged_when_no_package_manager_is_configured() {
 
     assert_eq!(
         command,
-        format!("maturin develop --manifest-path {crate_dir}/Cargo.toml")
+        format!("maturin develop --manifest-path {}/Cargo.toml", quoted(&crate_dir))
     );
 }
 
@@ -172,7 +182,10 @@ sources = ["src/lib.rs"]
     let command = build_command_for(Language::Python, &maturin_build_config(), &config, false);
 
     assert!(
-        command.contains("--manifest-path crates/sample-lib-py/Cargo.toml"),
+        command.contains(&format!(
+            "--manifest-path {}/Cargo.toml",
+            quoted("crates/sample-lib-py")
+        )),
         "the maturin arm must name the binding crate scaffold writes, not a root-relative \
          `/Cargo.toml`: {command}"
     );
