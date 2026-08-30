@@ -891,7 +891,6 @@ pub(super) fn render_assertion(
         }
     }
 }
-}
 
 #[cfg(test)]
 #[path = "assertions/skip_marker_tests.rs"]
