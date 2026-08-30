@@ -1,7 +1,10 @@
 mod enum_members;
 
 use super::*;
-use enum_members::{declared_enum_member_for_prefixed, is_tagged_data_enum, wasm_enum_bridged_as_raw_value};
+use enum_members::{
+    declared_enum_member_for_prefixed, is_tagged_data_enum, node_tagged_unit_variant_literal,
+    wasm_enum_bridged_as_raw_value,
+};
 
 use crate::e2e::codegen::fixture_refusal::RefusalSite;
 
@@ -433,8 +436,12 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
-                        let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, s);
-                        enum_member_reference(enum_type, &member, referenced_enums)
+                        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, s) {
+                            literal
+                        } else {
+                            let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, s);
+                            enum_member_reference(enum_type, &member, referenced_enums)
+                        }
                     } else {
                         json_to_js(&preprocessed)
                     }
@@ -676,6 +683,9 @@ fn node_value_expression(
         && enums.iter().any(|definition| definition.name == *type_name)
         && let Some(variant) = value.as_str()
     {
+        if let Some(literal) = node_tagged_unit_variant_literal(type_name, enums, variant) {
+            return literal;
+        }
         let member = declared_enum_member_for_prefixed(type_name, enums, "", variant);
         return enum_member_reference(type_name, &member, referenced_enums);
     }
@@ -683,6 +693,9 @@ fn node_value_expression(
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
+        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, variant) {
+            return literal;
+        }
         let member = declared_enum_member_for_prefixed(enum_type, enums, "", variant);
         return enum_member_reference(enum_type, &member, referenced_enums);
     }

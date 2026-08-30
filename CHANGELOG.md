@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
+  literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
+  enum members.
+
 ## [0.79.2] - 2026-08-30
 
 ### Fixed

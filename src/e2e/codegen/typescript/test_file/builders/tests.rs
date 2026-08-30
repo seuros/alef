@@ -255,6 +255,60 @@ fn node_typed_objects_use_importable_enum_members() {
 }
 
 #[test]
+fn node_tagged_data_enum_uses_object_literal_instead_of_runtime_member() {
+    let type_defs = [TypeDef {
+        name: "RenderOptions".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "format".into(),
+            ty: crate::core::ir::TypeRef::Named("RenderFormat".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let enums = [EnumDef {
+        name: "RenderFormat".into(),
+        serde_rename_all: Some("snake_case".into()),
+        variants: vec![
+            crate::core::ir::EnumVariant {
+                name: "PlainText".into(),
+                ..Default::default()
+            },
+            crate::core::ir::EnumVariant {
+                name: "Custom".into(),
+                is_tuple: true,
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "_0".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"format": "plain_text"}).as_object().expect("object"),
+        "RenderOptions",
+        &Default::default(),
+        "node",
+        &[("format".to_string(), "RenderFormat".to_string())]
+            .into_iter()
+            .collect(),
+        &Default::default(),
+        &type_defs,
+        &enums,
+        "",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert_eq!(
+        expression,
+        "{ format: { type: \"plain_text\" } as RenderFormat } as RenderOptions"
+    );
+}
+
+#[test]
 fn node_typed_objects_lower_bytes_and_enums_from_ir() {
     let type_defs = [TypeDef {
         name: "DocumentInput".into(),

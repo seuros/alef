@@ -93,3 +93,22 @@ pub(super) fn declared_enum_member_for_prefixed(
         .or_else(|| declared_enum_member(prefixed_enum, enums, wire_value))
         .unwrap_or_else(|| wire_value.to_upper_camel_case())
 }
+
+pub(super) fn node_tagged_unit_variant_literal(enum_name: &str, enums: &[EnumDef], wire_value: &str) -> Option<String> {
+    let enum_def = enums
+        .iter()
+        .find(|definition| definition.name == enum_name && crate::backends::napi::is_tagged_data_enum(definition))?;
+    let variant_name = crate::codegen::serde_enum_repr::variant_name_for_wire(enum_def, wire_value)?;
+    let variant = enum_def
+        .variants
+        .iter()
+        .find(|variant| variant.name == variant_name && variant.fields.is_empty())?;
+    let wire_value = crate::codegen::naming::wire_variant_value(
+        &variant.name,
+        variant.serde_rename.as_deref(),
+        enum_def.serde_rename_all.as_deref(),
+    );
+    let tag = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
+    let quoted = serde_json::to_string(&wire_value).expect("enum wire values serialize as JSON strings");
+    Some(format!("{{ {tag}: {quoted} }} as {enum_name}"))
+}
