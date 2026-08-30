@@ -335,7 +335,7 @@ mod tests {
         assert!(meta.targets["cli"]);
     }
 
-    /// Consumers can gate a Scoop publish job on `release_scoop`, so the emitted JSON must carry
+    /// ~keep Consumers can gate a Scoop publish job on `release_scoop`, so the emitted JSON must carry
     /// the key even when the target is off. A missing key reads as an empty string in a GitHub
     /// Actions `if:` and would skip the job silently.
     #[test]
