@@ -896,9 +896,17 @@ impl OutputTemplate {
     /// Panics if `crate_name` contains a NUL byte, path separator (`/`, `\`),
     /// or is a bare relative reference (`..`), and if the resolved path would
     /// escape the project root via `..` components or an absolute root.
+    ///
+    /// `crate_name` and `lang` are expected to have already been validated at the
+    /// config-resolution boundary (see [`crate::core::config::new_config::NewAlefConfig::resolve`]),
+    /// which surfaces the same underlying checks as a contextual [`crate::core::config::new_config::ResolveError`]
+    /// instead of a panic. This call site keeps panicking so every other caller of
+    /// `resolve` (tests, ad hoc tooling) is not forced to thread a `Result` through —
+    /// by the time `resolve` runs on a real config, the value has already been
+    /// accepted or rejected upstream.
     pub fn resolve(&self, crate_name: &str, lang: &str, multi_crate: bool) -> PathBuf {
-        validate_output_segment(crate_name, "crate_name");
-        validate_output_segment(lang, "lang");
+        validate_output_segment(crate_name, "crate_name").unwrap_or_else(|message| panic!("{message}"));
+        validate_output_segment(lang, "lang").unwrap_or_else(|message| panic!("{message}"));
 
         let path = if let Some(template) = self.entry(lang) {
             PathBuf::from(template.replace("{crate}", crate_name).replace("{lang}", lang))
@@ -913,7 +921,7 @@ impl OutputTemplate {
             PathBuf::from(super::resolve_helpers::default_package_root(lang))
         };
 
-        validate_output_path(&path);
+        validate_output_path(&path).unwrap_or_else(|message| panic!("{message}"));
         path
     }
 
@@ -942,45 +950,55 @@ impl OutputTemplate {
     }
 }
 
-/// Validate that a user-supplied path segment (crate name or language code) does not
-/// contain characters that could enable path traversal.
+/// Validate that a user-supplied path segment (crate name, language code, or any other
+/// config value later spliced into an output path as a single component) does not contain
+/// characters that could enable path traversal or an absolute-path override.
 ///
-/// # Panics
-///
-/// Panics if the segment contains a NUL byte, a forward slash, or a backslash.
-fn validate_output_segment(segment: &str, label: &str) {
+/// Returns `Err` with a human-readable message instead of panicking, so config-resolution
+/// call sites (see [`crate::core::config::new_config::NewAlefConfig::resolve`]) can surface
+/// the failure as a contextual [`crate::core::config::new_config::ResolveError`]. The one
+/// existing panicking call site ([`OutputTemplate::resolve`]) unwraps this itself to keep
+/// its long-standing panic-on-invalid-input contract intact for callers that predate
+/// fallible config resolution.
+pub(crate) fn validate_output_segment(segment: &str, label: &str) -> Result<(), String> {
     if segment.contains('\0') {
-        panic!("invalid {label}: NUL byte is not allowed in output path segments (got {segment:?})");
+        return Err(format!(
+            "invalid {label}: NUL byte is not allowed in output path segments (got {segment:?})"
+        ));
     }
     if segment.contains('/') || segment.contains('\\') {
-        panic!("invalid {label}: path separators are not allowed in output path segments (got {segment:?})");
+        return Err(format!(
+            "invalid {label}: path separators are not allowed in output path segments (got {segment:?})"
+        ));
     }
+    Ok(())
 }
 
-/// Validate that a resolved output `PathBuf` does not escape the project root.
+/// Validate that a `Path` does not escape the project root: no `..` component, and not
+/// absolute.
 ///
-/// # Panics
-///
-/// Panics if the path contains a `..` component or is absolute.
-fn validate_output_path(path: &std::path::Path) {
+/// Returns `Err` with a human-readable message instead of panicking; see
+/// [`validate_output_segment`] for why both a fallible and a panicking call site exist.
+pub(crate) fn validate_output_path(path: &std::path::Path) -> Result<(), String> {
     use std::path::Component;
     for component in path.components() {
         match component {
             Component::ParentDir => {
-                panic!(
+                return Err(format!(
                     "resolved output path `{}` contains `..` and would escape the project root",
                     path.display()
-                );
+                ));
             }
             Component::RootDir | Component::Prefix(_) => {
-                panic!(
+                return Err(format!(
                     "resolved output path `{}` is absolute and would escape the project root",
                     path.display()
-                );
+                ));
             }
             _ => {}
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
