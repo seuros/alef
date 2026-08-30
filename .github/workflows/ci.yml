@@ -114,24 +114,50 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-sort
-      - uses: xberg-io/actions/install-homebrew-linux@v1
-      # Homebrew 6.x refuses to load formulae from a third-party tap until the tap is
-      # explicitly trusted; `brew install` on an untrusted tap fails rather than skipping.
-      # `brew trust` is a real subcommand as of 6.x (verified locally); see
-      # https://docs.brew.sh/Tap-Trust.
-      - name: Trust goldziher/tap
-        run: |
-          brew tap goldziher/tap
-          brew trust goldziher/tap
+      # Pinned to an exact poly release, not `latest`: the `[hooks.pre-commit.commands.
+      # added-large-files]` entry in poly.toml shells out to `poly hooks check
+      # --added-large-files`, which poly's own `--help` labels internal/hidden -- not part
+      # of its user-facing surface, so a future poly could rename or drop it without that
+      # being a documented breaking change. `Goldziher/poly` is the project's own
+      # composite action; it forwards `version:` to the project's checksum-verified
+      # `install.sh`, so this is a true, verified pin, not a presence check. See
+      # https://github.com/Goldziher/poly#github-actions. ~keep
       - name: Install poly
-        run: brew install goldziher/tap/poly
+        # Goldziher/poly@v0 resolved to tag v0.23.0 (commit
+        # 5f609e9f6913a9e0e9046fc02fe76c0515a8e276) when this pin was written -- pinned to that
+        # commit SHA below because a major-version tag like `v0` is mutable and can be
+        # repointed, so the SHA is the real supply-chain pin; `version: v0.23.0` in `with:` is
+        # kept as the human-readable/functional pin the action itself resolves against. To bump
+        # poly, update both the SHA below and `version:` together. ~keep
+        uses: Goldziher/poly@5f609e9f6913a9e0e9046fc02fe76c0515a8e276 # v0.23.0
+        with:
+          version: v0.23.0
       # Both tools must be present *before* the lanes run. The lanes fail on a missing
       # tool rather than skipping, so this step exists to fail earlier and more legibly,
-      # not to decide whether the gate runs.
+      # not to decide whether the gate runs. The poly assertions are deliberately strict
+      # rather than a bare `poly --version`: (1) the version must match the pin above
+      # exactly, so an accidental `latest` resolution or a stale cache is caught here
+      # instead of silently linting with the wrong poly; (2) `poly hooks check
+      # --added-large-files --help` must still resolve, because that hidden subcommand is
+      # exactly what `poly.toml`'s large-file guard depends on -- if a poly upgrade ever
+      # renames or removes it, this is where that shows up as a loud, named CI failure
+      # instead of the guard silently no-op'ing on every future commit. ~keep
       - name: Verify downstream tooling is present
         run: |
           cargo sort --version
-          poly --version
+
+          installed_poly_version="$(poly --version | awk '{print $2}')"
+          if [ "$installed_poly_version" != "0.23.0" ]; then
+            echo "::error::expected poly 0.23.0 (pinned for the poly.toml added-large-files hook), got ${installed_poly_version:-<empty>}. Update the pinned Goldziher/poly uses: SHA and version: input above together with this check." >&2
+            exit 1
+          fi
+          echo "poly ${installed_poly_version} matches the pinned version."
+
+          if ! poly hooks check --added-large-files --help >/dev/null 2>&1; then
+            echo "::error::'poly hooks check --added-large-files' no longer resolves. This is the hidden/internal subcommand that poly.toml's [hooks.pre-commit.commands.added-large-files] shells out to for the repo's large-file guard -- if poly renamed or dropped it, that guard is now silently not running on every commit. Fix poly.toml (see the 'flag if a public surface can replace the hidden command' note in CHANGELOG.md) before bumping the pinned poly version." >&2
+            exit 1
+          fi
+          echo "poly hooks check --added-large-files is still available."
       # Not ignored, needs no tooling: the isolation guard and the wiring check. Run as
       # its own step so "the gate refuses to lint alef itself" is a named, visible result
       # in the CI log rather than an assertion buried inside a long run.

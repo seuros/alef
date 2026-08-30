@@ -226,6 +226,10 @@ fn clippy_lane_languages() -> Vec<&'static str> {
 mod fixture;
 use fixture::FIXTURE_CARGO_TOML;
 
+#[path = "workflow_job_block/support.rs"]
+mod workflow_job_block_support;
+use workflow_job_block_support::workflow_job_block;
+
 // ---------------------------------------------------------------------------
 // Tooling: present and executable, or the gate fails
 // ---------------------------------------------------------------------------
@@ -1112,29 +1116,6 @@ fn isolation_guard_accepts_a_standalone_temp_tree() {
 /// it matching.
 const GATE_JOB: &str = "generated-output-gate";
 
-/// Extract one job's block from a workflow, from its `  <name>:` line up to the next line
-/// at the same two-space indent.
-///
-/// The scoping is the point. An earlier version of this test searched the whole file for
-/// `cargo-sort` and `poly`, and both already appear in the `validate` and `poly-validate`
-/// jobs — so it would have passed with the gate job deleted outright. A wiring check that
-/// cannot fail is the same kind of nothing as a lint that examines nothing. ~keep
-fn workflow_job_block(workflow: &str, job: &str) -> Option<String> {
-    let header = format!("  {job}:");
-    let mut lines = workflow.lines().skip_while(|line| line.trim_end() != header);
-    let first = lines.next()?;
-    let mut block = String::from(first);
-    for line in lines {
-        let is_sibling_job = line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':');
-        if is_sibling_job {
-            break;
-        }
-        block.push('\n');
-        block.push_str(line);
-    }
-    Some(block)
-}
-
 #[test]
 fn ci_workflow_runs_the_generated_output_gate() {
     let workflow_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
@@ -1149,6 +1130,8 @@ fn ci_workflow_runs_the_generated_output_gate() {
         )
     });
 
+    assert_gate_job_installs_poly(&block, &workflow_path);
+
     let required: &[(&str, &str)] = &[
         (
             "--test generated_output_downstream_gate",
@@ -1162,10 +1145,6 @@ fn ci_workflow_runs_the_generated_output_gate() {
         (
             "cargo-sort",
             "the gate job must install cargo-sort, or the cargo sort lane fails on a missing tool",
-        ),
-        (
-            "goldziher/tap/poly",
-            "the gate job must install poly, or the poly fmt lane fails on a missing tool",
         ),
         (
             "clippy",
@@ -1189,24 +1168,29 @@ fn ci_workflow_runs_the_generated_output_gate() {
     );
 }
 
-/// The block extractor has to actually stop at the next job, or every needle above would
-/// be satisfied by some other job's steps and the wiring check would be vacuous again.
-#[test]
-fn workflow_job_block_stops_at_the_next_job() {
-    let workflow = concat!(
-        "jobs:\n",
-        "  first:\n    steps:\n      - run: marker-in-first\n",
-        "  second:\n    steps:\n      - run: marker-in-second\n",
-    );
-    let first = workflow_job_block(workflow, "first").expect("first job block");
-    assert!(first.contains("marker-in-first"), "block must contain its own steps");
+/// Whether `block` has an actual `uses:` step line installing `Goldziher/poly`.
+///
+/// Line-scoped rather than a whole-block `contains("Goldziher/poly")`: the surrounding
+/// comments on the `Install poly` step mention `Goldziher/poly` several times in prose (the
+/// pin rationale, the SHA-vs-tag explanation, the version-mismatch error message), so a bare
+/// substring search would still pass with the real `uses:` line deleted. Only a line whose
+/// trimmed text starts with `uses: Goldziher/poly@` counts. ~keep
+fn gate_job_installs_poly(block: &str) -> bool {
+    const USES_PREFIX: &str = "uses: Goldziher/poly@";
+    block.lines().any(|line| line.trim_start().starts_with(USES_PREFIX))
+}
+
+/// Panics with a job-block dump if [`gate_job_installs_poly`] does not hold. Split out of
+/// [`ci_workflow_runs_the_generated_output_gate`] so fixing this needle did not grow that
+/// (already-long, pre-existing) test function any further.
+fn assert_gate_job_installs_poly(block: &str, workflow_path: &Path) {
     assert!(
-        !first.contains("marker-in-second"),
-        "block leaked into the following job, so job-scoped assertions would be meaningless"
-    );
-    assert!(
-        workflow_job_block(workflow, "absent").is_none(),
-        "a job that does not exist must not resolve to a block"
+        gate_job_installs_poly(block),
+        "the `{GATE_JOB}` job in {} must have a `uses: Goldziher/poly@...` step, not just prose \
+         mentioning `Goldziher/poly` -- the poly fmt lane fails on a missing tool if the real \
+         install step is gone:\n\
+         --- job block as parsed ---\n{block}",
+        workflow_path.display()
     );
 }
 

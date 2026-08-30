@@ -37,6 +37,10 @@ use std::process::Command;
 
 use syn::visit::Visit;
 
+#[path = "workflow_job_block/support.rs"]
+mod workflow_job_block_support;
+use workflow_job_block_support::workflow_job_block;
+
 /// The workflow whose `test` job is the only thing that runs the integration binaries.
 const CI_WORKFLOW: &str = ".github/workflows/ci.yml";
 
@@ -261,24 +265,6 @@ fn no_contains_disjunction_may_subsume_its_own_arm() {
         offenders.len(),
         offenders.join("\n")
     );
-}
-
-/// The `run:` lines of one job block in a GitHub Actions workflow.
-fn workflow_job_block(workflow: &str, job: &str) -> Option<String> {
-    let header = format!("  {job}:");
-    let mut lines = workflow.lines().skip_while(|line| *line != header);
-    lines.next()?;
-
-    let mut block = String::new();
-    for line in lines {
-        let is_sibling_job = line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':');
-        if is_sibling_job {
-            break;
-        }
-        block.push_str(line);
-        block.push('\n');
-    }
-    Some(block)
 }
 
 /// `cargo test --lib` runs the unit tests in `src/` and none of the ~253 test binaries under
