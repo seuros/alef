@@ -103,11 +103,7 @@ pub fn validate_c_make_path(value: &str, output_base: &str) -> Result<(), String
         return Err(format!("`{value}` contains a character active in Make or the shell"));
     }
 
-    let mut depth = output_base
-        .split('/')
-        .filter(|component| !component.is_empty() && *component != ".")
-        .count()
-        + 1;
+    let mut depth = lexical_relative_depth(output_base)? + 1;
     for component in value.split('/') {
         match component {
             "" | "." => {}
@@ -119,12 +115,24 @@ pub fn validate_c_make_path(value: &str, output_base: &str) -> Result<(), String
     Ok(())
 }
 
+fn lexical_relative_depth(value: &str) -> Result<usize, String> {
+    let mut depth = 0;
+    for component in value.split('/') {
+        match component {
+            "" | "." => {}
+            ".." if depth == 0 => return Err(format!("output base `{value}` escapes the repository root")),
+            ".." => depth -= 1,
+            _ => depth += 1,
+        }
+    }
+    Ok(depth)
+}
+
 /// Validate a bare ASCII ABI identifier: `[ffi] prefix` and a capsule's
 /// `c_return_type`.
 ///
-/// **Grammar:** `^[A-Za-z_][A-Za-z0-9_]*$` — a valid C identifier (ISO C
-/// §6.4.2.1), restricted to the ASCII subset C's translation-limits guarantee is
-/// portable.
+/// **Grammar:** `^[A-Za-z][A-Za-z0-9_]*$` — a portable file-scope C identifier
+/// (ISO C §6.4.2.1) that excludes the implementation-reserved leading `_` space.
 ///
 /// **Source:** both fields become part of, or the entirety of, a `#[no_mangle]
 /// extern "C"` symbol name or a cbindgen-declared C type name — every C-ABI
@@ -143,21 +151,13 @@ pub fn validate_ascii_abi_identifier(value: &str) -> Result<(), String> {
     let Some(first) = chars.next() else {
         return Err("must not be empty".to_string());
     };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return Err(format!("`{value}` must start with an ASCII letter or `_`"));
+    if !first.is_ascii_alphabetic() {
+        return Err(format!("`{value}` must start with an ASCII letter"));
     }
     if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(format!(
             "`{value}` may only contain ASCII letters, digits, and `_` after the first character"
         ));
-    }
-    if value.starts_with("__")
-        || value
-            .strip_prefix('_')
-            .and_then(|rest| rest.chars().next())
-            .is_some_and(|ch| ch.is_ascii_uppercase())
-    {
-        return Err(format!("`{value}` is reserved to the C implementation"));
     }
     if is_c_reserved_keyword(value) {
         return Err(format!("`{value}` is a reserved C keyword"));
@@ -351,7 +351,20 @@ fn validate_cfg_bare_path(path: &syn::Path) -> Result<(), String> {
     if text.starts_with("r#") {
         return Err(format!("`{text}` must not be a raw identifier"));
     }
-    validate_ascii_abi_identifier(&text)
+    validate_cfg_identifier(&text)
+}
+
+fn validate_cfg_identifier(value: &str) -> Result<(), String> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err("cfg key must not be empty".to_string());
+    };
+    if !(first.is_ascii_alphabetic() || first == '_')
+        || !chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return Err(format!("`{value}` is not a portable cfg identifier"));
+    }
+    Ok(())
 }
 
 /// Validate a capsule's `package` field: a Cargo package name injected as a bare
@@ -498,6 +511,7 @@ mod tests {
         assert_eq!(validate_c_make_path("../../crates/sample-ffi", "e2e"), Ok(()));
         assert!(validate_c_make_path("../../$(shell touch pwned)", "e2e").is_err());
         assert!(validate_c_make_path("../../../outside", "e2e").is_err());
+        assert!(validate_c_make_path("../../../outside", "e2e/nested/../..").is_err());
     }
 
     // -- ascii abi identifier -------------------------------------------------
@@ -516,6 +530,7 @@ mod tests {
         assert!(validate_ascii_abi_identifier("int").is_err());
         assert!(validate_ascii_abi_identifier("__private").is_err());
         assert!(validate_ascii_abi_identifier("_Private").is_err());
+        assert!(validate_ascii_abi_identifier("_private").is_err());
     }
 
     // -- rust pointee type path -----------------------------------------------
@@ -551,6 +566,7 @@ mod tests {
         );
         assert_eq!(validate_cfg_expression("unix"), Ok(()));
         assert_eq!(validate_cfg_expression("not(windows)"), Ok(()));
+        assert_eq!(validate_cfg_expression("_custom"), Ok(()));
     }
 
     #[test]

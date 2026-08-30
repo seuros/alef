@@ -521,7 +521,9 @@ fn validate_ffi_config(crate_name: &str, ffi: &FfiConfig) -> Result<(), ResolveE
 }
 
 fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), ResolveError> {
+    let c_e2e_enabled = effective_c_e2e_enabled(config);
     let uses_c_abi = config.ffi.is_some()
+        || c_e2e_enabled
         || config.languages.iter().any(|language| {
             matches!(
                 language,
@@ -555,10 +557,23 @@ fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), Res
     let lib = config.ffi_lib_name();
     abi_grammar::validate_native_artifact_basename(&lib).map_err(|error| invalid("lib_name", &lib, error))?;
 
-    if config.languages.contains(&Language::C) {
+    if c_e2e_enabled {
         validate_effective_c_e2e_config(config, &invalid)?;
     }
     Ok(())
+}
+
+fn effective_c_e2e_enabled(config: &ResolvedCrateConfig) -> bool {
+    let Some(e2e) = config.e2e.as_ref() else {
+        return false;
+    };
+    if e2e.languages.is_empty() {
+        crate::e2e::default_e2e_languages(&config.languages)
+            .iter()
+            .any(|language| language == "c")
+    } else {
+        e2e.languages.iter().any(|language| language == "c")
+    }
 }
 
 fn validate_effective_c_e2e_config(
@@ -569,15 +584,11 @@ fn validate_effective_c_e2e_config(
         return Ok(());
     };
     let package = e2e.resolve_package("c");
-    if let Some(overrides) = e2e.call.overrides.get("c") {
-        if let Some(prefix) = overrides.prefix.as_deref() {
-            abi_grammar::validate_ascii_abi_identifier(prefix)
-                .map_err(|error| invalid("e2e.call.overrides.c.prefix", prefix, error))?;
-        }
-        if let Some(header) = overrides.header.as_deref() {
-            abi_grammar::validate_c_header_filename(header)
-                .map_err(|error| invalid("e2e.call.overrides.c.header", header, error))?;
-        }
+    validate_c_call_override("e2e.call", &e2e.call, invalid)?;
+    let mut named_calls: Vec<_> = e2e.calls.iter().collect();
+    named_calls.sort_unstable_by_key(|(name, _)| *name);
+    for (name, call) in named_calls {
+        validate_c_call_override(&format!("e2e.calls.{name}"), call, invalid)?;
     }
     if let Some(name) = package.as_ref().and_then(|package| package.name.as_deref()) {
         abi_grammar::validate_native_artifact_basename(name)
@@ -590,6 +601,25 @@ fn validate_effective_c_e2e_config(
         .unwrap_or_else(|| config.ffi_crate_path());
     abi_grammar::validate_c_make_path(&path, e2e.effective_output())
         .map_err(|error| invalid("e2e.packages.c.path", &path, error))
+}
+
+fn validate_c_call_override(
+    field: &str,
+    call: &super::e2e::CallConfig,
+    invalid: &impl Fn(&str, &str, String) -> ResolveError,
+) -> Result<(), ResolveError> {
+    let Some(overrides) = call.overrides.get("c") else {
+        return Ok(());
+    };
+    if let Some(prefix) = overrides.prefix.as_deref() {
+        abi_grammar::validate_ascii_abi_identifier(prefix)
+            .map_err(|error| invalid(&format!("{field}.overrides.c.prefix"), prefix, error))?;
+    }
+    if let Some(header) = overrides.header.as_deref() {
+        abi_grammar::validate_c_header_filename(header)
+            .map_err(|error| invalid(&format!("{field}.overrides.c.header"), header, error))?;
+    }
+    Ok(())
 }
 
 /// Resolve a list of `SourceCrate` entries, rebasing sources for any entry with
@@ -712,5 +742,7 @@ fn merge_build_command_maps(
     merged
 }
 
+#[cfg(test)]
+mod c_abi_tests;
 #[cfg(test)]
 mod tests;

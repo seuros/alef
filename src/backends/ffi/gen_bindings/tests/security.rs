@@ -3,6 +3,7 @@ use super::common::{resolved_one, sample_api, sample_config};
 use crate::core::backend::Backend;
 use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, MethodDef, TypeDef, TypeRef};
 use std::collections::HashMap;
+use syn::visit::Visit;
 
 fn generated_lib(api: &ApiSurface) -> String {
     let content = FfiBackend
@@ -166,7 +167,37 @@ fn go_header_destination_escapes_the_composed_rust_path() {
         "sample",
         &HashMap::new(),
     );
-    syn::parse_file(&build).expect("generated build.rs remains valid Rust");
-    assert!(build.contains(r#"evil\"; panic!(\"pwned\"); //"#));
-    assert!(!build.contains(r#"evil"; panic!("pwned"); //"#));
+    let syntax = syn::parse_file(&build).expect("generated build.rs remains valid Rust");
+    let mut visitor = GeneratedBuildVisitor::default();
+    visitor.visit_file(&syntax);
+    assert!(
+        visitor
+            .string_literals
+            .contains(&"../../../packages/go/evil\"; panic!(\"pwned\"); /include/sample.h".to_string()),
+        "generated string literals: {:?}",
+        visitor.string_literals
+    );
+    assert_eq!(
+        visitor.panic_macros, 0,
+        "payload must remain data, never executable syntax"
+    );
+}
+
+#[derive(Default)]
+struct GeneratedBuildVisitor {
+    string_literals: Vec<String>,
+    panic_macros: usize,
+}
+
+impl<'ast> Visit<'ast> for GeneratedBuildVisitor {
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        self.string_literals.push(literal.value());
+    }
+
+    fn visit_expr_macro(&mut self, expression: &'ast syn::ExprMacro) {
+        if expression.mac.path.is_ident("panic") {
+            self.panic_macros += 1;
+        }
+        syn::visit::visit_expr_macro(self, expression);
+    }
 }
