@@ -7,7 +7,7 @@ pub mod functions;
 pub mod methods;
 pub mod service_api;
 mod ts_union;
-pub(crate) use ts_union::docs_ts_type_for_untagged_enum;
+pub(crate) use ts_union::{docs_ts_type_for_untagged_enum, is_bigint_primitive};
 pub mod types;
 
 mod cargo;

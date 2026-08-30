@@ -251,6 +251,40 @@ fn to_bigint_literal(value_expr: &str) -> String {
     format!("BigInt({trimmed})")
 }
 
+/// Whether a field of `field_type` is one wasm-bindgen exposes as a JS `bigint` setter.
+///
+/// ~keep Answered from the IR, and from the *same* predicate that decides the `.d.ts` type the
+/// wasm backend declares for the primitive. The only previous source of truth was the
+/// hand-maintained `[crates.e2e.call].bigint_fields` list in `alef.toml`, so a `u64`/`i64` field
+/// a consumer had not remembered to list got a plain `42` assigned to a `bigint` setter — a
+/// TypeScript type error, and at runtime a `TypeError: Cannot convert a Number to a BigInt`.
+/// The list stays honoured on top of this, since it also covers fields whose owner the IR
+/// lookup cannot resolve. Gated on `wasm`: NAPI (`lang == "node"`) marshals `i64` as `number`.
+fn wasm_bigint_field(lang: &str, field_type: Option<&crate::core::ir::TypeRef>) -> bool {
+    lang == "wasm"
+        && matches!(
+            field_type,
+            Some(crate::core::ir::TypeRef::Primitive(prim))
+                if crate::backends::wasm::gen_bindings::is_bigint_primitive(prim)
+        )
+}
+
+/// The BigInt literal for a fixture value assigned to a wasm-bindgen `u64`/`i64` setter.
+///
+/// ~keep Integers are lowered straight from the JSON number text. Routing them through
+/// [`json_to_js`] first turned anything past 2^53 into `Number("9007199254740993")` — already a
+/// double, so the precision a BigInt exists to preserve was gone before the `n` suffix could be
+/// appended. Everything else (strings, expressions) still goes the old way: `BigInt("...")` on a
+/// digit string is exact, and a non-integer number has no BigInt literal form at all.
+fn bigint_value_literal(val: &serde_json::Value) -> String {
+    if let serde_json::Value::Number(number) = val
+        && (number.is_i64() || number.is_u64())
+    {
+        return format!("{number}n");
+    }
+    to_bigint_literal(&json_to_js(val))
+}
+
 /// Find the `FieldDef` on `owner_type` that fixture key `key` refers to, matching either the
 /// field's Rust name or its wire name (`#[serde(rename = ...)]` / a container `rename_all`) —
 /// a fixture may key a field either way, exactly as `refuse_undeclared_json_keys` accepts both
@@ -542,7 +576,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             );
             continue;
         }
-        let is_bigint = bigint_fields.contains(&camel_key) || bigint_fields.contains(key);
+        let is_bigint =
+            bigint_fields.contains(&camel_key) || bigint_fields.contains(key) || wasm_bigint_field(lang, field_type);
         // A `bytes` field's fixture value may be a JSON array of numbers or a JSON string
         // (file path / inline text / base64) — ask `ts_bytes_value_expression` how to lower
         // it rather than assuming array-shaped input, matching every other TypeRef::Bytes
@@ -645,8 +680,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             // wasm-bindgen u64/i64 setters require BigInt. Plain numeric
             // literals must be suffixed with `n`; non-literal numeric
             // values are wrapped in `BigInt(...)`.
-            let raw = json_to_js(val);
-            stmts.push(format!("{var}.{camel_key} = {};", to_bigint_literal(&raw)));
+            stmts.push(format!("{var}.{camel_key} = {};", bigint_value_literal(val)));
         } else {
             stmts.push(format!("{var}.{camel_key} = {};", json_to_js(val)));
         }
@@ -805,6 +839,8 @@ fn json_pointer_child(pointer: &str, field: &str) -> String {
     format!("{pointer}/{field}")
 }
 
+#[cfg(test)]
+mod bigint_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

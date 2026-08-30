@@ -481,6 +481,19 @@ pub(super) fn wasm_opaque_type_names(api: &ApiSurface, exclude_types: &[String])
         .collect()
 }
 
+/// Whether wasm-bindgen lowers `prim` to a JavaScript `bigint` rather than a `number`.
+///
+/// ~keep The single predicate behind both halves of the contract: the TypeScript type this
+/// backend *declares* for the primitive ([`primitive_ts_type`]) and the literal alef's e2e/doc
+/// generator *emits* for a value of it (`e2e::codegen::typescript::test_file::builders`). Those
+/// were decided independently — the declared type came from here, the literal came from a
+/// hand-maintained `bigint_fields` list in `alef.toml` — so any `u64`/`i64` field a consumer had
+/// not remembered to list got a plain `42` assigned to a `bigint` setter. Keeping one function
+/// is what stops the emitted type and the emitted value from disagreeing again.
+pub(crate) fn is_bigint_primitive(prim: &crate::core::ir::PrimitiveType) -> bool {
+    primitive_ts_type(prim) == "bigint"
+}
+
 fn primitive_ts_type(prim: &crate::core::ir::PrimitiveType) -> &'static str {
     use crate::core::ir::PrimitiveType;
     match prim {

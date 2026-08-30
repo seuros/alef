@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
   raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
   element-anchored classification inert on exactly the projected shapes it was added for.
+- Emit BigInt literals for `u64`/`i64` values in generated WASM tests and snippets, derived from
+  the IR rather than only from the hand-maintained `bigint_fields` list, and lowered straight from
+  the JSON integer text so values past `Number.MAX_SAFE_INTEGER` keep every digit instead of
+  passing through a precision-losing `Number("...")`. NAPI (`node`) is unaffected.
 - Normalize a required nil Go slice or map argument to the `[]`/`{}` wire form serde writes for an
   empty Rust collection. Generated Go marshalled required `Vec`/`Map` parameters with a bare
   `json.Marshal`,
