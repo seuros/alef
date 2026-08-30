@@ -174,6 +174,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same central registry version as the `e2e/wasm` and `e2e/typescript` generators, so the
   package's own `test`/`test:watch`/`test:coverage` scripts resolve under a frozen install
   instead of invoking a dependency the manifest never declared.
+- Construct Python/PyO3 e2e config fields whose type is itself a generated pyclass with that
+  class's own constructor, in both single-object and batch-call kwargs lowering, instead of
+  emitting a raw dict pyo3 rejects for that field.
+- Index Python/PyO3 `$mock_url` runtime values by the field's declared IR type rather than by
+  the path segment's text, so a map keyed by numeric strings stays a quoted lookup instead of
+  raising `KeyError` while a genuine array position stays an integer subscript.
+- Construct `element_type` instances for Python/PyO3 arrays carrying a `$mock_url` placeholder
+  instead of short-circuiting to `json.loads`, so nested pyclasses in batch-call fixtures are
+  no longer passed as raw dicts.
 
 ## [0.79.2] - 2026-08-30
 
