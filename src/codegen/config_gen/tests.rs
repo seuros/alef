@@ -145,6 +145,7 @@ fn simple_type_mapper(tr: &TypeRef) -> String {
 
 mod constructors;
 mod defaults;
+mod derive_default_probe;
 mod diagnostics;
 mod extendr;
 mod generators;

@@ -530,12 +530,13 @@ fn owning_type_path(typ: &TypeDef) -> &str {
 
 /// Recover a `#[serde(default = "path")]` field's true value by deserializing a minimal
 /// JSON object through the owning type's own `Deserialize` impl, mirroring the exact
-/// mechanism serde itself uses `path()` for: every sibling field that carries its own
-/// default (or is `Option<T>`) is omitted from the JSON, so serde fills it — including
-/// the field this call is solving for — with its real, source-crate-computed value.
-/// Every other (truly required) sibling gets a placeholder value, since its presence is
-/// needed only to make the object deserialize at all and does not affect the field being
-/// solved for.
+/// mechanism serde itself uses `path()` for: every sibling field serde will genuinely fill
+/// when its wire key is absent — one with its own field-level serde default, one covered by
+/// a container-level `#[serde(default)]`, or `Option<T>` — is omitted from the JSON, so
+/// serde fills it — including the field this call is solving for — with its real,
+/// source-crate-computed value. Every other (truly required) sibling gets a placeholder
+/// value, since its presence is needed only to make the object deserialize at all and does
+/// not affect the field being solved for.
 ///
 /// Returns `None` when this cannot be done with confidence, in which case the caller must
 /// fail generation rather than guess:
@@ -559,7 +560,24 @@ fn rust_default_via_source_deserialize(field: &FieldDef, typ: &TypeDef) -> Optio
         if sibling.serde_flatten || sibling.cfg.is_some() {
             return None;
         }
-        let has_own_default = sibling.typed_default.is_some() || sibling.default.is_some();
+        // `sibling.typed_default.is_some()` is NOT a substitute for "serde will fill this
+        // field if its wire key is absent": `#[derive(Default)]` seeds `typed_default =
+        // Some(Empty)` on every field of the container (`extract::extractor::types::
+        // extract_struct`), including ones with no serde attribute at all, so it is
+        // essentially always `Some` for any field on a `derive(Default)` type. Using it here
+        // omitted every required sibling from the probe JSON, leaving `placeholders` empty
+        // and the caller emitting `serde_json::from_str(r#"{}"#)`, which panics at runtime
+        // the moment a required field is genuinely missing. `sibling.default` is the durable,
+        // narrower signal: `extract::extractor::helpers::fields::extract_field` sets it only
+        // from a real field-level `#[serde(default)]`/`#[serde(default = "path")]` attribute,
+        // and nothing downstream overwrites it — unlike `typed_default`, which a later
+        // `#[derive(Default)]` or manual `impl Default` unconditionally clobbers. A
+        // container-level `#[serde(default)]` (`typ.serde_container_default`) makes every
+        // field on the type absent-tolerant regardless of its own attributes. This mirrors
+        // `backends::go::gen_bindings::types::helpers::needs_omitempty_pointer`, which gates
+        // the same decision on `field.default.is_none() && !typ.serde_container_default` and
+        // documents `has_default` itself as inadmissible for exactly this reason. ~keep
+        let has_own_default = sibling.default.is_some() || typ.serde_container_default;
         let is_optional = sibling.optional || matches!(&sibling.ty, TypeRef::Optional(_));
         if has_own_default || is_optional {
             continue;
