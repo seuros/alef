@@ -421,6 +421,10 @@ fn containment_proof_an_absolute_value_discards_the_base_dir_via_join() {
     // `.replace('.', "/")`.
     let base_dir = PathBuf::from("/safe/output_dir");
     let hostile_package_path = "/etc/passwd_dir";
+    #[expect(
+        clippy::join_absolute_paths,
+        reason = "this regression proves that joining an absolute hostile value discards the safe base"
+    )]
     let joined = base_dir.join(hostile_package_path);
 
     assert_eq!(

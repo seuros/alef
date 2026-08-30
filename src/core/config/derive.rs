@@ -11,7 +11,7 @@
 /// alongside the existing hyphen normalization closes that gap without touching the `.`/`/`
 /// handling this function already gets right. ~keep
 fn sanitize_reverse_dns_label(label: &str) -> String {
-    label.replace('-', "_").replace('\\', "_")
+    label.replace(['-', '\\'], "_")
 }
 
 /// Derive a reverse-DNS package name from a repository URL.

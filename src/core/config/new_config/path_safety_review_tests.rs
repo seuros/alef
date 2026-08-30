@@ -29,6 +29,24 @@ node = 'C:\outside'
 }
 
 #[test]
+fn explicit_output_rejects_windows_drive_relative_paths_on_every_host() {
+    expect_path_rejected(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-core"
+sources = ["src/lib.rs"]
+
+[crates.output]
+node = 'C:outside'
+"#,
+        "output.node",
+    );
+}
+
+#[test]
 fn explicit_output_rejects_backslash_parent_traversal_on_every_host() {
     expect_path_rejected(
         r#"

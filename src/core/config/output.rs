@@ -988,8 +988,7 @@ pub(crate) fn validate_output_segment(segment: &str, label: &str) -> Result<(), 
 pub(crate) fn validate_output_path(path: &std::path::Path) -> Result<(), String> {
     let rendered = path.to_string_lossy();
     let bytes = rendered.as_bytes();
-    let has_drive_prefix =
-        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
+    let has_drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     if rendered.starts_with('/') || rendered.starts_with('\\') || has_drive_prefix {
         return Err(format!(
             "resolved output path `{}` is absolute and would escape the project root",
