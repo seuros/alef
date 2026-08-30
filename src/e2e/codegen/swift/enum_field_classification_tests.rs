@@ -338,10 +338,11 @@ fn a_unit_only_enum_property_still_lowers_to_its_exact_raw_value_comparison() {
 /// on its own does not fix that: every string-shaped arm reads the same lowered expression, so the
 /// field lands on `XCTAssertEqual(result.kind, "key_value")` — "cannot convert value of type
 /// 'StageOutput' to expected argument type 'String'", still a compile failure, just a different
-/// one. Both halves are pinned: the exact skip line, and the absence of any `XCTAssert`. ~keep
+/// one. Both halves are pinned: the exact skip line, and the total absence of the fixture literal
+/// `"key_value"` — the only thing that could carry a comparison into the emitted file. ~keep
 ///
 /// Reverting the `payload_union_skip_line` gate in `swift/assertions.rs` fails this on the missing
-/// skip line AND on the reappearing `XCTAssertEqual`.
+/// skip line AND on the reappearing `XCTAssertEqual(result.kind, "key_value")`.
 #[test]
 fn a_payload_carrying_union_field_renders_a_registered_refusal_not_a_type_mismatch() {
     let (type_defs, enums, functions) = table_ir();

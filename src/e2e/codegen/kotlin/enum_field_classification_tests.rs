@@ -368,10 +368,11 @@ fn a_unit_only_enum_field_still_lowers_to_its_exact_scalar_comparison_in_each_ta
 /// bare accessor, emitting `assertEquals("key_value", result.kind)`. Kotlin's `assertEquals(Any?,
 /// Any?)` accepts that, so it compiles and is simply FALSE at runtime for every fixture — a
 /// green-looking suite failing on a comparison that never had a chance. Both halves are pinned:
-/// the exact skip line, and the absence of any `assertEquals(`. ~keep
+/// the exact skip line, and the total absence of the fixture literal `"key_value"` — the only
+/// thing that could carry a comparison into the emitted file. ~keep
 ///
 /// Reverting `try_skip_payload_union_scalar_lowering` fails this on the missing skip line AND on
-/// the reappearing `assertEquals(`, in both targets.
+/// the reappearing `assertEquals("key_value", result.kind)`, in both targets.
 #[test]
 fn a_payload_carrying_union_field_renders_a_registered_refusal_in_each_target() {
     let (type_defs, enums, functions) = table_ir();
