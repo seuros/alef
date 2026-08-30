@@ -48,7 +48,6 @@ src/e2e/codegen/go/assertions.rs 1436
 src/e2e/codegen/go/setup.rs 1190
 src/e2e/codegen/go/snippet.rs 2054
 src/e2e/codegen/go/tests.rs 1397
-src/e2e/codegen/java/assertions.rs 1352
 src/e2e/codegen/kotlin/test_method.rs 1167
 src/e2e/codegen/kotlin/tests.rs 1241
 src/e2e/codegen/python/mod.rs 1373
