@@ -448,22 +448,41 @@ pub fn expand_configured_features(config: &ResolvedCrateConfig, requested: &[Str
 /// support one) only ever narrows *that* cfg target's dependency edge -- see
 /// `scaffold::render_core_dep_with_overrides`, `scaffold::languages::ffi::render_core_dep`, and
 /// `scaffold::languages::jni`'s mirror of the same shape -- the base branch every other target
-/// compiles against always omits `default-features = false` entirely, so Cargo's own default
+/// compiles against omits `default-features = false` entirely, so Cargo's own default
 /// (`default-features` omitted means `true`) applies and the core crate's declared `default`
 /// features are active.
 ///
-/// R is the one language with a base-line (not per-target) knob: `[crates.r] default_features =
-/// false` can suppress defaults on its single core dependency line -- but only when there is a
+/// R and WASM are the two exceptions: their base (not per-target) dependency line can suppress the
+/// core crate's defaults, and each does so on its own condition:
+///
+/// R has an explicit knob: `[crates.r] default_features = false` -- but only when there is a
 /// configured feature list to put in their place. `scaffold_r_cargo` keeps the plain,
 /// defaults-active line whenever `features_for_language(Language::R)` is empty, regardless of the
 /// flag, so this mirrors that same short-circuit rather than trusting the flag alone in isolation. ~keep
+///
+/// WASM has no knob -- `backends::wasm::gen_bindings::cargo::gen_cargo_toml` emits
+/// `default-features = false, features = [...]` on the core dep unconditionally whenever
+/// `features_for_language(Language::Wasm)` is non-empty, and a plain defaults-active line when it
+/// is empty. Reporting defaults as active in the suppressed case is not a cosmetic disagreement:
+/// `gen_cargo_toml` intersects this function's result with the cfg-referenced feature names to
+/// build its own `[features] default = [...]`, so a core default such as `native-http` came back
+/// through the wasm crate's own default row (`native-http = ["<core>/native-http"]`) and switched
+/// the very feature the dep line had just turned off -- pulling tokio's native `net`/`mio` stack
+/// into a wasm32 build (`This wasm target is unsupported by mio`). Every other language's base
+/// branch really does omit `default-features = false` (a per-target `default_features = false`
+/// override in Dart/Swift/FFI/JNI narrows only that cfg target -- see
+/// `scaffold::render_core_dep_with_overrides`, `scaffold::languages::ffi::render_core_dep`, and
+/// `scaffold::languages::jni`'s mirror), so they must keep reading as active. ~keep
 #[must_use]
 pub fn core_default_features_active(config: &ResolvedCrateConfig, lang: Language) -> bool {
-    if lang != Language::R {
-        return true;
+    match lang {
+        Language::R => {
+            let configured = config.r.as_ref().and_then(|r| r.default_features).unwrap_or(true);
+            configured || config.features_for_language(Language::R).is_empty()
+        }
+        Language::Wasm => config.features_for_language(Language::Wasm).is_empty(),
+        _ => true,
     }
-    let core_default_features_configured = config.r.as_ref().and_then(|r| r.default_features).unwrap_or(true);
-    core_default_features_configured || config.features_for_language(Language::R).is_empty()
 }
 
 /// The feature set actually active on `lang`'s generated Rust source: `lang`'s own configured

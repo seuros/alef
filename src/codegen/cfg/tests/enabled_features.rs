@@ -6,8 +6,8 @@
 //! whose `[features] default = [...]` enables a feature that gates a FOREIGN cfg enum variant, and
 //! whose binding `alef.toml` never names that feature explicitly, must still count that feature as
 //! active for every language whose Cargo dependency edge to the core crate does not suppress
-//! defaults (every language except R, and R only when it opts out explicitly -- see
-//! `core_default_features_active`'s doc). Getting this backward in either direction is a real
+//! defaults (every language except R and WASM, each of which suppresses on its own condition --
+//! see `core_default_features_active`'s doc). Getting this backward in either direction is a real
 //! bug: undercounting drops a reachable variant's catch-all and produces a non-exhaustive match
 //! (`error[E0004]`) the moment cargo actually turns the feature on; overcounting (treating a
 //! feature as active when the binding's Cargo.toml genuinely never turns it on) would resurrect
@@ -41,13 +41,17 @@ fn set(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|n| (*n).to_string()).collect()
 }
 
-/// [`core_default_features_active`] must be unconditionally `true` for every language but R: none
-/// of them has a base-line (non-per-target-override) knob that can suppress the core crate's own
-/// `default-features`. This is the authority [`enabled_features_for_language`] asks before
-/// unioning the core crate's declared defaults in, so it must agree with what
+/// [`core_default_features_active`] must be unconditionally `true` for every language but R and
+/// WASM: none of the rest has a base-line (non-per-target-override) knob that can suppress the
+/// core crate's own `default-features`. This is the authority [`enabled_features_for_language`]
+/// asks before unioning the core crate's declared defaults in, so it must agree with what
 /// `scaffold::render_core_dep`/`render_core_dep_with_overrides` actually emit for the base branch.
+///
+/// WASM is absent from this list on purpose: `backends::wasm::gen_bindings::cargo::gen_cargo_toml`
+/// builds its own manifest rather than going through `scaffold::render_core_dep`, and emits
+/// `default-features = false` on the base line whenever a wasm feature list is configured. ~keep
 #[test]
-fn core_default_features_active_is_unconditionally_true_outside_r() {
+fn core_default_features_active_is_unconditionally_true_outside_r_and_wasm() {
     let config = ResolvedCrateConfig::default();
     for lang in [
         Language::Go,
@@ -60,7 +64,6 @@ fn core_default_features_active_is_unconditionally_true_outside_r() {
         Language::Node,
         Language::Php,
         Language::Elixir,
-        Language::Wasm,
         Language::Zig,
         Language::Dart,
         Language::Swift,
@@ -215,4 +218,123 @@ fn enabled_features_for_language_does_not_resurrect_a_feature_r_genuinely_suppre
         "`extended-mode` is a core default this R binding's Cargo.toml explicitly suppresses -- it must \
          stay absent, got: {enabled:?}"
     );
+}
+
+/// Write the same minimal core crate manifest as [`config_with_core_features`], but resolve the
+/// config from TOML so a real `[crates.wasm]` table can be attached ([`WasmConfig`] has no
+/// `Default`, so the struct-literal helper above cannot express one).
+///
+/// [`WasmConfig`]: crate::core::config::WasmConfig
+fn wasm_config_with_core_features(
+    dir: &std::path::Path,
+    features_body: &str,
+    wasm_table_body: &str,
+) -> ResolvedCrateConfig {
+    let core_dir = dir.join("crates").join("my-lib");
+    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+    std::fs::write(
+        core_dir.join("Cargo.toml"),
+        format!("[package]\nname = \"my-lib\"\n\n[features]\n{features_body}"),
+    )
+    .expect("write core Cargo.toml");
+
+    let toml_src = format!(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "my-lib"
+sources = ["crates/my-lib/src/lib.rs"]
+workspace_root = "{root}"
+[crates.wasm]
+{wasm_table_body}
+"#,
+        // TOML strings treat `\` as an escape, so a Windows temp path must be forward-slashed. ~keep
+        root = dir.display().to_string().replace('\\', "/"),
+    );
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(&toml_src).expect("valid alef config");
+    cfg.resolve().expect("resolve").remove(0)
+}
+
+/// WASM's suppression case, the mirror of R's: `backends::wasm::gen_bindings::cargo::gen_cargo_toml`
+/// emits `default-features = false, features = [...]` on the core dep the moment
+/// `features_for_language(Language::Wasm)` is non-empty, so the core crate's declared defaults are
+/// genuinely off and must read as inactive here.
+#[test]
+fn core_default_features_active_for_wasm_is_false_once_a_feature_list_replaces_the_defaults() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = wasm_config_with_core_features(
+        dir.path(),
+        "default = [\"native-http\"]\nnative-http = []\nwasm-http = []\n",
+        "features = [\"wasm-http\"]",
+    );
+    assert!(!core_default_features_active(&config, Language::Wasm));
+}
+
+/// The other side of the wasm branch: with nothing configured, `gen_cargo_toml` writes a plain
+/// `{ path = "..." }` dependency line, Cargo's own `default-features = true` applies, and the core
+/// crate's defaults really are active. Narrowing wasm unconditionally would fail here.
+#[test]
+fn core_default_features_active_for_wasm_stays_true_with_no_replacement_features() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = wasm_config_with_core_features(
+        dir.path(),
+        "default = [\"native-http\"]\nnative-http = []\nwasm-http = []\n",
+        "",
+    );
+    assert!(core_default_features_active(&config, Language::Wasm));
+}
+
+/// THE MIO REGRESSION, at the level of the predicate the manifest is derived from: a core crate
+/// declaring `default = ["native-http"]` whose wasm binding replaced that with `wasm-http` must
+/// not report `native-http` (nor `telemetry`, reachable only through the same defaults) as
+/// enabled. `backends::wasm::gen_bindings::cargo::gen_cargo_toml` intersects this result with the
+/// cfg-referenced names to build the wasm crate's own `default = [...]`, so anything leaking here
+/// is switched straight back on by a forwarding row -- which is how tokio's native `net`/`mio`
+/// stack reached a wasm32 build. ~keep
+#[test]
+fn enabled_features_for_language_does_not_resurrect_a_core_default_the_wasm_dep_line_suppressed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = wasm_config_with_core_features(
+        dir.path(),
+        "default = [\"native-http\", \"telemetry\"]\nnative-http = []\nwasm-http = []\ntelemetry = []\n",
+        "features = [\"wasm-http\"]",
+    );
+
+    let enabled: BTreeSet<String> = enabled_features_for_language(&config, Language::Wasm)
+        .into_iter()
+        .collect();
+
+    assert_eq!(
+        enabled,
+        set(&["wasm-http"]),
+        "the wasm dep line already turned the core defaults off; counting them as active hands \
+         `gen_cargo_toml` a `default = [...]` that turns them back on, got: {enabled:?}"
+    );
+}
+
+/// NATIVE CONTROL, on the exact same config object as the test above -- the only difference is the
+/// language asked. Every native binding's base dependency edge leaves the core defaults on, so
+/// `native-http` and `telemetry` must both still count as enabled. A fix that suppressed core
+/// defaults globally, or dropped the union in `enabled_features_from` outright, would pass the
+/// wasm assertion and fail here: that is what makes this a per-target divergence rather than a
+/// downgrade. ~keep
+#[test]
+fn enabled_features_for_language_still_unions_core_defaults_for_native_languages() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = wasm_config_with_core_features(
+        dir.path(),
+        "default = [\"native-http\", \"telemetry\"]\nnative-http = []\nwasm-http = []\ntelemetry = []\n",
+        "features = [\"wasm-http\"]",
+    );
+
+    for lang in [Language::Ffi, Language::Node, Language::Python, Language::Go] {
+        let enabled: BTreeSet<String> = enabled_features_for_language(&config, lang).into_iter().collect();
+        assert_eq!(
+            enabled,
+            set(&["native-http", "telemetry"]),
+            "{lang:?} keeps the core crate's defaults on its dependency edge, so both must read \
+             as enabled, got: {enabled:?}"
+        );
+    }
 }

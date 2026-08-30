@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop the generated WASM crate's `[features] default = [...]` from re-enabling a core-crate
+  feature its own dependency line had just disabled. `gen_cargo_toml` emits
+  `default-features = false, features = [...]` on the core dep whenever `[crates.wasm] features`
+  is configured, but `codegen::cfg::core_default_features_active` reported the core crate's own
+  `default = [...]` as active for every language except R — so a native-only default such as
+  `native-http` came back through the wasm crate's own default row and its forwarding entry,
+  pulling tokio's native `net`/`mio` stack into a `wasm32` build (`This wasm target is
+  unsupported by mio. If using Tokio, disable the net feature.`). The predicate now mirrors the
+  wasm emitter: core defaults count as active only when no wasm feature list replaces them.
+  Native targets are unchanged — their dependency edges still keep the core crate's defaults.
 - Resolve the Python wildcard element's `TypedDict`-vs-attribute owner from the same
   result-relative path the container half is rendered from. On an envelope-projected container
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the

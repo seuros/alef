@@ -669,4 +669,61 @@ sources = []
             "no [features] forwarding block should appear when nothing is cfg-gated:\n{cargo_toml}"
         );
     }
+
+    /// NATIVE CONTROL for the wasm mio leak (see
+    /// `backends::wasm::gen_bindings::cargo_feature_leak_tests`). The wasm fix narrows
+    /// `codegen::cfg::core_default_features_active` for `Language::Wasm` only, so this native
+    /// (PyO3) manifest must be untouched: every cfg-referenced feature still gets a forwarding row
+    /// AND is still defaulted on, `native-http` included. A fix that stripped the native feature
+    /// set globally -- or that narrowed `collect_cfg_features`/`cfg_default_and_forwarding_lines`
+    /// instead of the wasm-only dependency-edge predicate -- would break every native binding
+    /// while the wasm assertions still passed. ~keep
+    #[test]
+    fn scaffold_python_cargo_keeps_defaulting_a_native_only_feature_on() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "sample-lib"
+sources = []
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            functions: vec![FunctionDef {
+                name: "request".to_string(),
+                rust_path: "sample_lib::request".to_string(),
+                return_type: TypeRef::Unit,
+                cfg: Some(r#"any(feature = "native-http", feature = "wasm-http")"#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let files = scaffold_python_cargo(&api, &config).expect("scaffold_python_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        let default_line = cargo_toml
+            .lines()
+            .find(|line| line.trim_start().starts_with("default = ["))
+            .unwrap_or_else(|| panic!("no default = [...] line in:\n{cargo_toml}"));
+        assert_eq!(
+            default_line.trim(),
+            r#"default = ["native-http", "wasm-http"]"#,
+            "the native manifest must keep defaulting every cfg-referenced feature on -- the wasm \
+             fix is a per-target divergence, not a global downgrade:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains(r#"native-http = ["sample-lib/native-http"]"#),
+            "the native-only forwarding row must survive:\n{cargo_toml}"
+        );
+    }
 }

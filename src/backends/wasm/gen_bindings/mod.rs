@@ -862,6 +862,8 @@ impl Backend for WasmBackend {
 }
 
 #[cfg(test)]
+mod cargo_feature_leak_tests;
+#[cfg(test)]
 mod cfg_variant_e2e_tests;
 #[cfg(test)]
 mod tests;
