@@ -1,0 +1,10 @@
+{#- Assertions for the visitor context probe recorded by `visitor_context_probe.jinja`.
+
+   Runs in the test body, after the call returns, because the bridge swallows exceptions raised
+   inside a visitor callback.
+#}
+    assert not _visitor.context_errors, (
+        "visitor context is missing attributes the generated binding declares: "
+        + "; ".join(_visitor.context_errors)
+    )
+    assert _visitor.context_reads > 0, "no visitor callback ever received a context object"

@@ -133,6 +133,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/python/visitor_method.jinja"),
     ),
     (
+        "python/visitor_context_probe.jinja",
+        include_str!("templates/python/visitor_context_probe.jinja"),
+    ),
+    (
+        "python/visitor_context_assertions.jinja",
+        include_str!("templates/python/visitor_context_assertions.jinja"),
+    ),
+    (
         "python/test_file.jinja",
         include_str!("templates/python/test_file.jinja"),
     ),

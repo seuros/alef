@@ -14,6 +14,7 @@ mod snippet;
 mod stubs;
 mod test_file;
 mod test_function;
+mod visitor_context;
 mod visitors;
 
 use std::path::PathBuf;

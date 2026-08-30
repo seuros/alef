@@ -17,7 +17,10 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 
 use super::helpers::{self, is_skipped, resolve_client_factory, resolve_function_name_for_call};
-use super::visitors::emit_python_visitor_method;
+use super::visitor_context::{distinct_context_probes, visitor_callback_probes};
+use super::visitors::{
+    emit_python_visitor_context_assertions, emit_python_visitor_context_probes, emit_python_visitor_method,
+};
 use args::build_args_and_setup;
 use error_assertions::emit_error_assertion;
 use result_assertions::emit_result_and_assertions;
@@ -219,22 +222,36 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     };
     let (arg_bindings, kwarg_exprs, teardown_block) = build_args_and_setup(fixture, arg_setup_context);
 
-    // Build visitor class if present
+    // Build visitor class if present. Each callback is resolved to the bridge whose trait
+    // declares it, so a crate with more than one visitor bridge probes each callback against its
+    // own context type instead of one globally-picked one.
+    let callback_probes = visitor_callback_probes(config, type_defs, convertible_types, fixture);
+    let distinct_probes = distinct_context_probes(&callback_probes);
+    let probe_context = !distinct_probes.is_empty();
     let mut visitor_class = String::new();
-    if let Some(visitor_spec) = &fixture.visitor {
+    if fixture.visitor.is_some() {
         let _ = writeln!(visitor_class, "    class _TestVisitor:");
-        for (method_name, action) in &visitor_spec.callbacks {
-            emit_python_visitor_method(&mut visitor_class, method_name, action);
+        emit_python_visitor_context_probes(&mut visitor_class, &distinct_probes);
+        for (method_name, action, probe) in &callback_probes {
+            emit_python_visitor_method(
+                &mut visitor_class,
+                method_name,
+                *action,
+                probe.as_ref().map(|probe| probe.probe_method.as_str()),
+            );
         }
     }
 
     // Build arg bindings string
-    let arg_bindings_str = arg_bindings.iter().map(|b| format!("{b}\n")).collect::<String>();
+    let mut arg_bindings_str = arg_bindings.iter().map(|b| format!("{b}\n")).collect::<String>();
+    if fixture.visitor.is_some() {
+        arg_bindings_str.push_str("    _visitor = _TestVisitor()\n");
+    }
 
     let call_args_str = {
         let mut exprs = kwarg_exprs.clone();
         if fixture.visitor.is_some() {
-            exprs.push("visitor=_TestVisitor()".to_string());
+            exprs.push("visitor=_visitor".to_string());
         }
         exprs.join(", ")
     };
@@ -384,6 +401,13 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         force_bind_result,
         streaming_item_type,
     );
+
+    if fixture.visitor.is_some() && probe_context {
+        if !result_assertions.ends_with('\n') {
+            result_assertions.push('\n');
+        }
+        emit_python_visitor_context_assertions(&mut result_assertions);
+    }
 
     // Append trait-bridge teardown after assertions. This restores shared
     // global state (e.g. plugin registries) between pytest

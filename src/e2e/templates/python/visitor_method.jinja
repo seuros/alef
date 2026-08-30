@@ -6,8 +6,13 @@
    - action_type: "skip", "continue", "preserve_html", "custom", "custom_template"
    - action_value: escaped string value (for custom)
    - action_template: escaped template string (for custom_template)
+   - probe_method: name of the `_TestVisitor` probe helper for THIS callback's bridge context
+     type, or none when no bridge declares a context type for it
 #}
         def {{ method_name }}({{ params }}):  # noqa: {% if needs_a002 %}A002, {% endif %}ANN001, ANN202, ARG002
+{% if probe_method %}
+            self.{{ probe_method }}(ctx)
+{% endif %}
 {% if action_type == "skip" %}
             return "skip"
 {% elif action_type == "continue" %}
