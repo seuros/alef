@@ -19,7 +19,9 @@ use super::super::json::json_to_python_literal;
 /// `leaf_source` decides how a leaf (non-container, non-nested-struct) field renders: the
 /// common `Literal` case embeds the field's JSON value directly, while the `$mock_url` case
 /// (see `emit_json_object_arg_with_mock_url`) needs every leaf to instead index into a runtime
-/// dict already holding the placeholder-substituted values. It is itself read-only, invariant
+/// dict already holding the placeholder-substituted values. Vector index segments carry the
+/// private `~2` tag so numeric map keys remain distinguishable from array positions. It is
+/// itself read-only, invariant
 /// for the whole recursion, so it belongs here rather than as a parallel argument threaded
 /// through every function in the call tree.
 ///
@@ -49,6 +51,8 @@ pub(in crate::e2e::codegen::python) enum LeafSource<'a> {
     /// instead of embedding the (still placeholder-laden) literal.
     RuntimeDict { holder: &'a str },
 }
+
+const RUNTIME_ARRAY_INDEX_PREFIX: &str = "~2";
 
 /// Output accumulator for one fixture argument's emission: the setup lines it needs
 /// (`bindings`) and the expression that becomes its slot in the call's keyword-argument list
@@ -153,20 +157,29 @@ fn render_leaf_value(value: &serde_json::Value, pointer: &str, leaf_source: Leaf
 
 /// Convert a JSON-pointer-style path built by the recursion below (e.g.
 /// `/profiles/first/model`) into a chain of Python subscript expressions on `holder` (e.g.
-/// `holder["profiles"]["first"]["model"]`). An all-digit segment renders as a bare integer
-/// subscript rather than a quoted string key, since `json.loads` turns a JSON array into a
-/// Python list, not a dict.
+/// `holder["profiles"]["first"]["model"]`). A segment tagged with the private `~2` prefix
+/// renders as an integer subscript; an untagged numeric segment remains a quoted map key.
 fn runtime_dict_index_expression(holder: &str, pointer: &str) -> String {
     let mut expression = holder.to_string();
     for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
-        let unescaped = segment.replace("~1", "/").replace("~0", "~");
-        if !unescaped.is_empty() && unescaped.bytes().all(|byte| byte.is_ascii_digit()) {
-            expression.push_str(&format!("[{unescaped}]"));
-        } else {
-            expression.push_str(&format!("[\"{}\"]", escape_python(&unescaped)));
+        if let Some(index) = segment
+            .strip_prefix(RUNTIME_ARRAY_INDEX_PREFIX)
+            .filter(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            expression.push_str(&format!("[{index}]"));
+            continue;
         }
+        let unescaped = segment.replace("~1", "/").replace("~0", "~");
+        expression.push_str(&format!("[\"{}\"]", escape_python(&unescaped)));
     }
     expression
+}
+
+fn array_item_pointer(pointer: &str, index: usize, leaf_source: LeafSource<'_>) -> String {
+    match leaf_source {
+        LeafSource::Literal => format!("{pointer}/{index}"),
+        LeafSource::RuntimeDict { .. } => format!("{pointer}/{RUNTIME_ARRAY_INDEX_PREFIX}{index}"),
+    }
 }
 
 /// Resolve `field_name`'s declared `TypeRef` on `containing_type` and render `value` against it
@@ -230,7 +243,7 @@ fn render_value_for_type_ref(
                 .iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    let item_pointer = format!("{pointer}/{index}");
+                    let item_pointer = array_item_pointer(pointer, index, context.leaf_source);
                     render_value_for_type_ref(inner, item, &item_pointer, context, used_struct_types)
                 })
                 .collect::<Option<Vec<String>>>()?;
@@ -279,10 +292,24 @@ fn render_enum_field_value(
 /// Docs-file branch of [`render_kwarg_field_value`]: a field whose JSON pointer matches a
 /// configured fixture docs-file input renders as a file-read expression instead of its JSON value.
 fn render_docs_file_field_value(pointer: &str, docs_files: &[FixtureDocsFileInput]) -> Option<String> {
+    let pointer = canonical_docs_pointer(pointer);
     docs_files
         .iter()
         .find(|file| file.field == pointer)
         .map(|file| docs_file_expression(&file.path))
+}
+
+fn canonical_docs_pointer(pointer: &str) -> String {
+    pointer
+        .split('/')
+        .map(|segment| {
+            segment
+                .strip_prefix(RUNTIME_ARRAY_INDEX_PREFIX)
+                .filter(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
+                .unwrap_or(segment)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Build a `TypeName(field=value, ...)` constructor call for `type_def`, recursing through
@@ -517,6 +544,14 @@ fn emit_json_object_arg_with_mock_url(
         crate::e2e::codegen::MOCK_URL_PLACEHOLDER
     ));
 
+    if !matches!(spec.options_via, "dict" | "json" | "from_json")
+        && let Some(element_type) = spec.element_type
+        && emit_mock_url_typed_array(sink, value, var_name, element_type, context)
+    {
+        sink.kwarg_exprs.push(var_name.to_string());
+        return true;
+    }
+
     match (spec.options_via, spec.options_type) {
         ("from_json", Some(opts_type)) => {
             sink.bindings
@@ -531,6 +566,41 @@ fn emit_json_object_arg_with_mock_url(
         }
     }
     sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+fn emit_mock_url_typed_array(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    element_type: &str,
+    context: KwargRenderContext<'_>,
+) -> bool {
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    if !items.iter().all(serde_json::Value::is_object) {
+        return false;
+    }
+
+    sink.bindings
+        .push(format!("    {var_name}_data = json.loads({var_name}_json)"));
+    let holder = format!("{var_name}_data");
+    let runtime_context = KwargRenderContext {
+        leaf_source: LeafSource::RuntimeDict { holder: &holder },
+        ..context
+    };
+    let rendered = items
+        .iter()
+        .filter_map(serde_json::Value::as_object)
+        .enumerate()
+        .map(|(index, item)| {
+            let pointer = array_item_pointer("", index, runtime_context.leaf_source);
+            emit_python_typed_instance(item, element_type, &pointer, runtime_context)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    sink.bindings.push(format!("    {var_name} = [{rendered}]"));
     true
 }
 

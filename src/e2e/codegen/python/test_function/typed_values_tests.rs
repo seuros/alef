@@ -567,14 +567,20 @@ fn runtime_dict_index_expression_builds_subscript_chain_from_pointer() {
     );
 }
 
-/// Array-index segments (all-ASCII-digit) must render as bare integer subscripts, not quoted
-/// string keys -- `json.loads` turns a JSON array into a Python list.
+/// Array-index segments carrying the private `~2` tag must render as bare integer subscripts,
+/// not quoted string keys -- `json.loads` turns a JSON array into a Python list.
 #[test]
 fn runtime_dict_index_expression_renders_array_index_as_integer_subscript() {
     assert_eq!(
-        runtime_dict_index_expression("opts_data", "/items/0/model"),
+        runtime_dict_index_expression("opts_data", "/items/~20/model"),
         r#"opts_data["items"][0]["model"]"#
     );
+}
+
+#[test]
+fn canonical_docs_pointer_removes_only_runtime_array_tags() {
+    assert_eq!(canonical_docs_pointer("/items/~20/nested"), "/items/0/nested");
+    assert_eq!(canonical_docs_pointer("/profiles/~020/nested"), "/profiles/~020/nested");
 }
 
 /// Regression for the `$mock_url` short-circuit defect: before this fix,
@@ -645,6 +651,160 @@ fn emit_json_object_arg_with_mock_url_constructs_nested_struct_field_from_runtim
     assert!(
         !rendered.contains("**json.loads"),
         "must not fall back to unpacking a raw dict, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn emit_json_object_arg_with_mock_url_keeps_numeric_map_keys_as_strings() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let inner_type = TypeDef {
+        name: "NestedConfig".to_string(),
+        rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "url".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let outer_type = TypeDef {
+        name: "ExtractionConfig".to_string(),
+        rust_path: "demo::ExtractionConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "profiles".to_string(),
+            ty: TypeRef::Map(
+                Box::new(TypeRef::String),
+                Box::new(TypeRef::Named("NestedConfig".to_string())),
+            ),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let type_defs = vec![outer_type, inner_type];
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!({"profiles": {"0": {"url": "$mock_url/path"}}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &[],
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+
+    assert!(emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context));
+    let rendered = bindings.join("\n");
+    assert!(
+        rendered.contains(r#"NestedConfig(url=opts_data["profiles"]["0"]["url"])"#),
+        "numeric map keys must remain string subscripts, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn emit_json_object_arg_with_mock_url_constructs_typed_array_elements() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let item_type = TypeDef {
+        name: "BatchItem".to_string(),
+        rust_path: "demo::BatchItem".to_string(),
+        fields: vec![FieldDef {
+            name: "nested".to_string(),
+            ty: TypeRef::Named("NestedConfig".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let nested_type = TypeDef {
+        name: "NestedConfig".to_string(),
+        rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "url".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let type_defs = vec![item_type, nested_type];
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!([{"nested": {"url": "$mock_url/path"}}]);
+    let element_type = Some("BatchItem".to_string());
+    let spec = ConstructorSpec {
+        options_type: None,
+        options_via: "kwargs",
+        element_type: &element_type,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &[],
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+
+    assert!(emit_json_object_arg(&mut sink, &value, "items", &spec, &mock, context));
+    let rendered = bindings.join("\n");
+    assert!(
+        rendered.contains(r#"BatchItem(nested=NestedConfig(url=items_data[0]["nested"]["url"]))"#),
+        "mock-url arrays must construct typed elements and nested classes, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn emit_json_object_arg_with_mock_url_preserves_explicit_dict_array_mode() {
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!([{"url": "$mock_url/path"}]);
+    let element_type = Some("BatchItem".to_string());
+    let spec = ConstructorSpec {
+        options_type: None,
+        options_via: "dict",
+        element_type: &element_type,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &[],
+        enums: &[],
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+
+    assert!(emit_json_object_arg(&mut sink, &value, "items", &spec, &mock, context));
+    let rendered = bindings.join("\n");
+    assert!(rendered.contains("items = json.loads(items_json)"), "got:\n{rendered}");
+    assert!(
+        !rendered.contains("BatchItem("),
+        "dict mode must remain untyped, got:\n{rendered}"
     );
 }
 
