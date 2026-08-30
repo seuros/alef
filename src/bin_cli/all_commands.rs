@@ -830,7 +830,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // `pnpm install` under the default frozen lockfile in CI. See
                 // `cli::pipeline::lock_freshness::check_generated_node_lock_freshness`'s doc
                 // comment for why this is a sibling check rather than a shared one. ~keep
-                if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths) {
+                if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths, &base_dir) {
                     stage_failures.record(
                         &format!("[{}] generated pnpm-lock.yaml freshness", resolved_cfg.name),
                         error,

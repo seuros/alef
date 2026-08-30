@@ -423,7 +423,22 @@ pub(crate) struct StaleNodeLockFinding {
 /// wearing similar names, and forcing them through one abstraction is how a later change to
 /// either drifts the other -- see the `avoid-duplication` rule and the `two-generators-disagree`
 /// pattern this repo is watching for. ~keep
-pub(crate) fn check_generated_node_lock_freshness(generated_paths: &HashSet<PathBuf>) -> Option<anyhow::Error> {
+///
+/// `generated_paths` alone is structurally blind to a whole class of `package.json`: any emitted
+/// `generated_header: false` (`crates/*-wasm/package.json`, `crates/*-node/package.json` and its
+/// per-platform `npm/<platform>/package.json` siblings, ...) never carries an `alef:hash:` marker
+/// -- JSON has no comment syntax to hold one -- so [`GeneratedFile::carries_alef_marker`] is
+/// always `false` for it and [`super::generate::stampable_output_paths`] filters it out of
+/// `current_gen_paths` before this function ever sees it. That is not "this run happened not to
+/// touch it": it is every run, forever, for every manifest of that shape, from the day it is
+/// first scaffolded. [`registered_unmarkable_manifest_dirs`] closes the gap by also consulting the
+/// committed ownership record, which already tracks exactly these paths for an unrelated reason
+/// (the write-time ownership guard). See that function's doc for why this is a general
+/// registration rather than a wasm-specific carve-out. ~keep
+pub(crate) fn check_generated_node_lock_freshness(
+    generated_paths: &HashSet<PathBuf>,
+    base_dir: &Path,
+) -> Option<anyhow::Error> {
     let mut directories = BTreeSet::new();
     for path in generated_paths {
         if path.file_name().and_then(|name| name.to_str()) != Some("package.json") {
@@ -433,12 +448,16 @@ pub(crate) fn check_generated_node_lock_freshness(generated_paths: &HashSet<Path
             directories.insert(dir.to_path_buf());
         }
     }
+    let registered_dirs = registered_unmarkable_manifest_dirs(base_dir, "package.json");
+    let registered_only = registered_dirs.difference(&directories).count();
+    directories.extend(registered_dirs);
     let mut findings = Vec::new();
     for dir in &directories {
         findings.extend(stale_node_lock_findings(dir));
     }
     tracing::debug!(
         manifest_dirs = directories.len(),
+        registered_only_dirs = registered_only,
         findings = findings.len(),
         "checked generated package.json files against their committed pnpm-lock.yaml"
     );
@@ -446,6 +465,40 @@ pub(crate) fn check_generated_node_lock_freshness(generated_paths: &HashSet<Path
         return None;
     }
     Some(anyhow::anyhow!(stale_node_lock_message(&findings)))
+}
+
+/// Directories holding a `file_name` manifest that [`GeneratedFile::carries_alef_marker`] can
+/// never certify, because the format has no comment syntax to carry an `alef:hash:` marker at all
+/// (`generated_header: false` JSON, principally `package.json`). A lock-freshness gate keyed only
+/// on this run's in-memory `current_gen_paths` -- itself filtered by that same marker predicate,
+/// see [`super::generate::stampable_output_paths`] -- structurally never examines these paths, in
+/// any run, which is the gap this function exists to close.
+///
+/// Reads the committed ownership record ([`crate::cli::cache::read_committed_owned_paths`],
+/// `.alef-ownership.toml`) instead: it is the durable, general-purpose list of every path alef has
+/// authorised itself to own *precisely because* it cannot carry a marker -- populated by
+/// `write_scaffold_files_report`'s own write guard the first time it creates such a file, for
+/// every unmarkable manifest kind alef emits, not only `package.json` for wasm. Filtering that
+/// list by `file_name` extends `generated_paths` with every alef-managed manifest of that name
+/// the registry already knows about, including one this particular run did not touch (a
+/// `--crate`-scoped run, or a language skipped by the per-language cache) -- which is strictly
+/// more correct for a freshness check than "only what this run happened to regenerate": the drift
+/// this gate exists to catch does not require this run to have written the manifest, only for the
+/// manifest and its sibling lock to disagree right now.
+///
+/// General by construction: nothing here names `wasm` or `node`. `crates/*-node/package.json` is
+/// `generated_header: false` for the identical reason `crates/*-wasm/package.json` is and was
+/// found to share this exact blind spot while auditing it, and both are closed by the same call
+/// with no per-backend special case. A future unmarkable manifest this registry starts tracking
+/// -- a PHP `composer.json`-vs-`composer.lock` gate, should one ever be added -- would read from
+/// this identical list rather than inventing its own. ~keep
+fn registered_unmarkable_manifest_dirs(base_dir: &Path, file_name: &str) -> BTreeSet<PathBuf> {
+    crate::cli::cache::read_committed_owned_paths(base_dir)
+        .iter()
+        .map(|relative| base_dir.join(relative))
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(file_name))
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect()
 }
 
 /// Every `dependencies` / `devDependencies` specifier declared in `package_json_dir/package.json`

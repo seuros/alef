@@ -533,7 +533,7 @@ pub(crate) fn handle_generate(
         // specifiers a committed `pnpm-lock.yaml` no longer matches fails `pnpm install` under
         // the default frozen lockfile in CI just as surely as a stale `Cargo.lock` fails `cargo
         // build --locked`. ~keep
-        if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths) {
+        if let Some(error) = pipeline::check_generated_node_lock_freshness(&current_gen_paths, &base_dir) {
             stage_failures.record(
                 &format!("[{}] generated pnpm-lock.yaml freshness", resolved_cfg.name),
                 error,

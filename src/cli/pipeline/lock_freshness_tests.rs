@@ -476,7 +476,7 @@ mod node {
         write_pnpm_lock_v9(root, NODE_FRESH_SPEC);
         let generated: HashSet<PathBuf> = [manifest].into_iter().collect();
 
-        let error = check_generated_node_lock_freshness(&generated).expect("a stale lock must fail the run");
+        let error = check_generated_node_lock_freshness(&generated, root).expect("a stale lock must fail the run");
         let message = format!("{error:#}");
 
         assert!(
@@ -513,7 +513,7 @@ mod node {
         let generated: HashSet<PathBuf> = [manifest].into_iter().collect();
 
         assert!(
-            check_generated_node_lock_freshness(&generated).is_none(),
+            check_generated_node_lock_freshness(&generated, root).is_none(),
             "a matching lock must not fail the run"
         );
     }
@@ -527,9 +527,12 @@ mod node {
         write_pnpm_lock_v9(root, NODE_FRESH_SPEC);
         let generated: HashSet<PathBuf> = [node_dir(root).join("src/index.ts")].into_iter().collect();
 
-        assert!(check_generated_node_lock_freshness(&generated).is_none());
+        assert!(check_generated_node_lock_freshness(&generated, root).is_none());
     }
 }
+
+#[path = "lock_freshness_registered_manifest_tests.rs"]
+mod registered_unmarkable_manifest_gap;
 
 /// Coverage for [`check_generated_uv_lock_freshness`] / [`stale_uv_lock_findings`], the uv/Python
 /// sibling of the checks above. Like the node fixtures there is no path-dependency indirection: the
