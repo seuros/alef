@@ -1,4 +1,6 @@
-use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command_streamed_with_env};
+use crate::cli::pipeline::helpers::{
+    check_precondition, run_before, run_command_streamed_with_env, run_command_streamed_with_envs,
+};
 use crate::cli::registry;
 use crate::core::config::output::{StringOrVec, TestConfig};
 use crate::core::config::{Language, ResolvedCrateConfig};
@@ -61,9 +63,8 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
     // code -- some runtimes (Elixir's `mix test`, whose Rustler NIF loads during Mix's compile
     // phase, before `test_helper.exs` ever runs) load native code before any generated fixture
     // file gets a chance to set it via the language's own env APIs. `test_apps_run` (the
-    // registry-mode runner) already exports these at spawn time via a plain `export K='V'; `
-    // prefix; this mirrors that exact mechanism here for the local `e2e/<lang>` runner so both
-    // paths agree.
+    // registry-mode runner) already sets these at spawn time; this mirrors that mechanism here
+    // for the local `e2e/<lang>` runner so both paths agree.
     //
     // Deliberately NOT folded into `env_vars` above and passed through
     // `run_command_streamed_with_env`: that path's `inline_env_in_shell_cmd` uses a
@@ -71,16 +72,16 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
     // correct for search-path variables (a duplicated directory is harmless) but corrupts an
     // exact-value var -- `command.env()` sets the child's `K` to `V` before the script runs, so
     // the guard then reads that same `V` back and appends it to itself (`V:V`), never matching
-    // a strict comparison an SSRF-policy check performs. A plain, non-appending export avoids
-    // that. ~keep
-    let e2e_env_prefix: String = config
+    // a strict comparison an SSRF-policy check performs. Passing exact values only through
+    // `Command::env` also keeps their contents out of the `sh -c` argument. ~keep
+    let e2e_env: Vec<(&str, String)> = config
         .e2e
         .as_ref()
         .map(|e2e| {
             let mut vars: Vec<(&String, &String)> = e2e.env.iter().collect();
             vars.sort();
-            vars.iter()
-                .map(|(k, v)| format!("export {k}='{}'; ", v.replace('\'', "'\\''")))
+            vars.into_iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
                 .collect()
         })
         .unwrap_or_default();
@@ -193,8 +194,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
                 && check_e2e_precondition(*lang, &lang_test)
             {
                 for cmd in e2e_cmd_list.commands() {
-                    let cmd_with_e2e_env = format!("{e2e_env_prefix}{cmd}");
-                    if let Err(e) = run_command_streamed_with_env(&cmd_with_e2e_env, Some(&label), &env_vars) {
+                    if let Err(e) = run_command_streamed_with_envs(cmd, Some(&label), &env_vars, &e2e_env) {
                         return (*lang, Err(e));
                     }
                 }

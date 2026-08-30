@@ -144,25 +144,14 @@ pub(crate) fn default_clean_config(lang: Language, output_dir: &str, _ctx: &Lang
             argv_clean: Some(cd_and_run(output_dir, "gradle", &["clean"])),
         },
         Language::KotlinAndroid => CleanConfig {
-            // `precondition` still interpolates `output_dir` into shell text (`test -x
-            // {output_dir}/gradlew`) -- CleanConfig::precondition has no typed argv
-            // alternative yet, so this specific check remains a known, unfixed instance of
-            // the same defect shape as `argv_clean` exists to close. Tracked as a remaining
-            // gap rather than silently left implying it was covered. ~keep
-            precondition: Some(format!("test -x {output_dir}/gradlew")),
+            precondition: None,
             before: None,
             clean: None,
-            // The executable path is resolved relative to *this* process's cwd before
-            // `current_dir` below ever takes effect (a documented `std::process::Command`
-            // gotcha), so `./gradlew` alone would look in alef's own cwd, not `output_dir`.
-            // `{output_dir}/gradlew` names the same file the shell version's `cd
-            // {output_dir} && ./gradlew` invoked, resolved the way this API actually
-            // resolves it. ~keep
             argv_clean: Some(ArgvRunConfig {
                 work_dir: output_dir.to_owned(),
                 env: Vec::new(),
                 steps: vec![ArgvStep {
-                    command: format!("{output_dir}/gradlew"),
+                    command: "./gradlew".to_owned(),
                     args: vec!["clean".to_owned()],
                 }],
             }),
@@ -393,15 +382,25 @@ mod tests {
     #[test]
     fn kotlin_android_uses_its_generated_gradle_wrapper() {
         let c = cfg(Language::KotlinAndroid, "packages/kotlin-android");
-        assert_eq!(
-            c.precondition.as_deref(),
-            Some("test -x packages/kotlin-android/gradlew")
+        assert!(
+            c.precondition.is_none(),
+            "the config path must not enter a shell precondition"
         );
         let argv = c.argv_clean.expect("kotlin_android should have an argv clean command");
         assert_eq!(argv.work_dir, "packages/kotlin-android");
         assert_eq!(argv.steps.len(), 1);
-        assert_eq!(argv.steps[0].command, "packages/kotlin-android/gradlew");
+        assert_eq!(argv.steps[0].command, "./gradlew");
         assert_eq!(argv.steps[0].args, vec!["clean"]);
+    }
+
+    #[test]
+    fn kotlin_android_clean_keeps_malicious_output_dir_out_of_shell_text() {
+        let malicious = "packages/kotlin; touch /tmp/alef-kotlin-clean; #";
+        let c = cfg(Language::KotlinAndroid, malicious);
+        assert!(c.precondition.is_none());
+        let argv = c.argv_clean.expect("kotlin_android should use argv clean");
+        assert_eq!(argv.work_dir, malicious);
+        assert_eq!(argv.steps[0].command, "./gradlew");
     }
 
     #[test]

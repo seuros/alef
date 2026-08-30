@@ -105,40 +105,52 @@ pub(crate) fn run_command_streamed(cmd: &str, label: Option<&str>) -> anyhow::Re
 pub(crate) fn run_command_streamed_with_env(
     cmd: &str,
     label: Option<&str>,
-    env_vars: &[(&str, String)],
+    path_env: &[(&str, String)],
 ) -> anyhow::Result<()> {
-    let cmd_with_env = inline_env_in_shell_cmd(cmd, env_vars);
+    run_command_streamed_with_envs(cmd, label, path_env, &[])
+}
+
+pub(crate) fn run_command_streamed_with_envs(
+    cmd: &str,
+    label: Option<&str>,
+    path_env: &[(&str, String)],
+    exact_env: &[(&str, String)],
+) -> anyhow::Result<()> {
     // Log (and use for error text) the ORIGINAL `cmd` plus env var NAMES only, never
     // `cmd_with_env` -- that string carries every env var's literal value (an e2e-policy
     // token, a mock-server URL that may itself embed a secret query param), and this line was
     // previously the only thing standing between such a value and CI log output. `description`
     // below also becomes what `run_prepared_command` puts in its own error messages, so this
     // redaction covers both the success and failure logging paths in one place.
-    let description = match env_key_names(env_vars) {
+    let description = match env_key_names(path_env.iter().chain(exact_env.iter()).map(|(key, _)| *key)) {
         Some(keys) => format!("{cmd} (env: {keys})"),
         None => cmd.to_string(),
     };
     info!("Running: {description}");
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", &cmd_with_env]);
-
-    for (key, value) in env_vars {
-        if *key == "PATH" {
-            continue;
-        }
-        command.env(key, value);
-    }
+    let command = prepare_shell_command(cmd, path_env, exact_env);
 
     process_exec::run_prepared_command(command, label, &description)
 }
 
 /// Comma-joined env var NAMES for logging, omitting every value. `None` when `env_vars` is
 /// empty (nothing to append to the logged command).
-fn env_key_names(env_vars: &[(&str, String)]) -> Option<String> {
-    if env_vars.is_empty() {
+fn env_key_names<'a>(env_vars: impl Iterator<Item = &'a str>) -> Option<String> {
+    let keys = env_vars.collect::<Vec<_>>();
+    if keys.is_empty() {
         return None;
     }
-    Some(env_vars.iter().map(|(key, _)| *key).collect::<Vec<_>>().join(", "))
+    Some(keys.join(", "))
+}
+
+fn prepare_shell_command(
+    cmd: &str,
+    path_env: &[(&str, String)],
+    exact_env: &[(&str, String)],
+) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", &inline_env_in_shell_cmd(cmd, path_env)]);
+    command.envs(exact_env.iter().map(|(key, value)| (*key, value)));
+    command
 }
 
 fn pump_lines<R: std::io::Read>(reader: R, prefix: &str) {
@@ -195,7 +207,7 @@ fn run_command_streamed_full(
     let cmd_with_env = inline_env_in_shell_cmd(cmd, env_vars);
     // See `run_command_streamed_with_env`'s matching comment: log `cmd` plus env var NAMES
     // only, never `cmd_with_env`, which carries every value verbatim.
-    let logged = match env_key_names(env_vars) {
+    let logged = match env_key_names(env_vars.iter().map(|(key, _)| *key)) {
         Some(keys) => format!("{cmd} (env: {keys})"),
         None => cmd.to_string(),
     };
@@ -210,13 +222,6 @@ fn run_command_streamed_full(
     command.args(["-c", &cmd_with_env]);
     if let Some(dir) = cwd {
         command.current_dir(dir);
-    }
-
-    for (key, value) in env_vars {
-        if *key == "PATH" {
-            continue;
-        }
-        command.env(key, value);
     }
 
     if prefix.is_some() {
@@ -935,5 +940,46 @@ mod tests {
             stdout, "/lib/dir",
             "An unset variable must yield just the new dir with no stray colon"
         );
+    }
+
+    #[test]
+    fn exact_environment_value_is_not_part_of_shell_argv() {
+        let exact_value = "literal'; touch /tmp/alef-env-injection; #".to_string();
+        let command = prepare_shell_command(
+            "printf '%s' \"$ALEF_EXACT_VALUE\"",
+            &[],
+            &[("ALEF_EXACT_VALUE", exact_value.clone())],
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(
+            arguments.iter().all(|argument| !argument.contains(&exact_value)),
+            "exact environment values must never enter the sh -c argument"
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "ALEF_EXACT_VALUE" && value.is_some_and(|value| value == exact_value.as_str())
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_environment_value_reaches_shell_without_interpretation() {
+        let marker = std::env::temp_dir().join(format!("alef-env-injection-{}", std::process::id()));
+        let exact_value = format!("literal'; touch {}; #", marker.display());
+        let mut command = prepare_shell_command(
+            "test \"$ALEF_EXACT_VALUE\" = \"$EXPECTED_ALEF_EXACT_VALUE\"",
+            &[],
+            &[
+                ("ALEF_EXACT_VALUE", exact_value.clone()),
+                ("EXPECTED_ALEF_EXACT_VALUE", exact_value),
+            ],
+        );
+        let status = command.status().expect("shell command should start");
+
+        assert!(status.success(), "the child must receive the exact configured value");
+        assert!(!marker.exists(), "shell syntax inside the value must remain inert");
     }
 }
