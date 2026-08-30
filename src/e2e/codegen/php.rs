@@ -180,7 +180,7 @@ impl E2eCodegen for PhpCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
         });
 
         // app_harness.php is now emitted by a consumer extension.

@@ -53,7 +53,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
 
         files.push(GeneratedFile {
             path: output_base.join("conftest.py"),
-            content: render_conftest(e2e_config, groups, type_defs),
+            content: render_conftest(e2e_config, groups, type_defs, enums),
             generated_header: true,
         });
 

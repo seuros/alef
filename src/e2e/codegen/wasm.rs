@@ -198,7 +198,7 @@ impl E2eCodegen for WasmCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
         });
 
         // Generate package.json — adds vitest + rollup dev deps so that the test

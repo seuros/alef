@@ -341,7 +341,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
         });
 
         // Whether any fixture hits the mock server: a direct HTTP fixture, a

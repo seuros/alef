@@ -100,7 +100,7 @@ impl E2eCodegen for TypeScriptCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
         });
 
         files.push(GeneratedFile {

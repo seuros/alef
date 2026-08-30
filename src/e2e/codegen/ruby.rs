@@ -102,7 +102,7 @@ impl E2eCodegen for RubyCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
         });
 
         // For client/mock-server pattern only: emit spec_helper.rb.

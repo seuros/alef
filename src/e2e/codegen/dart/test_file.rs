@@ -54,7 +54,7 @@ pub(super) fn render_test_file(
         }
         let call_config =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        super::super::file_inputs::fixture_uses_test_documents(f, call_config, type_defs)
+        super::super::file_inputs::fixture_uses_test_documents(f, call_config, type_defs, enums)
     });
 
     // Detect whether any non-HTTP fixture uses a json_object arg that resolves to a JSON array —

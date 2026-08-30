@@ -184,7 +184,7 @@ fn conftest_and_test_file_survive_a_realistic_ruff_lint_pass() {
         fixtures: fixtures.clone(),
     }];
 
-    let conftest_py = render_conftest(&e2e_config, &groups, &[]);
+    let conftest_py = render_conftest(&e2e_config, &groups, &[], &[]);
     let fixture_refs: Vec<&Fixture> = fixtures.iter().collect();
     let config = ResolvedCrateConfig::default();
     let sample_error = crate::core::ir::ErrorDef {

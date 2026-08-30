@@ -37,7 +37,7 @@ pub(super) fn render_test_file(
     let needs_chdir = fixtures.iter().any(|f| {
         let call_config =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        crate::e2e::codegen::file_inputs::fixture_uses_test_documents(f, call_config, type_defs)
+        crate::e2e::codegen::file_inputs::fixture_uses_test_documents(f, call_config, type_defs, enums)
     });
 
     let mut out = String::new();

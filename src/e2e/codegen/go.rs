@@ -246,7 +246,7 @@ impl E2eCodegen for GoCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, call, type_defs)
+            super::file_inputs::fixture_uses_test_documents(f, call, type_defs, enums)
         });
 
         // Determine if any fixture needs the mock-server binary or HTTP integration tests.
