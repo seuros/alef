@@ -494,7 +494,7 @@ pub(crate) enum Commands {
         /// Version to check.
         #[arg(long)]
         version: String,
-        /// Homebrew tap repository (`owner/repo`).
+        /// Homebrew tap repository, or Scoop bucket repository (`owner/repo`).
         #[arg(long)]
         tap_repo: Option<String>,
         /// GitHub repository (`owner/repo`) for github-release check.

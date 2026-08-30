@@ -24,6 +24,7 @@ pub enum Registry {
     Cratesio,
     Hex,
     Homebrew,
+    Scoop,
     GithubRelease,
     /// pub.dev (Dart packages).
     Pub,
@@ -46,6 +47,7 @@ impl std::fmt::Display for Registry {
             Registry::Cratesio => write!(f, "cratesio"),
             Registry::Hex => write!(f, "hex"),
             Registry::Homebrew => write!(f, "homebrew"),
+            Registry::Scoop => write!(f, "scoop"),
             Registry::GithubRelease => write!(f, "github-release"),
             Registry::Pub => write!(f, "pub"),
             Registry::Zig => write!(f, "zig"),
@@ -60,6 +62,8 @@ impl std::fmt::Display for Registry {
 /// - Maven: `package` is `groupId:artifactId` (colon-separated).
 /// - NuGet: `source_url` override (defaults to `https://api.nuget.org`).
 /// - Homebrew: `tap_repo` in `owner/repo` form (e.g. `Homebrew/homebrew-core`).
+/// - Scoop: `tap_repo` names the bucket repository in `owner/repo` form (e.g.
+///   `xberg-io/scoop-bucket`); required, since Scoop has no default/central bucket.
 /// - GitHub Release: `repo` in `owner/repo` form.
 pub fn check(registry: Registry, package: &str, version: &str, extra: &ExtraParams, output_json: bool) -> Result<bool> {
     let exists = match registry {
@@ -72,6 +76,7 @@ pub fn check(registry: Registry, package: &str, version: &str, extra: &ExtraPara
         Registry::Cratesio => check_cratesio(package, version)?,
         Registry::Hex => check_hex(package, version)?,
         Registry::Homebrew => check_homebrew(package, version, extra.tap_repo.as_deref())?,
+        Registry::Scoop => check_scoop(package, version, extra.tap_repo.as_deref())?,
         Registry::GithubRelease => {
             let exists = check_github_release(
                 package,
@@ -118,7 +123,7 @@ pub fn check(registry: Registry, package: &str, version: &str, extra: &ExtraPara
 pub struct ExtraParams {
     /// NuGet source URL override.
     pub nuget_source: Option<String>,
-    /// Homebrew tap repository (`owner/repo`).
+    /// Homebrew tap repository, or Scoop bucket repository (`owner/repo`).
     pub tap_repo: Option<String>,
     /// GitHub repository (`owner/repo`) for GitHub Release check.
     pub repo: Option<String>,
@@ -310,6 +315,22 @@ fn check_homebrew(package: &str, version: &str, tap_repo: Option<&str>) -> Resul
     Ok(false)
 }
 
+/// Check whether `version` is published as a Scoop manifest in `tap_repo`'s bucket.
+///
+/// Scoop has no default/central bucket (unlike Homebrew's `homebrew-core`), so `tap_repo`
+/// is required. Manifests live under the bucket repository's `bucket/` directory per the
+/// Scoop manifest convention: `bucket/<package>.json` with a top-level `"version"` field.
+fn check_scoop(package: &str, version: &str, tap_repo: Option<&str>) -> Result<bool> {
+    let repo = tap_repo
+        .filter(|r| !r.is_empty())
+        .with_context(|| format!("--tap-repo is required for scoop check of {package} (no default bucket)"))?;
+    let url = format!("https://raw.githubusercontent.com/{repo}/HEAD/bucket/{package}.json");
+    let Some(json) = http_get_json(&url)? else {
+        return Ok(false);
+    };
+    Ok(json.get("version").and_then(|v| v.as_str()) == Some(version))
+}
+
 /// Pick the GitHub token to authenticate with, given the two candidate
 /// environment variables read by [`github_auth_token`]. Kept separate from
 /// the env lookup so the precedence/empty-string rules are unit-testable
@@ -404,10 +425,25 @@ mod tests {
     fn registry_display() {
         assert_eq!(Registry::Pypi.to_string(), "pypi");
         assert_eq!(Registry::Npm.to_string(), "npm");
+        assert_eq!(Registry::Homebrew.to_string(), "homebrew");
+        assert_eq!(Registry::Scoop.to_string(), "scoop");
         assert_eq!(Registry::GithubRelease.to_string(), "github-release");
         assert_eq!(Registry::Pub.to_string(), "pub");
         assert_eq!(Registry::Zig.to_string(), "zig");
         assert_eq!(Registry::Swift.to_string(), "swift");
+    }
+
+    #[test]
+    fn scoop_requires_tap_repo() {
+        let result = check_scoop("alef", "1.0.0", None);
+        assert!(result.is_err(), "scoop has no default bucket and must require --tap-repo");
+        assert!(result.unwrap_err().to_string().contains("--tap-repo"));
+    }
+
+    #[test]
+    fn scoop_requires_non_empty_tap_repo() {
+        let result = check_scoop("alef", "1.0.0", Some(""));
+        assert!(result.is_err(), "an empty --tap-repo must not be treated as present");
     }
 
     #[test]

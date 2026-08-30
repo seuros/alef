@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recognize `scoop` as a release target in `alef release-metadata`, so consumers can use the
   emitted `release_scoop` flag to gate a Scoop-bucket publish job. Like `homebrew`, it implies
   `cli` because Scoop manifests point at prebuilt CLI release archives.
+- Consume `release_scoop` in Alef's own publish workflow: `scoop` is now a selectable
+  `available-targets` value, gated the same way as `homebrew` (opt-in, off by default), with a
+  `check-scoop` registry-existence check and a `publish-scoop-manifest` job that hashes the
+  already-built Windows CLI archive and writes/updates `bucket/alef.json` in a Scoop bucket
+  repository. Add `Registry::Scoop` to `alef check-registry`.
 
 ### Fixed
 

@@ -20,10 +20,11 @@ on:
         default: false
         type: boolean
       targets:
-        # ~keep Empty means `crates,cli`, NOT every available target -- `homebrew` is opt-in
-        # only, because nothing in this org installs alef via brew. Name it explicitly to get a
-        # brew release. See the fallback chain on `prepare-release-metadata` below.
-        description: "Comma-separated targets (empty = crates,cli). Values: crates,cli,homebrew"
+        # ~keep Empty means `crates,cli`, NOT every available target -- `homebrew` and `scoop`
+        # are opt-in only, because nothing in this org installs alef via brew or scoop by
+        # default. Name either explicitly to get that release. See the fallback chain on
+        # `prepare-release-metadata` below.
+        description: "Comma-separated targets (empty = crates,cli). Values: crates,cli,homebrew,scoop"
         required: false
         default: ""
         type: string
@@ -53,6 +54,7 @@ jobs:
       release_crates: ${{ steps.meta.outputs.release_crates }}
       release_cli: ${{ steps.meta.outputs.release_cli }}
       release_homebrew: ${{ steps.meta.outputs.release_homebrew }}
+      release_scoop: ${{ steps.scoop-gate.outputs.release_scoop }}
       cli_matrix: ${{ steps.cli-targets.outputs.matrix }}
       cli_assets: ${{ steps.cli-targets.outputs.assets }}
     steps:
@@ -92,21 +94,55 @@ jobs:
           print("assets=" + ",".join(f"alef-{t['target']}.{t['archive_ext']}" for t in targets))
           PY
 
-      # ~keep Homebrew stays OFF by default: nothing in this org installs alef via brew, so
-      # every release was paying for a formula update, a four-way bottle matrix and a DSL merge
-      # that no consumer ever consumed. `homebrew` is deliberately still listed in
-      # `available-targets` and the four `*homebrew*` jobs below are deliberately still here --
-      # this is a default, not a removal. Re-enable a brew release by dispatching with an
-      # explicit `targets` that names it (e.g. `cli,homebrew`), which the fallback chain below
-      # honours; only the empty/automatic case is narrowed to `crates,cli`. A `release`-triggered
+      # ~keep A whitespace-only `targets` input is a non-empty string, so it is truthy and
+      # wins the `||` fallback chain below even though it names no real target. Alef's own
+      # `--targets` parser then trims it to empty and treats empty as "release everything"
+      # (see parse_targets in src/cli/commands/release_metadata.rs) -- a stray space in a
+      # manual dispatch form would silently enable every opt-in target, including Homebrew and
+      # Scoop. Normalizing here, before the fallback chain runs, closes that gap without
+      # touching Alef's own empty-means-all contract. See
+      # scripts/publish/normalize-release-targets.sh for the exact rules, tested in
+      # tests/publish_normalize_targets_test.rs.
+      - name: Normalize release targets input
+        id: normalize-targets
+        shell: bash
+        env:
+          RAW_TARGETS: ${{ inputs.targets || github.event.client_payload.targets || '' }}
+        run: echo "targets=$(scripts/publish/normalize-release-targets.sh)" >> "$GITHUB_OUTPUT"
+
+      # ~keep Homebrew and Scoop stay OFF by default: nothing in this org installs alef via
+      # brew or scoop, so every release was paying for a formula/manifest update and, for
+      # homebrew, a four-way bottle matrix and DSL merge that no consumer ever consumed. Both
+      # are deliberately still listed in `available-targets` and their gated jobs below are
+      # deliberately still here -- this is a default, not a removal. Re-enable either release
+      # by dispatching with an explicit `targets` that names it (e.g. `cli,homebrew` or
+      # `cli,scoop`), which the normalized value above still honours; only the
+      # empty/whitespace-only/automatic case is narrowed to `crates,cli`. A `release`-triggered
       # run carries no targets at all, so the automatic path is exactly the case this narrows.
       - name: Prepare release metadata
         id: meta
         uses: xberg-io/actions/prepare-release-metadata@v1
         with:
-          available-targets: crates,cli,homebrew
-          targets: ${{ inputs.targets || github.event.client_payload.targets || 'crates,cli' }}
+          available-targets: crates,cli,homebrew,scoop
+          targets: ${{ steps.normalize-targets.outputs.targets }}
           alef-version: main
+
+      # ~keep `prepare-release-metadata@v1` declares `release_homebrew` as a named output but
+      # not `release_scoop` -- scoop was added to Alef's own target list after that action's
+      # output list was fixed, and an undeclared `steps.meta.outputs.release_scoop` reference
+      # evaluates to an empty string forever, which reads as "false" everywhere it's checked.
+      # That is a green run that silently publishes nothing, which is worse than a red one.
+      # Rather than depend on an Actions-repo change this branch does not control, derive the
+      # gate here from `release_targets`, which IS declared and already carries every enabled
+      # target (or the literal "all"). See scripts/publish/compute-scoop-gate.sh and
+      # tests/publish_scoop_gate_test.rs for the exact matching semantics, including the
+      # `all` case.
+      - name: Derive Scoop release gate
+        id: scoop-gate
+        shell: bash
+        env:
+          RELEASE_TARGETS: ${{ steps.meta.outputs.release_targets }}
+        run: echo "release_scoop=$(scripts/publish/compute-scoop-gate.sh)" >> "$GITHUB_OUTPUT"
 
   check-cratesio:
     name: Check crates.io
@@ -187,6 +223,28 @@ jobs:
           package: alef
           version: ${{ needs.prepare.outputs.version }}
           tap-repo: xberg-io/homebrew-tap
+          alef-version: main
+
+  check-scoop:
+    name: Check Scoop bucket
+    needs: prepare
+    if: needs.prepare.outputs.release_scoop == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      # ~keep continue-on-error: same rationale as `check-homebrew` -- this check is
+      # advisory, and `publish-scoop-manifest` already treats a missing/non-'true' `exists`
+      # output as "not published yet."
+      - name: Check Scoop manifest
+        id: check
+        continue-on-error: true
+        uses: xberg-io/actions/check-registry@v1
+        with:
+          registry: scoop
+          package: alef
+          version: ${{ needs.prepare.outputs.version }}
+          tap-repo: xberg-io/scoop-bucket
           alef-version: main
 
   build-cli:
@@ -475,6 +533,123 @@ jobs:
           dry-run: ${{ needs.prepare.outputs.dry_run }}
           token: ${{ steps.app-token.outputs.token }}
 
+  publish-scoop-manifest:
+    name: Update Scoop bucket manifest
+    needs: [prepare, check-scoop, upload-release-assets]
+    # ~keep `upload-release-assets.result != 'failure'` (not `== 'success'`) so a same-tag
+    # retry still proceeds regardless of *why* that job didn't freshly succeed this run --
+    # skipped because the release already carried the asset, skipped for an unrelated reason,
+    # cancelled, whatever short of an active failure. This job no longer needs to reason about
+    # `check-github-release`'s output to decide that; if the Windows asset genuinely isn't on
+    # the release, "Render and publish Scoop manifest" below fails loudly (its `gh release
+    # download` has nothing to fetch) instead of this `if:` silently skipping the job -- a
+    # loud, visible failure beats a green run that published nothing.
+    #
+    # ~keep Runs in dry-run too: only "Commit and push manifest" is gated on
+    # `dry_run != 'true'`. A dry run that skipped rendering would prove nothing -- it must
+    # still download the real release asset, hash it, and render+validate the real manifest,
+    # and stop short of only the actual write (the git commit/push to scoop-bucket).
+    if: |
+      always() &&
+      needs.prepare.outputs.release_scoop == 'true' &&
+      needs.upload-release-assets.result != 'failure' &&
+      (needs.check-scoop.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: bucket-token
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: xberg-io
+          repositories: scoop-bucket
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - uses: actions/checkout@v7
+        with:
+          repository: xberg-io/scoop-bucket
+          token: ${{ steps.bucket-token.outputs.token }}
+          path: scoop-bucket
+
+      # ~keep `publish-scoop-manifests@v1` is the authoritative renderer for
+      # xberg-io/scoop-bucket manifests -- it owns the `architecture.64bit` shape the bucket
+      # actually validates against, so this job must not hand-roll a second, competing
+      # manifest writer. It resolves the Windows asset from the published GitHub release
+      # itself (github-repo + tag), not from a same-run build artifact, so a Scoop-only retry
+      # (release already published, manifest still missing) needs no `force_republish` and no
+      # local rebuild. The action downloads that asset and computes its SHA256 itself, so the
+      # hash is still always derived from the actual archive bytes, never taken on trust from
+      # a manifest or a release body -- see scripts/publish/alef.json.tmpl and
+      # tests/publish_scoop_manifest_template_test.rs for the exact rendered shape this
+      # produces and why it is not the previous flat url/hash/extract_dir bug.
+      #
+      # ~keep The following are verified against xberg-io/actions@publish-scoop-manifests's
+      # actual source (action.yml + scripts/render.py), fetched via
+      # `gh api repos/xberg-io/actions/contents/...`, not inferred from its README:
+      # - `config-file` resolves via `Path(INPUT_CONFIG_FILE).resolve()` against the step's
+      #   process cwd (render.py `main()`); the composite step that runs it carries no
+      #   `working-directory:` override, so that cwd is this job's default
+      #   `$GITHUB_WORKSPACE` -- the alef checkout above, with no `path:` override. A relative
+      #   `config-file` here is therefore alef-repo-root-relative, matching
+      #   `scripts/publish/scoop-manifests.json` below.
+      # - `token` is read exclusively by `_download_asset()`'s `gh release download -R {repo}`
+      #   -- render.py contains no git-write code at all, and action.yml states outright: "The
+      #   calling workflow is responsible for committing/pushing the resulting bucket changes
+      #   -- bot identity is repo-specific." `contents: read` on the same-repo `github.token`
+      #   is sufficient for a public-repo release download, and is in fact this input's own
+      #   documented default (`default: ${{ github.token }}`); the write side stays entirely
+      #   on `bucket-token` below, which this step never touches.
+      # - Templating is confirmed `string.Template(raw).substitute(mapping)` in
+      #   `_render_template()`, with `mapping = {"tag": ..., "version": ..., <sha_key>: <hex>}`
+      #   built from the config's own `assets` dict keys -- exactly `${tag}`, `${version}`,
+      #   `${win_x64_sha}` in scripts/publish/alef.json.tmpl. `.substitute()` (not
+      #   `safe_substitute()`) raises `KeyError` on an unescaped unknown placeholder, which is
+      #   exactly the error `$schema` produced locally before being escaped to `$$schema` --
+      #   confirming that fix was necessary against the real renderer, not just this branch's
+      #   local verification harness.
+      #
+      # ~keep `token: github.token`, not the `bucket-token` app-token step above: this step
+      # only reads the public `xberg-io/alef` release (`github-repo` below), it never writes
+      # to `scoop-bucket`, so it gets the workflow's own same-repo, `contents: read`-scoped
+      # token rather than a broader one. `bucket-token` stays reserved for the one step that
+      # actually needs write access to a different repository -- the commit/push below.
+      #
+      # ~keep Deliberately does NOT forward `needs.prepare.outputs.dry_run` as this step's own
+      # `dry-run` input: per action.yml, that input makes the action tolerate a *missing*
+      # asset via a zero-SHA placeholder, and its own "Validate rendered manifests" step is
+      # gated `if: inputs.dry-run != 'true'` -- i.e. dry-run mode explicitly SKIPS the
+      # action's own schema/version/zero-SHA validation. That is the opposite of what a
+      # release dry run should prove, so this step always renders (and validates) for real
+      # against the already-available asset; only "Commit and push manifest" below is gated on
+      # our workflow's `dry_run`.
+      - name: Render and publish Scoop manifest
+        id: render
+        uses: xberg-io/actions/publish-scoop-manifests@v1
+        with:
+          bucket-dir: ${{ github.workspace }}/scoop-bucket
+          config-file: scripts/publish/scoop-manifests.json
+          tag: ${{ needs.prepare.outputs.tag }}
+          version: ${{ needs.prepare.outputs.version }}
+          github-repo: xberg-io/alef
+          token: ${{ github.token }}
+
+      # ~keep Extracted to a standalone, unit-testable script (rather than inline workflow
+      # bash) specifically so the untracked-first-publish fix has a real regression test --
+      # see scripts/publish/commit-scoop-manifest.sh and
+      # tests/publish_scoop_manifest_commit_test.rs, which reproduces the bug against a real
+      # git repo and proves the old `git diff --quiet` form misses it.
+      - name: Commit and push manifest
+        if: needs.prepare.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ steps.bucket-token.outputs.token }}
+          BUCKET_DIR: ${{ github.workspace }}/scoop-bucket
+          MANIFEST_PATH: bucket/alef.json
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: scripts/publish/commit-scoop-manifest.sh
+
   publish-crates:
     name: Publish crates.io
     needs: [prepare, check-cratesio]
@@ -505,7 +680,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    needs: [prepare, upload-release-assets, publish-crates, publish-homebrew-bottles]
+    needs: [prepare, upload-release-assets, publish-crates, publish-homebrew-bottles, publish-scoop-manifest]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -534,4 +709,5 @@ jobs:
             report "crates.io"       "${{ needs.publish-crates.result }}"
             report "GitHub Release"  "${{ needs.upload-release-assets.result }}"
             report "Homebrew"        "${{ needs.publish-homebrew-bottles.result }}"
+            report "Scoop"           "${{ needs.publish-scoop-manifest.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
