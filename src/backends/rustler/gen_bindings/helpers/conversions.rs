@@ -411,8 +411,13 @@ pub(in crate::backends::rustler::gen_bindings) fn flat_data_enum_discriminator(
 }
 
 /// Escape a wire value for embedding in a double-quoted Elixir string literal.
+///
+/// Delegates to the backend's one escaping authority. The inline
+/// `replace('\\', ..).replace('"', ..)` this replaced covered the two characters that break the
+/// PARSE and neither of the two that do not: `#`, which makes the literal interpolate, and
+/// control characters. ~keep
 fn escape_elixir_string_literal(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    crate::backends::rustler::elixir_escape::escape_elixir_string_literal(value)
 }
 
 /// `core_import`/`configured_features` decide which variants this Elixir-facing module

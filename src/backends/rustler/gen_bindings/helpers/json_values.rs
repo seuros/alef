@@ -118,39 +118,13 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_safe_param_name(name: &
 /// Return an Elixir atom value (without leading `:`, as the template adds it).
 /// If the atom contains non-identifier characters, it is quoted as `"atom:value"`.
 ///
-/// Valid Elixir identifiers are: `[a-zA-Z_][a-zA-Z_0-9]*[?!]?`.
-/// Atoms containing colons, dashes, or other special chars are wrapped as `"atom:value"`.
-/// This is used for enum variant atom values that may contain `#[serde(rename)]` strings.
+/// Delegates to [`crate::backends::rustler::elixir_escape::elixir_atom_body`], which owns both
+/// halves of the decision — bare-versus-quoted, and what escaping the quoted body needs. This
+/// used to inline `format!(r#""{atom_value}""#)`, which quoted the body without escaping it, so a
+/// `#[serde(rename)]` carrying `"`, `\` or `#{` produced either a broken module or, for `#{`, one
+/// that executed the rename's contents when it compiled. ~keep
 pub(in crate::backends::rustler::gen_bindings) fn elixir_safe_atom(atom_value: &str) -> String {
-    fn is_valid_identifier(s: &str) -> bool {
-        if s.is_empty() {
-            return false;
-        }
-        let mut chars = s.chars();
-        let first = chars.next().unwrap();
-        if !first.is_ascii_alphabetic() && first != '_' {
-            return false;
-        }
-        loop {
-            match chars.next() {
-                None => return true,
-                Some(c) => {
-                    if !c.is_ascii_alphanumeric() && c != '_' && c != '?' && c != '!' {
-                        return false;
-                    }
-                    if (c == '?' || c == '!') && chars.as_str() != "" {
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-
-    if is_valid_identifier(atom_value) {
-        atom_value.to_string()
-    } else {
-        format!(r#""{atom_value}""#)
-    }
+    crate::backends::rustler::elixir_escape::elixir_atom_body(atom_value)
 }
 
 /// - If the field name is a struct field name (like `reason`), use it directly.
