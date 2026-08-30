@@ -17,6 +17,7 @@ pub mod field_init;
 pub mod fn_dedup;
 pub mod foreign_cfg_variants;
 pub mod generators;
+pub mod java_literal;
 pub mod keywords;
 pub mod mut_writeback;
 pub mod naming;
