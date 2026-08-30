@@ -9,7 +9,9 @@ use crate::e2e::fixture::Fixture;
 
 use super::super::json::json_to_python_literal;
 use super::handle_values::build_handle_kwarg_value;
-use super::typed_values::{KwargRenderContext, emit_bytes_arg, emit_json_object_arg};
+use super::typed_values::{
+    ArgSink, ConstructorSpec, KwargRenderContext, MockUrlInfo, emit_bytes_arg, emit_json_object_arg,
+};
 
 /// Build arg binding lines and kwarg expressions for a fixture call.
 ///
@@ -173,6 +175,19 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "json_object" && !value.is_null() {
+            let mut sink = ArgSink {
+                bindings: &mut arg_bindings,
+                kwarg_exprs: &mut kwarg_exprs,
+            };
+            let spec = ConstructorSpec {
+                options_type: crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, value),
+                options_via,
+                element_type: &arg.element_type,
+            };
+            let mock = MockUrlInfo {
+                fixture_id: &fixture.id,
+                has_host_root_route: fixture.has_host_root_route(),
+            };
             let docs_files = fixture.docs_files_for_arg(&arg.field);
             let context = KwargRenderContext {
                 type_defs,
@@ -180,18 +195,7 @@ pub(super) fn build_args_and_setup(
                 enum_fields,
                 docs_files: &docs_files,
             };
-            if emit_json_object_arg(
-                &mut arg_bindings,
-                &mut kwarg_exprs,
-                value,
-                var_name,
-                crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, value),
-                options_via,
-                &arg.element_type,
-                &fixture.id,
-                fixture.has_host_root_route(),
-                context,
-            ) {
+            if emit_json_object_arg(&mut sink, value, var_name, &spec, &mock, context) {
                 continue;
             }
         }

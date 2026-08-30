@@ -53,25 +53,27 @@ fn emit_json_object_arg_enum_field_emits_constructor_call() {
 
     let mut bindings = Vec::new();
     let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
     let value = serde_json::json!({"output_format": "markdown"});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let context = KwargRenderContext {
         type_defs: &type_defs,
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut exprs,
-        &value,
-        "opts",
-        Some("ExtractionConfig"),
-        "kwargs",
-        &None,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
     assert!(done);
     // Constructor-call form works for both (str, Enum) subclasses and #[pyclass] tagged-union
     // structs. Attribute access (OutputFormat.MARKDOWN) fails for the latter because they have
@@ -92,27 +94,29 @@ fn emit_json_object_arg_enum_field_emits_constructor_call() {
 fn emit_json_object_arg_dict_mode_emits_literal() {
     let mut bindings = Vec::new();
     let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
     let value = serde_json::json!({"key": "val"});
     let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
     let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let spec = ConstructorSpec {
+        options_type: None,
+        options_via: "dict",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let context = KwargRenderContext {
         type_defs: &type_defs,
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut exprs,
-        &value,
-        "opts",
-        None,
-        "dict",
-        &None,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
     assert!(done);
     assert!(bindings[0].contains("\"key\""), "got: {:?}", bindings[0]);
 }
@@ -121,7 +125,20 @@ fn emit_json_object_arg_dict_mode_emits_literal() {
 fn emit_json_object_arg_reads_documented_nested_file() {
     let mut bindings = Vec::new();
     let mut expressions = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut expressions,
+    };
     let value = serde_json::json!({"bytes": "document.pdf"});
+    let spec = ConstructorSpec {
+        options_type: Some("DocumentInput"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let docs_files = [FixtureDocsFileInput {
         field: "/bytes".into(),
         path: "document.pdf".into(),
@@ -132,18 +149,7 @@ fn emit_json_object_arg_reads_documented_nested_file() {
         enum_fields: &HashMap::new(),
         docs_files: &docs_files,
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut expressions,
-        &value,
-        "input",
-        Some("DocumentInput"),
-        "kwargs",
-        &None,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "input", &spec, &mock, context);
 
     assert!(done);
     assert_eq!(
@@ -185,25 +191,27 @@ fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_field() {
 
     let mut bindings = Vec::new();
     let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
     let value = serde_json::json!({"nested": {"model": "standard"}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let context = KwargRenderContext {
         type_defs: &type_defs,
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut exprs,
-        &value,
-        "opts",
-        Some("ExtractionConfig"),
-        "kwargs",
-        &None,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
 
     assert!(done);
     assert_eq!(
@@ -245,26 +253,28 @@ fn emit_json_object_arg_batch_mode_constructs_nested_struct_field_in_each_item()
 
     let mut bindings = Vec::new();
     let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
     let value = serde_json::json!([{"nested": {"model": "standard"}}]);
     let element_type = Some("BatchFileItem".to_string());
+    let spec = ConstructorSpec {
+        options_type: None,
+        options_via: "kwargs",
+        element_type: &element_type,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let context = KwargRenderContext {
         type_defs: &type_defs,
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut exprs,
-        &value,
-        "items",
-        None,
-        "kwargs",
-        &element_type,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "items", &spec, &mock, context);
 
     assert!(done);
     assert_eq!(
@@ -311,25 +321,27 @@ fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_map_values() {
 
     let mut bindings = Vec::new();
     let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
     let value = serde_json::json!({"profiles": {"first": {"model": "standard"}}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
     let context = KwargRenderContext {
         type_defs: &type_defs,
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
     };
-    let done = emit_json_object_arg(
-        &mut bindings,
-        &mut exprs,
-        &value,
-        "opts",
-        Some("ExtractionConfig"),
-        "kwargs",
-        &None,
-        "fixture",
-        false,
-        context,
-    );
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
 
     assert!(done);
     assert_eq!(

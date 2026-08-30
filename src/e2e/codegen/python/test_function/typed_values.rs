@@ -29,6 +29,35 @@ pub(in crate::e2e::codegen::python) struct KwargRenderContext<'a> {
     pub docs_files: &'a [FixtureDocsFileInput],
 }
 
+/// Output accumulator for one fixture argument's emission: the setup lines it needs
+/// (`bindings`) and the expression that becomes its slot in the call's keyword-argument list
+/// (`kwarg_exprs`). Bundled because every `json_object` arg emitter below appends to both
+/// together, in lockstep, never to one alone. Unlike `KwargRenderContext` this is mutated on
+/// every call, so it holds `&mut` fields and is passed by `&mut` reference rather than `Copy`.
+pub(in crate::e2e::codegen::python) struct ArgSink<'a> {
+    pub bindings: &'a mut Vec<String>,
+    pub kwarg_exprs: &'a mut Vec<String>,
+}
+
+/// How a `json_object` argument's JSON value should become a Python expression -- the three
+/// pieces of `alef.toml` call-config the branches of `emit_json_object_arg` dispatch on
+/// together. Bundled because every branch needs some subset of exactly these three fields and
+/// nothing else about the call.
+pub(in crate::e2e::codegen::python) struct ConstructorSpec<'a> {
+    pub options_type: Option<&'a str>,
+    pub options_via: &'a str,
+    pub element_type: &'a Option<String>,
+}
+
+/// Identifies the mock-server fixture a `json_object` argument's placeholder URL resolves
+/// against. Only consulted once `value_contains_mock_url_placeholder` finds a placeholder to
+/// substitute, so it stays its own small struct rather than folding into `ConstructorSpec`
+/// (which every call needs) or `KwargRenderContext` (which describes IR, not the fixture).
+pub(in crate::e2e::codegen::python) struct MockUrlInfo<'a> {
+    pub fixture_id: &'a str,
+    pub has_host_root_route: bool,
+}
+
 /// Resolve the enum type name for a field if it's an enum type in the TypeDef,
 /// and return None if it's not an enum or the type cannot be resolved.
 pub(in crate::e2e::codegen::python) fn resolve_field_enum_type(
@@ -340,166 +369,202 @@ fn render_struct_constructor(
 }
 
 /// Returns `true` if the arg was fully emitted (caller should `continue`).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_json_object_arg(
-    arg_bindings: &mut Vec<String>,
-    kwarg_exprs: &mut Vec<String>,
+    sink: &mut ArgSink<'_>,
     value: &serde_json::Value,
     var_name: &str,
-    options_type: Option<&str>,
-    options_via: &str,
-    element_type: &Option<String>,
-    fixture_id: &str,
-    has_host_root_route: bool,
+    spec: &ConstructorSpec<'_>,
+    mock: &MockUrlInfo<'_>,
     context: KwargRenderContext<'_>,
 ) -> bool {
     if crate::e2e::codegen::value_contains_mock_url_placeholder(value) {
-        return emit_json_object_arg_with_mock_url(
-            arg_bindings,
-            kwarg_exprs,
-            value,
-            var_name,
-            options_type,
-            options_via,
-            fixture_id,
-            has_host_root_route,
-        );
+        return emit_json_object_arg_with_mock_url(sink, value, var_name, spec, mock);
     }
 
-    match options_via {
-        "dict" => {
-            // When we have an array of objects and an element_type, emit dict literals (not constructor calls).
-            // The bindings expect [{"type": "click", "selector": "#id"}, ...], not [PageAction(...), ...]
-            if let (Some(_elem_type), Some(arr)) = (element_type, value.as_array())
-                && !arr.is_empty()
-                && arr.iter().all(|v| v.is_object())
-            {
-                let items: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| v.as_object())
-                    .map(emit_python_object_item)
-                    .collect();
-                arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
-                kwarg_exprs.push(var_name.to_string());
-                return true;
-            }
-            // Fall through to default dict behavior
-            let literal = json_to_python_literal(value);
-            let noqa = if literal.contains("/tmp/") {
-                "  # noqa: S108"
-            } else {
-                ""
-            };
-            arg_bindings.push(format!("    {var_name} = {literal}{noqa}"));
-            kwarg_exprs.push(var_name.to_string());
-            true
-        }
-        "json" => {
-            let json_str = serde_json::to_string(value).unwrap_or_default();
-            let escaped = escape_python(&json_str);
-            arg_bindings.push(format!("    {var_name} = json.loads(\"{escaped}\")"));
-            kwarg_exprs.push(var_name.to_string());
-            true
-        }
-        "from_json" => {
-            if let Some(opts_type) = options_type {
-                let json_str = serde_json::to_string(value).unwrap_or_default();
-                let escaped = escape_python(&json_str);
-                arg_bindings.push(format!("    {var_name} = {opts_type}.from_json(\"{escaped}\")"));
-                kwarg_exprs.push(var_name.to_string());
-                true
-            } else {
-                false
-            }
-        }
-        _ => {
-            // When we have an array with element_type, construct typed instances for Python.
-            if let Some(elem_type) = element_type
-                && !value.is_null()
-                && let Some(arr) = value.as_array()
-                && arr.iter().all(|item| item.is_object())
-            {
-                let items: Vec<String> = arr
-                    .iter()
-                    .filter_map(|item| item.as_object())
-                    .enumerate()
-                    .map(|(index, obj)| {
-                        let pointer = format!("/{index}");
-                        emit_python_typed_instance(obj, elem_type, &pointer, context)
-                    })
-                    .collect();
-                arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
-                kwarg_exprs.push(var_name.to_string());
-                return true;
-            }
-            // "kwargs" mode
-            if let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) {
-                let mut used_struct_types = BTreeSet::new();
-                let kwargs: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| {
-                        let snake_key = k.to_snake_case();
-                        let field_pointer = format!("/{}", escape_json_pointer(k));
-                        let py_val = render_kwarg_field_value(
-                            k,
-                            v,
-                            Some(opts_type),
-                            &field_pointer,
-                            context,
-                            &mut used_struct_types,
-                        );
-                        format!("{snake_key}={py_val}")
-                    })
-                    .collect();
-                let constructor = format!("{opts_type}({})", kwargs.join(", "));
-                arg_bindings.push(format!("    {var_name} = {constructor}"));
-                kwarg_exprs.push(var_name.to_string());
-                true
-            } else {
-                false
-            }
-        }
+    match spec.options_via {
+        "dict" => emit_json_object_arg_dict_mode(sink, value, var_name, spec.element_type),
+        "json" => emit_json_object_arg_json_mode(sink, value, var_name),
+        "from_json" => emit_json_object_arg_from_json_mode(sink, value, var_name, spec.options_type),
+        _ => emit_json_object_arg_default_mode(sink, value, var_name, spec, context),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn emit_json_object_arg_with_mock_url(
-    arg_bindings: &mut Vec<String>,
-    kwarg_exprs: &mut Vec<String>,
+/// `options_via = "dict"` branch: an array of objects paired with `element_type` emits plain
+/// dict literals (the bindings expect `[{"type": "click", ...}, ...]`, not constructor calls);
+/// anything else falls back to a single JSON literal for the whole value.
+fn emit_json_object_arg_dict_mode(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    element_type: &Option<String>,
+) -> bool {
+    if let (Some(_elem_type), Some(arr)) = (element_type, value.as_array())
+        && !arr.is_empty()
+        && arr.iter().all(|v| v.is_object())
+    {
+        let items: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_object())
+            .map(emit_python_object_item)
+            .collect();
+        sink.bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
+        sink.kwarg_exprs.push(var_name.to_string());
+        return true;
+    }
+    let literal = json_to_python_literal(value);
+    let noqa = if literal.contains("/tmp/") { "  # noqa: S108" } else { "" };
+    sink.bindings.push(format!("    {var_name} = {literal}{noqa}"));
+    sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+/// `options_via = "json"` branch: the value round-trips through `json.loads(...)`.
+fn emit_json_object_arg_json_mode(sink: &mut ArgSink<'_>, value: &serde_json::Value, var_name: &str) -> bool {
+    let json_str = serde_json::to_string(value).unwrap_or_default();
+    let escaped = escape_python(&json_str);
+    sink.bindings.push(format!("    {var_name} = json.loads(\"{escaped}\")"));
+    sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+/// `options_via = "from_json"` branch: the value round-trips through the configured type's
+/// `from_json(...)` classmethod. Requires `options_type`; without it there is no method to call,
+/// so the caller falls back to the remaining arg-emission paths.
+fn emit_json_object_arg_from_json_mode(
+    sink: &mut ArgSink<'_>,
     value: &serde_json::Value,
     var_name: &str,
     options_type: Option<&str>,
-    options_via: &str,
-    fixture_id: &str,
-    has_host_root_route: bool,
+) -> bool {
+    let Some(opts_type) = options_type else {
+        return false;
+    };
+    let json_str = serde_json::to_string(value).unwrap_or_default();
+    let escaped = escape_python(&json_str);
+    sink.bindings
+        .push(format!("    {var_name} = {opts_type}.from_json(\"{escaped}\")"));
+    sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+/// Default (`options_via` unset or unrecognized) branch: either a "batch" array of typed items
+/// (`element_type`), or a single "kwargs"-mode constructor call (`options_type`).
+fn emit_json_object_arg_default_mode(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    spec: &ConstructorSpec<'_>,
+    context: KwargRenderContext<'_>,
+) -> bool {
+    if emit_json_object_arg_typed_array(sink, value, var_name, spec.element_type, context) {
+        return true;
+    }
+    emit_json_object_arg_typed_kwargs(sink, value, var_name, spec.options_type, context)
+}
+
+/// Batch-array sub-branch of the default mode: an array of objects paired with `element_type`
+/// constructs a typed instance per item via [`emit_python_typed_instance`].
+fn emit_json_object_arg_typed_array(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    element_type: &Option<String>,
+    context: KwargRenderContext<'_>,
+) -> bool {
+    let Some(elem_type) = element_type else {
+        return false;
+    };
+    if value.is_null() {
+        return false;
+    }
+    let Some(arr) = value.as_array() else {
+        return false;
+    };
+    if !arr.iter().all(|item| item.is_object()) {
+        return false;
+    }
+    let items: Vec<String> = arr
+        .iter()
+        .filter_map(|item| item.as_object())
+        .enumerate()
+        .map(|(index, obj)| {
+            let pointer = format!("/{index}");
+            emit_python_typed_instance(obj, elem_type, &pointer, context)
+        })
+        .collect();
+    sink.bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
+    sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+/// Single-object sub-branch of the default mode: a "kwargs"-mode constructor call, recursing
+/// through [`render_kwarg_field_value`] for every field.
+fn emit_json_object_arg_typed_kwargs(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    options_type: Option<&str>,
+    context: KwargRenderContext<'_>,
+) -> bool {
+    let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) else {
+        return false;
+    };
+    let mut used_struct_types = BTreeSet::new();
+    let kwargs: Vec<String> = obj
+        .iter()
+        .map(|(k, v)| {
+            let snake_key = k.to_snake_case();
+            let field_pointer = format!("/{}", escape_json_pointer(k));
+            let py_val =
+                render_kwarg_field_value(k, v, Some(opts_type), &field_pointer, context, &mut used_struct_types);
+            format!("{snake_key}={py_val}")
+        })
+        .collect();
+    let constructor = format!("{opts_type}({})", kwargs.join(", "));
+    sink.bindings.push(format!("    {var_name} = {constructor}"));
+    sink.kwarg_exprs.push(var_name.to_string());
+    true
+}
+
+fn emit_json_object_arg_with_mock_url(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    spec: &ConstructorSpec<'_>,
+    mock: &MockUrlInfo<'_>,
 ) -> bool {
     let json_str = serde_json::to_string(value).unwrap_or_default();
     let escaped = escape_python(&json_str);
-    let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
-    let fallback = format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'");
-    let base_expr = if has_host_root_route {
+    let env_key = crate::e2e::codegen::mock_url_env_key(mock.fixture_id);
+    let fallback = format!(
+        "os.environ['MOCK_SERVER_URL'] + '/fixtures/{}'",
+        mock.fixture_id
+    );
+    let base_expr = if mock.has_host_root_route {
         format!("os.environ.get('{env_key}') or {fallback}")
     } else {
         fallback
     };
-    arg_bindings.push(format!("    {var_name}_mock_base_url = {base_expr}"));
-    arg_bindings.push(format!(
+    sink.bindings.push(format!("    {var_name}_mock_base_url = {base_expr}"));
+    sink.bindings.push(format!(
         "    {var_name}_json = \"{escaped}\".replace(\"{}\", {var_name}_mock_base_url)",
         crate::e2e::codegen::MOCK_URL_PLACEHOLDER
     ));
 
-    match (options_via, options_type) {
+    match (spec.options_via, spec.options_type) {
         ("from_json", Some(opts_type)) => {
-            arg_bindings.push(format!("    {var_name} = {opts_type}.from_json({var_name}_json)"));
+            sink.bindings
+                .push(format!("    {var_name} = {opts_type}.from_json({var_name}_json)"));
         }
         ("dict", _) | (_, None) | ("json", _) => {
-            arg_bindings.push(format!("    {var_name} = json.loads({var_name}_json)"));
+            sink.bindings.push(format!("    {var_name} = json.loads({var_name}_json)"));
         }
         (_, Some(opts_type)) => {
-            arg_bindings.push(format!("    {var_name} = {opts_type}(**json.loads({var_name}_json))"));
+            sink.bindings
+                .push(format!("    {var_name} = {opts_type}(**json.loads({var_name}_json))"));
         }
     }
-    kwarg_exprs.push(var_name.to_string());
+    sink.kwarg_exprs.push(var_name.to_string());
     true
 }
 
