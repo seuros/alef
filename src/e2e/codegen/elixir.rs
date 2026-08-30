@@ -283,4 +283,6 @@ mod not_error_sibling_assertion_tests;
 #[cfg(test)]
 mod rename_all_wire_value_tests;
 #[cfg(test)]
+mod streaming_pipe_precedence_tests;
+#[cfg(test)]
 mod tests;

@@ -166,10 +166,13 @@ fn accessor_elixir_chunks_length_uses_length_function() {
 }
 
 #[test]
-fn accessor_elixir_stream_content_uses_pipe() {
+fn accessor_elixir_stream_content_joins_mapped_deltas() {
     let expr = StreamingFieldResolver::accessor("stream_content", "elixir", "chunks").unwrap();
-    assert!(expr.contains("|> Enum.join"), "elixir stream_content: {expr}");
-    assert!(expr.contains("|> Enum.map"), "elixir stream_content: {expr}");
+    // Was `|> Enum.map(...) |> Enum.join("")`. A pipe-headed accessor is unusable in the
+    // operator contexts call sites paste it into (see `elixir::streaming_pipe_precedence_tests`),
+    // so the same composition is emitted as nested calls. ~keep
+    assert!(expr.contains("Enum.join("), "elixir stream_content: {expr}");
+    assert!(expr.contains("Enum.map(chunks,"), "elixir stream_content: {expr}");
     // Elixir lists do not support bracket access — must use Enum.at, never choices[0]
     assert!(
         !expr.contains("choices[0]"),
@@ -926,7 +929,7 @@ fn elixir_tool_calls_normalizes_nil_delta_before_flat_map() {
     // that normalizes a stored-but-nil value, not just an absent key, to an empty list --
     // otherwise `Enum.flat_map`'s callback can return `nil` and crash. ~keep
     assert!(
-        expr.contains("Map.get(:tool_calls, [])) || []"),
+        expr.contains(":tool_calls, []) || []"),
         "elixir tool_calls must normalize a nil Map.get result with `|| []` before flat_map \
          enumerates it, got: {expr}"
     );

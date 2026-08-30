@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsupported by mio. If using Tokio, disable the net feature.`). The predicate now mirrors the
   wasm emitter: core defaults count as active only when no wasm feature list replaces them.
   Native targets are unchanged — their dependency edges still keep the core crate's defaults.
+- Emit the Elixir streaming `tool_calls` and `stream_content` accessors as plain calls instead of
+  `chunks |> ...` pipe chains. Elixir binds `in`/`not in` tighter than `|>`, so a `not_empty`
+  assertion on either field rendered `assert chunks |> Enum.flat_map(...) not in [nil, "", [], %{}]`,
+  which the compiler rejected with `cannot pipe chunks into Enum.flat_map(...) not in [...]` and
+  failed the whole generated E2E elixir suite. Deep `tool_calls.<field>` tails also composed onto
+  the bare pipe.
 - Resolve the Python wildcard element's `TypedDict`-vs-attribute owner from the same
   result-relative path the container half is rendered from. On an envelope-projected container
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the

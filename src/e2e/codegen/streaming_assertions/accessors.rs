@@ -159,11 +159,18 @@ impl StreamingFieldResolver {
                     format!("{chunks_var}.joinToString(\"\") {{ it.choices?.firstOrNull()?.delta?.content ?: \"\" }}")
                 }
                 "elixir" => {
-                    // StreamDelta has all fields optional with skip_serializing_if, so
-                    // absent fields are not present as keys in the Jason-decoded map.
-                    // Use Map.get with defaults to avoid KeyError on absent :content.
+                    // ~keep StreamDelta has all fields optional with skip_serializing_if, so absent
+                    // fields are not present as keys in the Jason-decoded map. `Map.get` with a
+                    // default avoids a KeyError on an absent `:content`.
+                    //
+                    // ~keep Emitted as nested calls, never a leading `|>` chain: Elixir binds
+                    // `in`/`not in` TIGHTER than `|>`, so a pipe-headed accessor substituted into
+                    // `assert <expr> not in [nil, "", [], %{}]` reparses as
+                    // `chunks |> (Enum.join(...) not in [...])` and fails to compile with
+                    // "cannot pipe chunks into ...". Streaming accessors are pasted into operator
+                    // contexts by every call site, so they must stay primary expressions.
                     format!(
-                        "{chunks_var} |> Enum.map(fn c -> (Enum.at(c.choices, 0) || %{{}}) |> Map.get(:delta, %{{}}) |> Map.get(:content, \"\") end) |> Enum.join(\"\")"
+                        "Enum.join(Enum.map({chunks_var}, fn c -> Map.get(Map.get((Enum.at(c.choices, 0) || %{{}}), :delta, %{{}}), :content, \"\") end), \"\")"
                     )
                 }
                 "python" => {
@@ -392,8 +399,16 @@ impl StreamingFieldResolver {
                     // stored `nil` instead of the `[]` default, and `Enum.flat_map`
                     // cannot enumerate `nil`. The trailing `|| []` normalizes that stored
                     // `nil` to an empty list before flat_map ever sees it. ~keep
+                    //
+                    // ~keep Emitted as a plain `Enum.flat_map/2` call, never `chunks |> ...`:
+                    // Elixir binds `in`/`not in` TIGHTER than `|>`, so the pipe-headed form
+                    // substituted into `assert <expr> not in [nil, "", [], %{}]` reparsed as
+                    // `chunks |> (Enum.flat_map(...) not in [...])` and the generated suite failed
+                    // to compile with "cannot pipe chunks into Enum.flat_map(...) not in
+                    // [nil, \"\", [], %{}]". It also kept `render_deep_tail`'s `.field` tail
+                    // (`tool_calls.foo`) from composing onto a bare pipe.
                     format!(
-                        "{chunks_var} |> Enum.flat_map(fn c -> ((List.first(c.choices) || %{{}}).delta |> Map.get(:tool_calls, [])) || [] end)"
+                        "Enum.flat_map({chunks_var}, fn c -> (Map.get((List.first(c.choices) || %{{}}).delta, :tool_calls, []) || []) end)"
                     )
                 }
                 // Zig: tool_calls count from all chunk deltas
