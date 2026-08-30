@@ -76,10 +76,33 @@ fn fixture_calling(call: &str) -> Fixture {
     }
 }
 
+/// A payload-carrying `#[serde(untagged)]` union: flutter_rust_bridge renders this as a freezed
+/// sealed class, NOT the plain Dart `enum` that `gen_bindings::wire_value::flat_wire_enums`
+/// attaches the `.wireValue` extension to (its filter requires every variant to be fieldless).
+fn stage_output_union() -> EnumDef {
+    EnumDef {
+        name: "StageOutput".to_string(),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            is_tuple: true,
+            ..EnumVariant::default()
+        }],
+        serde_untagged: true,
+        ..EnumDef::default()
+    }
+}
+
 /// `process` returns `ProcessResult { kind: DataNodeKind }`, `other` returns
 /// `OtherResult { kind: String }` (same leaf name, unrelated non-enum type — proves the
-/// classification is anchored per-call rather than matching on the leaf name alone), and
-/// `process_optional` returns `OptionalResult { kind: Option<DataNodeKind> }`.
+/// classification is anchored per-call rather than matching on the leaf name alone),
+/// `process_optional` returns `OptionalResult { kind: Option<DataNodeKind> }`, and
+/// `process_union` returns `UnionResult { kind: StageOutput }` — the payload-carrying shape,
+/// carried in the same surface as the unit-only enum so one IR exercises both branches.
 fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
     let type_defs = vec![
         TypeDef {
@@ -100,8 +123,13 @@ fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
             )],
             ..TypeDef::default()
         },
+        TypeDef {
+            name: "UnionResult".to_string(),
+            fields: vec![kind_field(TypeRef::Named("StageOutput".to_string()), false)],
+            ..TypeDef::default()
+        },
     ];
-    let enums = vec![data_node_kind_enum()];
+    let enums = vec![data_node_kind_enum(), stage_output_union()];
     let functions = vec![
         FunctionDef {
             name: "process".to_string(),
@@ -116,6 +144,11 @@ fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
         FunctionDef {
             name: "process_optional".to_string(),
             return_type: TypeRef::Named("OptionalResult".to_string()),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "process_union".to_string(),
+            return_type: TypeRef::Named("UnionResult".to_string()),
             ..FunctionDef::default()
         },
     ];
@@ -189,6 +222,11 @@ const CASES: &[Case] = &[
         call: "process_optional",
         expect_enum_wrapper: true,
     },
+    Case {
+        name: "a payload-carrying union field does not get .wireValue (freezed sealed class has none)",
+        call: "process_union",
+        expect_enum_wrapper: false,
+    },
 ];
 
 #[test]
@@ -227,5 +265,49 @@ fn an_explicit_enum_fields_config_entry_still_classifies_as_enum() {
     assert!(
         out.contains(ENUM_WRAPPER_MARKER),
         "explicit enum_fields config must still classify the field as enum, got:\n{out}"
+    );
+}
+
+/// The compile-shape discriminator: one IR carrying BOTH a unit-only enum and a payload-carrying
+/// union must lower only the first through `.wireValue`.
+///
+/// `flat_wire_enums` emits the `{{Enum}}WireValue` extension only for an enum whose every variant
+/// is fieldless, so for `StageOutput` there is no such extension in the generated Dart at all and
+/// `result.kind.wireValue` is an undefined getter — a `dart analyze` error, not a wrong-string
+/// runtime failure. Asserting the union case still renders an `expect(...)` line separates "the
+/// accessor was correctly withheld" from "the assertion was skipped entirely", which would make
+/// the absence check pass for the wrong reason. ~keep
+#[test]
+fn a_payload_carrying_union_field_is_not_lowered_through_wire_value() {
+    let (type_defs, enums, functions) = table_ir();
+
+    let unit_out = render(
+        &fixture_calling("process"),
+        &e2e_config_for("process", |_| {}),
+        &type_defs,
+        &enums,
+        &functions,
+    );
+    assert!(
+        unit_out.contains(ENUM_WRAPPER_MARKER),
+        "the unit-only enum must still lower through .wireValue, got:\n{unit_out}"
+    );
+
+    let union_out = render(
+        &fixture_calling("process_union"),
+        &e2e_config_for("process_union", |_| {}),
+        &type_defs,
+        &enums,
+        &functions,
+    );
+    assert!(
+        !union_out.contains(ENUM_WRAPPER_MARKER),
+        "a payload-carrying union has no .wireValue extension in the generated Dart, so the \
+         assertion must not reach for one, got:\n{union_out}"
+    );
+    assert!(
+        union_out.contains("expect("),
+        "the union assertion must still be rendered — an absent .wireValue only proves the fix \
+         when the assertion itself was emitted, got:\n{union_out}"
     );
 }

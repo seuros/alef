@@ -243,11 +243,22 @@ pub(super) fn render_assertion_dart(
                 // rather than failing to compile: `expect(result.kind.toString(), equals('key_value'))`
                 // compares the enum's Dart `toString()` (its variant name) against the fixture's
                 // serde wire value, so the test passes or fails on the wrong string. ~keep
+                //
+                // `ir_enum_is_data_carrying` then excludes the shape that has no `.wireValue` to
+                // reach for: `gen_bindings::wire_value::flat_wire_enums` emits the extension only
+                // for an enum whose every variant is fieldless, so a payload-carrying union
+                // (`StructureKind::Other(String)`, any `#[serde(untagged)]` union) is rendered by
+                // flutter_rust_bridge as a freezed sealed class the extension was never written
+                // against — `result.kind.wireValue` is then an undefined getter, a Dart analyze
+                // error. `None` (the IR did not resolve a concrete enum, e.g. a `fields_enum`-only
+                // config entry) keeps the pre-existing behaviour. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
                     .filter(|f| !f.is_empty())
-                    .is_some_and(|f| field_resolver.is_enum(f));
+                    .is_some_and(|f| {
+                        field_resolver.is_enum(f) && field_resolver.ir_enum_is_data_carrying(f) != Some(true)
+                    });
 
                 // Check if this field is a display-as-text type (e.g. AssistantContent).
                 let is_display_as_text = assertion
@@ -330,12 +341,15 @@ pub(super) fn render_assertion_dart(
             if let Some(expected) = &assertion.value {
                 let dart_val = format_value(expected);
                 // Check if this field is an enum field. See the `equals`/`field_equals` arm
-                // above for why this must consult the IR, not only the config. ~keep
+                // above for why this must consult the IR, not only the config, and why a
+                // data-carrying union is excluded from the `.wireValue` branch. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
                     .filter(|f| !f.is_empty())
-                    .is_some_and(|f| field_resolver.is_enum(f));
+                    .is_some_and(|f| {
+                        field_resolver.is_enum(f) && field_resolver.ir_enum_is_data_carrying(f) != Some(true)
+                    });
 
                 // Check if this field is a display-as-text type.
                 let is_display_as_text = assertion

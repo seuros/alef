@@ -277,6 +277,16 @@ pub struct IrEnumMap {
     /// `tagged_enum_wire[enum_name] -> (serde_tag, Rust variant -> serde wire value)`.
     /// Carries the exact discriminator spellings assertion generators need at runtime.
     pub tagged_enum_wire: HashMap<String, TaggedEnumWire>,
+    /// Names of the IR enums that carry data on at least one variant — the exact complement of
+    /// the `variants.iter().all(|v| v.fields.is_empty())` gate the Dart, Kotlin and Swift binding
+    /// backends each branch on when they decide whether an enum gets a scalar, string-lowerable
+    /// representation (`.wireValue` extension / `enum class` with `toWire()` / `: String` raw-value
+    /// enum) or a payload-bearing one (freezed sealed union / Kotlin sealed class / Swift enum with
+    /// associated values). Only the first shape has the lowering accessor, so an assertion
+    /// generator that classifies a field as "enum-typed" and appends that accessor unconditionally
+    /// emits an accessor the binding never declared. `enum_field_types` answers WHICH enum backs a
+    /// field; this answers whether that enum is one the accessor exists on. ~keep
+    pub data_carrying_enum_names: HashSet<String>,
     pub root_type: Option<String>,
 }
 

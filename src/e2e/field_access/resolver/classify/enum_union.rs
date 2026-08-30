@@ -6,7 +6,8 @@
 //! ([`FieldResolver::ir_enum_type_name`]), what a tagged-union variant's single payload field
 //! is and whether that payload is itself a collection
 //! ([`FieldResolver::union_variant_payload`], [`FieldResolver::union_variant_payload_is_collection`]),
-//! its wire discriminator ([`FieldResolver::tagged_enum_wire_discriminator`]), and two
+//! its wire discriminator ([`FieldResolver::tagged_enum_wire_discriminator`]), whether that enum
+//! carries variant data at all ([`FieldResolver::ir_enum_is_data_carrying`]), and two
 //! per-backend representation facts derived from the same enum-type lookup
 //! ([`FieldResolver::java_enum_emits_get_value`], [`FieldResolver::ruby_enum_serialized_as_hash`]).
 //! Keeping them together is what makes the shared `ir_enum_type_name` dependency visible: every
@@ -85,6 +86,22 @@ impl FieldResolver {
     pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
         let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;
         Some((wire.tag.as_str(), wire.variants.get(variant)?.as_str()))
+    }
+
+    /// Whether the IR enum backing `field` carries data on at least one variant, per
+    /// [`super::super::super::types::IrEnumMap::data_carrying_enum_names`]. `None` when the IR does
+    /// not positively resolve `field` to a concrete enum type (unresolved root type, or a field
+    /// classified as enum only via the hand-maintained `fields_enum` config) — a caller must decide
+    /// its own fallback for "unknown" rather than this method guessing.
+    ///
+    /// Callers are the assertion generators whose emitted accessor for an enum-typed field is a
+    /// scalar lowering the binding backend only declares on the unit-only shape: Dart's
+    /// `.wireValue`, Kotlin/Android's `.toWire()`, the Kotlin JVM facade's `.getValue()`, and
+    /// Swift's `.rawValue`. `Some(true)` means the binding rendered a payload-bearing union
+    /// instead, and none of those accessors exist on it. ~keep
+    pub fn ir_enum_is_data_carrying(&self, field: &str) -> Option<bool> {
+        let name = self.ir_enum_type_name(field)?;
+        Some(self.ir_enum_map.data_carrying_enum_names.contains(&name))
     }
 
     /// Whether the Java binding backend emits a `getValue()` accessor for the enum type

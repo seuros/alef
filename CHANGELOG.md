@@ -205,6 +205,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name. The bare `Wasm{Name}` is already the wasm-bindgen class, and TypeScript merges an
   interface into a same-named class silently, publishing the interface's serde wire keys as
   phantom members on every class instance alongside the real host accessors.
+- Stop lowering payload-carrying enum fields through the unit-only scalar accessor in generated
+  Dart, Kotlin, Kotlin Android and Swift E2E assertions. The IR classifies a `#[serde(untagged)]`
+  or otherwise data-carrying union as "enum-typed" just like a fieldless enum, so assertions
+  reached for `.wireValue`, `.toWire()`, `.getValue()` and `.rawValue` — accessors the binding
+  backends emit only on the all-fieldless-variants branch — producing generated tests that do not
+  compile.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

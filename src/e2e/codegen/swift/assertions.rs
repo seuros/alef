@@ -185,16 +185,17 @@ pub(super) fn render_assertion(
 
     // Determine if this field is an enum type. `field_resolver.is_enum` consults the
     // hand-maintained `fields_enum`/`enum_fields` config first and only then the IR-derived
-    // classification (`with_ir_enum_map`), so an explicit config entry still wins — this only
-    // rescues fields a consumer's `alef.toml` never mentions at all. A config-only check here
-    // used to answer `false` for those, emitting `XCTAssertEqual(result.kind().toString(),
-    // "key_value")` against a field whose Swift type is the generated enum `DataNodeKind`,
-    // which is not compile-comparable to a `String`. ~keep
+    // classification (`with_ir_enum_map`), so an explicit config entry still wins; a config-only
+    // check emitted `XCTAssertEqual(result.kind().toString(), "key_value")` against a field whose
+    // Swift type is the generated enum `DataNodeKind`, not compile-comparable to a `String`.
+    // `ir_enum_is_data_carrying` then excludes the union shape `gen_bindings::enums::emit_enum`
+    // renders with associated values instead of a `: String` raw-value enum — it has no
+    // `.rawValue`, so the property-access branch below must not invent one. ~keep
     let field_is_enum = assertion
         .field
         .as_deref()
         .filter(|f| !f.is_empty())
-        .is_some_and(|f| field_resolver.is_enum(f));
+        .is_some_and(|f| field_resolver.is_enum(f) && field_resolver.ir_enum_is_data_carrying(f) != Some(true));
 
     // Determine if this field is a display-as-text content union (e.g. `AssistantContent`).
     // Such fields are emitted as Swift enums (not `String`) and expose a `.text()` method

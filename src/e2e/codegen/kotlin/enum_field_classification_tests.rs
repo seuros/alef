@@ -51,10 +51,34 @@ fn kind_field(ty: TypeRef, optional: bool) -> FieldDef {
     }
 }
 
+/// A payload-carrying `#[serde(untagged)]` union. `emit_enum` takes its `enum class` branch —
+/// the only branch that declares `toWire()` — solely when every variant is fieldless, so this
+/// shape is emitted as a Kotlin sealed class with neither `toWire()` nor the JVM facade's
+/// `getValue()`.
+fn stage_output_union() -> EnumDef {
+    EnumDef {
+        name: "StageOutput".to_string(),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            is_tuple: true,
+            ..EnumVariant::default()
+        }],
+        serde_untagged: true,
+        ..EnumDef::default()
+    }
+}
+
 /// `process` returns `ProcessResult { kind: DataNodeKind }`, `other` returns
 /// `OtherResult { kind: String }` (same leaf name, unrelated non-enum type — proves the
-/// classification is anchored per-call rather than matching on the leaf name alone), and
-/// `process_optional` returns `OptionalResult { kind: Option<DataNodeKind> }`.
+/// classification is anchored per-call rather than matching on the leaf name alone),
+/// `process_optional` returns `OptionalResult { kind: Option<DataNodeKind> }`, and
+/// `process_union` returns `UnionResult { kind: StageOutput }` — the payload-carrying shape,
+/// carried in the same surface as the unit-only enum so one IR exercises both branches.
 fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
     let type_defs = vec![
         TypeDef {
@@ -75,8 +99,13 @@ fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
             )],
             ..TypeDef::default()
         },
+        TypeDef {
+            name: "UnionResult".to_string(),
+            fields: vec![kind_field(TypeRef::Named("StageOutput".to_string()), false)],
+            ..TypeDef::default()
+        },
     ];
-    let enums = vec![data_node_kind_enum()];
+    let enums = vec![data_node_kind_enum(), stage_output_union()];
     let functions = vec![
         FunctionDef {
             name: "process".to_string(),
@@ -91,6 +120,11 @@ fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
         FunctionDef {
             name: "process_optional".to_string(),
             return_type: TypeRef::Named("OptionalResult".to_string()),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "process_union".to_string(),
+            return_type: TypeRef::Named("UnionResult".to_string()),
             ..FunctionDef::default()
         },
     ];
@@ -242,25 +276,7 @@ fn kotlin_android_enum_equals_assertion_uses_to_wire_not_name_lowercase() {
         }],
         ..Fixture::default()
     };
-    let mut out = String::new();
-    render_test_method(
-        &mut out,
-        &fixture,
-        "Facade",
-        "",
-        "",
-        &[],
-        None,
-        false,
-        &e2e_config,
-        &std::collections::HashMap::new(),
-        true,
-        &ResolvedCrateConfig::default(),
-        &type_defs,
-        &enums,
-        &functions,
-    )
-    .expect("render_test_method succeeds");
+    let out = render_android(&fixture, &e2e_config, &type_defs, &enums, &functions);
     assert!(
         out.contains(".toWire()"),
         "expected .toWire() for a kotlin_android enum field, got:\n{out}"
@@ -272,5 +288,88 @@ fn kotlin_android_enum_equals_assertion_uses_to_wire_not_name_lowercase() {
     assert!(
         !out.contains(".lowercase()"),
         "kotlin_android enum equals assertions must not guess a case transform, got:\n{out}"
+    );
+}
+
+/// Render `call` in kotlin_android mode (the `kotlin_android` positional flag `render` pins to
+/// `false`), where enum-typed fields lower through `toWire()` rather than the JVM facade's
+/// `getValue()`.
+fn render_android(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[FunctionDef],
+) -> String {
+    let mut out = String::new();
+    render_test_method(
+        &mut out,
+        fixture,
+        "Facade",
+        "",
+        "",
+        &[],
+        None,
+        false,
+        e2e_config,
+        &std::collections::HashMap::new(),
+        true,
+        &ResolvedCrateConfig::default(),
+        type_defs,
+        enums,
+        functions,
+    )
+    .expect("render_test_method succeeds");
+    out
+}
+
+/// The compile-shape discriminator: one IR carrying BOTH a unit-only enum and a payload-carrying
+/// union must lower only the first through the scalar accessor, in each Kotlin target.
+///
+/// `toWire()` (kotlin_android) and `getValue()` (JVM facade) are both emitted only on the
+/// fieldless-variant branch of the binding backends' enum emitters, so applying either to a sealed
+/// class is an unresolved reference at Kotlin compile time. Asserting the union case still renders
+/// an `assertEquals(` against `result.kind` separates "the accessor was correctly withheld" from
+/// "the assertion was skipped entirely", which would satisfy the absence check for the wrong
+/// reason. ~keep
+#[test]
+fn a_payload_carrying_union_field_is_not_lowered_through_to_wire_or_get_value() {
+    let (type_defs, enums, functions) = table_ir();
+    let unit_config = e2e_config_for("process", |_| {});
+    let union_config = e2e_config_for("process_union", |_| {});
+    let unit_fixture = fixture_calling("process");
+    let union_fixture = fixture_calling("process_union");
+
+    let android_unit = render_android(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
+    assert!(
+        android_unit.contains(".toWire()"),
+        "the unit-only enum must still lower through .toWire() in kotlin_android, got:\n{android_unit}"
+    );
+
+    let android_union = render_android(&union_fixture, &union_config, &type_defs, &enums, &functions);
+    assert!(
+        !android_union.contains(".toWire()"),
+        "a payload-carrying union is a Kotlin sealed class with no toWire(), got:\n{android_union}"
+    );
+    assert!(
+        android_union.contains("assertEquals(") && android_union.contains("result.kind"),
+        "the union assertion must still be rendered — an absent .toWire() only proves the fix \
+         when the assertion itself was emitted, got:\n{android_union}"
+    );
+
+    let jvm_unit = render(&unit_fixture, &unit_config, &type_defs, &enums, &functions);
+    assert!(
+        jvm_unit.contains(ENUM_MARKER),
+        "the unit-only enum must still lower through .getValue() on the JVM, got:\n{jvm_unit}"
+    );
+
+    let jvm_union = render(&union_fixture, &union_config, &type_defs, &enums, &functions);
+    assert!(
+        !jvm_union.contains(ENUM_MARKER),
+        "the JVM facade declares no getValue() on the union wrapper either, got:\n{jvm_union}"
+    );
+    assert!(
+        jvm_union.contains("assertEquals(") && jvm_union.contains("result.kind"),
+        "the union assertion must still be rendered on the JVM path too, got:\n{jvm_union}"
     );
 }

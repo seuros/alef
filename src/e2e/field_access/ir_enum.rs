@@ -76,8 +76,26 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         variant_payload_types,
         variant_payload_is_collection,
         tagged_enum_wire: build_tagged_enum_wire(enums),
+        data_carrying_enum_names: data_carrying_enum_names(enums),
         root_type: None,
     }
+}
+
+/// The enums with at least one data-carrying variant, keyed by IR name.
+///
+/// The predicate is the negation of the `variants.iter().all(|v| v.fields.is_empty())` test the
+/// Dart (`backends::dart::gen_bindings::wire_value::flat_wire_enums`), Kotlin
+/// (`backends::kotlin::gen_bindings::object_wrapper::enums::emit_enum`) and Swift
+/// (`backends::swift::gen_bindings::enums::emit_enum`) binding backends each apply before emitting
+/// a scalar, string-lowerable representation. Asking it here, from the same IR those backends read,
+/// is what keeps an assertion generator from appending a lowering accessor to a union the binding
+/// rendered with a payload instead. ~keep
+fn data_carrying_enum_names(enums: &[EnumDef]) -> HashSet<String> {
+    enums
+        .iter()
+        .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
+        .map(|enum_def| enum_def.name.clone())
+        .collect()
 }
 
 fn build_tagged_enum_wire(enums: &[EnumDef]) -> HashMap<String, TaggedEnumWire> {

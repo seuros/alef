@@ -41,6 +41,18 @@ pub(super) fn build_call_field_resolver(
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
+    // The Kotlin (JVM) target asserts against the Java facade, so its `.getValue()` exists exactly
+    // when the Java binding backend's own `emits_get_value` says so — a different predicate from
+    // the all-fieldless-variants gate kotlin_android's `toWire()` has, since Java still folds an
+    // externally-tagged data enum down to a plain `enum`. Wiring the same set Java's own e2e
+    // generator wires is what keeps the two from disagreeing. ~keep
+    .with_java_wrapper_enum_names(
+        enums
+            .iter()
+            .filter(|enum_def| !crate::backends::java::gen_bindings::emits_get_value(enum_def))
+            .map(|enum_def| enum_def.name.clone())
+            .collect(),
+    )
     .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)

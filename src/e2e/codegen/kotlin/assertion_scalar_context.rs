@@ -15,16 +15,35 @@ use crate::e2e::fixture::Assertion;
 /// field (e.g., AssistantContent) with a `.text()` accessor. `enum_fields` carries the effective
 /// hand-maintained config (merged with the call-level `type_enum_fields` auto-detect in
 /// test_method.rs, which itself requires a `result_type` override to anchor); when it is silent,
-/// `field_resolver.is_enum` falls back to the IR-derived classification. This is purely
-/// additive -- it only turns a `false` into `true`. ~keep
+/// `field_resolver.is_enum` falls back to the IR-derived classification. ~keep
+///
+/// Classification alone is not enough to justify the scalar lowering `resolve_string_expr` applies:
+/// each target only declares its accessor on some enum shapes, and the two targets do NOT agree on
+/// which. kotlin_android's `toWire()` comes from `backends::kotlin::gen_bindings::object_wrapper::
+/// enums::emit_enum`, which reaches its `enum class` branch only when every variant is fieldless —
+/// a payload-carrying union is a sealed class with no `toWire()`. The JVM target asserts against
+/// the Java facade instead, whose `getValue()` follows `backends::java::gen_bindings::
+/// emits_get_value`: that one folds an externally-tagged data enum down to a plain `enum` and
+/// withholds the accessor only for a `serde(tag)`/`serde(untagged)` union wrapper. Asking each
+/// target's own predicate is what keeps this from emitting an unresolved reference in one target or
+/// needlessly dropping a working accessor in the other. `None` from either (the IR did not resolve
+/// a concrete enum, e.g. a `fields_enum`-only config entry) keeps the pre-existing behaviour. ~keep
 pub(super) fn compute_field_shape_flags(
     assertion: &Assertion,
     field_resolver: &FieldResolver,
     enum_fields: &std::collections::HashSet<String>,
     json_scalar_fields: &std::collections::HashSet<String>,
+    kotlin_android_style: bool,
 ) -> (bool, bool, bool) {
     let field_is_enum = assertion.field.as_deref().is_some_and(|f| {
-        enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)) || field_resolver.is_enum(f)
+        let classified_as_enum =
+            enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)) || field_resolver.is_enum(f);
+        let target_declares_accessor = if kotlin_android_style {
+            field_resolver.ir_enum_is_data_carrying(f) != Some(true)
+        } else {
+            field_resolver.java_enum_emits_get_value(f) != Some(false)
+        };
+        classified_as_enum && target_declares_accessor
     });
     let field_is_json_scalar = assertion
         .field
@@ -232,8 +251,13 @@ pub(super) fn compute_scalar_context(
     fields_c_types: &std::collections::HashMap<String, String>,
     kotlin_android_style: bool,
 ) -> (String, String, String, String, bool, bool, bool) {
-    let (field_is_enum, field_is_json_scalar, field_is_display_as_text) =
-        compute_field_shape_flags(assertion, field_resolver, enum_fields, json_scalar_fields);
+    let (field_is_enum, field_is_json_scalar, field_is_display_as_text) = compute_field_shape_flags(
+        assertion,
+        field_resolver,
+        enum_fields,
+        json_scalar_fields,
+        kotlin_android_style,
+    );
     let accessor_lang = if kotlin_android_style {
         "kotlin_android"
     } else {
