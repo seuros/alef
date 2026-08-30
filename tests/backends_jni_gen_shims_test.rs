@@ -83,8 +83,7 @@ fn make_method(name: &str, params: Vec<ParamDef>, return_type: TypeRef, is_async
 
 /// Build the Demo fixture API surface:
 /// - one top-level function: `create_client(api_key: String) -> Named("DemoClient")` [async, opaque return]
-/// - TypeDef `DemoClient` (opaque) with:
-///   * `do_thing(input: String) -> String`  (async, 1 param, String return)
+/// - TypeDef `DemoClient` (opaque) with: * `do_thing(input: String) -> String`  (async, 1 param, String return)
 ///   * `ping() -> bool`                      (async, no params, Bool return)
 ///   * `fetch_blob() -> Vec<u8>`             (async, no params, ByteArray return)
 fn make_demo_api() -> ApiSurface {
@@ -214,6 +213,7 @@ fn make_demo_api() -> ApiSurface {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],

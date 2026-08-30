@@ -111,6 +111,7 @@ fn make_enum(name: &str, variants: Vec<&str>) -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
 
         is_copy: false,
         has_serde: false,
@@ -798,6 +799,7 @@ fn lib_rs_struct_with_tagged_enum_field_serializes_to_json() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         is_copy: false,
         has_serde: true,
         binding_excluded: false,
@@ -1446,8 +1448,7 @@ fn trait_bridge_unregister_and_clear_fns_emitted_when_both_configured() {
     );
 }
 
-/// When `unregister_fn` and `clear_fn` are both `None`, neither function must
-/// appear in the generated lib.rs.
+/// When `unregister_fn` and `clear_fn` are both `None`, neither function must appear in the generated lib.rs.
 #[test]
 fn trait_bridge_no_unregister_or_clear_when_both_none() {
     let api = make_minimal_trait_api("Analyzer");
@@ -2028,8 +2029,7 @@ fn option_named_return_on_method_uses_map_not_serde_json() {
 }
 
 /// Method with a `Bytes` param where `is_ref = true` must pass `&name` (not `name`)
-/// so the core method receives `&[u8]` instead of `Vec<u8>`.
-/// This is Class B bug 1.
+/// so the core method receives `&[u8]` instead of `Vec<u8>`. This is Class B bug 1.
 #[test]
 fn bytes_ref_param_on_method_passes_borrowed_slice() {
     let parse_bytes_method = {
@@ -2090,8 +2090,7 @@ fn bytes_ref_param_on_method_passes_borrowed_slice() {
     );
 }
 
-/// Method with a `Path` param (not is_ref) must call `PathBuf::from(name)` not `&name`.
-/// This is Class B bug 2.
+/// Method with a `Path` param (not is_ref) must call `PathBuf::from(name)` not `&name`. This is Class B bug 2.
 #[test]
 fn path_param_on_method_converts_to_pathbuf() {
     let add_dir_method = make_simple_method(
@@ -2577,6 +2576,7 @@ fn make_tagged_enum(name: &str, variants: Vec<(&str, Vec<&str>)>) -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         is_copy: false,
         has_serde: true,
         binding_excluded: false,

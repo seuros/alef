@@ -144,6 +144,7 @@ pub(super) fn simple_enum() -> EnumDef {
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -427,6 +428,7 @@ fn untagged_tuple_enum() -> EnumDef {
         serde_tag: None,
         serde_untagged: true,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -869,9 +871,8 @@ fn arc_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     }
 }
 
-/// Regression: Option<Arc<serde_json::Value>> must not chain `(*v).clone().into()`
-/// on top of `as_ref().map(ToString::to_string)`, which would emit invalid
-/// `(*String).clone()` (str: !Clone).
+/// Regression: Option<Arc<serde_json::Value>> must not chain `(*v).clone().into()` on top of
+/// `as_ref().map(ToString::to_string)`, which would emit invalid `(*String).clone()` (str: !Clone).
 #[test]
 fn test_arc_json_option_field_no_double_chain() {
     let typ = arc_field_type(arc_field("registered_spec", TypeRef::Json, true));
@@ -913,11 +914,10 @@ fn test_arc_string_option_field_passthrough() {
     );
 }
 
-/// Regression: `Arc<HashMap<String, String>>` field — synthetic shape representative
-/// of structs that share an immutable map via Arc for zero-copy FFI. The plain `Arc`
-/// CoreWrapper must transparently unwrap the inner `val.<name>` reference via
-/// `(*val.<name>).clone()` so the downstream map iteration sees the owned `HashMap`,
-/// and the binding side reconstructs an `Arc` around the binding-shaped map.
+/// Regression: `Arc<HashMap<String, String>>` field — synthetic shape representative of structs
+/// that share an immutable map via Arc for zero-copy FFI. The plain `Arc` CoreWrapper must
+/// transparently unwrap the inner `val.<name>` reference via `(*val.<name>).clone()` so the
+/// downstream map iteration sees the owned `HashMap`, and the binding side reconstructs an `Arc`.
 #[test]
 fn test_arc_hashmap_string_string_field_transparent() {
     let field = arc_field(
@@ -938,8 +938,7 @@ fn test_arc_hashmap_string_string_field_transparent() {
     );
 }
 
-/// Regression: `Arc<Vec<String>>` field — plain Arc unwraps via deref-clone on the
-/// non-optional branch, just like the HashMap shape.
+/// Regression: `Arc<Vec<String>>` field — plain Arc unwraps via deref-clone, just like HashMap.
 #[test]
 fn test_arc_vec_string_field_transparent() {
     let field = arc_field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false);
@@ -1073,6 +1072,7 @@ fn cache_backend_like_enum() -> EnumDef {
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],

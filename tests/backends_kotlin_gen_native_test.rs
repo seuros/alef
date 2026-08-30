@@ -277,6 +277,7 @@ fn native_unit_enum_emits_enum_class() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,

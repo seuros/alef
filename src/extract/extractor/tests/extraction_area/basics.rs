@@ -68,6 +68,44 @@ fn test_extract_enum() {
 }
 
 #[test]
+fn test_extract_enum_rename_all_fields_independent_of_rename_all() {
+    let source = r#"
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "SCREAMING_SNAKE_CASE", rename_all_fields = "camelCase")]
+        pub enum Shape {
+            Circle { inner_radius: f64 },
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.enums.len(), 1);
+
+    let shape = &surface.enums[0];
+    assert_eq!(
+        shape.serde_rename_all.as_deref(),
+        Some("SCREAMING_SNAKE_CASE"),
+        "rename_all must still resolve to the variant-name rule"
+    );
+    assert_eq!(
+        shape.rename_all_fields.as_deref(),
+        Some("camelCase"),
+        "rename_all_fields must resolve to its own field-name rule, not rename_all's value"
+    );
+}
+
+#[test]
+fn test_extract_enum_rename_all_fields_absent_by_default() {
+    let source = r#"
+        pub enum Shape {
+            Circle { inner_radius: f64 },
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.enums[0].rename_all_fields, None);
+}
+
+#[test]
 fn test_extract_free_function() {
     let source = r#"
         /// Process the input.

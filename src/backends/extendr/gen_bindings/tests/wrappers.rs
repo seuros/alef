@@ -88,8 +88,7 @@ fn extendr_wrappers_emits_function_call_binding() {
 
 #[test]
 fn extendr_wrappers_emits_roxygen_doc_block_for_free_functions() {
-    // line + description from the Rust doc comment and emit `@param` /
-    // `@return` lines from the IR's type information.
+    // line + description from the Rust doc comment and emit `@param` / `@return` lines from the IR's type information.
     let backend = ExtendrBackend;
     let config = make_config();
     let api = ApiSurface {
@@ -705,8 +704,7 @@ fn extendr_wrappers_emits_roxygen_class_block_with_field_lines_for_struct() {
 
 #[test]
 fn extendr_wrappers_emits_param_doc_from_arguments_section_for_function() {
-    // type-based description on the `#' @param` line, and the `# Returns`
-    // section must drive the `#' @return` line.
+    // type-based description on the `#' @param` line, and the `# Returns` section must drive the `#' @return` line.
     let backend = ExtendrBackend;
     let config = make_config();
     let api = ApiSurface {
@@ -831,6 +829,7 @@ fn extendr_wrappers_emits_roxygen_block_for_flat_data_enum_with_variant_fields()
             serde_tag: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1127,6 +1126,7 @@ fn r_public_api_omits_from_json_for_unregistered_dto_roots() {
             serde_tag: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],

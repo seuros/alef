@@ -199,6 +199,7 @@ fn test_generated_code_example() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -286,6 +287,7 @@ fn make_untagged_enum(name: &str) -> EnumDef {
         serde_content: None,
         serde_untagged: true,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![
             EnumVariant {
                 name: "Text".to_string(),

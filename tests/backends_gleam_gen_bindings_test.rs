@@ -8,27 +8,10 @@ use alef::core::ir::{
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
-        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
-        default: None,
-        doc: String::new(),
-        sanitized: false,
-        is_boxed: false,
-        type_rust_path: None,
-        cfg: None,
-        typed_default: None,
-        core_wrapper: CoreWrapper::None,
-        vec_inner_core_wrapper: CoreWrapper::None,
-        newtype_wrapper: None,
-        serde_rename: None,
-        serde_flatten: false,
-        serde_with: None,
-        serde_skip_serializing_if: false,
-        binding_excluded: false,
-        binding_exclusion_reason: None,
-        original_type: None,
+        ..FieldDef::default()
     }
 }
 
@@ -234,6 +217,7 @@ fn enum_emits_custom_type() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -377,6 +361,7 @@ fn enum_tuple_variant_emits_unlabeled_field() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,

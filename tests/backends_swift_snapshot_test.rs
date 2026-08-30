@@ -174,6 +174,7 @@ fn make_basic_api() -> ApiSurface {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -411,6 +412,7 @@ fn snapshot_conversion_enum_with_data() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -736,13 +738,10 @@ unregister_fn = "unregister_image_processor"
 /// `Vec<Primitive(Usize)>` and sets `sanitized = true` on the `FieldDef`.  The
 /// swift backend must **not** emit a direct assignment (`__target.ngram_range =
 /// ngram_range;`) because the source field is still `(usize, usize)` — that
-/// would be a type-mismatch compile error.  Instead it must emit the serde
-/// JSON round-trip:
+/// would be a type-mismatch compile error.  Instead it must emit the serde JSON round-trip:
 ///
-/// ```text
-/// if let Ok(__v) = ::serde_json::to_value(ngram_range) {
-///     if let Ok(t) = ::serde_json::from_value(__v) { __target.ngram_range = t; }
-/// }
+/// ```text if let Ok(__v) = ::serde_json::to_value(ngram_range) {
+/// if let Ok(t) = ::serde_json::from_value(__v) { __target.ngram_range = t; } }
 /// ```
 ///
 /// This test locks down that code path so a future refactor cannot regress it.
@@ -1173,6 +1172,7 @@ fn snapshot_trait_bridge_inbound_options_field() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1499,8 +1499,7 @@ fn snapshot_into_rust_bulk_constructor_nested() {
 /// Primitive-only serde DTOs without a `Default` impl (e.g. `Point { row: u32,
 /// column: u32 }`, `ByteRange { start: usize, end: usize }`) must still get a
 /// positional `fn new(...)` constructor extern emitted to the swift-bridge
-/// extern block — and the Swift `intoRust()` must call it directly rather than
-/// routing through a JSON-roundtrip path.
+/// extern block — and the Swift `intoRust()` must call it directly rather than routing through a JSON-roundtrip path.
 #[test]
 fn snapshot_intorust_bulk_constructor_primitive_no_default() {
     let api = ApiSurface {
@@ -1599,8 +1598,7 @@ fn snapshot_intorust_bulk_constructor_primitive_no_default() {
 ///
 /// (Today's `can_emit_first_class_struct` gate keeps Map-bearing DTOs as
 /// RustBridge typealiases so `intoRust()` is not even emitted on the Swift side
-/// — but the shim is still pre-positioned so any future first-class emission
-/// Just Works.)
+/// — but the shim is still pre-positioned so any future first-class emission Just Works.)
 #[test]
 fn snapshot_intorust_json_fallback_shim_present_for_map_dto() {
     let api = ApiSurface {
@@ -1774,6 +1772,7 @@ fn snapshot_enum_variant_optional_field() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1893,6 +1892,7 @@ fn untagged_enum_field_uses_json_decoder_not_ref_init() {
             serde_content: None,
             serde_untagged: true,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],

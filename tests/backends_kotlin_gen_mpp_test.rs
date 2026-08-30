@@ -484,6 +484,7 @@ fn mpp_sealed_enum_in_common_main() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,

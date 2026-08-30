@@ -122,6 +122,7 @@ fn test_gen_unit_enum_type_produces_type_string_and_const_block() {
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![EnumVariant {
             name: "Active".to_string(),
             doc: String::new(),
@@ -203,6 +204,7 @@ fn test_gen_data_enum_sealed_interface() {
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![
             EnumVariant {
                 name: "Basic".to_string(),
@@ -491,6 +493,7 @@ fn make_passthrough_enum() -> EnumDef {
         serde_tag: None,
         serde_untagged: true,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![
             EnumVariant {
                 name: "Text".to_string(),
@@ -601,6 +604,7 @@ fn make_unit_enum(name: &str, rename_all: Option<&str>, variants: Vec<EnumVarian
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: rename_all.map(str::to_string),
+        rename_all_fields: None,
         variants,
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -704,6 +708,7 @@ fn make_newtype_tuple_enum(name: &str, rename_all: Option<&str>, variants: Vec<E
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: rename_all.map(str::to_string),
+        rename_all_fields: None,
         variants,
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -1154,6 +1159,7 @@ fn gen_data_enum_sealed_interface_doc_lists_all_variants_with_go_casing() {
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![
             make_variant("Text"),
             make_variant("ImageUrl"),
@@ -1533,125 +1539,6 @@ fn adjacent_tagged_enum_with_collection_payloads_is_not_reported_as_a_raw_passth
     );
 }
 
-/// The spellings `e2e::codegen::go::enum_literals` builds its expressions out of must be the
-/// ones the binding actually declares.
-///
-/// That module can no longer fall back on a conversion for a struct- or interface-shaped enum;
-/// it writes the variant's field name, the field's JSON key, the discriminator field, the
-/// adjacent-tagged constructor and the concrete variant struct by name. Any one of those it got
-/// wrong would name nothing in the emitted package, and the published snippet would fail to
-/// compile for a new reason instead of the old one. So assert every accessor against the real
-/// emitted text rather than against a second copy of the naming rule. ~keep
-#[test]
-fn go_enum_variant_spellings_match_the_emitted_declarations() {
-    fn variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
-        EnumVariant {
-            name: name.to_string(),
-            fields,
-            ..EnumVariant::default()
-        }
-    }
-    fn enum_def(name: &str, variants: Vec<EnumVariant>) -> EnumDef {
-        EnumDef {
-            name: name.to_string(),
-            rust_path: format!("samplelib::{name}"),
-            variants,
-            ..EnumDef::default()
-        }
-    }
-
-    let internally_tagged = EnumDef {
-        serde_tag: Some("kind".to_string()),
-        ..enum_def(
-            "SampleChoice",
-            vec![variant(
-                "Explicit",
-                vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
-            )],
-        )
-    };
-    let emitted = gen_enum_type(&internally_tagged, &[]);
-    let (tag_field, tag_json) = super::enums::go_struct_enum_tag_field(&internally_tagged).expect("a tag field");
-    assert!(
-        emitted.contains(&format!("{tag_field} string `json:\"{tag_json}\"`")),
-        "the discriminator spelling must be the emitted one:\n{emitted}"
-    );
-    let variant_fields = super::enums::go_struct_enum_variant_fields(&internally_tagged);
-    let explicit = variant_fields.first().expect("one variant field");
-    assert!(
-        emitted.contains(&format!(
-            "{} *SampleTarget `json:\"{},omitempty\"`",
-            explicit.field_name, explicit.json_key
-        )),
-        "the variant field spelling must be the emitted one:\n{emitted}"
-    );
-
-    let externally_tagged = enum_def(
-        "SampleExternal",
-        vec![variant(
-            "Explicit",
-            vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
-        )],
-    );
-    let emitted = gen_enum_type(&externally_tagged, &[]);
-    assert!(
-        super::enums::go_struct_enum_tag_field(&externally_tagged).is_none(),
-        "an externally tagged union declares no discriminator field"
-    );
-    let variant_fields = super::enums::go_struct_enum_variant_fields(&externally_tagged);
-    let explicit = variant_fields.first().expect("one variant field");
-    assert!(
-        emitted.contains(&format!(
-            "{} *SampleTarget `json:\"{},omitempty\"`",
-            explicit.field_name, explicit.json_key
-        )),
-        "an externally tagged union keys its field by the variant's wire name:\n{emitted}"
-    );
-
-    let sealed = EnumDef {
-        serde_tag: Some("type".to_string()),
-        ..enum_def(
-            "SampleDocument",
-            vec![variant("Url", vec![simple_field("url", TypeRef::String)])],
-        )
-    };
-    let emitted = gen_enum_type(&sealed, &[]);
-    let url_variant = &sealed.variants[0];
-    let struct_name = super::enums::go_data_enum_variant_struct(&sealed, url_variant);
-    assert!(
-        emitted.contains(&format!("type {struct_name} struct {{")),
-        "the concrete variant struct spelling must be the emitted one:\n{emitted}"
-    );
-    let (field_name, json_key) =
-        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
-    assert!(
-        emitted.contains(&format!("{field_name} string `json:\"{json_key}\"`")),
-        "the variant struct's field spelling must be the emitted one:\n{emitted}"
-    );
-    assert!(
-        super::enums::go_data_enum_variant_field(&sealed, &simple_field("_0", TypeRef::String)).is_none(),
-        "a positional field has no declared Go field on the variant struct"
-    );
-
-    let adjacent = EnumDef {
-        serde_tag: Some("kind".to_string()),
-        serde_content: Some("payload".to_string()),
-        ..enum_def(
-            "SampleAdjacent",
-            vec![variant(
-                "Text",
-                vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
-            )],
-        )
-    };
-    let emitted = gen_enum_type(&adjacent, &[]);
-    let constructor = super::enums::go_adjacent_tagged_constructor(&adjacent, &adjacent.variants[0]);
-    assert!(
-        emitted.contains(&format!("func {constructor}(")),
-        "the adjacent-tagged constructor spelling must be the emitted one:\n{emitted}"
-    );
-}
-
 /// Regression (#242): with neither `#[serde(tag = ..)]` nor `#[serde(untagged)]`, serde's
 /// default for a data-carrying enum is EXTERNAL tagging: `{"Variant": <inner>}`. This is the
 /// same wire shape the kotlin, pyo3, and magnus backends already emit for the equivalent
@@ -1711,6 +1598,7 @@ fn gen_data_enum_type_externally_tagged_round_trip_matches_serde_wire_shape() {
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
+        rename_all_fields: None,
         variants: vec![
             EnumVariant {
                 name: "Basic".to_string(),

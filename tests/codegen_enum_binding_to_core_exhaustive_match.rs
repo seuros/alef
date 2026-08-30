@@ -73,6 +73,7 @@ fn make_color_enum() -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         version: Default::default(),

@@ -261,6 +261,7 @@ fn make_visit_result_php() -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],

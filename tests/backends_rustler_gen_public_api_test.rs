@@ -265,6 +265,7 @@ fn test_generate_public_api_creates_all_files() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -540,6 +541,7 @@ fn test_struct_module_has_defstruct() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -783,6 +785,7 @@ fn test_simple_enum_module_has_type_and_accessors() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -903,9 +906,8 @@ fn test_generate_bindings_nif_init_uses_native_module() {
     );
 }
 
-/// A data-enum variant named `Function` snake-cases to `function`, which is an Elixir
-/// built-in type. The generated `@type` declaration must use `function_variant` to avoid
-/// a `Kernel.TypespecError: type function/0 is a built-in type and it cannot be redefined`.
+/// A data-enum variant named `Function` snake-cases to `function`, an Elixir built-in type. The
+/// generated `@type` declaration must use `function_variant` to avoid `Kernel.TypespecError`.
 #[test]
 fn test_builtin_type_function_variant_uses_safe_type_name() {
     let backend = RustlerBackend;
@@ -957,6 +959,7 @@ fn test_builtin_type_function_variant_uses_safe_type_name() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1037,9 +1040,8 @@ fn test_native_ex_emits_force_build_guard() {
     );
 }
 
-/// A simple-enum variant named `Doc` snake-cases to `doc`, which is a reserved Elixir
-/// module attribute. Emitting `@doc :doc` causes a compiler error. The generator must
-/// use `@doc_attr :doc` and `def doc, do: @doc_attr` instead.
+/// A simple-enum variant named `Doc` snake-cases to `doc`, a reserved Elixir module attribute.
+/// Emitting `@doc :doc` errors; the generator must use `@doc_attr :doc` / `def doc, do: @doc_attr`.
 #[test]
 fn test_reserved_attr_doc_variant_uses_safe_name() {
     let backend = RustlerBackend;
@@ -1091,6 +1093,7 @@ fn test_reserved_attr_doc_variant_uses_safe_name() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1676,11 +1679,10 @@ fn error_methods_emit_elixir_spec_and_def_wrappers() {
     );
 }
 
-/// Regression test: every Rust NIF emitted for error introspection methods
-/// (`<errname>_status_code`, `<errname>_is_transient`, `<errname>_error_type`) must
-/// have a matching `:erlang.nif_error(:nif_not_loaded)` stub in the `<App>.Native`
-/// Elixir module. Without these stubs, rustler-precompiled's `on_load` fails with
-/// `{:error, {:bad_lib, ~c"Function not found ..."}}` and the BEAM aborts module load.
+/// Regression test: every Rust NIF emitted for error introspection methods (`<errname>_status_code`,
+/// `<errname>_is_transient`, `<errname>_error_type`) must have a matching
+/// `:erlang.nif_error(:nif_not_loaded)` stub in the `<App>.Native` Elixir module. Without these
+/// stubs, rustler-precompiled's `on_load` fails and the BEAM aborts module load.
 #[test]
 fn error_methods_emit_matching_native_ex_stubs() {
     let backend = RustlerBackend;
@@ -1730,13 +1732,12 @@ fn error_methods_emit_matching_native_ex_stubs() {
     );
 }
 
-/// Regression test: opaque types with static constructor methods (like `new`) that return
-/// `Self` must wrap the NIF return value in the struct so instance methods receive
-/// `%SampleModule{ref: ...}` instead of a raw reference.
+/// Regression test: opaque types with static constructor methods (like `new`) that return `Self`
+/// must wrap the NIF return value in the struct so instance methods receive `%SampleModule{ref:
+/// ...}` instead of a raw reference.
 ///
-/// Issue: #119 — Elixir e2e RouteBuilder.new(method, path) returned a raw NIF Reference,
-/// not wrapped in %RouteBuilder{ref: ref}. Subsequent calls like request_schema_json(obj, ...)
-/// failed with BadMapError when trying to extract obj.ref.
+/// Issue: #119 — Elixir e2e RouteBuilder.new(method, path) returned a raw NIF Reference, not
+/// wrapped in %RouteBuilder{ref: ref}; subsequent calls failed with BadMapError extracting obj.ref.
 #[test]
 fn opaque_static_constructor_wraps_return_in_struct() {
     let backend = RustlerBackend;
@@ -1853,14 +1854,13 @@ fn opaque_static_constructor_wraps_return_in_struct() {
 
 /// A rustler method is flattened into a standalone `#[rustler::nif] pub fn`, so it re-emits its
 /// gate rather than being filtered — the same treatment the free-function loop already gives
-/// `FunctionDef::cfg` via `prepend_cfg`, and sound because the scaffolded Elixir crate declares
-/// every referenced cfg feature as a default-on passthrough.
+/// `FunctionDef::cfg` via `prepend_cfg`, sound because the scaffolded Elixir crate declares every
+/// referenced cfg feature as a default-on passthrough.
 ///
-/// The registration half of the contract is the second assertion. Rustler discovers NIFs from the
-/// attribute: `rustler::init!` is rendered with the module name alone and never enumerates NIF
-/// names, so there is no list that could keep naming a method the gate compiled out. Asserting the
-/// absence of such a list is what makes the one-sided gate provably safe rather than merely
-/// untested. ~keep
+/// The registration half is the second assertion: Rustler discovers NIFs from the attribute, and
+/// `rustler::init!` is rendered with the module name alone and never enumerates NIF names, so
+/// there is no list that could keep naming a gated-out method -- asserting its absence is what
+/// makes the one-sided gate provably safe rather than merely untested. ~keep
 #[test]
 fn rustler_gates_a_cfg_gated_nif_method_and_keeps_no_nif_name_list_to_disagree_with() {
     let backend = RustlerBackend;

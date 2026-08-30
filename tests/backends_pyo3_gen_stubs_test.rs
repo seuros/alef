@@ -188,6 +188,7 @@ fn test_basic_stubs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -403,6 +404,7 @@ fn test_enum_stubs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1240,6 +1242,7 @@ fn test_multiple_types_and_functions() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1558,6 +1561,7 @@ fn make_batch_status_enum_def() -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -1616,10 +1620,9 @@ fn test_pyi_stub_emits_upper_snake_case_enum_variants() {
     );
 }
 
-/// `.pyi` stub must escape variant names whose snake_case form collides with a Python
-/// reserved keyword. `Del` snake-cases to `del`, which is a Python statement keyword and
-/// produces unparseable stubs. The escape strategy appends `_` (`del_`), matching the
-/// field-name escape convention via `alef::core::keywords::python_ident`.
+/// `.pyi` stub must escape variant names whose snake_case form collides with a Python reserved
+/// keyword. `Del` snake-cases to `del`, a statement keyword, producing unparseable stubs; the
+/// escape strategy appends `_` (`del_`), matching `alef::core::keywords::python_ident`.
 #[test]
 fn test_pyi_stub_escapes_python_keyword_variant_names() {
     let backend = Pyo3Backend;
@@ -1683,6 +1686,7 @@ fn test_pyi_stub_escapes_python_keyword_variant_names() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1726,10 +1730,9 @@ fn test_pyi_stub_escapes_python_keyword_variant_names() {
     );
 }
 
-/// Opaque types that have a `[workspace.client_constructors.TypeName]` entry must emit
-/// a `def __init__(self, ...) -> None: ...` stub so mypy accepts `TypeName(params...)`
-/// call sites.  Without this stub mypy infers `def __init__(self) -> None` (no args)
-/// and rejects every construction call site with "Too many arguments".
+/// Opaque types with a `[workspace.client_constructors.TypeName]` entry must emit a `def
+/// __init__(self, ...) -> None: ...` stub so mypy accepts `TypeName(params...)` call sites.
+/// Without it mypy infers a no-arg `__init__` and rejects every construction call site.
 #[test]
 fn test_opaque_type_with_constructor_emits_init_stub() {
     let backend = Pyo3Backend;
@@ -1946,6 +1949,7 @@ fn test_data_enum_typed_dict_literals_use_serde_wire_names() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("kebab-case".to_string()),
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2313,8 +2317,7 @@ fn test_pyi_plugin_protocol_widens_sequence_returns_but_not_params() {
         content.contains("from typing import") && content.contains("Iterable"),
         "widened return must pull in the Iterable import:\n{content}"
     );
-    // `str` satisfies `Iterable[str]` but PyO3 rejects it ("Can't extract `str` to `Vec`"), so
-    // widening a string sequence would delete a static check instead of relaxing a false one.
+    // `str` satisfies `Iterable[str]` but PyO3 rejects it, so widening would delete a real check.
     assert!(
         content.contains("def supported_mime_types(self) -> list[str]: ..."),
         "string sequence return must NOT widen:\n{content}"
@@ -2327,11 +2330,9 @@ fn test_pyi_plugin_protocol_widens_sequence_returns_but_not_params() {
 }
 
 /// Regression test for xberg#362: the `.pyi` stub annotated a `serde_json::Value` field as
-/// `dict[str, Any]` while the `#[pyclass]` field is a `String`.
-///
-/// `Pyo3Mapper::json()` (`src/backends/pyo3/type_map.rs`) maps `TypeRef::Json` to the Rust type
-/// `String`, so `#[pyo3(get)]` returns a `str` holding serialized JSON. The stub said `dict`,
-/// so type checkers accepted `result.value["key"]` on what is really a string at runtime.
+/// `dict[str, Any]` while the `#[pyclass]` field is a `String` (`Pyo3Mapper::json()` maps
+/// `TypeRef::Json` to Rust `String`, so `#[pyo3(get)]` returns a `str`); type checkers accepted
+/// `result.value["key"]` on what is really a string at runtime.
 #[test]
 fn test_pyi_annotates_json_fields_as_str_not_dict() {
     let backend = Pyo3Backend;
@@ -2398,8 +2399,7 @@ fn test_pyi_annotates_json_fields_as_str_not_dict() {
         "the .pyi must not claim a Json field is a dict — the runtime returns a JSON str:\n{content}"
     );
 
-    // Negative control: the fix is scoped to `TypeRef::Json`. A real String-valued map is
-    // untouched and still renders as a dict.
+    // Negative control: the fix is scoped to `TypeRef::Json`; a real String-valued map is untouched.
     assert!(
         content.contains("metadata: dict[str, str]"),
         "Map<String, String> must still be annotated `dict[str, str]`:\n{content}"

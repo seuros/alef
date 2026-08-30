@@ -1,11 +1,8 @@
-//! Tests for Ruby type stub (.rbs) generation via Magnus backend.
-//!
+// ! Tests for Ruby type stub (.rbs) generation via Magnus backend. !
 //! These tests verify that the `generate_type_stubs` method correctly generates
 //! RBS (Ruby Type Signatures) type stubs from API surfaces. The stubs define Ruby
-//! class and method signatures for use with the built native extension.
-//!
-//! Test coverage:
-//! - Basic stub generation with types, functions, and enums
+// ! class and method signatures for use with the built native extension. !
+// ! Test coverage: ! - Basic stub generation with types, functions, and enums
 //! - Ruby type mapping (Integer, String, Float, Array, Hash, Optional, etc.)
 //! - Enum variant generation
 //! - Opaque type stubs (methods only, no fields)
@@ -225,6 +222,7 @@ fn test_basic_rbs_stubs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -473,6 +471,7 @@ fn test_enum_stubs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -915,6 +914,7 @@ fn test_multiline_doc_comment_is_valid_rbs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],

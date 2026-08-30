@@ -118,6 +118,96 @@ fn serde_rename_wins_over_rename_all() {
     );
 }
 
+// `EnumDef::rename_all_fields` cases the FIELD names of a struct-shaped variant's payload; it is
+// a distinct serde namespace from `EnumDef::serde_rename_all`, which cases VARIANT names. A call
+// site computing a struct-variant field's wire name must resolve it through `wire_field_name`
+// with the field's own `serde_rename` and the enum's `rename_all_fields` -- never the enum's
+// `serde_rename_all`, which is the exact confusion this precedence chain guards against. ~keep
+#[test]
+fn struct_variant_field_wire_name_prefers_field_rename_over_enum_rename_all_fields() {
+    let field = crate::core::ir::FieldDef {
+        name: "inner_radius".to_string(),
+        serde_rename: Some("radius".to_string()),
+        ..crate::core::ir::FieldDef::default()
+    };
+    let enum_def = crate::core::ir::EnumDef {
+        rename_all_fields: Some("camelCase".to_string()),
+        ..crate::core::ir::EnumDef::default()
+    };
+
+    assert_eq!(
+        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        "radius",
+        "an explicit field-level serde_rename must win over the enum's rename_all_fields"
+    );
+}
+
+#[test]
+fn struct_variant_field_wire_name_falls_back_to_rename_all_fields_without_field_rename() {
+    let field = crate::core::ir::FieldDef {
+        name: "inner_radius".to_string(),
+        ..crate::core::ir::FieldDef::default()
+    };
+    let enum_def = crate::core::ir::EnumDef {
+        rename_all_fields: Some("camelCase".to_string()),
+        ..crate::core::ir::EnumDef::default()
+    };
+
+    assert_eq!(
+        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        "innerRadius",
+        "with no field-level rename, the enum's rename_all_fields must case the raw field name"
+    );
+}
+
+#[test]
+fn struct_variant_field_wire_name_falls_back_to_raw_name_with_no_rule_at_all() {
+    let field = crate::core::ir::FieldDef {
+        name: "inner_radius".to_string(),
+        ..crate::core::ir::FieldDef::default()
+    };
+    let enum_def = crate::core::ir::EnumDef::default();
+
+    assert_eq!(
+        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        "inner_radius"
+    );
+}
+
+/// `rename_all` (variant names) and `rename_all_fields` (struct-variant field names) are
+/// independent serde container attributes: an enum may set either, both, or neither, and one
+/// must never influence the other's resolved value. ~keep
+#[test]
+fn rename_all_and_rename_all_fields_are_independent() {
+    let variant_name_only = crate::core::ir::EnumDef {
+        serde_rename_all: Some("SCREAMING_SNAKE_CASE".to_string()),
+        ..crate::core::ir::EnumDef::default()
+    };
+    assert_eq!(variant_name_only.rename_all_fields, None);
+
+    let field_name_only = crate::core::ir::EnumDef {
+        rename_all_fields: Some("kebab-case".to_string()),
+        ..crate::core::ir::EnumDef::default()
+    };
+    assert_eq!(field_name_only.serde_rename_all, None);
+
+    let both = crate::core::ir::EnumDef {
+        serde_rename_all: Some("SCREAMING_SNAKE_CASE".to_string()),
+        rename_all_fields: Some("camelCase".to_string()),
+        ..crate::core::ir::EnumDef::default()
+    };
+    assert_eq!(
+        wire_variant_value("InnerRadius", None, both.serde_rename_all.as_deref()),
+        "INNER_RADIUS",
+        "serde_rename_all still governs variant-name casing when both are set"
+    );
+    assert_eq!(
+        wire_field_name("inner_radius", None, both.rename_all_fields.as_deref()),
+        "innerRadius",
+        "rename_all_fields still governs field-name casing when both are set"
+    );
+}
+
 #[test]
 fn public_identifiers_are_separate_from_wire_names() {
     assert_eq!(

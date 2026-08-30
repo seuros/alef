@@ -259,6 +259,7 @@ fn unit_enum_emits_enum_class() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -622,8 +623,7 @@ fn function_imports_native_facade() {
 /// as `Flow<T>` methods (using `callbackFlow`) on the generated Kotlin
 /// `DefaultClient` class. The previous implementation emitted an `Iterator<T>`
 /// delegation; it is now replaced with a coroutine-native `Flow<T>` wrapper that
-/// calls the three JNI native methods (`native{Owner}{Adapter}Start/Next/Free`)
-/// emitted on the Java facade class.
+/// calls the three JNI native methods (`native{Owner}{Adapter}Start/Next/Free`) emitted on the Java facade class.
 #[test]
 fn streaming_adapter_emits_flow_method_on_client_class() {
     let config = resolved_one(
@@ -1284,8 +1284,7 @@ target = "jvm"
 }
 
 /// A data class with a single short field fits within 100 chars → ktfmt
-/// collapses it to a single line. The emitter must produce the same output
-/// without a post-processing step.
+/// collapses it to a single line. The emitter must produce the same output without a post-processing step.
 #[test]
 fn short_data_class_emits_single_line() {
     let ty = make_type(
@@ -1301,8 +1300,7 @@ fn short_data_class_emits_single_line() {
     );
 }
 
-/// A data class whose single-line form exceeds 100 chars must be emitted
-/// multi-line so ktfmt leaves it unchanged.
+/// A data class whose single-line form exceeds 100 chars must be emitted multi-line so ktfmt leaves it unchanged.
 #[test]
 fn long_data_class_emits_multi_line() {
     let fields = vec![
@@ -1380,6 +1378,7 @@ fn short_sealed_class_variant_emits_single_line() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         is_copy: false,
         has_serde: false,
         has_default: false,
@@ -1424,6 +1423,7 @@ fn long_sealed_class_variant_emits_multi_line() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         is_copy: false,
         has_serde: false,
         has_default: false,

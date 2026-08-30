@@ -177,6 +177,7 @@ fn test_basic_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -364,6 +365,7 @@ fn test_enum_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1634,6 +1636,7 @@ fn make_visit_result_wasm() -> EnumDef {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -2193,8 +2196,7 @@ fn test_vec_string_is_ref_without_inner_ref_passes_the_vec_directly() {
 /// binding wrapper type (e.g. `WasmParseOptions`) is returned, not the bare core type.
 ///
 /// Before the fix, `wrap_return_with_mutex` skipped `.into()` when `n == type_name`, which
-/// caused `fn default() -> WasmParseOptions { core::ParseOptions::default() }` —
-/// a type mismatch compile error.
+/// caused `fn default() -> WasmParseOptions { core::ParseOptions::default() }` — a type mismatch compile error.
 #[test]
 fn test_static_default_returns_binding_wrapper_not_core_type() {
     let backend = WasmBackend;
@@ -2476,21 +2478,18 @@ fn test_wasm_core_crate_override_and_exclude_extra_dependencies() {
 
 /// Lock in the contract for `Map<String, NamedStruct>` fields in the WASM backend.
 ///
-/// The WASM backend sets `map_uses_jsvalue = true`, which causes the entire
-/// `HashMap<K, V>` to be serialised as a `JsValue`.  This is intentional:
-/// wasm-bindgen cannot pass a Rust `HashMap` across the JS/Wasm boundary directly.
+/// The WASM backend sets `map_uses_jsvalue = true`, which causes the entire `HashMap<K, V>` to be
+/// serialised as a `JsValue`: wasm-bindgen cannot pass a Rust `HashMap` across the JS/Wasm
+/// boundary directly.
 ///
-/// Core→binding direction uses `js_sys::JSON::parse` (via a `serde_json::to_string`
-/// round-trip) to produce a plain JS object.  `serde_wasm_bindgen::to_value` is
-/// intentionally NOT used here because it produces ES6 Maps for `serialize_map`
-/// calls, whereas callers expect plain JS objects.
+/// Core→binding uses `js_sys::JSON::parse` (via a `serde_json::to_string` round-trip) to produce
+/// a plain JS object; `serde_wasm_bindgen::to_value` is intentionally NOT used here because it
+/// produces ES6 Maps for `serialize_map` calls, whereas callers expect plain JS objects.
+/// Binding→core uses `serde_wasm_bindgen::from_value`.
 ///
-/// Binding→core direction uses `serde_wasm_bindgen::from_value`.
-///
-/// This test locks in that emission so a future refactor cannot silently switch to
-/// a `.into_iter().map(|(k, v)| (k, v.into())).collect()` pattern, which would fail
-/// to compile (the binding-wrapper type does not implement `Into<CoreType>` for map
-/// values when the field is typed as `JsValue`).
+/// This test locks in that emission so a future refactor cannot silently switch to a
+/// `.into_iter().map(|(k, v)| (k, v.into())).collect()` pattern, which would fail to compile (the
+/// binding-wrapper type does not implement `Into<CoreType>` for map values typed as `JsValue`).
 #[test]
 fn test_map_named_value_uses_serde_wasm_bindgen_not_into() {
     let backend = WasmBackend;
@@ -2874,6 +2873,7 @@ fn test_default_factory_emitted_for_required_args_struct() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3033,6 +3033,7 @@ fn make_enum_def(name: &str, variants: &[&str], serde_rename_all: Option<&str>) 
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: serde_rename_all.map(str::to_string),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -3072,8 +3073,7 @@ fn make_type_def(name: &str, fields: Vec<FieldDef>) -> TypeDef {
 }
 
 /// Optional enum fields must generate `Option<String>` getters (not `Option<WasmEnum>`)
-/// so JS receives the serde wire string (e.g. "stop", "tool_calls") rather than a
-/// numeric discriminant.
+/// so JS receives the serde wire string (e.g. "stop", "tool_calls") rather than a numeric discriminant.
 #[test]
 fn test_optional_enum_getter_returns_option_string() {
     let backend = WasmBackend;
@@ -3255,6 +3255,7 @@ fn test_vec_of_tagged_data_enum_field_uses_js_value() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -3429,6 +3430,7 @@ fn test_option_and_bare_tagged_data_enum_fields_use_js_value() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -3839,6 +3841,7 @@ fn test_wasm_js_name_on_unit_enum() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3970,8 +3973,7 @@ fn test_has_default_struct_delegates_wasm_default_to_core_default() {
 
 /// Regression test: constructor params and struct-literal field inits must stay in sync.
 ///
-/// Three cases:
-/// 1. Single-word optional field (`content: Option<String>`) — camelCase == snake_case, must work.
+/// Three cases: 1. Single-word optional field (`content: Option<String>`) — camelCase == snake_case, must work.
 /// 2. Multi-word optional field (`total_tokens: Option<u64>`) — param becomes `totalTokens`,
 ///    struct-literal LHS stays `total_tokens`, RHS must be `totalTokens.unwrap_or_default()`.
 ///    Previously emitted `total_tokens.unwrap_or_default()` (E0425 — ident not in scope).
@@ -4103,11 +4105,10 @@ fn test_constructor_camel_case_required_multi_word_field() {
 
 /// Regression test: From impl must use snake_case for struct field names on both sides.
 ///
-/// The binding struct has snake_case field names (prompt_tokens, completion_tokens).
-/// The From<WasmStruct> → CoreStruct impl must reference these with snake_case
-/// (val.prompt_tokens, not val.promptTokens).
-/// Previously, if the WASM backend applied camelCase conversions to param names,
-/// it could leak into the From impl generation, causing E0425 "cannot find value".
+/// The binding struct has snake_case field names (prompt_tokens, completion_tokens). The
+/// From<WasmStruct> → CoreStruct impl must reference these with snake_case (val.prompt_tokens,
+/// not val.promptTokens). Previously, if the WASM backend applied camelCase conversions to param
+/// names, it could leak into the From impl generation, causing E0425 "cannot find value".
 #[test]
 fn test_from_impl_uses_snake_case_field_names() {
     let backend = WasmBackend;
@@ -4190,8 +4191,7 @@ fn test_from_impl_uses_snake_case_field_names() {
 /// - decode via `serde_wasm_bindgen::from_value::<Vec<(String, String)>>` in binding→core
 /// - encode via `serde_wasm_bindgen::to_value` in core→binding
 ///
-/// This preserves the `[["k","v"],...]` JSON wire format that serde produces for
-/// `Vec<(String, String)>` and prevents the flat `["k","v",...]` that `Vec<String>` would give.
+/// This preserves the `[["k","v"],...]` wire format vs. the flat `["k","v",...]` `Vec<String>` gives.
 #[test]
 fn test_sanitized_tuple_vec_field_uses_js_value_in_tagged_enum() {
     let backend = WasmBackend;
@@ -4282,6 +4282,7 @@ fn test_sanitized_tuple_vec_field_uses_js_value_in_tagged_enum() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -4577,9 +4578,9 @@ fn has_default_non_convertible_type_derives_default_not_delegating_impl() {
 }
 
 /// Regression coverage for xberg#390: a struct field whose type has no corresponding
-/// `TypeDef`/`EnumDef` anywhere in the API surface (a genuinely foreign/unbound Rust type, e.g.
-/// `html_to_markdown_rs::ConversionOptions` referenced by `ExtractionConfig::html_options`) must
-/// not produce a dangling reference to a `Wasm*` wrapper that is never generated.
+/// `TypeDef`/`EnumDef` anywhere in the API surface (a genuinely foreign/unbound Rust type,
+/// referenced by `ExtractionConfig::html_options`) must not produce a dangling reference to a
+/// `Wasm*` wrapper that is never generated.
 ///
 /// Before this fix, `WasmMapper::named` mapped *any* `TypeRef::Named(name)` to `"{prefix}{name}"`
 /// unconditionally, so this field would silently become `html_options: Option<WasmConversionOptions>`
@@ -4651,8 +4652,7 @@ fn field_referencing_unbound_foreign_type_is_excluded_with_loud_marker() {
 /// Negative control for the above: a field whose type DOES have a corresponding `TypeDef` in the
 /// API surface must be bound normally — no exclusion, no omission marker. This is the
 /// revert-check: if the unknown-type detection in `cfg::first_unknown_named_type` regresses to
-/// treating every `Named` type as unbound, this test fails because `pages` and `PageConfig`
-/// would be wrongly dropped.
+/// treating every `Named` type as unbound, this test fails because `pages` and `PageConfig` would be wrongly dropped.
 #[test]
 fn field_referencing_a_known_named_type_is_not_treated_as_unbound() {
     let backend = WasmBackend;

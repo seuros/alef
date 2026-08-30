@@ -702,6 +702,7 @@ fn test_basic_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1453,11 +1454,10 @@ fn test_no_standalone_builder_java_file_emitted() {
     );
 }
 
-/// Regression: a non-optional `#[serde(default)]` boolean field that defaults to `true`
-/// must restore that default in the record's compact constructor. Boxed `@Nullable Boolean`
-/// fields arrive as `null` when JSON omits them, so without the null-check the accessor would
-/// return `null` instead of `true` (mirrors the boxed-numeric default handling and Kotlin's
-/// `= true`). Primitive bool fields stay skipped — covered separately.
+/// Regression: a non-optional `#[serde(default)]` boolean field defaulting to `true` must restore
+/// that default in the record's compact constructor. Boxed `@Nullable Boolean` fields arrive as
+/// `null` when JSON omits them, so without the null-check the accessor returns `null` instead of
+/// `true` (mirrors the boxed-numeric default handling). Primitive bool fields stay skipped.
 #[test]
 fn test_serde_default_boxed_boolean_true_restored_in_compact_ctor() {
     let backend = JavaBackend;
@@ -1559,6 +1559,7 @@ fn test_tagged_union_newtype_variants_produce_valid_java() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("snake_case".to_string()),
+            rename_all_fields: None,
             methods: vec![],
             doc: String::new(),
             cfg: None,
@@ -1718,11 +1719,10 @@ fn test_output_path_no_doubling() {
     );
 }
 
-/// Streaming-adapter emission: when a `[[crates.adapters]]` entry has
-/// pattern = "streaming" and owner_type = an opaque handle, the Java backend
-/// must emit (a) the three FFI iterator-handle MethodHandles in NativeLib and
-/// (b) a public `chatStream(req)` instance method on the opaque handle that
-/// returns `Stream<ChatCompletionChunk>` driven by those handles.
+/// Streaming-adapter emission: when a `[[crates.adapters]]` entry has pattern = "streaming" and
+/// owner_type = an opaque handle, the Java backend must emit (a) the three FFI iterator-handle
+/// MethodHandles in NativeLib and (b) a public `chatStream(req)` instance method on the opaque
+/// handle that returns `Stream<ChatCompletionChunk>` driven by those handles.
 #[test]
 fn test_streaming_adapter_emits_stream_method_on_opaque_handle() {
     use alef::core::ir::{MethodDef, ReceiverKind};
@@ -2164,11 +2164,10 @@ fn test_dto_emits_as_record_with_fields_only() {
     );
 }
 
-/// Regression for issue #146: an instance method on an opaque handle that
-/// returns another opaque handle must NOT free the returned pointer. The new
-/// wrapper owns the handle and frees it in close(); freeing it in the accessor
-/// returns a wrapper around an already-freed handle (use-after-free → native
-/// access-violation crash on the next call, e.g. `tree.walk()`).
+/// Regression for issue #146: an instance method on an opaque handle that returns another opaque
+/// handle must NOT free the returned pointer. The new wrapper owns the handle and frees it in
+/// close(); freeing it in the accessor returns a wrapper around an already-freed handle
+/// (use-after-free → native access-violation crash on the next call).
 #[test]
 fn test_opaque_handle_returning_method_does_not_free_result() {
     let backend = JavaBackend;
@@ -2412,6 +2411,7 @@ fn test_sum_type_sealed_interface_with_record_variants() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2652,6 +2652,7 @@ fn test_tagged_enum_emits_sealed_interface_with_record_variants() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             methods: vec![],
             doc: "A geometric shape".to_string(),
             cfg: None,
@@ -3112,10 +3113,9 @@ fn test_option_params_and_returns_emit_nullable_annotations() {
 }
 
 /// Regression: streaming method template uses fully-qualified `java.util.stream.Stream<T>` and
-/// `java.util.stream.StreamSupport.stream(...)` in the method body. Adding
-/// `import java.util.stream.Stream;` is therefore redundant and triggers Checkstyle's
-/// `UnusedImports` rule (observed in sample-llm DefaultClient.java:12 after regeneration).
-/// This test asserts the import is absent for opaque-handle classes that own streaming adapters.
+/// `java.util.stream.StreamSupport.stream(...)` in the method body, so adding `import
+/// java.util.stream.Stream;` is redundant and triggers Checkstyle's `UnusedImports` rule. This
+/// test asserts the import is absent for opaque-handle classes that own streaming adapters.
 #[test]
 fn test_no_stream_import_emitted_for_streaming_opaque_handle() {
     let config = resolved_one(
@@ -4235,12 +4235,11 @@ result_type = "FlowDecision"
     assert!(!options.content.contains("Visitor hook"));
 }
 
-/// Regression test for a Java visitor `context_type` carrying a Rust lifetime parameter
-/// (e.g. `NodeContext<'a>`): a lifetime parameter alone must not exclude the type from the
-/// binding surface, or the visitor pattern silently stops resolving (`resolve_visitor_generation`
-/// fails to find `context_type` in `api.types` and returns `None`), leaving `VisitorBridge.java`
-/// and its siblings unemitted with nothing surfaced to the caller. See
-/// `JavaBackend::effective_exclude_types` / `lifetime_bound_type_names`.
+/// Regression test for a Java visitor `context_type` carrying a Rust lifetime parameter (e.g.
+/// `NodeContext<'a>`): a lifetime parameter alone must not exclude the type from the binding
+/// surface, or the visitor pattern silently stops resolving (`resolve_visitor_generation` fails
+/// to find `context_type` in `api.types`), leaving `VisitorBridge.java` unemitted with nothing
+/// surfaced to the caller. See `JavaBackend::effective_exclude_types` / `lifetime_bound_type_names`.
 #[test]
 fn options_field_visitor_context_type_with_lifetime_params_is_still_bound() {
     let backend = JavaBackend;
@@ -4846,6 +4845,7 @@ fn make_assistant_content_enum() -> alef::core::ir::EnumDef {
         serde_content: None,
         serde_untagged: true,
         serde_rename_all: None,
+        rename_all_fields: None,
         variants: vec![
             alef::core::ir::EnumVariant {
                 name: "Text".to_string(),
@@ -5169,6 +5169,7 @@ fn generate_plain_enum_content(serde_rename_all: Option<&str>, serde_rename: Opt
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: serde_rename_all.map(str::to_string),
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -5193,9 +5194,8 @@ fn generate_plain_enum_content(serde_rename_all: Option<&str>, serde_rename: Opt
         .clone()
 }
 
-/// Regression for the fallback wire-name bug: with no `#[serde(rename_all)]` and no
-/// `#[serde(rename)]`, serde emits the variant name verbatim (`ListItem`), not lowercased
-/// (`listitem`). An explicit `serde(rename)` must beat `rename_all` when both are present.
+/// Regression for the fallback wire-name bug: with no `#[serde(rename_all)]`/`rename`, serde emits
+/// the variant name verbatim, not lowercased; an explicit `serde(rename)` must beat `rename_all`.
 #[test]
 fn plain_enum_json_name_matches_serde_wire_format() {
     let cases: &[(Option<&str>, Option<&str>, &str)] = &[

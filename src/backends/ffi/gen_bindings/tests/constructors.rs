@@ -164,6 +164,7 @@ fn opaque_with_constructor_api() -> ApiSurface {
             serde_tag: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],

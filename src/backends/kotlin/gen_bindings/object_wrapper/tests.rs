@@ -64,6 +64,7 @@ fn make_enum(
         serde_tag: serde_tag.map(str::to_string),
         serde_untagged,
         serde_rename_all: serde_rename_all.map(str::to_string),
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -72,9 +73,8 @@ fn make_enum(
     }
 }
 
-/// Regression: sealed classes with `#[serde(tag = ...)]` must emit
-/// `@JsonDeserialize` annotation and a companion deserializer that reads the
-/// tag field and dispatches per variant.
+/// Regression: sealed classes with `#[serde(tag = ...)]` must emit `@JsonDeserialize` annotation
+/// and a companion deserializer that reads the tag field and dispatches per variant.
 #[test]
 fn emit_enum_tagged_sealed_class_emits_json_deserialize_annotation() {
     let en = make_enum(

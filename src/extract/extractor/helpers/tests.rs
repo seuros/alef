@@ -1,6 +1,7 @@
 use super::attributes::{
     extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all,
-    extract_serde_skip_serializing_if, extract_serde_with, has_container_serde_default, has_derive, has_derive_path,
+    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_serde_with, has_container_serde_default,
+    has_derive, has_derive_path,
 };
 use super::normalize_rustdoc;
 
@@ -239,6 +240,67 @@ fn test_extract_serde_rename_all_cfg_attr_multiple_inner_attrs() {
 fn test_extract_serde_rename_all_absent_returns_none() {
     let attrs = parse_attrs(r#"#[derive(Debug, Clone)]"#);
     assert_eq!(extract_serde_rename_all(&attrs), None);
+}
+
+// --- extract_serde_rename_all_fields ---
+//
+// `rename_all_fields` is a distinct serde container attribute from `rename_all`: it cases the
+// FIELD names of struct-shaped variants, while `rename_all` cases VARIANT names. The two are
+// independent -- setting one must never report a value for the other. ~keep
+
+#[test]
+fn test_extract_serde_rename_all_fields_bare_attribute() {
+    let attrs = parse_attrs(r#"#[serde(rename_all_fields = "camelCase")]"#);
+    assert_eq!(extract_serde_rename_all_fields(&attrs).as_deref(), Some("camelCase"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_fields_cfg_attr_condition() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "serde", serde(rename_all_fields = "snake_case"))]"#);
+    assert_eq!(extract_serde_rename_all_fields(&attrs).as_deref(), Some("snake_case"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_fields_absent_returns_none() {
+    let attrs = parse_attrs(r#"#[derive(Debug, Clone)]"#);
+    assert_eq!(extract_serde_rename_all_fields(&attrs), None);
+}
+
+#[test]
+fn test_extract_serde_rename_all_fields_present_alongside_rename_all_reads_independently() {
+    let attrs = parse_attrs(r#"#[serde(rename_all = "SCREAMING_SNAKE_CASE", rename_all_fields = "camelCase")]"#);
+    assert_eq!(
+        extract_serde_rename_all(&attrs).as_deref(),
+        Some("SCREAMING_SNAKE_CASE"),
+        "rename_all must still resolve to the variant-name rule"
+    );
+    assert_eq!(
+        extract_serde_rename_all_fields(&attrs).as_deref(),
+        Some("camelCase"),
+        "rename_all_fields must resolve to its own field-name rule, not rename_all's value"
+    );
+}
+
+#[test]
+fn test_extract_serde_rename_all_only_set_leaves_rename_all_fields_none() {
+    let attrs = parse_attrs(r#"#[serde(rename_all = "snake_case")]"#);
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("snake_case"));
+    assert_eq!(
+        extract_serde_rename_all_fields(&attrs),
+        None,
+        "setting rename_all alone must not leak into rename_all_fields"
+    );
+}
+
+#[test]
+fn test_extract_serde_rename_all_fields_only_set_leaves_rename_all_none() {
+    let attrs = parse_attrs(r#"#[serde(rename_all_fields = "kebab-case")]"#);
+    assert_eq!(extract_serde_rename_all_fields(&attrs).as_deref(), Some("kebab-case"));
+    assert_eq!(
+        extract_serde_rename_all(&attrs),
+        None,
+        "setting rename_all_fields alone must not leak into rename_all"
+    );
 }
 
 use super::detect_core_wrapper;

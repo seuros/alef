@@ -485,8 +485,7 @@ fn make_opaque_factory_api() -> ApiSurface {
 /// rather than `fun createClient(...): String = DemoBridge.nativeCreateClient(...)`.
 ///
 /// The JNI Bridge emits `external fun nativeCreateClient(...): Long` for opaque
-/// handle return types; the wrapper must construct the concrete `DefaultClient`
-/// from that raw `Long` handle.
+/// handle return types; the wrapper must construct the concrete `DefaultClient` from that raw `Long` handle.
 #[test]
 fn module_kt_create_client_returns_default_client_not_string() {
     let api = make_opaque_factory_api();
@@ -514,8 +513,7 @@ fn module_kt_create_client_returns_default_client_not_string() {
     );
 }
 
-/// Build an API with the sample_crawler shape:
-/// - `CrawlEngineHandle` is an opaque type with NO instance methods.
+/// Build an API with the sample_crawler shape: - `CrawlEngineHandle` is an opaque type with NO instance methods.
 /// - `create_engine() -> CrawlEngineHandle` is a top-level fn returning the handle.
 /// - `scrape(engine: &CrawlEngineHandle, url: &str) -> String` takes the handle.
 fn make_handle_only_api() -> ApiSurface {
@@ -736,8 +734,7 @@ fn make_handle_only_api_with_unreachable_type() -> ApiSurface {
 /// a `close()` calling `XbergBridge.nativeFreeTokenCounter(...)`, a symbol
 /// the Bridge object never declared (`Unresolved reference` at compile time)
 /// and the native JNI shim never implemented either — the type can never be
-/// legitimately constructed from Kotlin in the first place, so the wrapper
-/// was pure dead weight pointing at nothing.
+/// legitimately constructed from Kotlin in the first place, so the wrapper was pure dead weight pointing at nothing.
 #[test]
 fn unreachable_opaque_type_gets_no_wrapper_class_or_dangling_destructor_reference() {
     let api = make_handle_only_api_with_unreachable_type();
@@ -993,8 +990,7 @@ fn make_optional_params_api() -> ApiSurface {
 }
 
 /// Regression test: optional params in the facade must emit Kotlin default
-/// values (`= 0L`, `= 0`, `= ""`) so that e2e callers that only pass
-/// `apiKey` and `baseUrl` still compile.
+/// values (`= 0L`, `= 0`, `= ""`) so that e2e callers that only pass `apiKey` and `baseUrl` still compile.
 #[test]
 fn optional_params_get_kotlin_default_values_in_facade() {
     let api = make_optional_params_api();
@@ -1316,6 +1312,7 @@ fn make_sealed_variants_api() -> ApiSurface {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -2253,6 +2250,7 @@ fn make_exclude_types_api() -> ApiSurface {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2714,6 +2712,7 @@ fn skipped_types_and_enums_are_not_emitted_as_kt_files() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
@@ -2746,6 +2745,7 @@ fn skipped_types_and_enums_are_not_emitted_as_kt_files() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: true,
         binding_exclusion_reason: Some("alef(skip)".into()),
         excluded_variants: vec![],

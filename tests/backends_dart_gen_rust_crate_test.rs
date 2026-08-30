@@ -545,6 +545,7 @@ fn lib_rs_emits_mirror_enum_per_ir_enum() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -1643,14 +1644,12 @@ fn opaque_method_named_param_with_is_ref_passes_by_reference() {
     );
 }
 
-/// A struct field that is `sanitized: true` with `ty: TypeRef::String` and
-/// `core_wrapper: CoreWrapper::Cow` (i.e. a `Cow<'static, str>` field that was
-/// sanitized because the type resolver resolved `str` → `Named("str")` before
-/// sanitize_unknown_types replaced it with `String`) must emit `v.<field>.into()`
-/// in the `From<Mirror> for Core` impl — NOT `Default::default()`.
+/// A struct field that is `sanitized: true` with `ty: TypeRef::String` and `core_wrapper:
+/// CoreWrapper::Cow` (i.e. a `Cow<'static, str>` field sanitized because the type resolver
+/// resolved `str` → `Named("str")` before sanitize_unknown_types replaced it with `String`) must
+/// emit `v.<field>.into()` in the `From<Mirror> for Core` impl — NOT `Default::default()`.
 ///
-/// Regression test for: `ProcessConfig::language` being silently dropped when
-/// converting from the dart mirror struct to the core struct.
+/// Regression test for: `ProcessConfig::language` silently dropped converting mirror to core.
 #[test]
 fn sanitized_string_cow_field_roundtrips_in_from_mirror_to_core_impl() {
     let mut language_field = make_field("language", TypeRef::String, false);
@@ -1771,13 +1770,12 @@ fn opaque_method_vec_string_param_with_is_ref_bridges_to_str_slice() {
     );
 }
 
-/// A trait surfaced via `trait_bridges` whose methods return another trait by name
-/// must NOT produce a `From<Trait> for SourceTrait` mirror-to-core impl. Trait types
-/// cannot be constructed with `{}`, so the emitted block would fail to compile
-/// (E0574 "expected struct, variant or union type, found trait"). The dart backend
-/// iterates `types_needing_from_impl` to emit those impls and must filter out
-/// `is_trait`/`is_opaque` entries — the seed set includes trait-bridge return-type
-/// names so a bare membership check is insufficient.
+/// A trait surfaced via `trait_bridges` whose methods return another trait by name must NOT
+/// produce a `From<Trait> for SourceTrait` mirror-to-core impl. Trait types cannot be constructed
+/// with `{}`, so the emitted block would fail to compile (E0574 "expected struct, variant or
+/// union type, found trait"). The dart backend iterates `types_needing_from_impl` to emit those
+/// impls and must filter out `is_trait`/`is_opaque` entries — the seed set includes trait-bridge
+/// return-type names so a bare membership check is insufficient.
 #[test]
 fn trait_bridge_return_type_does_not_emit_from_impl_for_trait() {
     let factory = make_method("make_visitor", vec![], TypeRef::Named("MyVisitor".to_string()), false);
@@ -2047,6 +2045,7 @@ fn mirror_enum_unit_variants_emit_rustdoc_per_variant() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: false,
             has_default: false,
@@ -2116,6 +2115,7 @@ fn mirror_enum_data_variant_field_emits_rustdoc() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: false,
             has_default: false,
@@ -2407,8 +2407,7 @@ fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields(
 /// impl. The mirror enum always uses struct syntax `{ field0: T }` (FRB requirement),
 /// but the core type expects `CoreError::Variant(value)` — not `CoreError::Variant { field0: value }`.
 ///
-/// Regression test for: dart bridge crate failing to compile with
-/// E0559 "variant `X` has no field named `field0`" when the core variant is a tuple.
+/// Regression: dart bridge crate failing E0559 "variant `X` has no field named `field0`" for a tuple variant.
 #[test]
 fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
     let make_positional_field = |idx: usize, ty: TypeRef| FieldDef {
@@ -2631,6 +2630,7 @@ fn sanitized_vec_vec_string_enum_field_uses_tuple_pair_conversion() {
         serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         is_copy: false,
         has_serde: false,
         has_default: false,

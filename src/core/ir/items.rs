@@ -525,6 +525,14 @@ pub struct EnumDef {
     /// Serde rename strategy for enum variants (from `#[serde(rename_all = "...")]`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serde_rename_all: Option<String>,
+    /// Serde rename strategy for the FIELDS of every struct-shaped variant (from
+    /// `#[serde(rename_all_fields = "...")]`). This is a distinct serde namespace from
+    /// `serde_rename_all`: that one cases VARIANT names, this one cases the field names inside a
+    /// struct-shaped variant's payload. Setting one must never affect the other -- an enum can
+    /// set either, both, or neither. A field's own `#[serde(rename = "...")]` still wins over
+    /// this container rule; see `crate::codegen::naming::wire_field_name`. ~keep
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_all_fields: Option<String>,
     /// True when source metadata explicitly excludes this enum from generated
     /// polyglot binding surfaces (via `#[cfg_attr(alef, alef(skip))]` or `#[doc(hidden)]`).
     #[serde(default)]
@@ -860,6 +868,7 @@ mod tests {
             serde_content: _,            // adjacently-tagged enum payload property name
             serde_untagged: _,           // untagged-enum handling
             serde_rename_all: _,         // variant renaming strategy
+            rename_all_fields: _,        // struct-variant field renaming strategy; independent of serde_rename_all
             binding_excluded: _,         // excludes the enum from generated surfaces
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
             excluded_variants: _,        // retained so exhaustive Rust matches emit unreachable!()

@@ -332,6 +332,7 @@ fn unit_enum_emits_dart_enum() {
             },
         ],
         serde_rename_all: None,
+        rename_all_fields: None,
         serde_tag: None,
         serde_content: None,
         serde_untagged: false,

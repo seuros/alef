@@ -203,6 +203,7 @@ fn test_basic_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -601,6 +602,7 @@ fn test_enum_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1517,8 +1519,7 @@ fn test_map_types() {
 fn test_tagged_enum_different_named_types_per_variant_uses_into_not_serde_json() {
     let backend = NapiBackend;
 
-    // #[serde(tag = "role")]
-    //     #[serde(rename = "system")]  System(SystemMessage),
+    // #[serde(tag = "role")] #[serde(rename = "system")]  System(SystemMessage),
     //     #[serde(rename = "user")]    User(UserMessage),
     let make_variant = |name: &str, rename: &str, struct_name: &str| EnumVariant {
         name: name.to_string(),
@@ -1597,6 +1598,7 @@ fn test_tagged_enum_different_named_types_per_variant_uses_into_not_serde_json()
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             methods: vec![],
             doc: String::new(),
             cfg: None,
@@ -1783,6 +1785,7 @@ fn make_api_napi() -> ApiSurface {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: true,
             has_default: false,
@@ -2365,8 +2368,7 @@ fn test_capsule_types_end_to_end() {
     );
 }
 
-/// capsule_types dts generation:
-/// - `import type { Language } from "sample_language"` appears at the top.
+/// capsule_types dts generation: - `import type { Language } from "sample_language"` appears at the top.
 /// - `export declare class JsLanguage` is NOT emitted.
 /// - `getLanguage(name: string): Language` uses the ecosystem type name.
 #[test]
@@ -2418,8 +2420,7 @@ fn test_capsule_types_dts_generation() {
     );
 }
 
-/// Build an opaque `LanguageRegistry` type whose `getLanguage` instance method
-/// returns the capsule type `Language`.
+/// Build an opaque `LanguageRegistry` type whose `getLanguage` instance method returns the capsule type `Language`.
 fn make_language_registry_type_def() -> TypeDef {
     TypeDef {
         name: "LanguageRegistry".to_string(),
@@ -2485,8 +2486,7 @@ fn make_language_registry_type_def() -> TypeDef {
     }
 }
 
-/// capsule_types on opaque method — Rust shim:
-/// A method on an opaque type returning a capsule type must emit the same
+/// capsule_types on opaque method — Rust shim: A method on an opaque type returning a capsule type must emit the same
 /// JsObject / External<T> / __parser pattern as a free capsule function.
 ///
 /// KNOWN LIMITATION: methods on opaque types currently fall through the regular
@@ -2574,8 +2574,7 @@ fn test_capsule_types_method_on_opaque_rust_shim() {
 
 /// capsule_types on opaque method — TypeScript stubs:
 /// The `index.d.ts` for an opaque class whose method returns a capsule type must:
-/// 1. Emit `import type { Language } from "sample_language"`.
-/// 2. Declare the class without `JsLanguage` anywhere.
+/// 1. Emit `import type { Language } from "sample_language"`. 2. Declare the class without `JsLanguage` anywhere.
 /// 3. Emit the method returning the ecosystem type name `Language`.
 ///
 /// KNOWN LIMITATION, same root cause as `test_capsule_types_method_on_opaque_rust_shim` above:
@@ -2792,6 +2791,7 @@ fn test_napi_js_name_on_string_enum() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             methods: vec![],
             doc: String::new(),
             cfg: None,
@@ -3149,6 +3149,7 @@ fn enum_and_variant_docs_emitted_as_rustdoc() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3181,8 +3182,7 @@ fn enum_and_variant_docs_emitted_as_rustdoc() {
 }
 
 /// A function with a single-line rustdoc must emit a single `///` line above
-/// the `#[napi]` attribute. A function with a multi-line rustdoc must emit
-/// one `///` line per source line.
+/// the `#[napi]` attribute. A function with a multi-line rustdoc must emit one `///` line per source line.
 #[test]
 fn function_doc_emitted_as_rustdoc_single_and_multiline() {
     let backend = NapiBackend;
@@ -3521,6 +3521,7 @@ fn test_trait_bridge_function_uses_alias_rust_path_outside_visitor_module() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: true,
             has_default: false,
@@ -3616,8 +3617,7 @@ fn napi_constructor_mutex_wraps_when_type_has_mut_methods() {
 }
 
 /// napi-rs emits a `string_enum` as a nominal TS `enum`, so `{ kind: "uri" }` — the literal the
-/// binding accepts at runtime — is rejected by tsc. The field must also admit the enum's own
-/// string values.
+/// binding accepts at runtime — is rejected by tsc. The field must also admit the enum's own string values.
 #[test]
 fn string_enum_field_ts_type_admits_the_enum_string_literals() {
     let api = ApiSurface {

@@ -209,6 +209,23 @@ pub(crate) fn extract_serde_rename_all(attrs: &[syn::Attribute]) -> Option<Strin
     found
 }
 
+/// Extract `rename_all_fields` value from `#[serde(rename_all_fields = "...")]` or
+/// `#[cfg_attr(..., serde(rename_all_fields = "..."))]` attributes on an enum.
+///
+/// This is a distinct serde container attribute from `rename_all`: `rename_all` cases enum
+/// VARIANT names, while `rename_all_fields` cases the FIELD names of every struct-shaped
+/// variant's payload. The two are independent -- an enum may set either, both, or neither --
+/// so this must never fall back to (or be confused with) [`extract_serde_rename_all`]. ~keep
+pub(crate) fn extract_serde_rename_all_fields(attrs: &[syn::Attribute]) -> Option<String> {
+    let mut found: Option<String> = None;
+    for_each_serde_meta_list(attrs, |list| {
+        if found.is_none() {
+            found = serde_meta_list_lit_str(list, "rename_all_fields");
+        }
+    });
+    found
+}
+
 /// Invoke `visit` with the `syn::MetaList` of every `#[serde(...)]` attribute in `attrs`,
 /// including ones nested inside `#[cfg_attr(...)]` (recursively, and regardless of how
 /// complex the gating condition is — Alef never evaluates `cfg`/`cfg_attr` predicates, so a

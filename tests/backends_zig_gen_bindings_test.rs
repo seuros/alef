@@ -618,6 +618,7 @@ fn enum_emits_zig_enum_or_union() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -729,8 +730,7 @@ fn error_set_emits_zig_error_with_pascal_case_tags() {
 }
 
 /// Opaque handle types with no methods (e.g. Language) must still be emitted
-/// as a Zig struct so functions that return them compile without
-/// "use of undeclared identifier" errors.
+/// as a Zig struct so functions that return them compile without "use of undeclared identifier" errors.
 #[test]
 fn opaque_handle_with_no_methods_is_emitted() {
     let language_type = TypeDef {

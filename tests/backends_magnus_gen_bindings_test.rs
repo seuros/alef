@@ -15,27 +15,10 @@ fn resolved_one(toml: &str) -> ResolvedCrateConfig {
 /// Helper to create a FieldDef with all defaults.
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
-        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
-        default: None,
-        doc: String::new(),
-        sanitized: false,
-        is_boxed: false,
-        type_rust_path: None,
-        cfg: None,
-        typed_default: None,
-        core_wrapper: CoreWrapper::None,
-        vec_inner_core_wrapper: CoreWrapper::None,
-        newtype_wrapper: None,
-        serde_rename: None,
-        serde_flatten: false,
-        serde_with: None,
-        serde_skip_serializing_if: false,
-        binding_excluded: false,
-        binding_exclusion_reason: None,
-        original_type: None,
+        ..FieldDef::default()
     }
 }
 
@@ -189,6 +172,7 @@ fn test_basic_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -379,6 +363,7 @@ fn test_enum_generation() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -479,6 +464,7 @@ fn test_internally_tagged_enum_constructor_wraps_bare_string() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("snake_case".to_string()),
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -1444,6 +1430,7 @@ mod trait_bridge {
                 serde_content: None,
                 serde_untagged: false,
                 serde_rename_all: None,
+                rename_all_fields: None,
                 is_copy: false,
                 has_serde: true,
                 has_default: false,
@@ -1985,6 +1972,7 @@ fn test_tagged_union_enum_vec_field_serde_marshalling() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2108,6 +2096,7 @@ fn test_tuple_variant_vec_primitive_stays_as_vec() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2179,6 +2168,7 @@ fn test_tuple_variant_bytes_stays_as_vec() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2490,6 +2480,7 @@ fn test_tuple_variant_vec_named_stays_as_vec_and_uses_into() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -2784,6 +2775,7 @@ fn test_visitor_bridge_debug_not_duplicated() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: true,
             has_default: false,
@@ -3019,6 +3011,7 @@ fn tagged_enum_public_api_does_not_emit_method_missing() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3046,10 +3039,9 @@ fn tagged_enum_public_api_does_not_emit_method_missing() {
     );
 }
 
-/// Regression: Sorbet `sig {` blocks must appear in the public Ruby API for tagged enum subclass methods.
-///
-/// Every generated accessor and predicate must carry a Sorbet-compatible `sig { }` annotation
-/// so that Sorbet users get type-checked attribute access without manual type annotations.
+/// Regression: Sorbet `sig {` blocks must appear in the public Ruby API for tagged enum subclass
+/// methods. Every generated accessor and predicate must carry a Sorbet-compatible `sig { }`
+/// annotation so that Sorbet users get type-checked attribute access without manual annotations.
 #[test]
 fn tagged_enum_public_api_emits_sorbet_sig_blocks() {
     let backend = MagnusBackend;
@@ -3108,6 +3100,7 @@ fn tagged_enum_public_api_emits_sorbet_sig_blocks() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3201,6 +3194,7 @@ fn tagged_enum_dispatcher_emits_rubocop_clean_ruby() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3307,6 +3301,7 @@ fn tagged_enum_dispatcher_uses_serde_wire_names() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("kebab-case".to_string()),
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3437,6 +3432,7 @@ fn tagged_enum_public_api_emits_class_hierarchy() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3572,6 +3568,7 @@ fn test_enum_yard_doc_emission() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3674,6 +3671,7 @@ fn test_enum_variant_method_yard_docs() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -3854,6 +3852,7 @@ fn test_explicit_re_export_list_filters_internal_types() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4095,6 +4094,7 @@ fn test_async_function_with_vec_named_params() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4348,6 +4348,7 @@ fn test_opaque_async_method_with_vec_named_ref_param() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4545,6 +4546,7 @@ fn test_internally_tagged_unit_variant_wraps_bare_string() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("snake_case".to_string()),
+            rename_all_fields: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -4725,11 +4727,9 @@ fn test_magnus_async_struct_param_marshalled_as_native_ruby_value() {
 /// Magnus is the two-sided case: a gated method needs `#[cfg]` on the wrapper `fn` **and** on the
 /// `class.define_method(...)` statement in `ruby_init`. `method!(Type::name, n)` resolves
 /// `Type::name` as a path, so gating only the `fn` turns a feature-off build into an E0599 rather
-/// than a Ruby method that is merely absent — which is exactly the "registration disagrees with
-/// emission" failure this gate exists to prevent.
-///
-/// The count assertion carries the ungated control: exactly two occurrences of the gate means the
-/// gated method got both of its sites and the ungated method got neither. ~keep
+/// than a Ruby method that is merely absent — the "registration disagrees with emission" failure
+/// this gate exists to prevent. The count assertion carries the ungated control: exactly two
+/// occurrences of the gate means the gated method got both sites and the ungated got neither. ~keep
 #[test]
 fn magnus_gates_the_wrapper_fn_and_its_define_method_registration_together() {
     let backend = MagnusBackend;

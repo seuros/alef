@@ -259,6 +259,7 @@ fn unit_enum_emits_dart_enum() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -334,6 +335,7 @@ fn data_bearing_enum_emits_sealed_class() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -434,12 +436,10 @@ fn simple_sync_function_emits_static_method() {
     );
 }
 
-/// `export 'traits.dart';` alone does not bring the trait names into the file's
-/// own scope, so `comment_references` flags every doc comment (`[OcrBackend]`,
-/// etc.) that points at a type declared in traits.dart. The module file must
-/// also `import 'traits.dart';` — but ONLY when it actually names a trait.
-/// Emitting the import unconditionally trips the opposite lint, `unused_import`,
-/// in every crate whose module file never refers to one (the common case).
+/// `export 'traits.dart';` alone does not bring the trait names into the file's own scope, so
+/// `comment_references` flags every doc comment (`[OcrBackend]`, etc.) that points at a type
+/// declared in traits.dart. The module file must also `import 'traits.dart';` — but ONLY when it
+/// actually names a trait, since emitting it unconditionally trips `unused_import` otherwise.
 #[test]
 fn module_file_omits_traits_import_when_no_trait_is_referenced() {
     let api = ApiSurface {
@@ -525,12 +525,10 @@ fn module_file_imports_traits_dart_when_a_trait_is_referenced() {
     );
 }
 
-/// The module file's `Int64List(0)`/`Uint8List(0)`/`Float64List(0)` default
-/// literals — and any bare `Int64List`/`Uint8List`/`Float64List` return or
-/// param type — must resolve through flutter_rust_bridge's generalized
-/// typed-list class, never the SDK's `dart:typed_data` one (the two are not
-/// assignable to each other). When the crate's surface never references a
-/// typed-list type at all, neither import should be emitted.
+/// The module file's typed-list defaults and return/param types must resolve through
+/// flutter_rust_bridge's generalized typed-list class, never the SDK's `dart:typed_data` one
+/// (the two are not assignable). When the surface never references a typed-list type, neither
+/// import should be emitted.
 #[test]
 fn module_file_omits_typed_data_import_when_no_typed_list_type_is_used() {
     let api = ApiSurface {
@@ -587,11 +585,10 @@ fn module_file_omits_typed_data_import_when_no_typed_list_type_is_used() {
     );
 }
 
-/// A function returning a bare typed-list type (`Int64List`, with no
-/// `Int64List(0)` literal anywhere else) must still route through FRB's
-/// typed-list import rather than `dart:typed_data`, and must not emit
-/// `dart:typed_data` at all — the two `Int64List` classes are not
-/// assignable, so importing both leaves the SDK one dangling and unused.
+/// A function returning a bare typed-list type (`Int64List`, with no `Int64List(0)` literal
+/// anywhere else) must still route through FRB's typed-list import rather than `dart:typed_data`,
+/// and must not emit `dart:typed_data` at all — the two `Int64List` classes are not assignable,
+/// so importing both leaves the SDK one dangling and unused.
 #[test]
 fn module_file_routes_bare_typed_list_return_through_frb_import_not_typed_data() {
     let api = ApiSurface {
@@ -914,6 +911,7 @@ fn default_config_param_synthesizes_expression_from_type_metadata() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: false,
             has_default: false,
@@ -1878,6 +1876,7 @@ fn enum_variant_named_default_is_escaped() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: false,
             has_default: false,
@@ -1938,6 +1937,7 @@ fn tuple_variant_with_numeric_field_name_is_escaped() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: false,
             has_default: false,

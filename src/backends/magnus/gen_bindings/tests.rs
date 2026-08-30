@@ -240,6 +240,7 @@ gem_name = "my_gem"
         serde_content: None,
         serde_tag: None,
         serde_rename_all: None,
+        rename_all_fields: None,
         serde_untagged: false,
         is_copy: false,
         has_serde: false,

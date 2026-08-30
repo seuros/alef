@@ -473,6 +473,7 @@ fn unit_only_enum_emits_lower_camel_cases() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -545,6 +546,7 @@ fn data_bearing_enum_emits_associated_values() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: false,
@@ -630,6 +632,7 @@ fn unit_enum_escapes_swift_keyword_variants_with_backticks() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
 
             is_copy: false,
             has_serde: true,
@@ -727,6 +730,7 @@ fn data_variant_serde_enum_with_bridge_safe_fields_emits_codable() {
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("lowercase".into()),
+            rename_all_fields: None,
             is_copy: false,
             has_serde: true,
             has_default: false,
@@ -808,6 +812,7 @@ fn data_variant_serde_enum_with_opaque_field_falls_back_to_rust_bridge_from_json
             serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
+            rename_all_fields: None,
             is_copy: false,
             has_serde: true,
             has_default: false,
@@ -1831,13 +1836,11 @@ fn swift_backend_reports_supports_streaming_true() {
 }
 
 /// Each streaming adapter's `{Owner}{Adapter}StreamHandle` must have an
-/// `extension RustBridge.XStreamHandle: @unchecked Sendable {}` emitted in the
-/// generated Swift file.
+/// `extension RustBridge.XStreamHandle: @unchecked Sendable {}` emitted in the generated Swift file.
 ///
 /// Swift 6 strict-concurrency rejects passing non-Sendable types across
 /// `Task.detached` boundaries.  The Rust side wraps `Mutex<stream>` and a
-/// `tokio::runtime::Runtime` — both thread-safe — so `@unchecked Sendable` is
-/// the correct annotation.
+/// `tokio::runtime::Runtime` — both thread-safe — so `@unchecked Sendable` is the correct annotation.
 #[test]
 fn streaming_handle_emits_unchecked_sendable_extension() {
     let api = make_streaming_api();
@@ -2122,11 +2125,9 @@ client_constructor_body.Client = "Self { inner: ::demo::Client::new(api_key, bas
 /// parameter, the generated call site must apply `.intoRust()` to convert the
 /// Swift wrapper into the `RustBridge.T` raw type that the bridge function
 /// expects.  Without this conversion the Swift compiler rejects the call with
-/// "cannot convert value of type 'SampleLlm.T' to expected argument type
-/// 'RustBridge.T'".
+/// "cannot convert value of type 'SampleLlm.T' to expected argument type 'RustBridge.T'".
 ///
-/// The method signature must also carry `throws` because `intoRust()` is itself
-/// a throwing function.
+/// The method signature must also carry `throws` because `intoRust()` is itself a throwing function.
 #[test]
 fn method_with_first_class_dto_param_calls_into_rust_at_call_site() {
     use alef::core::ir::{MethodDef, ReceiverKind};
@@ -2591,8 +2592,7 @@ fn complex_dto_with_optional_vec_named_field_emits_first_class_struct() {
 /// `fn detect_language_from_extension(ext: &str) -> Option<&'static str>` is
 /// JSON-bridged by swift-bridge: the bridge crate declares the function as
 /// `-> String` (the JSON payload), which swift-bridge surfaces on the Swift
-/// side as a NON-optional `-> RustString`. The forwarder declares the high-level
-/// `-> String?` return matching the IR.
+/// side as a NON-optional `-> RustString`. The forwarder declares the high-level `-> String?` return matching the IR.
 ///
 /// v0.17.10 attempted to apply `?.toString()` to the bridge call, which is a
 /// type error: "cannot use optional chaining on non-optional value of type

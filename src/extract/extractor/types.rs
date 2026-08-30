@@ -9,8 +9,8 @@ use super::helpers::{
     build_rust_path, extract_alef_error_code, extract_cfg_condition, extract_doc_comments, extract_enum_variant,
     extract_error_message_template, extract_field, extract_field_binding_exclusion_reason,
     extract_field_type_rust_path, extract_serde_container_conversion, extract_serde_rename_all,
-    extract_serde_skip_serializing_if, extract_version_annotation, has_cfg_attribute, has_container_serde_default,
-    has_derive, has_field_attr, is_pub, syn_type_is_boxed,
+    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_version_annotation,
+    has_cfg_attribute, has_container_serde_default, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.
@@ -212,6 +212,7 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
     let serde_content = extract_serde_content(&item.attrs);
     let serde_untagged = has_serde_untagged(&item.attrs);
     let serde_rename_all = extract_serde_rename_all(&item.attrs);
+    let rename_all_fields = extract_serde_rename_all_fields(&item.attrs);
     let is_copy = has_derive(item.attrs.as_slice(), "Copy");
     let has_serde = has_derive(item.attrs.as_slice(), "Serialize") && has_derive(item.attrs.as_slice(), "Deserialize");
     let has_default = has_derive(item.attrs.as_slice(), "Default");
@@ -229,6 +230,7 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
         serde_content,
         serde_untagged,
         serde_rename_all,
+        rename_all_fields,
         is_copy,
         has_serde,
         has_default,

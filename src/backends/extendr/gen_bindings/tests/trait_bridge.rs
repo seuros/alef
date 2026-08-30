@@ -195,6 +195,7 @@ fn regression_namespace_exports_functions_types_enums() {
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
+        rename_all_fields: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         excluded_variants: vec![],
