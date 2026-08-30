@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 
 fn empty_api() -> ApiSurface {
     ApiSurface {
@@ -323,7 +323,7 @@ fn primitive_types_map_to_expected_ts() {
             exclude_types: &AHashSet::default(),
             opaque_type_names: &AHashSet::default(),
             prefix: "Alef",
-            in_progress: AHashSet::default(),
+            in_progress: AHashMap::default(),
             resolved_names: ahash::AHashMap::default(),
             decls: Vec::new(),
         };
@@ -339,7 +339,7 @@ fn vec_maps_to_element_array() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
@@ -365,7 +365,7 @@ fn vec_of_optional_wraps_union_before_appending_array_suffix() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
@@ -387,7 +387,7 @@ fn nested_vec_of_optional_parenthesizes_at_the_right_level() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
@@ -405,7 +405,7 @@ fn optional_appends_undefined() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
@@ -421,7 +421,7 @@ fn string_keyed_map_becomes_record() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
@@ -440,7 +440,7 @@ fn non_string_keyed_map_falls_back_to_any() {
         exclude_types: &AHashSet::default(),
         opaque_type_names: &AHashSet::default(),
         prefix: "Alef",
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: ahash::AHashMap::default(),
         decls: Vec::new(),
     };
