@@ -99,17 +99,21 @@ fn write_sample_package(root: &Path) {
     .unwrap();
 }
 
-fn assert_generated_package_passes(assertion_type: &str, expected: &str) {
+fn run_generated_package(assertion_type: &str, expected: &str) -> std::process::Output {
     let go = which::which("go").expect("Go is required for generated package compile fixtures");
     let root = tempfile::tempdir().expect("create generated Go package root");
     let files = generate_package(assertion_type, expected);
     write_generated_files(root.path(), &files);
     write_sample_package(root.path());
-    let output = std::process::Command::new(go)
+    std::process::Command::new(go)
         .args(["test", "-mod=mod", "./..."])
         .current_dir(root.path().join("e2e/go"))
         .output()
-        .expect("run complete generated Go package");
+        .expect("run complete generated Go package")
+}
+
+fn assert_generated_package_passes(assertion_type: &str, expected: &str) {
+    let output = run_generated_package(assertion_type, expected);
     assert!(
         output.status.success(),
         "{assertion_type} failed\nstdout:\n{}\nstderr:\n{}",
@@ -138,6 +142,36 @@ fn generated_equals_data_interface_emits_json_helper() {
         files.iter().any(|file| file.path.ends_with("helpers_test.go")),
         "equals emits jsonString and must emit its package helper"
     );
+    let shape = files
+        .iter()
+        .find(|file| file.path.ends_with("shape_test.go"))
+        .expect("shape_test.go is generated");
+    assert_eq!(
+        shape.content.matches("jsonString(t, result.Choice)").count(),
+        1,
+        "generated assertion must call the real JSON helper:\n{}",
+        shape.content
+    );
+}
+
+#[test]
+fn wrong_data_interface_expectations_fail_through_generated_pipeline() {
+    for (assertion_type, expected, diagnostic) in [
+        ("equals", "absent", "equals mismatch"),
+        ("contains", "absent", "expected to contain"),
+        ("starts_with", "absent", "expected to start"),
+        ("ends_with", "absent", "expected to end"),
+        ("matches_regex", "^absent$", "expected value to match regex"),
+    ] {
+        let output = run_generated_package(assertion_type, expected);
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{assertion_type} unexpectedly passed");
+        assert!(diagnostics.contains(diagnostic), "{assertion_type}:\n{diagnostics}");
+    }
 }
 
 #[test]
