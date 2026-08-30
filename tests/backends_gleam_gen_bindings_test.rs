@@ -2,8 +2,8 @@ use alef::backends::gleam::GleamBackend;
 use alef::core::backend::Backend;
 use alef::core::config::{GleamConfig, ResolvedCrateConfig, TraitBridgeConfig, new_config::NewAlefConfig};
 use alef::core::ir::{
-    ApiSurface, CoreWrapper, EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef,
-    PrimitiveType, ReceiverKind, TypeDef, TypeRef,
+    ApiSurface, EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, PrimitiveType,
+    ReceiverKind, TypeDef, TypeRef,
 };
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
