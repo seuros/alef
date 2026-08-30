@@ -161,6 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
   on any failure and asserted nothing; it now binds both ABI failure channels and requires the
   failure to have carried a message or a non-catch-all error-set member.
+- Name the PHP e2e DTO literal's named arguments with the same helper the PHP binding uses for
+  its `#[php(constructor)]` parameters. A field whose name is a PHP reserved word was
+  escaped on the call side only, producing `Unknown named parameter`.
 - Declare an `#[serde(untagged)]` data enum's struct-variant field keys in the Node and WASM
   TypeScript surfaces as serde wire names rather than host camelCase property names. Both
   backends bridge these values straight into the core Rust type through serde, so the

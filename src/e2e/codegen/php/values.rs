@@ -4,7 +4,12 @@ use crate::core::ir::TypeRef;
 use crate::e2e::escape::escape_php;
 use heck::ToLowerCamelCase;
 
-pub(super) fn render_native_php_dto(
+/// Render a fixture object as a PHP named-argument constructor call for `type_name`.
+///
+/// `pub(crate)` so the PHP binding backend's own tests can compare this literal against the
+/// `#[php(constructor)]` signature it emits for the same `TypeDef` -- see
+/// `backends::php::gen_bindings::types::structs::tests`. ~keep
+pub(crate) fn render_native_php_dto(
     namespace: &str,
     type_name: &str,
     value: &serde_json::Value,
@@ -45,7 +50,15 @@ fn render_native_php_dto_at(
         .into_iter()
         .filter_map(|field| object.get(&field.name).map(|value| (field, value)))
         .map(|(field, value)| {
-            let name = crate::codegen::naming::public_field_name(crate::core::config::Language::Php, &field.name, None);
+            // The named argument must be the PHP binding's CONSTRUCTOR PARAMETER name, which
+            // `backends::php` builds with `naming::to_php_name` (see
+            // `types::structs::gen_struct_methods_impl`, `helpers::params`). `public_field_name`
+            // is the same lower-camel transform PLUS keyword escaping, so the two agreed on every
+            // field except a PHP-keyword-named one: the binding declares `$list`, this emitted
+            // `list_:`, and PHP rejects the call with `Unknown named parameter $list_`. PHP allows
+            // a reserved word as a parameter name and as a named argument, so the escape is not
+            // just a second spelling -- it is the wrong one. ~keep
+            let name = crate::codegen::naming::to_php_name(&field.name);
             let field_pointer = format!("{pointer}/{}", field.name);
             let value = render_native_php_value(namespace, value, &field.ty, type_defs, files, &field_pointer)?;
             Some(minijinja::context! { name => name, value => value })

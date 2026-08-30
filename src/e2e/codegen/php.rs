@@ -357,7 +357,7 @@ mod stubs;
 mod test_file;
 mod test_method;
 mod types;
-mod values;
+pub(crate) mod values;
 mod visitor;
 
 pub use stubs::{emit_test_backend, emit_test_backend_with_ns};

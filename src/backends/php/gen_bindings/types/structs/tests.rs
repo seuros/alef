@@ -554,3 +554,142 @@ mod constructor_param_order_tests {
         );
     }
 }
+
+/// Cross-emitter parity between the `#[php(constructor)]` signature this module emits and the
+/// PHP named-argument constructor call the e2e generator writes for the SAME `TypeDef`.
+///
+/// PHP named arguments are matched by parameter NAME, so these two emitters must agree letter for
+/// letter or the generated call dies with `Unknown named parameter`. They read the same `FieldDef`
+/// and used to lower it through two different helpers: this side through
+/// `naming::to_php_name` (lower-camel only), the e2e side through `naming::public_field_name`
+/// (lower-camel plus reserved-word escaping). The two agree on every field name except one that
+/// is a PHP reserved word -- the escape appends `_` and nothing on the binding side ever does.
+#[cfg(test)]
+mod e2e_named_argument_parity_tests {
+    use super::*;
+    use crate::backends::php::type_map::PhpMapper;
+
+    const NAMESPACE: &str = "Sample\\Bindings";
+    const TYPE_NAME: &str = "SampleOptions";
+    /// A PHP reserved word (`core::keywords::PHP_KEYWORDS`) that is NOT a Rust keyword and is
+    /// already valid lower-camel-case, so the ONLY thing that can change its spelling on either
+    /// side is reserved-word escaping. PHP itself accepts it as a parameter name and as a named
+    /// argument, so escaping is not a second valid spelling -- it is the wrong one.
+    const KEYWORD_FIELD: &str = "list";
+    const PLAIN_FIELD: &str = "max_chars";
+
+    fn mapper() -> PhpMapper {
+        PhpMapper {
+            enum_names: AHashSet::new(),
+            data_enum_names: AHashSet::new(),
+            untagged_data_enum_names: AHashSet::new(),
+            json_string_enum_names: AHashSet::new(),
+        }
+    }
+
+    fn options_type() -> TypeDef {
+        TypeDef {
+            name: TYPE_NAME.to_string(),
+            rust_path: format!("sample_core::{TYPE_NAME}"),
+            fields: vec![
+                FieldDef {
+                    name: KEYWORD_FIELD.to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: PLAIN_FIELD.to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// The parameter names the emitted `#[php(constructor)] pub fn new(...)` declares. Sliced out
+    /// of the signature only, never the `Self { .. }` initializer that follows it -- the
+    /// initializer uses raw Rust field names, so matching there would pass while the signature
+    /// (the half PHP actually binds named arguments against) said something else.
+    fn binding_constructor_params(binding: &str) -> Vec<String> {
+        let new_fn = binding
+            .split("#[php(constructor)]")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no #[php(constructor)] fn emitted:\n{binding}"));
+        let signature = new_fn
+            .split_once("pub fn new(")
+            .and_then(|(_, rest)| rest.split_once(") -> Self {"))
+            .map(|(signature, _)| signature)
+            .unwrap_or_else(|| panic!("no `pub fn new(..) -> Self {{` in:\n{new_fn}"));
+        signature
+            .split(',')
+            .filter_map(|param| param.split_once(':'))
+            .map(|(name, _)| name.trim().trim_start_matches("r#").to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    /// The named-argument keys the e2e generator writes in `new \Ns\Type(key: value, ...)`.
+    fn e2e_named_arguments(literal: &str) -> Vec<String> {
+        let args = literal
+            .split_once('(')
+            .and_then(|(_, rest)| rest.rsplit_once(')'))
+            .map(|(args, _)| args)
+            .unwrap_or_else(|| panic!("no argument list in the rendered DTO literal:\n{literal}"));
+        args.split(',')
+            .filter_map(|arg| arg.split_once(':'))
+            .map(|(name, _)| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn should_name_e2e_named_arguments_exactly_as_the_php_constructor_declares_them() {
+        let typ = options_type();
+        let binding = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            false,
+            "sample_core",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+        let declared = binding_constructor_params(&binding);
+        assert!(
+            declared.iter().any(|name| name == KEYWORD_FIELD),
+            "the binding must declare the reserved-word field unescaped, got {declared:?}:\n{binding}"
+        );
+
+        let mut object = serde_json::Map::new();
+        object.insert(KEYWORD_FIELD.to_string(), serde_json::Value::String("a".to_string()));
+        object.insert(PLAIN_FIELD.to_string(), serde_json::Value::String("b".to_string()));
+        let fixture = serde_json::Value::Object(object);
+        let literal = crate::e2e::codegen::php::values::render_native_php_dto(
+            NAMESPACE,
+            TYPE_NAME,
+            &fixture,
+            std::slice::from_ref(&typ),
+            &[],
+        )
+        .expect("the fixture is an all-scalar DTO the e2e renderer constructs natively");
+
+        for name in e2e_named_arguments(&literal) {
+            assert!(
+                declared.contains(&name),
+                "e2e passes named argument `{name}:` but the constructor declares {declared:?}; \
+                 PHP binds named arguments by parameter name, so this call cannot resolve.\n\
+                 binding:\n{binding}\nliteral:\n{literal}"
+            );
+        }
+        assert!(
+            !literal.contains(&format!("{KEYWORD_FIELD}_:")),
+            "a reserved-word field must not be escaped on the call side:\n{literal}"
+        );
+    }
+}
