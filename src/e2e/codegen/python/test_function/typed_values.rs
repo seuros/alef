@@ -99,7 +99,7 @@ pub(in crate::e2e::codegen::python) fn resolve_field_element_struct_type<'a>(
 
 /// Render one field's JSON value as a Python expression for a `kwargs`-mode constructor call,
 /// recursing into nested config/struct fields so a field whose type is itself a generated
-/// pyclass (e.g. `captioning: CaptioningConfig` inside `ExtractionConfig`) is constructed with
+/// pyclass (e.g. `nested: NestedConfig` inside `ExtractionConfig`) is constructed with
 /// that class instead of a raw dict literal. `used_struct_types` records every nested
 /// constructor name this rendering references, so a caller collecting imports can run the
 /// identical traversal instead of a second copy that could disagree with what actually gets
@@ -437,7 +437,7 @@ fn emit_python_object_item(obj: &serde_json::Map<String, serde_json::Value>) -> 
 
 /// Emit a Python constructor call for a typed instance (e.g., BatchFileItem(...)), recursing
 /// into any of its own fields that are themselves generated pyclasses (e.g. a batch item whose
-/// `captioning` field is a `CaptioningConfig`) via [`render_kwarg_field_value`].
+/// `nested` field is a `NestedConfig`) via [`render_kwarg_field_value`].
 fn emit_python_typed_instance(
     obj: &serde_json::Map<String, serde_json::Value>,
     elem_type: &str,
@@ -626,7 +626,7 @@ mod tests {
     }
 
     /// Regression for the nested-config construction defect: a config field whose own type is
-    /// itself a generated pyclass (e.g. `captioning: CaptioningConfig` inside
+    /// itself a generated pyclass (e.g. `nested: NestedConfig` inside
     /// `ExtractionConfig`) must be constructed with that class, not emitted as a raw dict --
     /// pyo3 rejects a dict where a native class instance is required.
     #[test]
@@ -634,8 +634,8 @@ mod tests {
         use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
         let inner_type = TypeDef {
-            name: "CaptioningConfig".to_string(),
-            rust_path: "demo::CaptioningConfig".to_string(),
+            name: "NestedConfig".to_string(),
+            rust_path: "demo::NestedConfig".to_string(),
             fields: vec![FieldDef {
                 name: "model".to_string(),
                 ty: TypeRef::String,
@@ -647,8 +647,8 @@ mod tests {
             name: "ExtractionConfig".to_string(),
             rust_path: "demo::ExtractionConfig".to_string(),
             fields: vec![FieldDef {
-                name: "captioning".to_string(),
-                ty: TypeRef::Named("CaptioningConfig".to_string()),
+                name: "nested".to_string(),
+                ty: TypeRef::Named("NestedConfig".to_string()),
                 ..Default::default()
             }],
             ..Default::default()
@@ -658,7 +658,7 @@ mod tests {
 
         let mut bindings = Vec::new();
         let mut exprs = Vec::new();
-        let value = serde_json::json!({"captioning": {"model": "gpt-vision"}});
+        let value = serde_json::json!({"nested": {"model": "standard"}});
         let done = emit_json_object_arg(
             &mut bindings,
             &mut exprs,
@@ -678,7 +678,7 @@ mod tests {
         assert!(done);
         assert_eq!(
             bindings,
-            [r#"    opts = ExtractionConfig(captioning=CaptioningConfig(model="gpt-vision"))"#],
+            [r#"    opts = ExtractionConfig(nested=NestedConfig(model="standard"))"#],
             "nested struct field must be constructed with its own class, got: {bindings:?}"
         );
     }
@@ -691,8 +691,8 @@ mod tests {
         use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
         let inner_type = TypeDef {
-            name: "CaptioningConfig".to_string(),
-            rust_path: "demo::CaptioningConfig".to_string(),
+            name: "NestedConfig".to_string(),
+            rust_path: "demo::NestedConfig".to_string(),
             fields: vec![FieldDef {
                 name: "model".to_string(),
                 ty: TypeRef::String,
@@ -704,8 +704,8 @@ mod tests {
             name: "BatchFileItem".to_string(),
             rust_path: "demo::BatchFileItem".to_string(),
             fields: vec![FieldDef {
-                name: "captioning".to_string(),
-                ty: TypeRef::Named("CaptioningConfig".to_string()),
+                name: "nested".to_string(),
+                ty: TypeRef::Named("NestedConfig".to_string()),
                 ..Default::default()
             }],
             ..Default::default()
@@ -715,7 +715,7 @@ mod tests {
 
         let mut bindings = Vec::new();
         let mut exprs = Vec::new();
-        let value = serde_json::json!([{"captioning": {"model": "gpt-vision"}}]);
+        let value = serde_json::json!([{"nested": {"model": "standard"}}]);
         let element_type = Some("BatchFileItem".to_string());
         let done = emit_json_object_arg(
             &mut bindings,
@@ -736,7 +736,7 @@ mod tests {
         assert!(done);
         assert_eq!(
             bindings,
-            [r#"    items = [BatchFileItem(captioning=CaptioningConfig(model="gpt-vision"))]"#],
+            [r#"    items = [BatchFileItem(nested=NestedConfig(model="standard"))]"#],
             "each batch item's nested struct field must be constructed with its own class, got: {bindings:?}"
         );
     }

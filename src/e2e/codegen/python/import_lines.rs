@@ -15,8 +15,8 @@ use super::super::test_function::render_kwarg_field_value;
 use super::references_identifier;
 
 /// Collect nested config/struct type names referenced by a `json_object` arg's value -- both the
-/// single-object shape (a field whose own type is a generated pyclass, e.g. `captioning:
-/// CaptioningConfig` inside `ExtractionConfig`) and the "batch" array-of-typed-items shape
+/// single-object shape (a field whose own type is a generated pyclass, e.g. `nested:
+/// NestedConfig` inside `ExtractionConfig`) and the "batch" array-of-typed-items shape
 /// (`element_type`, e.g. `BatchFileItem`).
 ///
 /// Runs the identical traversal `render_kwarg_field_value` (typed_values.rs) uses to emit the
