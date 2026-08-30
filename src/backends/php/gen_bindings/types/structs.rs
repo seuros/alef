@@ -14,6 +14,8 @@ use super::super::functions::{
 };
 use super::enums::ty_references_untagged_data_enum;
 
+mod constructor_init;
+
 /// Returns true if the type is "scalar-compatible" — i.e. ext-php-rs can handle it as a
 /// Check if a type is scalar-compatible for PHP properties, considering enum names.
 /// `#[php(prop)]` without needing a manual getter.  Scalar-compatible means the mapped Rust
@@ -430,7 +432,7 @@ pub(crate) fn gen_struct_methods(
     enum_names: &AHashSet<String>,
     enums: &[EnumDef],
     mutex_types: &AHashSet<String>,
-) -> String {
+) -> anyhow::Result<String> {
     gen_struct_methods_impl(
         typ,
         mapper,
@@ -461,7 +463,7 @@ pub fn gen_struct_methods_with_exclude(
     never_skip_cfg_field_names: &[String],
     mutex_types: &AHashSet<String>,
     untagged_union_text_types: &[String],
-) -> String {
+) -> anyhow::Result<String> {
     gen_struct_methods_impl(
         typ,
         mapper,
@@ -492,7 +494,7 @@ fn gen_struct_methods_impl(
     _never_skip_cfg_field_names: &[String],
     mutex_types: &AHashSet<String>,
     _untagged_union_text_types: &[String],
-) -> String {
+) -> anyhow::Result<String> {
     let mut impl_builder = ImplBuilder::new(&typ.name);
     impl_builder.add_attr("php_impl");
 
@@ -604,43 +606,12 @@ fn gen_struct_methods_impl(
                     }
                 }
 
-                let param_init = typ
-                    .fields
-                    .iter()
-                    .filter(|f| !f.binding_excluded)
-                    .map(|f| {
-                        let php_param_name = crate::codegen::naming::to_php_name(&f.name);
-                        if f.cfg.is_some() {
-                            return format!("{}: Default::default()", f.name);
-                        }
-                        if php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types) {
-                            if let TypeRef::Vec(inner) = &f.ty
-                                && let TypeRef::Named(name) = inner.as_ref()
-                                    && !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
-                                        return format!("{}: {}_core", f.name, php_param_name);
-                                    }
-                            let is_bytes = matches!(&f.ty, TypeRef::Bytes)
-                                || matches!(&f.ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes));
-                            if is_bytes {
-                                if f.optional {
-                                    return format!("{}: {}.map(|b| b.0)", f.name, php_param_name);
-                                }
-                                return format!("{}: {}.0", f.name, php_param_name);
-                            }
-                            if f.name == php_param_name {
-                                f.name.clone()
-                            } else {
-                                format!("{}: {}", f.name, php_param_name)
-                            }
-                        } else {
-                            format!("{}: Default::default()", f.name)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let init = constructor_init::gen_constructor_field_inits(typ, enum_names, opaque_types)?;
+                let prelude = init.prelude;
+                let param_init = init.field_inits;
                 let named_constructor = format!(
                     "#[php(constructor)]\npub fn new(\n{param_lines}\n) -> Self {{\n    \
-                     {let_bindings}Self {{ {param_init} }}\n\
+                     {prelude}{let_bindings}Self {{ {param_init} }}\n\
                      }}"
                 );
                 impl_builder.add_method(&named_constructor);
@@ -920,7 +891,7 @@ fn gen_struct_methods_impl(
         }
     }
 
-    impl_builder.build()
+    Ok(impl_builder.build())
 }
 
 #[cfg(test)]

@@ -51,7 +51,8 @@ mod redundant_field_shorthand_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         assert!(
             !out.contains("provider: provider"),
@@ -89,7 +90,8 @@ mod redundant_field_shorthand_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         assert!(
             out.contains("chunk_size: chunkSize"),
@@ -122,7 +124,8 @@ mod redundant_field_shorthand_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         assert!(
             !out.contains("label: label"),
@@ -188,6 +191,7 @@ mod optional_named_setter_tests {
             &AHashSet::new(),
             &[],
         )
+        .expect("struct methods generate")
     }
 
     /// `class_derives!` — what `#[php_class]` expands to — implements `FromZval<'a>` only for
@@ -427,7 +431,8 @@ mod constructor_param_order_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         let new_fn = out
             .split("#[php(constructor)]")
@@ -484,7 +489,8 @@ mod constructor_param_order_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         let new_fn = out
             .split("#[php(constructor)]")
@@ -538,7 +544,8 @@ mod constructor_param_order_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
 
         let new_fn = out
             .split("#[php(constructor)]")
@@ -659,7 +666,8 @@ mod e2e_named_argument_parity_tests {
             &[],
             &AHashSet::new(),
             &[],
-        );
+        )
+        .expect("struct methods generate");
         let declared = binding_constructor_params(&binding);
         assert!(
             declared.iter().any(|name| name == KEYWORD_FIELD),

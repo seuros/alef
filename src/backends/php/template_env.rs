@@ -75,6 +75,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php_vec_named_struct_let_binding.jinja"),
     ),
     (
+        "php_core_defaults_let_binding.jinja",
+        include_str!("templates/php_core_defaults_let_binding.jinja"),
+    ),
+    (
         "php_struct_field_assignment.jinja",
         include_str!("templates/php_struct_field_assignment.jinja"),
     ),

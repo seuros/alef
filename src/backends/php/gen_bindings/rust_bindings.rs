@@ -390,7 +390,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 &never_skip_cfg_field_names,
                 &mutex_types,
                 &config.untagged_union_text_types,
-            ));
+            )?);
         }
     }
 
