@@ -410,6 +410,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                         &fixture.docs_files_for_arg(&arg.field),
                                         &mut *referenced_enums,
                                     ),
+                                    None if lang == "node" => item.as_str().map_or_else(
+                                        || json_to_js(item),
+                                        |wire_value| {
+                                            node_enum_string_literal(
+                                                &builder_type_name,
+                                                enums,
+                                                wire_value,
+                                                &mut *referenced_enums,
+                                            )
+                                        },
+                                    ),
                                     None => json_to_js(item),
                                 })
                                 .collect();

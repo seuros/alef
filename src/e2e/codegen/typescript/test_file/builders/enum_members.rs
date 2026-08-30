@@ -94,7 +94,12 @@ pub(super) fn declared_enum_member_for_prefixed(
         .unwrap_or_else(|| wire_value.to_upper_camel_case())
 }
 
-pub(super) fn node_tagged_unit_variant_literal(enum_name: &str, enums: &[EnumDef], wire_value: &str) -> Option<String> {
+pub(super) fn node_tagged_unit_variant_literal(
+    enum_name: &str,
+    enums: &[EnumDef],
+    wire_value: &str,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
+) -> Option<String> {
     let enum_def = enums
         .iter()
         .find(|definition| definition.name == enum_name && crate::backends::napi::is_tagged_data_enum(definition))?;
@@ -110,5 +115,19 @@ pub(super) fn node_tagged_unit_variant_literal(enum_name: &str, enums: &[EnumDef
     );
     let tag = crate::backends::napi::tagged_enum_discriminant_js_name(enum_def);
     let quoted = serde_json::to_string(&wire_value).expect("enum wire values serialize as JSON strings");
+    referenced_enums.insert(format!("type {enum_name}"));
     Some(format!("{{ {tag}: {quoted} }} as {enum_name}"))
+}
+
+pub(in crate::e2e::codegen::typescript::test_file) fn node_enum_string_literal(
+    enum_name: &str,
+    enums: &[EnumDef],
+    wire_value: &str,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
+) -> String {
+    if let Some(literal) = node_tagged_unit_variant_literal(enum_name, enums, wire_value, referenced_enums) {
+        return literal;
+    }
+    let member = declared_enum_member_for_prefixed(enum_name, enums, "", wire_value);
+    enum_member_reference(enum_name, &member, referenced_enums)
 }

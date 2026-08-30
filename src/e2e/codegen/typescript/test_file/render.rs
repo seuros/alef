@@ -442,8 +442,16 @@ pub fn render_test_file(
                     // reference emitted by `build_args_and_setup`. Non-wasm langs
                     // and primitives / host types pass through unchanged.
                     let elem_type = wasm_prefixed_wrapped_type(lang, elem_type, type_defs, enums, wasm_type_prefix);
-                    if !is_typescript_primitive_element_type(&elem_type) && !imports.contains(&elem_type) {
-                        imports.push(elem_type);
+                    let elem_import = if lang == "node"
+                        && enums.iter().any(|definition| {
+                            definition.name == elem_type && crate::backends::napi::is_tagged_data_enum(definition)
+                        }) {
+                        format!("type {elem_type}")
+                    } else {
+                        elem_type
+                    };
+                    if !is_typescript_primitive_element_type(&elem_import) && !imports.contains(&elem_import) {
+                        imports.push(elem_import);
                     }
                 }
                 if lang == "node" && arg.arg_type == "json_object" {

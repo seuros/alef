@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.
+- Import tagged N-API enum unions as types wherever generated Node fixtures use object-literal
+  casts, including unit variants passed in directly typed arrays.
 
 ## [0.79.2] - 2026-08-30
 

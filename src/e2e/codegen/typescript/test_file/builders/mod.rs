@@ -1,6 +1,7 @@
 mod enum_members;
 
 use super::*;
+pub(in crate::e2e::codegen::typescript::test_file) use enum_members::node_enum_string_literal;
 use enum_members::{
     declared_enum_member_for_prefixed, is_tagged_data_enum, node_tagged_unit_variant_literal,
     wasm_enum_bridged_as_raw_value,
@@ -436,7 +437,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
-                        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, s) {
+                        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, s, referenced_enums) {
                             literal
                         } else {
                             let member = declared_enum_member_for_prefixed(enum_type, enums, wasm_type_prefix, s);
@@ -683,7 +684,7 @@ fn node_value_expression(
         && enums.iter().any(|definition| definition.name == *type_name)
         && let Some(variant) = value.as_str()
     {
-        if let Some(literal) = node_tagged_unit_variant_literal(type_name, enums, variant) {
+        if let Some(literal) = node_tagged_unit_variant_literal(type_name, enums, variant, referenced_enums) {
             return literal;
         }
         let member = declared_enum_member_for_prefixed(type_name, enums, "", variant);
@@ -693,7 +694,7 @@ fn node_value_expression(
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
-        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, variant) {
+        if let Some(literal) = node_tagged_unit_variant_literal(enum_type, enums, variant, referenced_enums) {
             return literal;
         }
         let member = declared_enum_member_for_prefixed(enum_type, enums, "", variant);
