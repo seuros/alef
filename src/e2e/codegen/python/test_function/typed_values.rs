@@ -97,6 +97,36 @@ pub(in crate::e2e::codegen::python) fn resolve_field_element_struct_type<'a>(
     }
 }
 
+/// Resolve the nested-struct value type for a field typed `Map<K, Struct>` (optionally wrapped
+/// in `Optional`) -- a map field whose values are themselves a generated pyclass (e.g.
+/// `Map<String, NestedConfig>`) must construct each value with that class rather than emit the
+/// map as a raw dict of dicts.
+pub(in crate::e2e::codegen::python) fn resolve_field_map_value_struct_type<'a>(
+    field_name: &str,
+    options_type: Option<&str>,
+    type_defs: &'a [crate::core::ir::TypeDef],
+) -> Option<&'a crate::core::ir::TypeDef> {
+    use crate::core::ir::TypeRef;
+
+    let opts_type = options_type?;
+    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
+    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
+
+    let map_value = match &field.ty {
+        TypeRef::Map(_, value) => Some(value.as_ref()),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Map(_, value) => Some(value.as_ref()),
+            _ => None,
+        },
+        _ => None,
+    }?;
+
+    match map_value {
+        TypeRef::Named(name) => type_defs.iter().find(|t| &t.name == name),
+        _ => None,
+    }
+}
+
 /// Render one field's JSON value as a Python expression for a `kwargs`-mode constructor call,
 /// recursing into nested config/struct fields so a field whose type is itself a generated
 /// pyclass (e.g. `nested: NestedConfig` inside `ExtractionConfig`) is constructed with
@@ -116,61 +146,230 @@ pub(in crate::e2e::codegen::python) fn render_kwarg_field_value(
     pointer: &str,
     used_struct_types: &mut BTreeSet<String>,
 ) -> String {
+    if let Some(rendered) = render_enum_field_value(field_name, value, containing_type, type_defs, enums, enum_fields)
+    {
+        return rendered;
+    }
+    if let Some(rendered) = render_docs_file_field_value(pointer, docs_files) {
+        return rendered;
+    }
+    if let Some(rendered) = render_nested_container_field_value(
+        field_name,
+        value,
+        containing_type,
+        type_defs,
+        enums,
+        enum_fields,
+        docs_files,
+        pointer,
+        used_struct_types,
+    ) {
+        return rendered;
+    }
+
+    json_to_python_literal(value)
+}
+
+/// Tries each nested-container shape in turn -- single struct, array-of-structs, then
+/// map-of-structs. The three share an identical signature: each resolves `field_name`'s declared
+/// type against `type_defs` and, on a match, recurses through [`render_struct_constructor`].
+/// Split out of [`render_kwarg_field_value`] to keep that function under the file's per-function
+/// line limit; grouping the three container shapes here (rather than inlining each) is what keeps
+/// the split effective, since all three take the same nine arguments.
+#[allow(clippy::too_many_arguments)]
+fn render_nested_container_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> Option<String> {
+    if let Some(rendered) = render_nested_struct_field_value(
+        field_name,
+        value,
+        containing_type,
+        type_defs,
+        enums,
+        enum_fields,
+        docs_files,
+        pointer,
+        used_struct_types,
+    ) {
+        return Some(rendered);
+    }
+    if let Some(rendered) = render_nested_array_field_value(
+        field_name,
+        value,
+        containing_type,
+        type_defs,
+        enums,
+        enum_fields,
+        docs_files,
+        pointer,
+        used_struct_types,
+    ) {
+        return Some(rendered);
+    }
+    render_nested_map_field_value(
+        field_name,
+        value,
+        containing_type,
+        type_defs,
+        enums,
+        enum_fields,
+        docs_files,
+        pointer,
+        used_struct_types,
+    )
+}
+
+/// Enum branch of [`render_kwarg_field_value`]: an explicitly configured `enum_fields` entry, or
+/// an auto-detected enum field type, renders as `EnumType("variant")`. Mirrors the original
+/// inline logic exactly -- an `enum_fields` hit with a non-string value falls through to the
+/// remaining branches rather than trying auto-detection.
+fn render_enum_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+) -> Option<String> {
     if let Some(enum_type) = enum_fields.get(field_name) {
         if let Some(s) = value.as_str() {
-            return format!("{enum_type}(\"{s}\")");
+            return Some(format!("{enum_type}(\"{s}\")"));
         }
     } else if let Some(auto_enum_type) = resolve_field_enum_type(field_name, containing_type, type_defs, enums)
         && let Some(s) = value.as_str()
     {
-        return format!("{auto_enum_type}(\"{s}\")");
+        return Some(format!("{auto_enum_type}(\"{s}\")"));
     }
+    None
+}
 
-    if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
-        return docs_file_expression(&file.path);
+/// Docs-file branch of [`render_kwarg_field_value`]: a field whose JSON pointer matches a
+/// configured fixture docs-file input renders as a file-read expression instead of its JSON value.
+fn render_docs_file_field_value(pointer: &str, docs_files: &[FixtureDocsFileInput]) -> Option<String> {
+    docs_files
+        .iter()
+        .find(|file| file.field == pointer)
+        .map(|file| docs_file_expression(&file.path))
+}
+
+/// Nested-struct branch of [`render_kwarg_field_value`]: a field typed as another generated
+/// pyclass (optionally `Optional`) renders as that class's constructor call.
+#[allow(clippy::too_many_arguments)]
+fn render_nested_struct_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> Option<String> {
+    let nested = resolve_field_struct_type(field_name, containing_type, type_defs)?;
+    let obj = value.as_object()?;
+    Some(render_struct_constructor(
+        nested,
+        obj,
+        type_defs,
+        enums,
+        enum_fields,
+        docs_files,
+        pointer,
+        used_struct_types,
+    ))
+}
+
+/// Nested-array branch of [`render_kwarg_field_value`]: a field typed `Vec<Struct>` (optionally
+/// `Optional`) renders as a Python list of that class's constructor calls.
+#[allow(clippy::too_many_arguments)]
+fn render_nested_array_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> Option<String> {
+    let elem = resolve_field_element_struct_type(field_name, containing_type, type_defs)?;
+    let arr = value.as_array()?;
+    if !arr.iter().all(|item| item.is_object()) {
+        return None;
     }
+    let items: Vec<String> = arr
+        .iter()
+        .filter_map(|item| item.as_object())
+        .enumerate()
+        .map(|(index, obj)| {
+            let item_pointer = format!("{pointer}/{index}");
+            render_struct_constructor(
+                elem,
+                obj,
+                type_defs,
+                enums,
+                enum_fields,
+                docs_files,
+                &item_pointer,
+                used_struct_types,
+            )
+        })
+        .collect();
+    Some(format!("[{}]", items.join(", ")))
+}
 
-    if let Some(nested) = resolve_field_struct_type(field_name, containing_type, type_defs)
-        && let Some(obj) = value.as_object()
-    {
-        return render_struct_constructor(
-            nested,
-            obj,
-            type_defs,
-            enums,
-            enum_fields,
-            docs_files,
-            pointer,
-            used_struct_types,
-        );
+/// Nested-map branch of [`render_kwarg_field_value`]: a field typed `Map<K, Struct>` (optionally
+/// `Optional`) renders as a Python dict literal whose values are constructed with their own
+/// class. The map's keys pass through as plain Python string literals -- alef's `Map<K, V>`
+/// fields are always string-keyed JSON objects on the wire, so only the value side needs a
+/// constructor. Falls through (returns `None`) when any entry's value is not itself an object,
+/// so a malformed fixture still reaches the `json_to_python_literal` fallback instead of panicking.
+#[allow(clippy::too_many_arguments)]
+fn render_nested_map_field_value(
+    field_name: &str,
+    value: &serde_json::Value,
+    containing_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    enum_fields: &HashMap<String, String>,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+    used_struct_types: &mut BTreeSet<String>,
+) -> Option<String> {
+    let elem = resolve_field_map_value_struct_type(field_name, containing_type, type_defs)?;
+    let map_obj = value.as_object()?;
+    if map_obj.values().any(|entry| !entry.is_object()) {
+        return None;
     }
-
-    if let Some(elem) = resolve_field_element_struct_type(field_name, containing_type, type_defs)
-        && let Some(arr) = value.as_array()
-        && arr.iter().all(|item| item.is_object())
-    {
-        let items: Vec<String> = arr
-            .iter()
-            .filter_map(|item| item.as_object())
-            .enumerate()
-            .map(|(index, obj)| {
-                let item_pointer = format!("{pointer}/{index}");
-                render_struct_constructor(
-                    elem,
-                    obj,
-                    type_defs,
-                    enums,
-                    enum_fields,
-                    docs_files,
-                    &item_pointer,
-                    used_struct_types,
-                )
-            })
-            .collect();
-        return format!("[{}]", items.join(", "));
-    }
-
-    json_to_python_literal(value)
+    let items: Vec<String> = map_obj
+        .iter()
+        .map(|(key, entry)| {
+            let entry_obj = entry.as_object().expect("checked above: every entry is an object");
+            let entry_pointer = format!("{pointer}/{}", escape_json_pointer(key));
+            let ctor = render_struct_constructor(
+                elem,
+                entry_obj,
+                type_defs,
+                enums,
+                enum_fields,
+                docs_files,
+                &entry_pointer,
+                used_struct_types,
+            );
+            format!("\"{}\": {ctor}", escape_python(key))
+        })
+        .collect();
+    Some(format!("{{{}}}", items.join(", ")))
 }
 
 /// Build a `TypeName(field=value, ...)` constructor call for `type_def`, recursing through
@@ -484,314 +683,5 @@ fn escape_json_pointer(field: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn emit_bytes_arg_file_path_uses_path_read_bytes() {
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::Value::String("pdf/memo.pdf".to_string());
-        emit_bytes_arg(&mut bindings, &mut exprs, &value, "content");
-        assert!(bindings[0].contains("Path("), "got: {:?}", bindings[0]);
-        assert!(bindings[0].contains("read_bytes"), "got: {:?}", bindings[0]);
-    }
-
-    #[test]
-    fn emit_bytes_arg_base64_uses_b64decode() {
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::Value::String("/9j/4AAQ".to_string());
-        emit_bytes_arg(&mut bindings, &mut exprs, &value, "data");
-        assert!(bindings[0].contains("b64decode"), "got: {:?}", bindings[0]);
-    }
-
-    #[test]
-    fn emit_json_object_arg_enum_field_emits_constructor_call() {
-        use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
-
-        let enum_def = EnumDef {
-            name: "OutputFormat".to_string(),
-            rust_path: "demo::OutputFormat".to_string(),
-            variants: vec![EnumVariant {
-                name: "Markdown".to_string(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let type_def = TypeDef {
-            name: "ExtractionConfig".to_string(),
-            rust_path: "demo::ExtractionConfig".to_string(),
-            fields: vec![FieldDef {
-                name: "output_format".to_string(),
-                ty: TypeRef::Named("OutputFormat".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let enums = vec![enum_def];
-        let type_defs = vec![type_def];
-
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::json!({"output_format": "markdown"});
-        let done = emit_json_object_arg(
-            &mut bindings,
-            &mut exprs,
-            &value,
-            "opts",
-            Some("ExtractionConfig"),
-            "kwargs",
-            &HashMap::new(),
-            &None,
-            "fixture",
-            false,
-            &type_defs,
-            &enums,
-            &[],
-        );
-        assert!(done);
-        // Constructor-call form works for both (str, Enum) subclasses and #[pyclass] tagged-union
-        // structs. Attribute access (OutputFormat.MARKDOWN) fails for the latter because they have
-        // no class-level variant constants.
-        assert!(
-            bindings[0].contains("OutputFormat(\"markdown\")"),
-            "expected constructor-call emission, got: {:?}",
-            bindings[0]
-        );
-        assert!(
-            !bindings[0].contains("OutputFormat.MARKDOWN"),
-            "must not emit attribute access, got: {:?}",
-            bindings[0]
-        );
-    }
-
-    #[test]
-    fn emit_json_object_arg_dict_mode_emits_literal() {
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::json!({"key": "val"});
-        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
-        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let done = emit_json_object_arg(
-            &mut bindings,
-            &mut exprs,
-            &value,
-            "opts",
-            None,
-            "dict",
-            &HashMap::new(),
-            &None,
-            "fixture",
-            false,
-            &type_defs,
-            &enums,
-            &[],
-        );
-        assert!(done);
-        assert!(bindings[0].contains("\"key\""), "got: {:?}", bindings[0]);
-    }
-
-    #[test]
-    fn emit_json_object_arg_reads_documented_nested_file() {
-        let mut bindings = Vec::new();
-        let mut expressions = Vec::new();
-        let value = serde_json::json!({"bytes": "document.pdf"});
-        let done = emit_json_object_arg(
-            &mut bindings,
-            &mut expressions,
-            &value,
-            "input",
-            Some("DocumentInput"),
-            "kwargs",
-            &HashMap::new(),
-            &None,
-            "fixture",
-            false,
-            &[],
-            &[],
-            &[FixtureDocsFileInput {
-                field: "/bytes".into(),
-                path: "document.pdf".into(),
-            }],
-        );
-
-        assert!(done);
-        assert_eq!(
-            bindings,
-            [r#"    input = DocumentInput(bytes=Path("document.pdf").read_bytes())"#]
-        );
-    }
-
-    /// Regression for the nested-config construction defect: a config field whose own type is
-    /// itself a generated pyclass (e.g. `nested: NestedConfig` inside
-    /// `ExtractionConfig`) must be constructed with that class, not emitted as a raw dict --
-    /// pyo3 rejects a dict where a native class instance is required.
-    #[test]
-    fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_field() {
-        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
-
-        let inner_type = TypeDef {
-            name: "NestedConfig".to_string(),
-            rust_path: "demo::NestedConfig".to_string(),
-            fields: vec![FieldDef {
-                name: "model".to_string(),
-                ty: TypeRef::String,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let outer_type = TypeDef {
-            name: "ExtractionConfig".to_string(),
-            rust_path: "demo::ExtractionConfig".to_string(),
-            fields: vec![FieldDef {
-                name: "nested".to_string(),
-                ty: TypeRef::Named("NestedConfig".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let type_defs = vec![outer_type, inner_type];
-        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::json!({"nested": {"model": "standard"}});
-        let done = emit_json_object_arg(
-            &mut bindings,
-            &mut exprs,
-            &value,
-            "opts",
-            Some("ExtractionConfig"),
-            "kwargs",
-            &HashMap::new(),
-            &None,
-            "fixture",
-            false,
-            &type_defs,
-            &enums,
-            &[],
-        );
-
-        assert!(done);
-        assert_eq!(
-            bindings,
-            [r#"    opts = ExtractionConfig(nested=NestedConfig(model="standard"))"#],
-            "nested struct field must be constructed with its own class, got: {bindings:?}"
-        );
-    }
-
-    /// Batch-call counterpart of the nested-config regression above: a "batch" argument passes
-    /// an array of typed items via `element_type` (see `emit_python_typed_instance`), and each
-    /// item's own nested struct fields must resolve the same way a single top-level config does.
-    #[test]
-    fn emit_json_object_arg_batch_mode_constructs_nested_struct_field_in_each_item() {
-        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
-
-        let inner_type = TypeDef {
-            name: "NestedConfig".to_string(),
-            rust_path: "demo::NestedConfig".to_string(),
-            fields: vec![FieldDef {
-                name: "model".to_string(),
-                ty: TypeRef::String,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let item_type = TypeDef {
-            name: "BatchFileItem".to_string(),
-            rust_path: "demo::BatchFileItem".to_string(),
-            fields: vec![FieldDef {
-                name: "nested".to_string(),
-                ty: TypeRef::Named("NestedConfig".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let type_defs = vec![item_type, inner_type];
-        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-
-        let mut bindings = Vec::new();
-        let mut exprs = Vec::new();
-        let value = serde_json::json!([{"nested": {"model": "standard"}}]);
-        let element_type = Some("BatchFileItem".to_string());
-        let done = emit_json_object_arg(
-            &mut bindings,
-            &mut exprs,
-            &value,
-            "items",
-            None,
-            "kwargs",
-            &HashMap::new(),
-            &element_type,
-            "fixture",
-            false,
-            &type_defs,
-            &enums,
-            &[],
-        );
-
-        assert!(done);
-        assert_eq!(
-            bindings,
-            [r#"    items = [BatchFileItem(nested=NestedConfig(model="standard"))]"#],
-            "each batch item's nested struct field must be constructed with its own class, got: {bindings:?}"
-        );
-    }
-
-    #[test]
-    fn resolve_field_enum_type_detects_enum_field() {
-        use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
-
-        let enum_def = EnumDef {
-            name: "TierStrategy".to_string(),
-            rust_path: "module::TierStrategy".to_string(),
-            variants: vec![EnumVariant {
-                name: "Auto".to_string(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let type_def = TypeDef {
-            name: "ConversionOptions".to_string(),
-            rust_path: "module::ConversionOptions".to_string(),
-            fields: vec![FieldDef {
-                name: "tier_strategy".to_string(),
-                ty: TypeRef::Named("TierStrategy".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let enums = vec![enum_def];
-        let type_defs = vec![type_def];
-
-        let result = resolve_field_enum_type("tier_strategy", Some("ConversionOptions"), &type_defs, &enums);
-        assert_eq!(result, Some("TierStrategy".to_string()));
-    }
-
-    #[test]
-    fn resolve_field_enum_type_returns_none_for_non_enum_field() {
-        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
-
-        let type_def = TypeDef {
-            name: "ConversionOptions".to_string(),
-            rust_path: "module::ConversionOptions".to_string(),
-            fields: vec![FieldDef {
-                name: "timeout".to_string(),
-                ty: TypeRef::Named("u64".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let enums: Vec<crate::core::ir::EnumDef> = vec![];
-        let type_defs = vec![type_def];
-
-        let result = resolve_field_enum_type("timeout", Some("ConversionOptions"), &type_defs, &enums);
-        assert_eq!(result, None);
-    }
-}
+#[path = "typed_values_tests.rs"]
+mod tests;
