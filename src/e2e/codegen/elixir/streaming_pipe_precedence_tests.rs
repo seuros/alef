@@ -18,6 +18,8 @@
 //! 1,000-line cap and may not grow (see `file-modularization` in CLAUDE.md). ~keep
 
 use std::collections::{HashMap, HashSet};
+use std::io::ErrorKind;
+use std::process::Command;
 
 use super::assertions::render_assertion;
 use super::snippet::render_snippet_body;
@@ -28,8 +30,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
 /// The exact `tool_calls` accessor the Elixir backend must emit.
-const TOOL_CALLS_ACCESSOR: &str =
-    "Enum.flat_map(chunks, fn c -> (Map.get((List.first(c.choices) || %{}).delta, :tool_calls, []) || []) end)";
+const TOOL_CALLS_ACCESSOR: &str = "Enum.flat_map(chunks, fn c -> (Map.get((Map.get(List.first(c.choices) || %{}, :delta, %{}) || %{}), :tool_calls, []) || []) end)";
 
 /// The exact `stream_content` accessor the Elixir backend must emit.
 const STREAM_CONTENT_ACCESSOR: &str = "Enum.join(Enum.map(chunks, fn c -> \
@@ -139,6 +140,45 @@ fn not_empty_on_tool_calls_emits_a_parsable_membership_test() {
         out,
         format!("      assert {TOOL_CALLS_ACCESSOR} not in [nil, \"\", [], %{{}}]\n"),
         "got: {out}"
+    );
+}
+
+/// Executes the emitted accessor in a real Elixir runtime. A usage-only terminal chunk may have
+/// no choices, and decoded input may omit or explicitly null the delta/tool-call fields; all are
+/// empty contributors rather than reasons for the generated assertion suite to crash. ~keep
+#[test]
+fn tool_calls_accessor_handles_sparse_chunks_in_elixir_runtime() {
+    let accessor =
+        StreamingFieldResolver::accessor("tool_calls", "elixir", "chunks").expect("elixir tool_calls accessor");
+    let script = format!(
+        r#"
+chunks = [
+  %{{choices: []}},
+  %{{choices: [%{{}}]}},
+  %{{choices: [%{{delta: nil}}]}},
+  %{{choices: [%{{delta: %{{tool_calls: nil}}}}]}},
+  %{{choices: [%{{delta: %{{tool_calls: [%{{id: "call-1"}}]}}}}]}}
+]
+
+actual = {accessor}
+
+unless actual == [%{{id: "call-1"}}] do
+  raise "unexpected tool calls: #{{inspect(actual)}}"
+end
+"#,
+    );
+
+    let output = match Command::new("elixir").args(["-e", &script]).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to execute installed Elixir runtime: {error}"),
+    };
+
+    assert!(
+        output.status.success(),
+        "generated accessor failed in Elixir runtime\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

@@ -399,6 +399,10 @@ impl StreamingFieldResolver {
                     // stored `nil` instead of the `[]` default, and `Enum.flat_map`
                     // cannot enumerate `nil`. The trailing `|| []` normalizes that stored
                     // `nil` to an empty list before flat_map ever sees it. ~keep
+                    // The same normalization is required one level up: usage-only terminal chunks
+                    // can have no choices, and decoded deltas can be absent or nil. Strict
+                    // `.delta` access on the `%{}` fallback raises `KeyError`, so both map hops
+                    // use `Map.get` and normalize explicit nil before the next hop. ~keep
                     //
                     // ~keep Emitted as a plain `Enum.flat_map/2` call, never `chunks |> ...`:
                     // Elixir binds `in`/`not in` TIGHTER than `|>`, so the pipe-headed form
@@ -408,7 +412,7 @@ impl StreamingFieldResolver {
                     // [nil, \"\", [], %{}]". It also kept `render_deep_tail`'s `.field` tail
                     // (`tool_calls.foo`) from composing onto a bare pipe.
                     format!(
-                        "Enum.flat_map({chunks_var}, fn c -> (Map.get((List.first(c.choices) || %{{}}).delta, :tool_calls, []) || []) end)"
+                        "Enum.flat_map({chunks_var}, fn c -> (Map.get((Map.get(List.first(c.choices) || %{{}}, :delta, %{{}}) || %{{}}), :tool_calls, []) || []) end)"
                     )
                 }
                 // Zig: tool_calls count from all chunk deltas
