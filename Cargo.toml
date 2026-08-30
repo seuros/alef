@@ -17,7 +17,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/alef-{ target }{ archive-suff
 bin-dir = "alef-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
-[package.metadata.binstall.overrides.x86_64-pc-windows-gnu]
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-fmt = "zip"
 
 [package.metadata.cargo-machete]

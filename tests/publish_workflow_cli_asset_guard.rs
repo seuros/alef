@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const WORKFLOW: &str = ".github/workflows/publish.yaml";
-#[cfg(unix)]
+const CARGO_MANIFEST: &str = "Cargo.toml";
 const TARGETS_FILE: &str = ".github/cli-targets.json";
 #[cfg(unix)]
 const RESOLVE_STEP_ID: &str = "cli-targets";
@@ -31,6 +31,12 @@ fn workflow() -> serde_yaml::Value {
     let path = repo_root().join(WORKFLOW);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))
+}
+
+fn cargo_manifest() -> toml::Value {
+    let path = repo_root().join(CARGO_MANIFEST);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    toml::from_str(&text).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))
 }
 
 fn job(workflow: &serde_yaml::Value, name: &str) -> serde_yaml::Value {
@@ -211,4 +217,40 @@ fn resolve_step_follows_the_target_list_rather_than_a_baked_in_set() {
         "alef-sample-target-a.tar.gz,alef-sample-target-b.zip",
         "the demanded asset set must be derived from the target list, not hard-coded"
     );
+}
+
+#[test]
+fn binstall_archive_overrides_match_published_cli_targets() {
+    let targets: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo_root().join(TARGETS_FILE)).expect("read CLI targets"))
+            .expect("CLI targets are valid JSON");
+    let manifest = cargo_manifest();
+    let overrides = manifest["package"]["metadata"]["binstall"]["overrides"]
+        .as_table()
+        .expect("binstall overrides are a TOML table");
+
+    for target in targets.as_array().expect("CLI targets are an array") {
+        let triple = target["target"].as_str().expect("CLI target has a target triple");
+        let archive_format = target["archive_ext"]
+            .as_str()
+            .expect("CLI target has an archive extension");
+        if archive_format == "zip" {
+            assert_eq!(
+                overrides[triple]["pkg-fmt"].as_str(),
+                Some("zip"),
+                "binstall must select ZIP for published target {triple}"
+            );
+        }
+    }
+
+    for triple in overrides.keys() {
+        assert!(
+            targets
+                .as_array()
+                .expect("CLI targets are an array")
+                .iter()
+                .any(|target| target["target"].as_str() == Some(triple)),
+            "binstall override {triple} has no matching published CLI target"
+        );
+    }
 }
