@@ -578,6 +578,23 @@ fn runtime_dict_index_expression_renders_array_index_as_integer_subscript() {
 }
 
 #[test]
+fn runtime_dict_index_expression_preserves_empty_map_key_segments() {
+    assert_eq!(
+        runtime_dict_index_expression("opts_data", "/profiles//url"),
+        r#"opts_data["profiles"][""]["url"]"#
+    );
+    assert_eq!(
+        runtime_dict_index_expression("opts_data", "/profiles/"),
+        r#"opts_data["profiles"][""]"#
+    );
+    assert_eq!(runtime_dict_index_expression("opts_data", ""), "opts_data");
+    assert_eq!(
+        runtime_dict_index_expression("opts_data", "/a~1b/~0/~020"),
+        r#"opts_data["a/b"]["~"]["~20"]"#
+    );
+}
+
+#[test]
 fn canonical_docs_pointer_removes_only_runtime_array_tags() {
     assert_eq!(canonical_docs_pointer("/items/~20/nested"), "/items/0/nested");
     assert_eq!(canonical_docs_pointer("/profiles/~020/nested"), "/profiles/~020/nested");
@@ -654,45 +671,52 @@ fn emit_json_object_arg_with_mock_url_constructs_nested_struct_field_from_runtim
     );
 }
 
-#[test]
-fn emit_json_object_arg_with_mock_url_keeps_numeric_map_keys_as_strings() {
+fn nested_profile_type_defs() -> Vec<crate::core::ir::TypeDef> {
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
-    let inner_type = TypeDef {
-        name: "NestedConfig".to_string(),
-        rust_path: "demo::NestedConfig".to_string(),
-        fields: vec![FieldDef {
-            name: "url".to_string(),
-            ty: TypeRef::String,
+    vec![
+        TypeDef {
+            name: "ExtractionConfig".to_string(),
+            rust_path: "demo::ExtractionConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "profiles".to_string(),
+                ty: TypeRef::Map(
+                    Box::new(TypeRef::String),
+                    Box::new(TypeRef::Named("NestedConfig".to_string())),
+                ),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let outer_type = TypeDef {
-        name: "ExtractionConfig".to_string(),
-        rust_path: "demo::ExtractionConfig".to_string(),
-        fields: vec![FieldDef {
-            name: "profiles".to_string(),
-            ty: TypeRef::Map(
-                Box::new(TypeRef::String),
-                Box::new(TypeRef::Named("NestedConfig".to_string())),
-            ),
+        },
+        TypeDef {
+            name: "NestedConfig".to_string(),
+            rust_path: "demo::NestedConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "url".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let type_defs = vec![outer_type, inner_type];
+        },
+    ]
+}
+
+fn render_mock_url_profile(map_key: &str) -> String {
+    let type_defs = nested_profile_type_defs();
+    let mut profiles = serde_json::Map::new();
+    profiles.insert(map_key.to_string(), serde_json::json!({"url": "$mock_url/path"}));
+    let value = serde_json::json!({"profiles": profiles});
     let mut bindings = Vec::new();
-    let mut exprs = Vec::new();
+    let mut expressions = Vec::new();
     let mut sink = ArgSink {
         bindings: &mut bindings,
-        kwarg_exprs: &mut exprs,
+        kwarg_exprs: &mut expressions,
     };
-    let value = serde_json::json!({"profiles": {"0": {"url": "$mock_url/path"}}});
+    let element_type = None;
     let spec = ConstructorSpec {
         options_type: Some("ExtractionConfig"),
         options_via: "kwargs",
-        element_type: &None,
+        element_type: &element_type,
     };
     let mock = MockUrlInfo {
         fixture_id: "fixture",
@@ -707,10 +731,24 @@ fn emit_json_object_arg_with_mock_url_keeps_numeric_map_keys_as_strings() {
     };
 
     assert!(emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context));
-    let rendered = bindings.join("\n");
+    bindings.join("\n")
+}
+
+#[test]
+fn emit_json_object_arg_with_mock_url_keeps_numeric_map_keys_as_strings() {
+    let rendered = render_mock_url_profile("0");
     assert!(
         rendered.contains(r#"NestedConfig(url=opts_data["profiles"]["0"]["url"])"#),
         "numeric map keys must remain string subscripts, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn emit_json_object_arg_with_mock_url_preserves_empty_map_keys() {
+    let rendered = render_mock_url_profile("");
+    assert!(
+        rendered.contains(r#"NestedConfig(url=opts_data["profiles"][""]["url"])"#),
+        "empty map keys must remain string subscripts, got:\n{rendered}"
     );
 }
 

@@ -161,7 +161,11 @@ fn render_leaf_value(value: &serde_json::Value, pointer: &str, leaf_source: Leaf
 /// renders as an integer subscript; an untagged numeric segment remains a quoted map key.
 fn runtime_dict_index_expression(holder: &str, pointer: &str) -> String {
     let mut expression = holder.to_string();
-    for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+    if pointer.is_empty() {
+        return expression;
+    }
+    let path = pointer.strip_prefix('/').unwrap_or(pointer);
+    for segment in path.split('/') {
         if let Some(index) = segment
             .strip_prefix(RUNTIME_ARRAY_INDEX_PREFIX)
             .filter(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
