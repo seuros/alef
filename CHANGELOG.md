@@ -161,6 +161,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
   on any failure and asserted nothing; it now binds both ABI failure channels and requires the
   failure to have carried a message or a non-catch-all error-set member.
+- Derive the synthesized discriminator key for a tagged-object enum lowering from one
+  shared authority (`codegen::serde_enum_repr::tagged_object_tag_key`). The Ruby/Magnus
+  `from_hash` dispatcher previously fell back to `kind` while every other backend fell back
+  to `type` for the same IR enum.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

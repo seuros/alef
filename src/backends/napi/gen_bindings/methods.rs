@@ -110,7 +110,7 @@ pub(super) fn gen_tagged_enum_binding_to_core(
 ) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
 
     let fields_with_binding_struct = tagged_enum_binding_struct_fields(enum_def, struct_names);
@@ -309,7 +309,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
 ) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let fields_with_binding_struct = tagged_enum_binding_struct_fields(enum_def, struct_names);
     let mixed_named_fields = tagged_enum_mixed_named_fields(enum_def);

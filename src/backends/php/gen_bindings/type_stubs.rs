@@ -809,7 +809,7 @@ pub(super) fn struct_needs_from_json_stub(
 /// deliberately emits PLAIN methods (see `structs.rs`'s historical note) precisely so they land as
 /// camelCase `getImageUrl()`; the stub must therefore declare properties here and methods there. ~keep
 fn gen_data_enum_property_declarations(enum_def: &EnumDef, enum_names: &AHashSet<String>) -> Vec<String> {
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let mut declarations = vec![format!(
         "    /** @var string The variant discriminator carried by the `{tag_field}` JSON field. */\n    \
          public readonly string ${tag_field}_tag;\n"

@@ -310,7 +310,7 @@ pub(super) fn gen_dts(
                     // Adjacent tagging (`#[serde(tag, content)]`): each variant serializes as its
                     // own `{ tag: 'value'; content: T }`, so a discriminated union of per-variant
                     // shapes matches the wire format exactly. (~keep)
-                    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+                    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(e);
                     let mut member_lines: Vec<String> = Vec::new();
                     for variant in &e.variants {
                         let tag_value = wire_variant_value(
@@ -360,7 +360,7 @@ pub(super) fn gen_dts(
                     // payload fields to differentiate, so a single object with a union-valued tag
                     // says the same thing as a per-variant union without the redundant repetition.
                     // (~keep)
-                    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+                    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(e);
                     let tag_values: Vec<String> = e
                         .variants
                         .iter()
@@ -625,7 +625,7 @@ pub(super) fn dts_type(ty: &TypeRef) -> String {
 /// `e2e::codegen::typescript::test_file::builders`'s `node_tagged_enum_*` cross-generator
 /// tests. ~keep
 pub(crate) fn internal_tagged_union_dts_lines(e: &EnumDef, ts_name: &str) -> Vec<String> {
-    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(e);
     let mut lines = vec![format!("export type {ts_name} =")];
     for variant in &e.variants {
         let tag_value = wire_variant_value(

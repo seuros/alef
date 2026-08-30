@@ -66,7 +66,7 @@ pub(crate) fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &En
 }
 
 pub(crate) fn tagged_enum_discriminant_js_name(enum_def: &EnumDef) -> &str {
-    enum_def.serde_tag.as_deref().unwrap_or("type")
+    crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def)
 }
 
 pub(crate) fn string_enum_variant_js_value(enum_def: &EnumDef, variant_name: &str) -> Option<String> {

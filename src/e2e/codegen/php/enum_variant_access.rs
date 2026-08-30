@@ -17,10 +17,8 @@
 use std::collections::HashSet;
 
 use crate::core::ir::{EnumDef, EnumVariant};
+use crate::codegen::serde_enum_repr::tagged_object_tag_key;
 use crate::e2e::field_access::PhpGetterMap;
-
-/// serde's own default when `#[serde(tag)]` names no field, mirroring the binding backend.
-const DEFAULT_SERDE_TAG: &str = "type";
 
 /// How `backends::php` lowers each IR enum, partitioned exactly as
 /// `backends::php::gen_bindings::rust_bindings::generate_bindings` partitions `api.enums`.
@@ -89,7 +87,7 @@ impl PhpEnumLowering {
             }
         }
         properties.push(FlatProperty {
-            name: format!("{}_tag", enum_def.serde_tag.as_deref().unwrap_or(DEFAULT_SERDE_TAG)),
+            name: format!("{}_tag", tagged_object_tag_key(enum_def)),
             payload_type: None,
         });
         Some(properties)

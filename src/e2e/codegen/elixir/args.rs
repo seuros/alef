@@ -611,7 +611,7 @@ fn emit_tagged_enum_array(
         Some(a) => a,
         None => return json_to_elixir(value),
     };
-    let tag_key = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_key = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let mut elements: Vec<String> = Vec::with_capacity(arr.len());
     for item in arr {
         let obj = match item.as_object() {

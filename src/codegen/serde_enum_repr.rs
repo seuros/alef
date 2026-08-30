@@ -78,6 +78,88 @@ pub fn serde_enum_repr(enum_def: &EnumDef) -> SerdeEnumRepr {
     }
 }
 
+/// The discriminator key a backend synthesizes when it lowers a data-carrying IR enum to a
+/// tagged object even though serde put no tag on the wire ([`SerdeEnumRepr::External`]).
+///
+/// Host object models frequently cannot express a Rust sum type directly — a `#[napi(object)]`,
+/// a `#[wasm_bindgen]` struct, an ext-php-rs `#[php_class]`, a Ruby `Data.define` — so those
+/// backends flatten every variant's payload into one struct and add a string discriminator. The
+/// key is not read from the IR in that case (there is nothing to read), so it is a *convention*,
+/// and a convention spelled inline at each emitter is a per-emitter oracle rather than one fact.
+pub const DEFAULT_TAGGED_OBJECT_TAG_KEY: &str = "type";
+
+/// The discriminator key for an IR enum a backend lowers to a tagged object: the enum's own
+/// `#[serde(tag = "...")]` when it has one, else [`DEFAULT_TAGGED_OBJECT_TAG_KEY`].
+///
+/// Every emitter that names a discriminator must call this. Restating
+/// `enum_def.serde_tag.as_deref().unwrap_or(<literal>)` locally is how the same IR enum acquired
+/// two different keys: fourteen call sites across the napi, wasm, php, swift, extendr, rustler
+/// and elixir emitters spelled the fallback `"type"` while
+/// `backends::magnus::gen_bindings::tagged_enums` spelled it `"kind"`, so a Ruby
+/// `from_hash` dispatcher read `hash[:kind]` off an object every sibling emitter keys as
+/// `type`. Nothing detects that: each emitter's own tests agree with its own literal.
+///
+/// This is a WIRE name, never a host-language public identifier — do not case it through
+/// `naming::public_host_identifier`. ~keep
+#[must_use]
+pub fn tagged_object_tag_key(enum_def: &EnumDef) -> &str {
+    enum_def.serde_tag.as_deref().unwrap_or(DEFAULT_TAGGED_OBJECT_TAG_KEY)
+}
+
+#[cfg(test)]
+mod tagged_object_tag_key_tests {
+    use super::*;
+
+    fn enum_with(tag: Option<&str>, content: Option<&str>) -> EnumDef {
+        EnumDef {
+            name: "Sample".to_string(),
+            serde_tag: tag.map(str::to_string),
+            serde_content: content.map(str::to_string),
+            ..EnumDef::default()
+        }
+    }
+
+    /// One row: case name, `#[serde(tag)]`, `#[serde(content)]`, the key that must come back.
+    type TagKeyCase<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str);
+
+    #[test]
+    fn should_resolve_the_discriminator_key_for_every_container_attribute_shape() {
+        let cases: [TagKeyCase<'_>; 5] = [
+            ("no container attribute falls back to the convention", None, None, "type"),
+            ("an explicit tag wins over the fallback", Some("kind"), None, "kind"),
+            (
+                "an explicit tag wins even when it equals the fallback",
+                Some("type"),
+                None,
+                "type",
+            ),
+            (
+                "adjacent tagging keys on the tag, not the content",
+                Some("kind"),
+                Some("payload"),
+                "kind",
+            ),
+            (
+                "a content without a tag still falls back to the convention",
+                None,
+                Some("payload"),
+                "type",
+            ),
+        ];
+
+        for (case, tag, content, expected) in cases {
+            assert_eq!(tagged_object_tag_key(&enum_with(tag, content)), expected, "{case}");
+        }
+    }
+
+    /// The fallback and the key an explicitly-`type`-tagged enum yields must be the same string,
+    /// so no emitter can be correct for one shape and wrong for the other.
+    #[test]
+    fn should_agree_with_the_named_constant() {
+        assert_eq!(tagged_object_tag_key(&enum_with(None, None)), DEFAULT_TAGGED_OBJECT_TAG_KEY);
+    }
+}
+
 /// The inverse of [`crate::codegen::naming::wire_variant_value`]: given a value read off the
 /// JSON/wire surface (an e2e fixture's enum-typed input, a recorded response body), return the
 /// Rust variant name that produces it — which is also the public member identifier every binding

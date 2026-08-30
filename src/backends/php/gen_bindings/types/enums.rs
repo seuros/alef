@@ -234,7 +234,7 @@ pub(crate) fn flat_field_name(variant: &EnumVariant, field_index: usize) -> Stri
 /// after the serde tag (defaulting to `"type"`). This lets `HashMap<String, SecuritySchemeInfo>`
 /// stay as `HashMap<String, SecuritySchemeInfo>` (the flat PHP class) with working `From` impls.
 pub(crate) fn gen_flat_data_enum(enum_def: &EnumDef, mapper: &PhpMapper, php_namespace: Option<&str>) -> String {
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
 
     let php_attrs: String = if let Some(ns) = php_namespace {
         let ns_escaped = ns.replace('\\', "\\\\");
@@ -306,7 +306,7 @@ pub(crate) fn gen_flat_data_enum_methods(
     core_import: &str,
     configured_features: Option<&HashSet<&str>>,
 ) -> String {
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let mut impl_builder = ImplBuilder::new(&enum_def.name);
     impl_builder.add_attr("php_impl");
 
@@ -391,7 +391,7 @@ pub(crate) fn gen_flat_data_enum_from_impls(
     configured_features: Option<&[String]>,
 ) -> String {
     use crate::core::ir::{PrimitiveType, TypeRef};
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = &enum_def.name;
     // A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's

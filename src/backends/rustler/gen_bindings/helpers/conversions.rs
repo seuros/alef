@@ -407,7 +407,7 @@ pub(in crate::backends::rustler::gen_bindings) fn is_flat_data_enum(enum_def: &c
 pub(in crate::backends::rustler::gen_bindings) fn flat_data_enum_discriminator(
     enum_def: &crate::core::ir::EnumDef,
 ) -> &str {
-    enum_def.serde_tag.as_deref().unwrap_or("type")
+    crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def)
 }
 
 /// Escape a wire value for embedding in a double-quoted Elixir string literal.

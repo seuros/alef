@@ -104,7 +104,7 @@ fn has_untagged_single_payloads(en: &EnumDef) -> bool {
 /// Emits a custom Codable conformance for a serde-internally-tagged enum.
 /// Handles variant-tag decoding/encoding and respects field renames.
 pub(super) fn emit_serde_tagged_codable(en: &EnumDef, out: &mut String, mapper: &SwiftMapper) {
-    let tag_key = en.serde_tag.as_deref().unwrap_or("type");
+    let tag_key = crate::codegen::serde_enum_repr::tagged_object_tag_key(en);
 
     let mut field_keys = std::collections::BTreeSet::new();
     for variant in &en.variants {

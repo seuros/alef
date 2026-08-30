@@ -268,7 +268,7 @@ pub(super) fn variant_tag_value(
 /// `gen_tagged_enum_binding_to_core` / `gen_tagged_enum_core_to_binding`.
 pub(super) fn gen_tagged_enum_as_struct(enum_def: &EnumDef, prefix: &str) -> String {
     let js_name = format!("{prefix}{}", enum_def.name);
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let tag_field_ident = escape_rust_keyword(tag_field);
     let tag_js_name = to_node_name(tag_field);
     let mapper = WasmMapper::new(std::collections::HashMap::new(), prefix.to_string());
@@ -458,7 +458,7 @@ fn wasm_tagged_variant_kept(enum_def: &EnumDef, variant: &EnumVariant, is_host_e
 pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &str, prefix: &str) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let tag_field_ident = escape_rust_keyword(tag_field);
     let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mixed = mixed_type_fields(enum_def);
@@ -579,7 +579,7 @@ pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &
 pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &str, prefix: &str) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let tag_field_ident = escape_rust_keyword(tag_field);
     let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mixed = mixed_type_fields(enum_def);

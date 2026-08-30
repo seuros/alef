@@ -41,7 +41,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
 
     let class_name = &enum_def.name;
     let variant_names: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("kind");
+    let tag_field = crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def);
     let tag_field_symbol = crate::backends::magnus::ruby_symbol_literal(tag_field);
 
     let mut doc_comment = String::new();
@@ -294,6 +294,85 @@ mod tests {
         assert!(
             !code.contains("when \"key_value\" then"),
             "must not fabricate a snake_case rename_all that the Rust enum never declared, got:\n{code}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod discriminator_key_parity_tests {
+    use super::gen_tagged_enum_ruby_classes;
+    use crate::backends::napi::tagged_enum_discriminant_js_name;
+    use crate::codegen::serde_enum_repr::tagged_object_tag_key;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
+
+    /// A data-carrying enum whose `#[serde(tag = ...)]` is whatever the caller passes -- including
+    /// `None`, the shape whose discriminator key is a convention rather than an IR value and so
+    /// the only shape where two emitters could each invent their own answer.
+    fn sample_enum(serde_tag: Option<&str>) -> EnumDef {
+        EnumDef {
+            name: "SampleUnion".to_string(),
+            rust_path: "test_core::SampleUnion".to_string(),
+            serde_tag: serde_tag.map(str::to_string),
+            variants: vec![
+                EnumVariant {
+                    name: "Basic".to_string(),
+                    fields: vec![FieldDef {
+                        name: "username".to_string(),
+                        ty: TypeRef::String,
+                        ..FieldDef::default()
+                    }],
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "Anonymous".to_string(),
+                    ..EnumVariant::default()
+                },
+            ],
+            ..EnumDef::default()
+        }
+    }
+
+    /// The Ruby marker module's `from_hash` dispatcher and the compiled napi binding's
+    /// discriminant field are two emitters reading one `EnumDef`. They must name the same key or
+    /// a payload produced by one binding is undispatchable by the other.
+    ///
+    /// This is the regression the module-level fix closes: `gen_tagged_enum_ruby_classes`
+    /// spelled its own fallback `"kind"` while every sibling emitter -- napi, wasm, php, swift,
+    /// extendr, rustler -- spelled theirs `"type"`. Neither side's own tests could see it,
+    /// because each compared its output against its own literal. Asking
+    /// [`tagged_object_tag_key`] from both places is what makes the two answers one answer.
+    #[test]
+    fn should_key_the_ruby_dispatcher_on_the_same_field_the_napi_binding_declares() {
+        for serde_tag in [None, Some("type"), Some("kind"), Some("discriminator")] {
+            let enum_def = sample_enum(serde_tag);
+
+            let expected = tagged_object_tag_key(&enum_def).to_string();
+            assert_eq!(
+                tagged_enum_discriminant_js_name(&enum_def),
+                expected,
+                "napi discriminant must come from the shared authority (serde_tag = {serde_tag:?})"
+            );
+
+            let ruby = gen_tagged_enum_ruby_classes(&enum_def, "TestLib");
+            assert!(
+                ruby.contains(&format!("discriminator = hash[:{expected}] || hash[\"{expected}\"]")),
+                "ruby from_hash must read `{expected}` (serde_tag = {serde_tag:?}), got:\n{ruby}"
+            );
+        }
+    }
+
+    /// Pins the direction of the fix, not just the agreement: an enum with no `#[serde(tag)]`
+    /// resolves to `type`. Without this a future change could make BOTH emitters say `kind` and
+    /// still pass the parity assertion above while disagreeing with php, wasm and swift.
+    #[test]
+    fn should_fall_back_to_the_conventional_type_key_when_the_enum_declares_no_tag() {
+        let enum_def = sample_enum(None);
+        assert_eq!(tagged_object_tag_key(&enum_def), "type");
+
+        let ruby = gen_tagged_enum_ruby_classes(&enum_def, "TestLib");
+        assert!(
+            !ruby.contains("hash[:kind]"),
+            "the untagged fallback must not reintroduce the magnus-only `kind` key, got:\n{ruby}"
         );
     }
 }

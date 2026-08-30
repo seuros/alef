@@ -55,7 +55,7 @@ pub(super) fn is_flat_data_enum(e: &EnumDef) -> bool {
 /// that build a flat data enum's discriminator (the struct field, the `From<core>` impl, and the
 /// `From<binding>` impl) must read it from here so they cannot drift apart. ~keep
 pub(super) fn flat_data_enum_discriminator(enum_def: &EnumDef) -> &str {
-    enum_def.serde_tag.as_deref().unwrap_or("type")
+    crate::codegen::serde_enum_repr::tagged_object_tag_key(enum_def)
 }
 
 /// Returns true if a flat data enum can safely generate a binding→core From impl.
