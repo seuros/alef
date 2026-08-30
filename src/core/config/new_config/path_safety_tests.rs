@@ -1,13 +1,20 @@
 //! RED-first coverage for the config-path-safety fix: `crate_dir` overrides (jni/node/wasm),
-//! `dart.lib_name`, and dotted package/namespace overrides (java/kotlin/kotlin_android/csharp)
-//! must be rejected with a contextual `ResolveError`, not silently accepted, when the value
-//! would let a generated write escape the output tree.
+//! `dart.lib_name`, dotted package/namespace overrides (java/kotlin/kotlin_android/csharp), and
+//! the crate `name` field itself must be rejected with a contextual `ResolveError`, not silently
+//! accepted, when the value would let a generated write escape the output tree.
 //!
-//! Each rejection test below panicked on current code before the fix (the checked values are
+//! Most rejection tests below panicked on current code before the fix (the checked values are
 //! exactly the shapes `validate_output_segment` / `validate_output_path` used to `panic!` on
 //! inside `OutputTemplate::resolve`, now surfaced instead as `Err(ResolveError::InvalidConfig)`
-//! at the same config-resolution boundary for these additional fields). The no-change control
-//! at the bottom proves an ordinary value still resolves to the exact same values as before.
+//! at the same config-resolution boundary for these additional fields). The `crate_name_rejects_*`
+//! tests differ: the leading-dot shape was silently *accepted* on current code (a JNI-only,
+//! single-crate config never embeds the crate name in any `OutputTemplate`-resolved path, so
+//! nothing there ever inspected it), while the directly-absolute shape still panicked (an
+//! embedded `/` is caught by `OutputTemplate::resolve`'s own unconditional
+//! `validate_output_segment(crate_name, ...)` call, which runs for the `jni` language too since
+//! its per-crate explicit-output lookup always returns `None`) — both are failures on current
+//! code either way, just via different failure modes. The no-change control at the bottom proves
+//! an ordinary value still resolves to the exact same values as before.
 
 use super::*;
 
@@ -337,6 +344,50 @@ sources = ["src/lib.rs"]
 namespace = ".."
 "#,
         &["sample-core", "csharp.namespace", "escape the project root"],
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// crate `name` itself -- unconditional, independent of which languages are configured. A JNI-only
+// crate (jni always requires kotlin_android, but neither has an `OutputTemplate` entry that
+// embeds the crate name in a single-crate workspace like this fixture) proves the check does not
+// depend on the `OutputTemplate` route the other fields incidentally ride along on.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn crate_name_rejects_a_leading_dot_that_becomes_an_absolute_path_jni_only() {
+    // ".hidden".replace('.', "/") == "/hidden" -- absolute, same shape as
+    // `java_package_rejects_a_leading_dot_that_becomes_an_absolute_path` above, but here it is
+    // the crate `name` itself, in a config that targets only jni + kotlin_android (no other
+    // language's `OutputTemplate` entry happens to embed the crate name and catch this first).
+    // Note: this failure comes from `validate_output_path` on the dot-replaced value, whose
+    // message does not repeat the `label` argument (only `validate_output_segment`'s messages
+    // do) -- so, unlike the directly-absolute test below, "name" itself is not asserted here.
+    expect_rejected(
+        r#"
+[workspace]
+languages = ["jni", "kotlin_android"]
+
+[[crates]]
+name = ".hidden"
+sources = ["src/lib.rs"]
+"#,
+        &[".hidden", "escape the project root"],
+    );
+}
+
+#[test]
+fn crate_name_rejects_a_directly_absolute_value_jni_only() {
+    expect_rejected(
+        r#"
+[workspace]
+languages = ["jni", "kotlin_android"]
+
+[[crates]]
+name = "/etc/passwd"
+sources = ["src/lib.rs"]
+"#,
+        &["/etc/passwd", "name", "path separators are not allowed"],
     );
 }
 

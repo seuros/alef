@@ -1,3 +1,19 @@
+/// Sanitize one reverse-DNS package label so it can never carry a raw path separator through to
+/// [`derive_reverse_dns_package`]'s output.
+///
+/// `/` is already excluded by construction (host and org are obtained by splitting the URL on
+/// `/`, so neither can contain one), and the java/kotlin/csharp backends' own
+/// `.replace('.', "/")` step (see `new_config::validate_package_like_field`) neutralizes a `.` in
+/// the source URL. A literal `\` is neither: it is not a URL path delimiter here, so an
+/// unusual host or org (e.g. a locally-configured `[scaffold] repository` on a filesystem that
+/// tolerates it) could carry one through unchanged, and `\` is a native path separator on
+/// Windows — the one platform where `Path::components()` treats it as such. Folding it into `_`
+/// alongside the existing hyphen normalization closes that gap without touching the `.`/`/`
+/// handling this function already gets right. ~keep
+fn sanitize_reverse_dns_label(label: &str) -> String {
+    label.replace('-', "_").replace('\\', "_")
+}
+
 /// Derive a reverse-DNS package name from a repository URL.
 ///
 /// Recognises `https?://<host>/<org>/<rest>` and produces `<reversed-host>.<org>`,
@@ -21,7 +37,7 @@ pub fn derive_reverse_dns_package(repo_url: &str) -> Option<String> {
         .split('.')
         .filter(|s| !s.is_empty())
         .rev()
-        .map(|s| s.replace('-', "_"))
+        .map(sanitize_reverse_dns_label)
         .collect();
     if host_reversed.is_empty() {
         return None;
@@ -29,7 +45,7 @@ pub fn derive_reverse_dns_package(repo_url: &str) -> Option<String> {
 
     let mut pkg = host_reversed.join(".");
     pkg.push('.');
-    pkg.push_str(&org.replace('-', "_"));
+    pkg.push_str(&sanitize_reverse_dns_label(org));
     Some(pkg)
 }
 
@@ -115,5 +131,78 @@ mod tests {
             derive_reverse_dns_package("https://example.invalid/my-lib"),
             Some("invalid.example.my_lib".to_string())
         );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Property coverage: no proptest/quickcheck dependency exists in this crate (checked
+    // `Cargo.toml`/`Cargo.lock`), so this drives a deliberately adversarial, table-driven input
+    // list through `derive_reverse_dns_package` rather than a randomized generator. Every
+    // fragment below is substituted into both the host and the org position of a repo URL, and
+    // for every `Some(pkg)` the java/kotlin backends' own `pkg.replace('.', "/")` step (see
+    // `new_config::validate_package_like_field`, `src/backends/java/gen_bindings/mod.rs`) must
+    // not produce an absolute path or a `..` path component, and `pkg` itself must never carry a
+    // raw path separator. This is the exact property the fix above closes: before it, the
+    // `back\slash` / `back\\slash` fragments below left a literal `\` in the returned package
+    // (`sanitize_reverse_dns_label` did not exist; only `-` was normalized), which `Path`
+    // recognizes as a separator on Windows even though `.replace('.', "/")` never touches it.
+    #[test]
+    fn derived_package_is_never_path_hazardous_for_adversarial_host_or_org() {
+        const ADVERSARIAL_FRAGMENTS: &[&str] = &[
+            "..",
+            ".",
+            "...",
+            "....",
+            "a..b",
+            ".leading",
+            "trailing.",
+            "..leading-trailing..",
+            "back\\slash",
+            "back\\\\slash",
+            "with\0null",
+            "unicode-\u{65e5}\u{672c}\u{8a9e}-\u{4f60}\u{597d}",
+            "  spaces  ",
+            "-",
+            "--",
+            "___",
+            "UPPER-CASE",
+            "MixedCase.Name",
+            "a.b.c.d.e",
+            "%2e%2e",
+            "..%2f..",
+            "a/b",
+            "////",
+            "...-...-",
+            "-.-.-",
+            "a-.-b",
+        ];
+
+        for fragment in ADVERSARIAL_FRAGMENTS {
+            for url in [
+                format!("https://example.com/{fragment}"),
+                format!("https://{fragment}/acme"),
+            ] {
+                let Some(pkg) = derive_reverse_dns_package(&url) else {
+                    continue;
+                };
+                assert!(
+                    !pkg.contains('/') && !pkg.contains('\\'),
+                    "derived package must never carry a raw path separator: url={url:?} pkg={pkg:?}"
+                );
+                let transformed = pkg.replace('.', "/");
+                let transformed_path = std::path::Path::new(&transformed);
+                assert!(
+                    !transformed_path.is_absolute(),
+                    "derived package must not become absolute after the backends' dot-to-slash \
+                     transform: url={url:?} pkg={pkg:?} transformed={transformed:?}"
+                );
+                assert!(
+                    !transformed_path
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir)),
+                    "derived package must not contain a `..` component after the backends' \
+                     dot-to-slash transform: url={url:?} pkg={pkg:?} transformed={transformed:?}"
+                );
+            }
+        }
     }
 }

@@ -114,6 +114,7 @@ impl NewAlefConfig {
             if seen.insert(krate.name.as_str(), idx).is_some() {
                 return Err(ResolveError::DuplicateCrateName(krate.name.clone()));
             }
+            validate_crate_name_path_safety(&krate.name)?;
         }
 
         let multi_crate = self.crates.len() > 1;
@@ -620,6 +621,32 @@ fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Langua
         .map_err(|error| invalid("[crates.dart].pubspec_name", &pubspec_name, error))?;
     let library_name = resolved.dart_library_name();
     validate_dart_library_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
+/// Validate that a crate's own `name` cannot itself carry a path-traversal or absolute-path
+/// takeover, called once per crate from [`NewAlefConfig::resolve`] before any per-crate,
+/// per-language resolution runs.
+///
+/// `name` is the fallback value behind several language-specific defaults — `jni_crate_base()`
+/// (used whenever `[crates.jni] crate_dir` is unset), the Dart pubspec-derived library name, and
+/// `csharp_namespace()`'s pascal-case default — and every one of today's consuming call sites
+/// happens to compose it safely (a fixed literal suffix, a `to_pascal_case()` transform that
+/// strips non-alphanumeric characters entirely, or a literal prefix ahead of it). That safety is
+/// an accident of the current call sites, not a guarantee, and relying on it silently drops
+/// coverage the moment a language is absent from `OutputTemplate` (`jni` has no entry there) or
+/// every configured language happens to carry an explicit `[crates.output]` override — either
+/// way, `OutputTemplate::resolve`'s own crate-name check never runs for that crate. Checking
+/// `name` here instead is unconditional: it runs for every crate regardless of which languages
+/// or output overrides are configured, and it runs early enough (before
+/// [`resolve_output_paths`](super::resolve_helpers::resolve_output_paths) can reach
+/// `OutputTemplate::resolve`'s panicking equivalent) to surface a bad name as a graceful
+/// [`ResolveError::InvalidConfig`] instead of a process panic. Reuses
+/// [`validate_package_like_field`]'s combined segment-and-dot-replaced-path check — the stricter
+/// of the two field-validation shapes — since a crate name should never legitimately contain a
+/// path separator or start with `.` (unlike `node`/`wasm` `crate_dir`, which need the narrower
+/// [`validate_relative_path_field`] because `/` is legitimate structure for those two fields). ~keep
+fn validate_crate_name_path_safety(crate_name: &str) -> Result<(), ResolveError> {
+    validate_package_like_field(crate_name, Some(crate_name), "name")
+}
+
 /// Validate every explicit per-language config override that becomes part of a generated
 /// output path, called once from `resolve_one` with the already-merged (crate-over-workspace)
 /// value for each field.
@@ -670,15 +697,12 @@ struct PathSafetyFields<'a> {
 /// path both format the value in with a fixed literal suffix (`-jni`, `.dart`), which defeats a
 /// bare `..` becoming a real `ParentDir` component there, but this check does not rely on that
 /// incidental protection — a bare `..` is never a legitimate value for either field regardless.
-/// A value of `None` (the field left unset) is not validated. For `jni.crate_dir` the default
-/// (`config.name`) is unvalidated here, but every crate targeting a language present in
-/// `OutputTemplate` — which `jni` always pairs with (`kotlin_android` is required alongside it,
-/// see the check above) — already runs `config.name` through this same pair of checks via
-/// `resolve_output_paths` → `OutputTemplate::resolve`. `dart.lib_name`'s fallback is the one
-/// exception with no equivalent implicit coverage — a crate can target only Dart with an
-/// explicit `[crates.output].dart` override, bypassing `OutputTemplate::resolve` entirely —
-/// so `validation::validate_dart_library_name` checks that resolved, post-default value
-/// separately.
+/// A value of `None` (the field left unset) is not validated: for `jni.crate_dir` the default
+/// (`config.name`) is covered unconditionally by [`validate_crate_name_path_safety`] instead, run
+/// once per crate regardless of language configuration. `dart.lib_name`'s fallback additionally
+/// goes through `dart_pubspec_name()`'s own hyphen-to-underscore transform before it reaches a
+/// path, so `validation::validate_dart_library_name` checks that resolved, post-default value
+/// separately rather than relying on the crate-name check alone.
 fn validate_path_segment_field(crate_name: &str, value: Option<&str>, label: &str) -> Result<(), ResolveError> {
     let Some(value) = value else {
         return Ok(());

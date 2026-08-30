@@ -298,4 +298,82 @@ sources = ["src/lib.rs"]
         let r = with_repo("my-lib", "https://github.com/foo-org/my-lib");
         assert_eq!(r.java_group_id(), r.java_package());
     }
+
+    // -----------------------------------------------------------------------------------------
+    // Property coverage: no proptest/quickcheck dependency exists in this crate, so this drives a
+    // deliberately adversarial, table-driven input list -- rather than a randomized generator --
+    // through `csharp_namespace()`'s unset-override default (`self.name.to_pascal_case()`,
+    // exercised here via `heck::ToPascalCase` directly rather than round-tripping through
+    // `NewAlefConfig::resolve()`, so the property holds independent of whatever the crate-name
+    // path-safety gate in `new_config` currently allows or rejects as a `name` value -- this is
+    // deliberately not relying on that gate as the only line of defense, matching
+    // `validate_path_segment_field`'s own "does not rely on that incidental protection"
+    // reasoning). For every input, the backend's own `namespace.replace('.', "/")` step (see
+    // `src/backends/csharp/gen_bindings/mod.rs`, `service_api.rs`) must not turn the pascal-cased
+    // output into an absolute path or a `..` path component, and the raw output must never carry
+    // a path separator or NUL byte. Confirmed empirically against the real `heck` 0.5.0
+    // dependency (not just reasoned from its docs) before writing this assertion: every fragment
+    // below strips to only alphanumeric characters (heck's word-boundary algorithm treats `.`,
+    // `-`, `_`, `/`, `\`, NUL, and whitespace purely as separators, never part of the output), so
+    // this test is expected to pass on current code -- it is defense-in-depth coverage for a
+    // property already true, not a fix for a discovered break.
+    #[test]
+    fn csharp_namespace_default_is_never_path_hazardous_for_any_crate_name() {
+        use heck::ToPascalCase;
+
+        const ADVERSARIAL_NAMES: &[&str] = &[
+            "..",
+            ".",
+            "...",
+            "....",
+            "a..b",
+            ".leading",
+            "trailing.",
+            "..leading-trailing..",
+            "back\\slash",
+            "back\\\\slash",
+            "with\0null",
+            "unicode-\u{65e5}\u{672c}\u{8a9e}-\u{4f60}\u{597d}",
+            "  spaces  ",
+            "-",
+            "--",
+            "___",
+            "UPPER-CASE",
+            "MixedCase.Name",
+            "a.b.c.d.e",
+            "%2e%2e",
+            "..%2f..",
+            "a/b",
+            "////",
+            "...-...-",
+            "-.-.-",
+            "a-.-b",
+            "",
+        ];
+
+        for name in ADVERSARIAL_NAMES {
+            let namespace = name.to_pascal_case();
+            assert!(
+                !namespace.contains('/') && !namespace.contains('\\') && !namespace.contains('\0'),
+                "csharp_namespace default must never carry a raw path separator or NUL: \
+                 name={name:?} namespace={namespace:?}"
+            );
+            let transformed = namespace.replace('.', "/");
+            let transformed_path = std::path::Path::new(&transformed);
+            assert!(
+                !transformed_path.is_absolute(),
+                "csharp_namespace default must not become absolute after the backend's \
+                 dot-to-slash transform: name={name:?} namespace={namespace:?} \
+                 transformed={transformed:?}"
+            );
+            assert!(
+                !transformed_path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir)),
+                "csharp_namespace default must not contain a `..` component after the backend's \
+                 dot-to-slash transform: name={name:?} namespace={namespace:?} \
+                 transformed={transformed:?}"
+            );
+        }
+    }
 }
