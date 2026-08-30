@@ -905,8 +905,14 @@ impl OutputTemplate {
     /// by the time `resolve` runs on a real config, the value has already been
     /// accepted or rejected upstream.
     pub fn resolve(&self, crate_name: &str, lang: &str, multi_crate: bool) -> PathBuf {
-        validate_output_segment(crate_name, "crate_name").unwrap_or_else(|message| panic!("{message}"));
-        validate_output_segment(lang, "lang").unwrap_or_else(|message| panic!("{message}"));
+        self.try_resolve(crate_name, lang, multi_crate)
+            .unwrap_or_else(|message| panic!("{message}"))
+    }
+
+    /// Fallible form of [`Self::resolve`] used at the config boundary.
+    pub(crate) fn try_resolve(&self, crate_name: &str, lang: &str, multi_crate: bool) -> Result<PathBuf, String> {
+        validate_output_segment(crate_name, "crate_name")?;
+        validate_output_segment(lang, "lang")?;
 
         let path = if let Some(template) = self.entry(lang) {
             PathBuf::from(template.replace("{crate}", crate_name).replace("{lang}", lang))
@@ -921,8 +927,8 @@ impl OutputTemplate {
             PathBuf::from(super::resolve_helpers::default_package_root(lang))
         };
 
-        validate_output_path(&path).unwrap_or_else(|message| panic!("{message}"));
-        path
+        validate_output_path(&path)?;
+        Ok(path)
     }
 
     /// Return the raw template string for a language code, if set.
@@ -980,23 +986,21 @@ pub(crate) fn validate_output_segment(segment: &str, label: &str) -> Result<(), 
 /// Returns `Err` with a human-readable message instead of panicking; see
 /// [`validate_output_segment`] for why both a fallible and a panicking call site exist.
 pub(crate) fn validate_output_path(path: &std::path::Path) -> Result<(), String> {
-    use std::path::Component;
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                return Err(format!(
-                    "resolved output path `{}` contains `..` and would escape the project root",
-                    path.display()
-                ));
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(format!(
-                    "resolved output path `{}` is absolute and would escape the project root",
-                    path.display()
-                ));
-            }
-            _ => {}
-        }
+    let rendered = path.to_string_lossy();
+    let bytes = rendered.as_bytes();
+    let has_drive_prefix =
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
+    if rendered.starts_with('/') || rendered.starts_with('\\') || has_drive_prefix {
+        return Err(format!(
+            "resolved output path `{}` is absolute and would escape the project root",
+            path.display()
+        ));
+    }
+    if rendered.split(['/', '\\']).any(|component| component == "..") {
+        return Err(format!(
+            "resolved output path `{}` contains `..` and would escape the project root",
+            path.display()
+        ));
     }
     Ok(())
 }

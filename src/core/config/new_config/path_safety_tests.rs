@@ -70,7 +70,12 @@ sources = ["src/lib.rs"]
 [crates.jni]
 crate_dir = ".."
 "#,
-        &["sample-core", "jni.crate_dir", "contains `..`", "escape the project root"],
+        &[
+            "sample-core",
+            "jni.crate_dir",
+            "contains `..`",
+            "escape the project root",
+        ],
     );
 }
 
@@ -108,7 +113,12 @@ sources = ["src/lib.rs"]
 [crates.node]
 crate_dir = "/etc/passwd"
 "#,
-        &["sample-core", "node.crate_dir", "is absolute", "escape the project root"],
+        &[
+            "sample-core",
+            "node.crate_dir",
+            "is absolute",
+            "escape the project root",
+        ],
     );
 }
 
@@ -126,7 +136,12 @@ sources = ["src/lib.rs"]
 [crates.node]
 crate_dir = "../../../../tmp/pwned"
 "#,
-        &["sample-core", "node.crate_dir", "contains `..`", "escape the project root"],
+        &[
+            "sample-core",
+            "node.crate_dir",
+            "contains `..`",
+            "escape the project root",
+        ],
     );
 }
 
@@ -483,7 +498,10 @@ namespace = "Sample.Core"
     .expect("ordinary config values must still resolve successfully");
 
     let config = &resolved[0];
-    assert_eq!(config.jni.as_ref().and_then(|c| c.crate_dir.as_deref()), Some("sample-core"));
+    assert_eq!(
+        config.jni.as_ref().and_then(|c| c.crate_dir.as_deref()),
+        Some("sample-core")
+    );
     assert_eq!(
         config.node.as_ref().and_then(|c| c.crate_dir.as_deref()),
         Some("crates/sample-core-node")
@@ -492,7 +510,10 @@ namespace = "Sample.Core"
         config.wasm.as_ref().and_then(|c| c.crate_dir.as_deref()),
         Some("crates/sample-core-wasm")
     );
-    assert_eq!(config.dart.as_ref().and_then(|c| c.lib_name.as_deref()), Some("sample_core"));
+    assert_eq!(
+        config.dart.as_ref().and_then(|c| c.lib_name.as_deref()),
+        Some("sample_core")
+    );
     assert_eq!(config.jni_crate_base(), "sample-core");
     assert_eq!(config.java_package(), "dev.sample.core");
     assert_eq!(config.kotlin_package(), "dev.sample.core");

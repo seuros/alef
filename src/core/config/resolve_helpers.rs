@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::extras::Language;
-use super::output::{OutputConfig, OutputTemplate};
+use super::new_config::ResolveError;
+use super::output::{OutputConfig, OutputTemplate, validate_output_path};
 use super::raw_crate::RawCrateConfig;
 
 /// Compute resolved output paths for a crate: per-crate explicit wins; else use template.
@@ -13,17 +14,28 @@ pub(crate) fn resolve_output_paths(
     template: &OutputTemplate,
     languages: &[Language],
     multi_crate: bool,
-) -> HashMap<String, PathBuf> {
+) -> Result<HashMap<String, PathBuf>, ResolveError> {
     let mut paths = HashMap::new();
     for lang in languages {
         let lang_str = lang.to_string();
         let explicit = per_crate_explicit_output(&krate.output, lang);
-        let path = explicit
-            .map(PathBuf::from)
-            .unwrap_or_else(|| template.resolve(&krate.name, &lang_str, multi_crate));
+        let path = match explicit {
+            Some(value) => {
+                let path = PathBuf::from(value);
+                validate_output_path(&path).map_err(|detail| {
+                    ResolveError::InvalidConfig(format!("crate `{}`: invalid output.{lang_str}: {detail}", krate.name))
+                })?;
+                path
+            }
+            None => template
+                .try_resolve(&krate.name, &lang_str, multi_crate)
+                .map_err(|detail| {
+                    ResolveError::InvalidConfig(format!("crate `{}`: invalid output.{lang_str}: {detail}", krate.name))
+                })?,
+        };
         paths.insert(lang_str, path);
     }
-    paths
+    Ok(paths)
 }
 
 /// The default `packages/` root a language's generated tree lives in when neither a per-crate

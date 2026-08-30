@@ -167,12 +167,16 @@ impl NewAlefConfig {
             }
         };
 
-        let output_paths = resolve_output_paths(krate, &ws.output_template, &languages, multi_crate);
+        let output_paths = resolve_output_paths(krate, &ws.output_template, &languages, multi_crate)?;
 
         // Per-language config, merged crate-over-workspace, computed once here so the path-safety
         // checks below and the struct literal at the end of this function see the same values —
         // duplicating the `.clone().or_else(...)` merge in both places would let them drift.
+        let python = krate.python.clone().or_else(|| ws.python.clone());
         let node = krate.node.clone().or_else(|| ws.node.clone());
+        let ruby = krate.ruby.clone().or_else(|| ws.ruby.clone());
+        let php = krate.php.clone().or_else(|| ws.php.clone());
+        let elixir = krate.elixir.clone().or_else(|| ws.elixir.clone());
         let wasm = krate.wasm.clone().or_else(|| ws.wasm.clone());
         let jni = krate.jni.clone().or_else(|| ws.jni.clone());
         let java = krate.java.clone().or_else(|| ws.java.clone());
@@ -192,6 +196,11 @@ impl NewAlefConfig {
                 kotlin_package: kotlin.as_ref().and_then(|c| c.package.as_deref()),
                 kotlin_android_package: kotlin_android.as_ref().and_then(|c| c.package.as_deref()),
                 csharp_namespace: csharp.as_ref().and_then(|c| c.namespace.as_deref()),
+                python_scaffold_output: python.as_ref().and_then(|c| c.scaffold_output.as_deref()),
+                node_scaffold_output: node.as_ref().and_then(|c| c.scaffold_output.as_deref()),
+                ruby_scaffold_output: ruby.as_ref().and_then(|c| c.scaffold_output.as_deref()),
+                php_scaffold_output: php.as_ref().and_then(|c| c.scaffold_output.as_deref()),
+                elixir_scaffold_output: elixir.as_ref().and_then(|c| c.scaffold_output.as_deref()),
             },
         )?;
 
@@ -351,11 +360,11 @@ impl NewAlefConfig {
             auto_path_mappings: krate.auto_path_mappings.unwrap_or(true),
             languages,
             targets,
-            python: krate.python.clone().or_else(|| ws.python.clone()),
+            python,
             node,
-            ruby: krate.ruby.clone().or_else(|| ws.ruby.clone()),
-            php: krate.php.clone().or_else(|| ws.php.clone()),
-            elixir: krate.elixir.clone().or_else(|| ws.elixir.clone()),
+            ruby,
+            php,
+            elixir,
             wasm,
             ffi: effective_ffi,
             go: krate.go.clone().or_else(|| ws.go.clone()),
@@ -671,6 +680,11 @@ fn validate_language_specific_path_fields(crate_name: &str, fields: PathSafetyFi
     validate_package_like_field(crate_name, fields.kotlin_package, "kotlin.package")?;
     validate_package_like_field(crate_name, fields.kotlin_android_package, "kotlin_android.package")?;
     validate_package_like_field(crate_name, fields.csharp_namespace, "csharp.namespace")?;
+    validate_path_field(crate_name, fields.python_scaffold_output, "python.scaffold_output")?;
+    validate_path_field(crate_name, fields.node_scaffold_output, "node.scaffold_output")?;
+    validate_path_field(crate_name, fields.ruby_scaffold_output, "ruby.scaffold_output")?;
+    validate_path_field(crate_name, fields.php_scaffold_output, "php.scaffold_output")?;
+    validate_path_field(crate_name, fields.elixir_scaffold_output, "elixir.scaffold_output")?;
     Ok(())
 }
 
@@ -685,6 +699,19 @@ struct PathSafetyFields<'a> {
     kotlin_package: Option<&'a str>,
     kotlin_android_package: Option<&'a str>,
     csharp_namespace: Option<&'a str>,
+    python_scaffold_output: Option<&'a Path>,
+    node_scaffold_output: Option<&'a Path>,
+    ruby_scaffold_output: Option<&'a Path>,
+    php_scaffold_output: Option<&'a Path>,
+    elixir_scaffold_output: Option<&'a Path>,
+}
+
+fn validate_path_field(crate_name: &str, value: Option<&Path>, label: &str) -> Result<(), ResolveError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    validate_output_path(value)
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: invalid {label}: {detail}")))
 }
 
 /// Validate an explicit config override documented as a single flat name (e.g. `[crates.jni]
@@ -708,8 +735,9 @@ fn validate_path_segment_field(crate_name: &str, value: Option<&str>, label: &st
         return Ok(());
     };
     validate_output_segment(value, label)
-        .and_then(|()| validate_output_path(Path::new(value)))
-        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))?;
+    validate_output_path(Path::new(value))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: invalid {label}: {detail}")))
 }
 
 /// Validate an explicit config override documented and tested to hold a full relative path
@@ -750,8 +778,9 @@ fn validate_package_like_field(crate_name: &str, value: Option<&str>, label: &st
         return Ok(());
     };
     validate_output_segment(value, label)
-        .and_then(|()| validate_output_path(Path::new(&value.replace('.', "/"))))
-        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))?;
+    validate_output_path(Path::new(&value.replace('.', "/")))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: invalid {label}: {detail}")))
 }
 
 /// Validate a single `crate_attributes` entry.
@@ -1127,6 +1156,8 @@ fn merge_build_command_maps(
 #[cfg(test)]
 mod c_abi_tests;
 #[cfg(test)]
-mod tests;
+mod path_safety_review_tests;
 #[cfg(test)]
 mod path_safety_tests;
+#[cfg(test)]
+mod tests;
