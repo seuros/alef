@@ -360,6 +360,7 @@ impl E2eCodegen for JavaCodegen {
 mod args;
 mod assertion_wildcard;
 mod assertions;
+mod field_shape;
 mod http;
 mod project;
 mod snippet;
@@ -375,6 +376,8 @@ pub use stubs::emit_test_backend;
 mod assertion_enum_field_classification_tests;
 #[cfg(test)]
 mod assertion_indentation_layout_tests;
+#[cfg(test)]
+mod assertion_object_shape_tests;
 #[cfg(test)]
 mod assertion_union_enum_field_classification_tests;
 #[cfg(test)]
