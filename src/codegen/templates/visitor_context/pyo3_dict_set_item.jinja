@@ -1,0 +1,19 @@
+{#- Populates one key of the PyDict a visitor callback receives when its context type has no
+   generated `#[pyclass]` to build.
+
+   The insert is fallible and this arm is already the degraded shape, so the failure is logged and
+   the remaining fields are still populated rather than aborting the whole context: a callback that
+   never reads this field keeps working, and one that does now has a logged cause instead of a bare
+   KeyError the bridge's default-result arm would swallow. `.unwrap_or(())` used to discard it.
+
+   Context variables:
+   - host_name: the Python-visible key
+   - value_expr: the Rust expression handed to `set_item`
+#}
+    if let Err(error) = d.set_item("{{ host_name }}", {{ value_expr }}) {
+        tracing::warn!(
+            field = "{{ host_name }}",
+            error = %error,
+            "visitor context field omitted from fallback dict"
+        );
+    }

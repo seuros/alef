@@ -550,6 +550,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "doc_doxygen_errors.jinja",
         include_str!("templates/doc_doxygen_errors.jinja"),
     ),
+    (
+        "visitor_context/pyo3_dict_set_item.jinja",
+        include_str!("templates/visitor_context/pyo3_dict_set_item.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

@@ -179,18 +179,38 @@ fn wasm_field_line(field: &FieldDef, shape: FieldShape) -> String {
     }
 }
 
+/// One `set_item` per context field, each logging its own failure instead of discarding it.
+///
+/// The insert is fallible and every arm here used to end in `.unwrap_or(())`, so a value PyO3
+/// could not convert vanished from the dict with no trace: the callback then hit a `KeyError` the
+/// bridge's default-result arm swallowed, which is the same silent-failure shape the `#[pyclass]`
+/// path was fixed for.
+///
+/// It does not propagate, unlike that path. The two are not symmetric: `Bound::new` builds the
+/// whole context object at once, so its failure leaves nothing to hand the callback and `?` is the
+/// only honest answer. This branch builds N independent keys and exists precisely for context
+/// types that cannot be represented faithfully, so it is already best-effort — turning one field's
+/// conversion failure into "the callback never runs" would strictly worsen the degraded path for
+/// every visitor that does not read that field. Degraded-but-continuing is `WARN` under the
+/// repo's level contract, and the field name is recorded so the omission is attributable. ~keep
 fn pyo3_field_line(field: &FieldDef, shape: FieldShape) -> String {
     let host_name = crate::codegen::naming::to_python_name(&field.name);
     let name = &field.name;
-    match shape {
-        FieldShape::String => format!(r#"    d.set_item("{host_name}", &ctx.{name}).unwrap_or(());"#),
-        FieldShape::OptionalString => format!(r#"    d.set_item("{host_name}", ctx.{name}.as_deref()).unwrap_or(());"#),
-        FieldShape::Bool | FieldShape::Number => format!(r#"    d.set_item("{host_name}", ctx.{name}).unwrap_or(());"#),
-        FieldShape::Enum => format!(r#"    d.set_item("{host_name}", format!("{{:?}}", ctx.{name})).unwrap_or(());"#),
-        FieldShape::StringMap | FieldShape::StringVec => {
-            format!(r#"    d.set_item("{host_name}", &ctx.{name}).unwrap_or(());"#)
-        }
-    }
+    let value_expr = match shape {
+        FieldShape::String | FieldShape::StringMap | FieldShape::StringVec => format!("&ctx.{name}"),
+        FieldShape::OptionalString => format!("ctx.{name}.as_deref()"),
+        FieldShape::Bool | FieldShape::Number => format!("ctx.{name}"),
+        FieldShape::Enum => format!(r#"format!("{{:?}}", ctx.{name})"#),
+    };
+    crate::codegen::template_env::render(
+        "visitor_context/pyo3_dict_set_item.jinja",
+        minijinja::context! {
+            host_name => host_name,
+            value_expr => value_expr,
+        },
+    )
+    .trim_end()
+    .to_string()
 }
 
 fn magnus_field_line(field: &FieldDef, shape: FieldShape) -> String {
