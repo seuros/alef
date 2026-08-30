@@ -240,6 +240,102 @@ fn conftest_and_test_file_survive_a_realistic_ruff_lint_pass() {
     );
 }
 
+/// The visitor context probe is new emitted code with its own `# noqa` surface, so it has to
+/// clear the same realistic lint pass. It renders the SAME mixed fixture set as the test above --
+/// filtering down to just the visitor fixture drops the two env-var fixtures that consume the
+/// hoisted `import os`, and ruff then fails the file on an unused import that has nothing to do
+/// with the probe. The `assert!`s before the ruff run are the point: without a bridge that
+/// declares `visit_heading` no probe is emitted at all, and ruff would report a clean file that
+/// never contained the code under test. ~keep
+#[test]
+fn visitor_context_probe_survives_a_realistic_ruff_lint_pass() {
+    if !ruff_available() {
+        return;
+    }
+
+    let fixtures = mixed_fixtures();
+    let e2e_config = e2e_config_with_client_factory();
+    let config = ResolvedCrateConfig {
+        trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+            trait_name: "DocumentWalker".to_string(),
+            type_alias: Some("DocumentWalkerHandle".to_string()),
+            context_type: Some("TraversalState".to_string()),
+            ..Default::default()
+        }],
+        ..ResolvedCrateConfig::default()
+    };
+    let type_defs = vec![
+        crate::core::ir::TypeDef {
+            name: "DocumentWalker".to_string(),
+            rust_path: "mypackage::DocumentWalker".to_string(),
+            is_trait: true,
+            methods: vec![crate::core::ir::MethodDef {
+                name: "visit_heading".to_string(),
+                has_default_impl: true,
+                ..Default::default()
+            }],
+            ..crate::core::ir::TypeDef::default()
+        },
+        crate::core::ir::TypeDef {
+            name: "TraversalState".to_string(),
+            rust_path: "mypackage::TraversalState".to_string(),
+            // Required for the bridge (and this probe) to resolve the class path rather than the
+            // dict path -- see `context_binding_class` / `eligible_context_def`. Without this the
+            // generated visitor never dereferences `ctx` and every assertion below the render call
+            // would pass over a probe that was never emitted. ~keep
+            is_clone: true,
+            fields: vec![crate::core::ir::FieldDef {
+                name: "node_kind".to_string(),
+                ty: crate::core::ir::TypeRef::String,
+                ..Default::default()
+            }],
+            methods: vec![crate::core::ir::MethodDef {
+                name: "attributes".to_string(),
+                return_type: crate::core::ir::TypeRef::Map(
+                    Box::new(crate::core::ir::TypeRef::String),
+                    Box::new(crate::core::ir::TypeRef::String),
+                ),
+                receiver: Some(crate::core::ir::ReceiverKind::Ref),
+                ..Default::default()
+            }],
+            ..crate::core::ir::TypeDef::default()
+        },
+    ];
+
+    let fixture_refs: Vec<&Fixture> = fixtures.iter().collect();
+    let rendered = render_test_file(
+        "visitor",
+        &fixture_refs,
+        &e2e_config,
+        &config,
+        &type_defs,
+        &[],
+        &[],
+        &[],
+        false,
+    );
+
+    assert!(
+        rendered.contains("self._probe_traversal_state(ctx)"),
+        "the generated visitor must dereference its context argument:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("\"node_kind\",") && rendered.contains("\"attributes\","),
+        "the probe must read the context type's declared field and call its declared method:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("assert not _visitor.context_errors"),
+        "the recorded probe failures must be asserted in the test body:\n{rendered}"
+    );
+
+    let (success, output) = run_ruff_check(&[("test_visitor.py", rendered.as_str())]);
+    assert!(
+        success,
+        "the generated visitor context probe must survive a realistic ruff lint pass; ruff reported:\n{output}\n\
+         --- test_visitor.py ---\n{rendered}"
+    );
+}
+
 /// Negative control: a deliberately deprecated import run through the exact same harness must
 /// still be flagged. Without this, a silently-misconfigured `run_ruff_check` (wrong config
 /// path, `ruff` swallowing an error, an empty `select`) would render the positive test above
