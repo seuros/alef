@@ -485,10 +485,10 @@ pub(super) fn render_assertion(
         .field
         .as_deref()
         .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
-    let field_is_object = assertion
-        .field
-        .as_deref()
-        .is_some_and(|field| field_resolver.is_display_unsafe(field));
+    let field_is_object = assertion.field.as_deref().is_some_and(|field| {
+        let resolved = field_resolver.resolve(field);
+        !field_is_array && !field_resolver.is_optional(resolved) && field_resolver.is_display_unsafe(field)
+    });
 
     // A fixture's `equals` assertion carrying a literal JSON `null` against a field the IR
     // proves is a genuine (non-`Option`) collection -- e.g. `Vec<T>` with `#[serde(default,
@@ -1002,6 +1002,116 @@ mod tests {
         assert_eq!(
             empty_out,
             "        assertNull(result.details(), \"expected empty value\");\n"
+        );
+    }
+
+    #[test]
+    fn record_collection_empty_checks_use_collection_methods() {
+        let types = vec![
+            crate::core::ir::TypeDef {
+                name: "Envelope".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "details".into(),
+                    ty: crate::core::ir::TypeRef::Vec(Box::new(crate::core::ir::TypeRef::Named("Details".into()))),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            crate::core::ir::TypeDef {
+                name: "Details".into(),
+                ..Default::default()
+            },
+        ];
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::from(["details".into()]),
+            &HashSet::new(),
+        )
+        .with_ir_result_fields(
+            FieldResolver::ir_result_field_facts(&types, "java"),
+            Some("Envelope".into()),
+        );
+        let mut out = String::new();
+
+        render_assertion(
+            &mut out,
+            &Assertion {
+                assertion_type: "not_empty".into(),
+                field: Some("details".into()),
+                ..Default::default()
+            },
+            "result",
+            "Envelope",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+            true,
+        );
+
+        assert_eq!(
+            out,
+            "        assertFalse(result.details().isEmpty(), \"expected non-empty value\");\n"
+        );
+    }
+
+    #[test]
+    fn optional_record_empty_check_uses_optional_presence() {
+        let types = vec![
+            crate::core::ir::TypeDef {
+                name: "Envelope".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "details".into(),
+                    ty: crate::core::ir::TypeRef::Named("Details".into()),
+                    optional: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            crate::core::ir::TypeDef {
+                name: "Details".into(),
+                ..Default::default()
+            },
+        ];
+        let resolver = make_resolver(HashSet::from(["details".into()]), HashSet::new()).with_ir_result_fields(
+            FieldResolver::ir_result_field_facts(&types, "java"),
+            Some("Envelope".into()),
+        );
+        let mut out = String::new();
+
+        render_assertion(
+            &mut out,
+            &Assertion {
+                assertion_type: "is_empty".into(),
+                field: Some("details".into()),
+                ..Default::default()
+            },
+            "result",
+            "Envelope",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+            true,
+        );
+
+        assert_eq!(
+            out,
+            "        assertTrue(java.util.Optional.ofNullable(result.details()).isEmpty(), \"expected empty value\");\n"
         );
     }
 
