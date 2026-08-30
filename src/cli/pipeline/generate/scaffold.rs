@@ -482,18 +482,17 @@ pub fn write_scaffold_files_report(
             .context("failed to migrate pre-existing packages/dart/.pubignore")?;
     }
 
-    // `crates/<crate>-wasm/package.json` is `generated_header: false`; a repo scaffolded before
-    // the `exports` map existed keeps shipping a package.json unresolvable via package-exports
-    // subpath/conditional resolution forever. Self-contained (derives the target/crate values it
-    // needs from the file's own `main`/`module`/`types` fields), so no `replacement` content is
-    // threaded through; see `migrate_wasm_package_json_exports`'s doc. ~keep
+    // `crates/<crate>-wasm/package.json` is `generated_header: false`; a repo scaffolded before a
+    // later scaffold_wasm fix keeps shipping whatever defect that fix closed forever. Each repair
+    // this bundles is self-contained and independently idempotent; see `migrate_wasm_package_json`'s
+    // doc. ~keep
     if let Some(wasm_pkg_file) = files.iter().find(|file| {
         file.path
             .to_str()
             .is_some_and(|path| path.ends_with("-wasm/package.json"))
     }) {
-        crate::scaffold::migrate_wasm_package_json_exports(base_dir, &wasm_pkg_file.path)
-            .context("failed to migrate pre-existing crates/*-wasm/package.json exports map")?;
+        crate::scaffold::migrate_wasm_package_json(base_dir, &wasm_pkg_file.path)
+            .context("failed to migrate pre-existing crates/*-wasm/package.json")?;
     }
 
     // `crates/<crate>-node/package.json` (the main napi-rs package, not the per-platform

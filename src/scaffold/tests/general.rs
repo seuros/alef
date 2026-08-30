@@ -85,21 +85,28 @@ fn wasm_targets_default_to_all_four_wasm_pack_targets() {
     );
 }
 
-/// Regression for the WASM crate `package.json`'s `scripts.test`/`test:watch`/`test:coverage`
-/// invoking `vitest` directly with no corresponding `devDependencies` entry: `pnpm install
-/// --frozen-lockfile` never installs a `vitest` binary for this package, so every one of those
-/// scripts fails at runtime the moment a freshly scaffolded crate is built. The fix routes the
-/// declared dependency through the same central registry (`tv::npm::VITEST`) the `e2e/wasm` and
-/// `e2e/typescript` generators already pin, so this package and its e2e sibling can never drift
-/// apart on which vitest version installs.
+/// FRESH-scaffold population: regression for the WASM crate `package.json`'s
+/// `scripts.test`/`test:watch`/`test:coverage` invoking `vitest` (and, for `test:coverage`, its
+/// `@vitest/coverage-v8` provider) directly with no corresponding `devDependencies` entry:
+/// `pnpm install --frozen-lockfile` never installs either binary for this package, so every one
+/// of those scripts fails at runtime the moment a freshly scaffolded crate is built. The fix
+/// routes both declared dependencies through the same central registry (`tv::npm::VITEST` /
+/// `tv::npm::VITEST_COVERAGE_V8`) the `e2e/wasm` and `e2e/typescript` generators already pin
+/// `vitest` through, so this package and its e2e sibling can never drift apart on which vitest
+/// version installs.
 #[test]
-fn wasm_package_json_declares_vitest_dev_dependency_backing_its_test_scripts() {
+fn wasm_package_json_declares_vitest_dev_dependencies_backing_its_test_scripts() {
     let parsed = wasm_package_json("");
 
     assert_eq!(
         parsed["devDependencies"]["vitest"],
         crate::core::template_versions::npm::VITEST,
         "wasm package.json must pin vitest to the central registry version, got:\n{parsed:#}"
+    );
+    assert_eq!(
+        parsed["devDependencies"]["@vitest/coverage-v8"],
+        crate::core::template_versions::npm::VITEST_COVERAGE_V8,
+        "wasm package.json must pin the vitest coverage provider to the central registry version, got:\n{parsed:#}"
     );
 
     let scripts = &parsed["scripts"];
@@ -112,10 +119,6 @@ fn wasm_package_json_declares_vitest_dev_dependency_backing_its_test_scripts() {
             .as_str()
             .unwrap_or_else(|| panic!("missing \"{script_name}\" script, got:\n{parsed:#}"));
         assert_eq!(command, expected, "unexpected \"{script_name}\" script");
-        assert!(
-            parsed["devDependencies"].get("vitest").is_some(),
-            "\"{script_name}\" invokes vitest but devDependencies has no vitest entry"
-        );
     }
 }
 

@@ -110,7 +110,8 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     "clean": "rm -rf pkg dist"
   }},
   "devDependencies": {{
-    "vitest": "{vitest}"
+    "vitest": "{vitest}",
+    "@vitest/coverage-v8": "{vitest_coverage_v8}"
   }}
 }}
 "#,
@@ -131,8 +132,12 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         // or `npx`), so this package must declare it as a devDependency or a frozen install
         // resolves nothing for those scripts to run -- same central version the e2e wasm/
         // typescript generators pin (`tv::npm::VITEST`), so this package and its e2e sibling
-        // can never drift apart on which vitest they install. ~keep
+        // can never drift apart on which vitest they install. `test:coverage` additionally
+        // needs its coverage provider declared, or `vitest run --coverage` fails to load a
+        // reporter -- `tv::npm::VITEST_COVERAGE_V8` tracks vitest's own version (see that
+        // const's doc). ~keep
         vitest = tv::npm::VITEST,
+        vitest_coverage_v8 = tv::npm::VITEST_COVERAGE_V8,
     );
 
     files.push(GeneratedFile {
@@ -142,6 +147,26 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     });
 
     Ok(files)
+}
+
+/// Crate-visible entry point for every in-place repair this module makes to a pre-existing
+/// `crates/<crate>-wasm/package.json` -- the single call site `cli::pipeline::generate::scaffold`
+/// invokes, so a future repair joins this list once instead of growing the call site again.
+///
+/// `crates/*-wasm/package.json` is `generated_header: false` (create-only: see
+/// `write_scaffold_files_report`'s ownership guard in `cli::pipeline::generate::scaffold`), so
+/// `scaffold_wasm` never rewrites it once it exists on disk -- every defect a later `scaffold_wasm`
+/// fix closes keeps shipping in every crate scaffolded before that fix, forever, unless something
+/// repairs the file in place. Each repair below is independently safe to run in isolation (its own
+/// recognition anchor, its own idempotency) and independently safe to run in this fixed order:
+/// [`migrate_wasm_package_json_exports`] first, then
+/// [`migrate_wasm_package_json_vitest_dev_dependencies`] reading whatever the first repair just
+/// wrote, so neither ever acts on a stale in-memory copy of the other's edit. Returns `true` when
+/// either repair changed the file on disk.
+pub(crate) fn migrate_wasm_package_json(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+    let exports_changed = migrate_wasm_package_json_exports(base_dir, relative_path)?;
+    let vitest_changed = migrate_wasm_package_json_vitest_dev_dependencies(base_dir, relative_path)?;
+    Ok(exports_changed || vitest_changed)
 }
 
 /// Repair a pre-existing `crates/<crate>-wasm/package.json` that predates the `exports` map
@@ -159,8 +184,10 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
 /// `devDependencies`, custom `scripts`), so this only ever *inserts* the missing block, never
 /// touches anything else on the line, and refuses outright rather than guess when the file
 /// doesn't unambiguously carry alef's own `main`/`module`/`types` shape. See
-/// [`repair_missing_wasm_exports`] for the exact detection and insertion. ~keep
-pub(crate) fn migrate_wasm_package_json_exports(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+/// [`repair_missing_wasm_exports`] for the exact detection and insertion. Called only from
+/// [`migrate_wasm_package_json`], which is the crate-visible entry point for every repair this
+/// module makes to a pre-existing `crates/*-wasm/package.json`. ~keep
+fn migrate_wasm_package_json_exports(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
     let path = base_dir.join(relative_path);
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
@@ -192,25 +219,24 @@ pub(crate) fn migrate_wasm_package_json_exports(base_dir: &Path, relative_path: 
     Ok(true)
 }
 
-/// Pure text transform behind [`migrate_wasm_package_json_exports`]. Returns `None` when
-/// `content` is not a safe migration candidate at all: it already has an `"exports"` key
-/// (nothing missing — whether that's this fix's own output or a consumer's hand-added one, either
-/// way there is nothing to insert without risking a duplicate or clobbering a custom map), or it
-/// does not carry the exact `"main"`/`"module"`/`"types"` triple `scaffold_wasm` emits (so this
-/// isn't provably alef's own package.json shape at all), or the file has no `"engines": {` line to
-/// anchor the insertion before (the one point in the template `scaffold_wasm` always emits the
-/// block directly ahead of).
+/// The `(node_target, crate_file, web_target)` triple recovered from a `crates/*-wasm/package.json`'s
+/// own `"main"`/`"module"`/`"types"` fields, when and only when all three agree on the same
+/// `crate_file` and follow the exact `pkg/<target>/<crate_file>_wasm.js` / `.d.ts` naming
+/// convention `scaffold_wasm` always emits.
 ///
-/// `node_target`/`web_target`/`crate_file` for the newly rendered block are extracted from the
-/// file's own `main`/`module`/`types` fields, not recomputed from live config — the values already
-/// on disk are definitionally consistent with the rest of the file, so reusing them (rather than
-/// asking the current `ResolvedCrateConfig` what it thinks the targets are today) can never
-/// disagree with the paths those existing `main`/`module`/`types` lines already point at.
-fn repair_missing_wasm_exports(content: &str) -> Option<String> {
-    if content.contains("\"exports\":") {
-        return None;
-    }
-
+/// This is the single recognition fingerprint every migration in this module anchors on before
+/// touching a `crates/*-wasm/package.json` it did not just write. The three-field cross-agreement
+/// is specific enough that no foreign, hand-authored `package.json` plausibly matches by
+/// coincidence: an ordinary manifest's `main`/`module`/`types` point at unrelated file names (or
+/// omit one of the three fields entirely), which fails at least one capture or the `crate_file` /
+/// `node_target` equality checks below and returns `None`. Sharing one function keeps every call
+/// site answering "is this alef's own file" from identical evidence, rather than two migrations
+/// silently drifting to slightly different fingerprints over time. A caller that finds `Some(..)`
+/// still is not free to rewrite blindly — each migration adds its own further anchor (an exact
+/// `"engines": {` line, an exact `"test": "vitest run"` script) proving the *specific* region it
+/// is about to touch still matches its own template's output, not just that the file is alef's in
+/// general. ~keep
+fn recognize_alef_wasm_package_json(content: &str) -> Option<(&str, &str, &str)> {
     let main_pattern = Regex::new(r#""main":\s*"pkg/([^/"]+)/([^"]+)_wasm\.js""#).expect("valid regex");
     let module_pattern = Regex::new(r#""module":\s*"pkg/([^/"]+)/([^"]+)_wasm\.js""#).expect("valid regex");
     let types_pattern = Regex::new(r#""types":\s*"pkg/([^/"]+)/([^"]+)_wasm\.d\.ts""#).expect("valid regex");
@@ -228,6 +254,28 @@ fn repair_missing_wasm_exports(content: &str) -> Option<String> {
     if types_captures.get(1)?.as_str() != node_target || types_captures.get(2)?.as_str() != crate_file {
         return None;
     }
+    Some((node_target, crate_file, web_target))
+}
+
+/// Pure text transform behind [`migrate_wasm_package_json_exports`]. Returns `None` when
+/// `content` is not a safe migration candidate at all: it already has an `"exports"` key
+/// (nothing missing — whether that's this fix's own output or a consumer's hand-added one, either
+/// way there is nothing to insert without risking a duplicate or clobbering a custom map),
+/// [`recognize_alef_wasm_package_json`] cannot positively identify it as alef's own wasm
+/// package.json, or the file has no `"engines": {` line to anchor the insertion before (the one
+/// point in the template `scaffold_wasm` always emits the block directly ahead of).
+///
+/// `node_target`/`web_target`/`crate_file` for the newly rendered block are extracted from the
+/// file's own `main`/`module`/`types` fields, not recomputed from live config — the values already
+/// on disk are definitionally consistent with the rest of the file, so reusing them (rather than
+/// asking the current `ResolvedCrateConfig` what it thinks the targets are today) can never
+/// disagree with the paths those existing `main`/`module`/`types` lines already point at.
+fn repair_missing_wasm_exports(content: &str) -> Option<String> {
+    if content.contains("\"exports\":") {
+        return None;
+    }
+
+    let (node_target, crate_file, web_target) = recognize_alef_wasm_package_json(content)?;
 
     let engines_line_index = content.lines().position(|line| line.trim() == "\"engines\": {")?;
 
@@ -258,115 +306,174 @@ fn repair_missing_wasm_exports(content: &str) -> Option<String> {
     Some(joined)
 }
 
-#[cfg(test)]
-mod migrate_tests {
-    use super::*;
-
-    /// The exact shape `scaffold_wasm` emitted before the fix that added the `exports` map --
-    /// a single `nodejs` target, `main`/`module`/`types` all pointing at the same crate file.
-    fn pre_fix_package_json() -> String {
-        "{\n  \
-         \"name\": \"@scope/example-wasm\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"private\": false,\n  \
-         \"description\": \"An example crate\",\n  \
-         \"publishConfig\": {\n    \"access\": \"public\"\n  },\n  \
-         \"type\": \"module\",\n  \
-         \"files\": [\n    \"pkg/nodejs\",\n    \"README.md\"\n  ],\n  \
-         \"main\": \"pkg/nodejs/example_wasm.js\",\n  \
-         \"module\": \"pkg/nodejs/example_wasm.js\",\n  \
-         \"types\": \"pkg/nodejs/example_wasm.d.ts\",\n  \
-         \"engines\": {\n    \"node\": \">=18\"\n  },\n  \
-         \"scripts\": {\n    \"build\": \"wasm-pack build\"\n  }\n\
-         }\n"
-        .to_string()
+/// Repair a pre-existing `crates/<crate>-wasm/package.json` whose `scripts.test` /
+/// `test:watch` / `test:coverage` invoke `vitest` (and, for `test:coverage`, its coverage
+/// provider) with no matching `devDependencies` entry to back them -- the defect the sibling fix
+/// closed for freshly scaffolded crates. `generated_header: false` means `scaffold_wasm` never
+/// rewrites this file once it exists on disk, so every crate scaffolded before that fix (or
+/// scaffolded after it but before the coverage provider was added) keeps shipping a manifest
+/// whose own test scripts have nothing installed to run under a frozen lockfile, forever, unless
+/// something repairs it in place. See [`repair_missing_wasm_vitest_dev_dependencies`] for the
+/// exact detection and insertion, and [`repair_missing_wasm_exports`]'s doc comment for why an
+/// in-place text patch -- never a full regenerate-and-overwrite -- is the only safe shape for a
+/// `generated_header: false` file a consumer may have hand-edited. Called only from
+/// [`migrate_wasm_package_json`].
+fn migrate_wasm_package_json_vitest_dev_dependencies(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let Some(migrated) = repair_missing_wasm_vitest_dev_dependencies(&existing) else {
+        return Ok(false);
+    };
+    if migrated == existing {
+        return Ok(false);
     }
 
-    #[test]
-    fn should_insert_exports_map_when_missing_from_alef_authored_package_json() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path().join("crates/example-wasm");
-        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-wasm");
-        std::fs::write(pkg_dir.join("package.json"), pre_fix_package_json()).expect("write pre-fix package.json");
+    let parent = path
+        .parent()
+        .context("wasm package.json path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, migrated.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
+        path = %path.display(),
+        "repaired pre-existing crates/*-wasm/package.json: inserted the missing vitest devDependency"
+    );
+    Ok(true)
+}
 
-        let relative_path = Path::new("crates/example-wasm/package.json");
-        let changed = migrate_wasm_package_json_exports(dir.path(), relative_path).expect("migration must not error");
-        assert!(changed, "a package.json missing exports must be reported as changed");
-
-        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read migrated file");
-        let parsed: serde_json::Value = serde_json::from_str(&on_disk).expect("migrated file must be valid JSON");
-        assert_eq!(
-            parsed["exports"]["."]["types"], "./pkg/nodejs/example_wasm.d.ts",
-            "exports map must reference the same target/crate_file as the existing main/module/types fields"
-        );
-        assert_eq!(parsed["exports"]["."]["require"], "./pkg/nodejs/example_wasm.js");
-        assert_eq!(
-            parsed["name"], "@scope/example-wasm",
-            "fields outside exports must survive untouched"
-        );
-        assert_eq!(
-            parsed["scripts"]["build"], "wasm-pack build",
-            "user-visible fields must survive untouched"
-        );
-
-        let changed_again =
-            migrate_wasm_package_json_exports(dir.path(), relative_path).expect("second pass must not error");
-        assert!(
-            !changed_again,
-            "second pass over an already-migrated file must be a no-op"
-        );
+/// Pure text transform behind [`migrate_wasm_package_json_vitest_dev_dependencies`]. Returns
+/// `None` when `content` is not a safe migration candidate: [`recognize_alef_wasm_package_json`]
+/// cannot positively identify it as alef's own wasm package.json, it does not carry the literal
+/// `"test": "vitest run"` script `scaffold_wasm` always emits (a second, independent anchor --
+/// the main/module/types fingerprint alone proves the file's *build* shape, not that its
+/// `scripts` block still matches what this migration patches), or every dependency this
+/// migration would add is already declared (nothing left to do -- this is what makes a second
+/// run a no-op).
+///
+/// Two on-disk shapes are handled, and each is recognized by its own exact anchor rather than
+/// guessed at:
+/// - no `"devDependencies"` key at all (the shape every crate scaffolded before the vitest fix
+///   shipped in): a whole new block is inserted via
+///   [`insert_new_dev_dependencies_block`], anchored on the literal two-line `  }` / `}` suffix
+///   `scaffold_wasm` emits when `scripts` is its last key. A consumer who added a field of their
+///   own after `scripts` breaks that exact suffix and is left untouched rather than guessed at.
+/// - a `"devDependencies"` key already present (freshly scaffolded after the vitest fix but
+///   before the coverage provider was added, or a consumer who added unrelated dev dependencies
+///   of their own by hand): [`insert_into_existing_dev_dependencies`] inserts only what's
+///   missing, as new lines directly after the `"devDependencies": {` line, never touching
+///   anything already inside the object.
+fn repair_missing_wasm_vitest_dev_dependencies(content: &str) -> Option<String> {
+    recognize_alef_wasm_package_json(content)?;
+    if !content.contains(r#""test": "vitest run""#) {
+        return None;
     }
+    let needs_coverage_provider = content.contains(r#""test:coverage":"#);
 
-    #[test]
-    fn should_not_touch_a_package_json_that_already_has_exports() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path().join("crates/example-wasm");
-        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-wasm");
-        let hand_written = "{\n  \"name\": \"@scope/example-wasm\",\n  \"exports\": \"./custom.js\"\n}\n";
-        std::fs::write(pkg_dir.join("package.json"), hand_written).expect("write hand-edited package.json");
-
-        let relative_path = Path::new("crates/example-wasm/package.json");
-        let changed = migrate_wasm_package_json_exports(dir.path(), relative_path).expect("migration must not error");
-        assert!(
-            !changed,
-            "a package.json that already declares exports must never be touched"
-        );
-
-        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
-        assert_eq!(
-            on_disk, hand_written,
-            "a custom exports field must survive byte-for-byte"
-        );
-    }
-
-    #[test]
-    fn should_not_touch_a_foreign_package_json_without_the_alef_wasm_shape() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path().join("crates/example-wasm");
-        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-wasm");
-        let hand_written = "{\n  \"name\": \"example\",\n  \"main\": \"index.js\",\n  \"engines\": {\n    \"node\": \">=18\"\n  }\n}\n";
-        std::fs::write(pkg_dir.join("package.json"), hand_written).expect("write foreign package.json");
-
-        let relative_path = Path::new("crates/example-wasm/package.json");
-        let changed = migrate_wasm_package_json_exports(dir.path(), relative_path).expect("migration must not error");
-        assert!(
-            !changed,
-            "a package.json without alef's main/module/types shape must never be touched"
-        );
-
-        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
-        assert_eq!(
-            on_disk, hand_written,
-            "a foreign package.json must survive byte-for-byte"
-        );
-    }
-
-    #[test]
-    fn migrate_wasm_package_json_is_a_no_op_when_file_does_not_exist() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let relative_path = Path::new("crates/example-wasm/package.json");
-        let changed = migrate_wasm_package_json_exports(dir.path(), relative_path).expect("must not error");
-        assert!(!changed);
-        assert!(!dir.path().join(relative_path).exists());
+    let parsed: serde_json::Value = serde_json::from_str(content).ok()?;
+    match parsed.get("devDependencies") {
+        None => insert_new_dev_dependencies_block(content, needs_coverage_provider),
+        Some(existing) => {
+            let existing = existing.as_object()?;
+            let needs_vitest = !existing.contains_key("vitest");
+            let needs_coverage = needs_coverage_provider && !existing.contains_key("@vitest/coverage-v8");
+            if !needs_vitest && !needs_coverage {
+                return None;
+            }
+            insert_into_existing_dev_dependencies(content, needs_vitest, needs_coverage)
+        }
     }
 }
+
+/// Splice a fresh `"devDependencies"` block into a `crates/*-wasm/package.json` that has none at
+/// all, anchored on the literal two-line `  }` / `}` suffix `scaffold_wasm` emits whenever
+/// `scripts` is its last key -- the same exact-suffix caution [`repair_missing_wasm_exports`]
+/// applies to its `"engines": {` anchor, applied here to the tail of the file instead of a fixed
+/// line. Returns `None` when that exact suffix is not found, which is what keeps a consumer's own
+/// trailing field (added after `scripts` by hand) from ever earning a guessed insertion point.
+fn insert_new_dev_dependencies_block(content: &str, include_coverage_provider: bool) -> Option<String> {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let last = lines.len().checked_sub(1)?;
+    let scripts_close = last.checked_sub(1)?;
+    if lines[last] != "}" || lines[scripts_close] != "  }" {
+        return None;
+    }
+
+    let mut entries = vec![format!("\"vitest\": \"{}\"", tv::npm::VITEST)];
+    if include_coverage_provider {
+        entries.push(format!("\"@vitest/coverage-v8\": \"{}\"", tv::npm::VITEST_COVERAGE_V8));
+    }
+    let entry_count = entries.len();
+
+    lines[scripts_close] = "  },".to_string();
+    let mut block = vec!["  \"devDependencies\": {".to_string()];
+    for (index, entry) in entries.into_iter().enumerate() {
+        let suffix = if index + 1 == entry_count { "" } else { "," };
+        block.push(format!("    {entry}{suffix}"));
+    }
+    block.push("  }".to_string());
+
+    lines.splice(last..last, block);
+    let mut joined = lines.join("\n");
+    if content.ends_with('\n') {
+        joined.push('\n');
+    }
+    Some(joined)
+}
+
+/// Insert missing entries as new lines directly after an existing `"devDependencies": {` line,
+/// never touching anything already inside the object -- no closing-brace search, no
+/// reformatting of neighboring entries, so a consumer's own hand-added dependencies (any name,
+/// any formatting, including a multi-line detailed table) survive untouched regardless of shape.
+/// Returns `None` when the literal `  "devDependencies": {` opening line (the exact indent
+/// `scaffold_wasm` always emits at the top level) is not found, the same "positively recognized
+/// shape or refuse" rule every insertion in this module follows.
+///
+/// Checks whether the object was already empty (its very next line closes it) so the last
+/// inserted entry omits its trailing comma exactly when nothing follows it before the closing
+/// brace -- otherwise every inserted line is comma-terminated, since something (an existing entry
+/// or the closing brace's own object) always follows. ~keep
+fn insert_into_existing_dev_dependencies(content: &str, needs_vitest: bool, needs_coverage: bool) -> Option<String> {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let open_index = lines.iter().position(|line| line == "  \"devDependencies\": {")?;
+    let object_is_empty = lines
+        .get(open_index + 1)
+        .is_some_and(|line| matches!(line.trim(), "}" | "},"));
+
+    let mut entries = Vec::new();
+    if needs_vitest {
+        entries.push(format!("\"vitest\": \"{}\"", tv::npm::VITEST));
+    }
+    if needs_coverage {
+        entries.push(format!("\"@vitest/coverage-v8\": \"{}\"", tv::npm::VITEST_COVERAGE_V8));
+    }
+    let entry_count = entries.len();
+
+    let new_lines: Vec<String> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let omit_comma = object_is_empty && index + 1 == entry_count;
+            let suffix = if omit_comma { "" } else { "," };
+            format!("    {entry}{suffix}")
+        })
+        .collect();
+
+    lines.splice(open_index + 1..open_index + 1, new_lines);
+    let mut joined = lines.join("\n");
+    if content.ends_with('\n') {
+        joined.push('\n');
+    }
+    Some(joined)
+}
+
+#[cfg(test)]
+mod migrate_tests;
