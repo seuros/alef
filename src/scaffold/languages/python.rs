@@ -5,9 +5,26 @@ use crate::core::template_versions as tv;
 use crate::scaffold::naming::python_pip_name;
 use crate::{
     scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
-    scaffold::render_extra_deps, scaffold::scaffold_meta, scaffold::to_pep440,
+    scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use std::path::PathBuf;
+
+/// e.g., "0.1.0-rc.1" -> "0.1.0rc1", "0.1.0-alpha.2" -> "0.1.0a2", "0.1.0-beta.3" -> "0.1.0b3"
+/// Non-pre-release versions are returned unchanged.
+fn to_pep440(version: &str) -> String {
+    if let Some((base, pre)) = version.split_once('-') {
+        let pep = pre
+            .replace("alpha.", "a")
+            .replace("alpha", "a")
+            .replace("beta.", "b")
+            .replace("beta", "b")
+            .replace("rc.", "rc")
+            .replace('.', "");
+        format!("{base}{pep}")
+    } else {
+        version.to_string()
+    }
+}
 
 /// pyproject-fmt's default `column_width` is 80 chars. Arrays whose inline
 /// rendering (`prefix_len + "[ a, b ]".len()`) fits within this width are
