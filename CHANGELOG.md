@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.2] - 2026-08-30
+
+### Fixed
+
+- Normalize real Rust tuple payload names such as `_0` to Flutter Rust Bridge's `field0`
+  accessors in generated Dart e2e assertions.
+- Generate a separate Dart analyzer hook for configured e2e projects, preventing their emitted
+  code from escaping the standard poly lint gate.
+- Suppress foreign enum cfg warnings only when canonical feature evaluation proves the variant
+  unreachable for every requested language, while retaining actionable and indeterminate warnings.
+
 ## [0.79.1] - 2026-08-30
 
 ### Fixed
