@@ -807,3 +807,5 @@ fn json_pointer_child(pointer: &str, field: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wire_name_tests;

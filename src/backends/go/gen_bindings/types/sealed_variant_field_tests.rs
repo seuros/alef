@@ -108,13 +108,13 @@ fn go_enum_variant_spellings_match_the_emitted_declarations() {
         "the concrete variant struct spelling must be the emitted one:\n{emitted}"
     );
     let (field_name, json_key) =
-        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
+        super::field_shape::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
     assert!(
         emitted.contains(&format!("{field_name} string `json:\"{json_key}\"`")),
         "the variant struct's field spelling must be the emitted one:\n{emitted}"
     );
     assert!(
-        super::enums::go_data_enum_variant_field(&sealed, &simple_field("_0", TypeRef::String)).is_none(),
+        super::field_shape::go_data_enum_variant_field(&sealed, &simple_field("_0", TypeRef::String)).is_none(),
         "a positional field has no declared Go field on the variant struct"
     );
 
@@ -161,7 +161,7 @@ fn go_data_enum_variant_field_field_rename_beats_rename_all_fields() {
     };
     let url_variant = &sealed.variants[0];
     let (_, json_key) =
-        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
+        super::field_shape::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
     assert_eq!(
         json_key, "path",
         "the field's own serde_rename must win over the enum's rename_all_fields"
@@ -182,7 +182,7 @@ fn go_data_enum_variant_field_applies_rename_all_fields_without_field_rename() {
     };
     let url_variant = &sealed.variants[0];
     let (_, json_key) =
-        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
+        super::field_shape::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
     assert_eq!(json_key, "innerPath");
 }
 
@@ -201,7 +201,7 @@ fn go_data_enum_variant_field_ignores_rename_all_variant_name_rule() {
     };
     let url_variant = &sealed.variants[0];
     let (_, json_key) =
-        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
+        super::field_shape::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
     assert_eq!(
         json_key, "inner_path",
         "the enum's rename_all (variant-name rule) must not case the field name"

@@ -238,12 +238,14 @@ fn render_presence_arm(
         "not_empty" | "is_empty" => render_empty_presence_arm(
             out,
             assertion,
-            result_is_option,
-            kotlin_android_style,
-            field_is_collection,
-            field_is_optional,
-            field_expr,
-            string_field_expr,
+            EmptyPresenceContext {
+                result_is_option,
+                kotlin_android_style,
+                field_is_collection,
+                field_is_optional,
+                field_expr,
+                string_field_expr,
+            },
         ),
         // See `not_error::render_not_error` for why this is not a no-op. WHETHER it may assert
         // presence at all is decided once, centrally, by `not_error_presence::may_assert_presence`
@@ -361,97 +363,60 @@ fn render_not_contains_arm(out: &mut String, assertion: &Assertion, field_is_col
 /// null` so the assertion semantics match the JVM return type. The kotlin-android wrapper
 /// unwraps `Optional<T>` to Kotlin's `T?` at the boundary, so its bare-option result is a
 /// nullable reference and must use `!= null` instead.
-#[allow(clippy::too_many_arguments)]
-/// `not_empty` / `is_empty` funnel here -- both need the same eight context values to decide
-/// among their Optional-vs-nullable presence templates. ~keep
-#[allow(clippy::too_many_arguments)]
-fn render_empty_presence_arm(
-    out: &mut String,
-    assertion: &Assertion,
+#[derive(Clone, Copy)]
+struct EmptyPresenceContext<'a> {
     result_is_option: bool,
     kotlin_android_style: bool,
     field_is_collection: bool,
     field_is_optional: bool,
-    field_expr: &str,
-    string_field_expr: &str,
-) {
+    field_expr: &'a str,
+    string_field_expr: &'a str,
+}
+
+fn render_empty_presence_arm(out: &mut String, assertion: &Assertion, context: EmptyPresenceContext<'_>) {
     if assertion.assertion_type == "not_empty" {
-        render_not_empty_arm(
-            out,
-            assertion,
-            result_is_option,
-            kotlin_android_style,
-            field_is_collection,
-            field_is_optional,
-            field_expr,
-            string_field_expr,
-        );
+        render_not_empty_arm(out, assertion, context);
     } else {
-        render_is_empty_arm(
-            out,
-            assertion,
-            result_is_option,
-            kotlin_android_style,
-            field_is_collection,
-            field_is_optional,
-            field_expr,
-            string_field_expr,
-        );
+        render_is_empty_arm(out, assertion, context);
     }
 }
 
-fn render_not_empty_arm(
-    out: &mut String,
-    assertion: &Assertion,
-    result_is_option: bool,
-    kotlin_android_style: bool,
-    field_is_collection: bool,
-    field_is_optional: bool,
-    field_expr: &str,
-    string_field_expr: &str,
-) {
-    let bare_result_is_option = result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
-    if bare_result_is_option && !kotlin_android_style {
+fn render_not_empty_arm(out: &mut String, assertion: &Assertion, context: EmptyPresenceContext<'_>) {
+    let bare_result_is_option =
+        context.result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
+    if bare_result_is_option && !context.kotlin_android_style {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/not_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{field_expr}.isPresent") },
+            minijinja::context! { predicate => format!("{}.isPresent", context.field_expr) },
         ));
-    } else if field_is_collection && (bare_result_is_option || field_is_optional) {
+    } else if context.field_is_collection && (bare_result_is_option || context.field_is_optional) {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/not_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{field_expr}?.isNotEmpty() == true") },
+            minijinja::context! { predicate => format!("{}?.isNotEmpty() == true", context.field_expr) },
         ));
-    } else if bare_result_is_option || field_is_optional {
+    } else if bare_result_is_option || context.field_is_optional {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/not_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{field_expr} != null") },
+            minijinja::context! { predicate => format!("{} != null", context.field_expr) },
         ));
     } else {
         let _ = writeln!(
             out,
-            "        assertFalse({string_field_expr}.isEmpty(), \"expected non-empty value\")"
+            "        assertFalse({}.isEmpty(), \"expected non-empty value\")",
+            context.string_field_expr
         );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_is_empty_arm(
-    out: &mut String,
-    assertion: &Assertion,
-    result_is_option: bool,
-    kotlin_android_style: bool,
-    field_is_collection: bool,
-    field_is_optional: bool,
-    field_expr: &str,
-    string_field_expr: &str,
-) {
-    let bare_result_is_option = result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
-    if bare_result_is_option && !kotlin_android_style {
+fn render_is_empty_arm(out: &mut String, assertion: &Assertion, context: EmptyPresenceContext<'_>) {
+    let bare_result_is_option =
+        context.result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
+    if bare_result_is_option && !context.kotlin_android_style {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/is_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{field_expr}.isEmpty") },
+            minijinja::context! { predicate => format!("{}.isEmpty", context.field_expr) },
         ));
-    } else if field_is_collection && (bare_result_is_option || field_is_optional) {
+    } else if context.field_is_collection && (bare_result_is_option || context.field_is_optional) {
         // Symmetric with `not_empty`'s `field_is_collection && (bare_result_is_option ||
         // field_is_optional)` branch above: an optional collection reached through
         // `field_is_optional` (e.g. `Option<Vec<T>>`) must null-check before calling
@@ -461,17 +426,17 @@ fn render_is_empty_arm(
         // assertion type. ~keep
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/is_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("({field_expr}?.isEmpty() ?: true)") },
+            minijinja::context! { predicate => format!("({}?.isEmpty() ?: true)", context.field_expr) },
         ));
-    } else if bare_result_is_option || field_is_optional {
+    } else if bare_result_is_option || context.field_is_optional {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/is_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{field_expr} == null") },
+            minijinja::context! { predicate => format!("{} == null", context.field_expr) },
         ));
     } else {
         out.push_str(&crate::e2e::template_env::render(
             "kotlin/is_empty_assertion.kt.jinja",
-            minijinja::context! { predicate => format!("{string_field_expr}.isEmpty()") },
+            minijinja::context! { predicate => format!("{}.isEmpty()", context.string_field_expr) },
         ));
     }
 }

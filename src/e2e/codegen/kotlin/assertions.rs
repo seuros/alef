@@ -6,8 +6,6 @@
 //! required at every call site — the small net growth here is that mechanical churn plus the
 //! `not_error` arm's updated doc comment, not new unrelated functionality.
 
-use std::fmt::Write as FmtWrite;
-
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 

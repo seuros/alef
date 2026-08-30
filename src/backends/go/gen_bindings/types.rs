@@ -10,11 +10,12 @@ pub(super) use enums::gen_enum_type;
 pub(crate) use enums::is_passthrough_raw_message_enum;
 pub(crate) use enums::{
     GoEnumRepresentation, GoStructEnumVariantField, go_adjacent_tagged_constructor,
-    go_data_enum_untagged_variant_matches, go_data_enum_variant_field, go_data_enum_variant_scalar_tuple_field,
-    go_data_enum_variant_struct, go_enum_constant_for_wire_value, go_enum_representation, go_struct_enum_tag_field,
-    go_struct_enum_variant_fields,
+    go_data_enum_untagged_variant_matches, go_data_enum_variant_scalar_tuple_field, go_data_enum_variant_struct,
+    go_enum_constant_for_wire_value, go_enum_representation, go_struct_enum_tag_field, go_struct_enum_variant_fields,
 };
-pub(crate) use field_shape::{is_data_interface_struct_field_enum, is_unit_struct_field_enum};
+pub(crate) use field_shape::{
+    go_data_enum_variant_field, is_data_interface_struct_field_enum, is_unit_struct_field_enum,
+};
 #[cfg(test)]
 pub(super) use helpers::is_tuple_field;
 pub(crate) use helpers::needs_omitempty_pointer;

@@ -978,39 +978,3 @@ fn node_field_keyed_by_a_wire_name_that_diverges_from_its_js_name_resolves_the_j
 
     assert_eq!(expression, "{ toolType: \"function\" } as ExampleTool");
 }
-
-/// Same divergence, exercised on the WASM setter-builder path (`lang == "wasm"`, the ordinary
-/// non-tagged-enum struct branch) rather than the node object-literal path above — wasm-bindgen
-/// getters/setters are named with the identical `to_node_name(&field.name)` policy (see
-/// `wasm::gen_bindings::types::gen_getter`), so the same wire-vs-host divergence produced
-/// `_u0.type = "function"` (an assignment to a property the generated class does not have)
-/// instead of `_u0.toolType = "function"`.
-#[test]
-fn wasm_field_keyed_by_a_wire_name_that_diverges_from_its_js_name_resolves_the_js_name() {
-    let type_defs = [TypeDef {
-        name: "ExampleTool".into(),
-        fields: vec![crate::core::ir::FieldDef {
-            name: "tool_type".into(),
-            ty: TypeRef::String,
-            serde_rename: Some("type".into()),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }];
-
-    let expression = ts_builder_expression(
-        serde_json::json!({"type": "function"}).as_object().expect("object"),
-        "WasmExampleTool",
-        &Default::default(),
-        "wasm",
-        &Default::default(),
-        &Default::default(),
-        &type_defs,
-        &[],
-        "Wasm",
-        &[],
-        &mut Default::default(),
-    );
-
-    assert!(expression.contains("_u0.toolType = \"function\""), "{expression}");
-}

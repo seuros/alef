@@ -1,8 +1,9 @@
 use crate::backends::go::type_map::{go_optional_type, go_type};
-use crate::codegen::naming::{apply_serde_rename_all, go_type_name, to_go_name, wire_field_name};
+use crate::codegen::naming::{apply_serde_rename_all, go_type_name, to_go_name};
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 use minijinja::context;
 
+use super::field_shape::go_data_enum_variant_field;
 use super::helpers::{emit_type_doc, is_tuple_field};
 
 /// Which Go declaration [`gen_enum_type`] emits for an IR enum — one variant per generator.
@@ -215,26 +216,6 @@ pub(crate) fn go_adjacent_tagged_constructor(enum_def: &EnumDef, variant: &EnumV
 /// so this name is the only way a snippet can produce one. ~keep
 pub(crate) fn go_data_enum_variant_struct(enum_def: &EnumDef, variant: &EnumVariant) -> String {
     format!("{}{}", go_type_name(&enum_def.name), to_go_name(&variant.name))
-}
-
-/// The exported field name and JSON key a sealed-interface variant struct declares for one of
-/// its fields, or `None` for a positional field the struct declares nothing for.
-///
-/// The container rule is the enum's `rename_all_fields` (struct-variant field names), not
-/// `rename_all` (variant names); `field.serde_rename` still wins, per `wire_field_name`. `None`
-/// is the same condition [`gen_data_enum_type`] skips on, so a literal can't fill an undeclared field. ~keep
-pub(crate) fn go_data_enum_variant_field(enum_def: &EnumDef, field: &FieldDef) -> Option<(String, String)> {
-    if is_tuple_field(field) {
-        return None;
-    }
-    Some((
-        to_go_name(&field.name),
-        wire_field_name(
-            &field.name,
-            field.serde_rename.as_deref(),
-            enum_def.rename_all_fields.as_deref(),
-        ),
-    ))
 }
 
 /// The single positional field an untagged sealed-interface variant stores in its `Value`
