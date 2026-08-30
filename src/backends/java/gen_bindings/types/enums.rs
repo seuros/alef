@@ -8,6 +8,7 @@ use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, emit_javadoc, escape_javadoc_line, is_tuple_field_name, java_apply_rename_all,
     qualify_shadowed_type, safe_java_field_name,
 };
+use crate::codegen::naming::wire_field_name;
 use crate::codegen::serde_enum_repr::serde_enum_repr;
 
 /// True when the Java binding backend emits `enum_def` as a plain `enum` with a `getValue()`
@@ -295,8 +296,17 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
                     if is_tuple_field_name(&f.name) {
                         format!("{ftype} value")
                     } else {
-                        let json_name = f.name.trim_start_matches('_');
-                        let jname = safe_java_field_name(json_name);
+                        let raw_field_name = f.name.trim_start_matches('_');
+                        let jname = safe_java_field_name(raw_field_name);
+                        // A struct-shaped variant's field names are a separate serde namespace
+                        // from the enum's own variant names: `serde_rename_all` cases variant
+                        // names, `rename_all_fields` cases these struct-variant field names, and
+                        // a field's own `serde_rename` wins over both. ~keep
+                        let json_name = wire_field_name(
+                            raw_field_name,
+                            f.serde_rename.as_deref(),
+                            enum_def.rename_all_fields.as_deref(),
+                        );
                         format!("@JsonProperty(\"{json_name}\") {ftype} {jname}")
                     }
                 })

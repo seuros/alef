@@ -588,4 +588,132 @@ fn tagged_union_field_type_colliding_with_variant_name_is_package_qualified() {
     );
 }
 
+/// Regression for the tagged-union field-naming defect (explicit-rename half): a struct-shaped
+/// variant's own `#[serde(rename = "...")]` on a *field* is a different serde namespace from the
+/// enum's `serde_rename_all`, which cases *variant* names. Before this fix, `gen_java_tagged_union`
+/// applied no rule at all to variant payload field names -- it emitted the raw Rust field name
+/// into `@JsonProperty(...)` and ignored `serde_rename` entirely, so wire deserialization from
+/// the real Rust core (which honors `serde_rename`) would fail to match. ~keep
+#[test]
+fn tagged_union_struct_variant_field_honors_own_serde_rename() {
+    let enum_def = EnumDef {
+        name: "ContentPart".to_string(),
+        rust_path: "sample_crate::ContentPart".to_string(),
+        serde_tag: Some("kind".to_string()),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "field_type".to_string(),
+                    ty: TypeRef::String,
+                    serde_rename: Some("type".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "value".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let out = gen_enum_class("io.xberg.literllm", &enum_def, "SampleCrawler", &[]);
+
+    assert!(
+        out.contains("@JsonProperty(\"type\") String fieldType"),
+        "a struct-variant field's own #[serde(rename)] must set the @JsonProperty wire name, \
+         got:\n{out}"
+    );
+    assert!(
+        !out.contains("@JsonProperty(\"field_type\")"),
+        "the raw Rust field name must not leak onto the wire once serde_rename is set, got:\n{out}"
+    );
+
+    // Control: a field with neither an explicit serde_rename nor an enum-level
+    // rename_all_fields must keep emitting its own raw name unchanged -- proving the fix does
+    // not over-apply and rename fields that were never meant to be renamed. ~keep
+    assert!(
+        out.contains("@JsonProperty(\"value\") String value"),
+        "a field without any rename must keep emitting its raw name unchanged, got:\n{out}"
+    );
+}
+
+/// Regression for the tagged-union field-naming defect (container-rule half): a struct-shaped
+/// variant field with NO explicit `serde_rename` must still be cased by the enum's own
+/// `#[serde(rename_all_fields = "...")]`. Before this fix `gen_java_tagged_union` never
+/// consulted `rename_all_fields` at all, so the raw Rust field name leaked onto the wire even
+/// when the enum declared a container-wide casing rule for struct-variant fields. ~keep
+#[test]
+fn tagged_union_struct_variant_field_honors_container_rename_all_fields() {
+    let enum_def = EnumDef {
+        name: "ContentPart".to_string(),
+        rust_path: "sample_crate::ContentPart".to_string(),
+        serde_tag: Some("kind".to_string()),
+        rename_all_fields: Some("SCREAMING_SNAKE_CASE".to_string()),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![FieldDef {
+                name: "user_name".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let out = gen_enum_class("io.xberg.literllm", &enum_def, "SampleCrawler", &[]);
+
+    assert!(
+        out.contains("@JsonProperty(\"USER_NAME\") String userName"),
+        "a struct-variant field with no explicit serde_rename must still be cased by the \
+         enum's container-level rename_all_fields rule, got:\n{out}"
+    );
+    assert!(
+        !out.contains("@JsonProperty(\"user_name\")"),
+        "the raw field name must not leak onto the wire once rename_all_fields applies, got:\n{out}"
+    );
+}
+
+/// Precedence regression: when both an explicit field-level `serde_rename` and an enum-level
+/// `rename_all_fields` apply to the same field, the field's own explicit rename must win --
+/// mirroring serde's own precedence, where `#[serde(rename = "...")]` on a field always
+/// overrides a container-wide `rename_all`/`rename_all_fields`.
+#[test]
+fn tagged_union_struct_variant_field_serde_rename_wins_over_rename_all_fields() {
+    let enum_def = EnumDef {
+        name: "ContentPart".to_string(),
+        rust_path: "sample_crate::ContentPart".to_string(),
+        serde_tag: Some("kind".to_string()),
+        rename_all_fields: Some("SCREAMING_SNAKE_CASE".to_string()),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![FieldDef {
+                name: "field_type".to_string(),
+                ty: TypeRef::String,
+                serde_rename: Some("type".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let out = gen_enum_class("io.xberg.literllm", &enum_def, "SampleCrawler", &[]);
+
+    assert!(
+        out.contains("@JsonProperty(\"type\") String fieldType"),
+        "an explicit field-level serde_rename must win over the enum's container-level \
+         rename_all_fields rule, got:\n{out}"
+    );
+    assert!(
+        !out.contains("@JsonProperty(\"FIELD_TYPE\")") && !out.contains("@JsonProperty(\"field_type\")"),
+        "neither the container-cased name nor the raw name may leak once an explicit rename \
+         wins, got:\n{out}"
+    );
+}
+
 mod default_restoration;
