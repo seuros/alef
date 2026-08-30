@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a literal character rather than a quoting operator, so maven was handed
   `file:///repo/'packages/java'/versions-rules.xml` — a URI naming no file, silently disarming
   the version rules it was told to apply.
+- Fix word-splitting in that same `-Dmaven.version.rules=…` flag: the fix above corrected the URI
+  itself but still interpolated the flag as a bare, unquoted `$(...)` substitution at the `mvn`
+  invocation, so a `$PWD` or configured output path containing a space split one flag into
+  multiple argv entries reaching maven. The flag is now computed into a shell variable and
+  referenced via `${var:+"$var"}` — the POSIX idiom for a word that is exactly one argv entry when
+  set and exactly zero when unset — instead of a bare substitution, which either word-splits or
+  (if simply quoted) hands maven a stray empty argument when no rules file exists.
 - Stop the generated WASM crate's `[features] default = [...]` from re-enabling a core-crate
   feature its own dependency line had just disabled. `gen_cargo_toml` emits
   `default-features = false, features = [...]` on the core dep whenever `[crates.wasm] features`

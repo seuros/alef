@@ -12,8 +12,18 @@ fn ruby_update_command(output_dir: &str) -> String {
     )
 }
 
-/// The optional `-Dmaven.version.rules=…` argument, emitted only when the scaffolded
-/// `versions-rules.xml` is actually on disk.
+/// The shell variable name `maven_version_rules_assignment` computes the optional
+/// `-Dmaven.version.rules=…` flag into, and `MAVEN_VERSION_RULES_REF` reads back -- the two must
+/// name the same variable. Namespaced so it cannot collide with a variable the user's own shell
+/// environment happens to export; it lives only for the lifetime of the one `sh -c` invocation
+/// that sets and reads it.
+const MAVEN_VERSION_RULES_VAR: &str = "alef_mvn_rules";
+
+/// A *statement* (not an expression) that computes the optional `-Dmaven.version.rules=…`
+/// argument into `$alef_mvn_rules`, emitted only when the scaffolded `versions-rules.xml` is
+/// actually on disk. Must be joined onto the front of the `mvn` invocation with `;` — see
+/// `MAVEN_VERSION_RULES_REF` for why the flag cannot be interpolated directly as a `$(...)`
+/// expression at the call site.
 ///
 /// `output_dir` arrives already shell-quoted (`'packages/java'`), and that is exactly why this
 /// fragment cannot be written as one flat double-quoted string: inside `echo "…"` a single quote
@@ -24,11 +34,24 @@ fn ruby_update_command(output_dir: &str) -> String {
 /// concatenates into the same argument while still being quoted *by the shell*, which keeps a
 /// `$(…)` or backtick in a configured output path inert. Verified against a real `sh`, not by
 /// reading. ~keep
-fn maven_version_rules_flag(output_dir: &str) -> String {
+fn maven_version_rules_assignment(output_dir: &str) -> String {
     format!(
-        "$([ -f {output_dir}/versions-rules.xml ] && echo \"-Dmaven.version.rules=file://${{PWD}}/\"{output_dir}\"/versions-rules.xml\")"
+        "{MAVEN_VERSION_RULES_VAR}=$([ -f {output_dir}/versions-rules.xml ] && echo \"-Dmaven.version.rules=file://${{PWD}}/\"{output_dir}\"/versions-rules.xml\")"
     )
 }
+
+/// Reference to the flag `maven_version_rules_assignment` computed, embedded directly as a word
+/// in the `mvn` invocation. Must name `MAVEN_VERSION_RULES_VAR`.
+///
+/// `${var:+"$var"}` is the POSIX idiom for a shell word that is exactly one argument when `var`
+/// is set and non-empty, and exactly *zero* when it is unset or empty. That double property is
+/// why this cannot be simplified to `$(...)` or a bare `$var` at the call site (either word-splits
+/// the captured value on any whitespace -- a `$PWD` or configured output path containing a space
+/// would otherwise fracture one flag into several argv entries reaching maven) nor to a flat
+/// `"$var"` (which would still hand maven one empty argument when no rules file exists, instead of
+/// omitting the word entirely). Verified against a real `sh`, counting argv entries rather than
+/// reading text, for both the with-space and no-rules-file cases. ~keep
+const MAVEN_VERSION_RULES_REF: &str = r#"${alef_mvn_rules:+"$alef_mvn_rules"}"#;
 
 /// Return the default update configuration for a language.
 ///
@@ -140,15 +163,18 @@ pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext
             ])),
         },
         Language::Java => {
-            let rules_flag = maven_version_rules_flag(&output_dir);
+            let rules_assignment = maven_version_rules_assignment(&output_dir);
+            let rules_ref = MAVEN_VERSION_RULES_REF;
             UpdateConfig {
                 precondition: Some(require_tool("mvn")),
                 before: None,
                 update: Some(StringOrVec::Single(format!(
-                    "mvn -f {output_dir}/pom.xml versions:use-latest-releases {rules_flag} --batch-mode --no-transfer-progress"
+                    "{rules_assignment}; mvn -f {output_dir}/pom.xml versions:use-latest-releases {rules_ref} \
+                     --batch-mode --no-transfer-progress"
                 ))),
                 upgrade: Some(StringOrVec::Single(format!(
-                    "mvn -f {output_dir}/pom.xml versions:use-latest-releases -DallowMajorUpdates=true {rules_flag} --batch-mode --no-transfer-progress"
+                    "{rules_assignment}; mvn -f {output_dir}/pom.xml versions:use-latest-releases \
+                     -DallowMajorUpdates=true {rules_ref} --batch-mode --no-transfer-progress"
                 ))),
             }
         }
@@ -446,46 +472,121 @@ mod tests {
         );
     }
 
-    /// The emitted `-Dmaven.version.rules=` value is built inside an `echo "…"`, where a single
-    /// quote is a literal character rather than a quoting operator. Asserting on the command
-    /// *text* cannot tell a correct URI from one carrying stray apostrophes, so this runs the
-    /// fragment through a real `sh` and checks the path it produces actually names the rules
-    /// file on disk. Fails on the flat-double-quoted form this replaced. ~keep
+    /// Runs the assignment + `${var:+"$var"}` reference pair through a real `sh`, in `cwd`, and
+    /// returns the rules flag as however many argv words it actually produced -- one per printed
+    /// line, via `for w in REF; do printf '%s\n' "$w"; done`. Counting entries (not joining them
+    /// back into one string) is the point: a joined comparison is exactly what would hide a
+    /// `$PWD` or output-dir space fracturing the flag into more than one word before maven ever
+    /// sees it. ~keep
     #[cfg(unix)]
-    #[test]
-    fn java_version_rules_flag_names_a_file_that_exists() {
-        const PACKAGE: &str = "packages/java";
-        let root = tempfile::tempdir().expect("tempdir");
-        let package = root.path().join(PACKAGE);
-        std::fs::create_dir_all(&package).expect("create package dir");
-        std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
-
-        let fragment = maven_version_rules_flag(&quoted(PACKAGE));
+    fn rules_flag_argv(output_dir_quoted: &str, cwd: &std::path::Path) -> Vec<String> {
+        let assignment = maven_version_rules_assignment(output_dir_quoted);
+        let script = format!("{assignment}; for w in {MAVEN_VERSION_RULES_REF}; do printf '%s\\n' \"$w\"; done");
         let output = std::process::Command::new("sh")
-            .args(["-c", &format!("printf '%s\\n' {fragment}")])
-            .current_dir(root.path())
+            .args(["-c", &script])
+            .current_dir(cwd)
             .output()
             .expect("shell should start");
-        // Joined rather than indexed: the `$(…)` is deliberately unquoted (quoting it would hand
-        // maven an empty argument when no rules file exists), so a `$TMPDIR` containing a space
-        // splits the substitution into several words. That is a real, pre-existing limitation of
-        // the unquoted substitution and not what this test is about — reassembling keeps the test
-        // measuring the emitted path rather than the runner's temp directory. ~keep
-        let emitted = String::from_utf8_lossy(&output.stdout)
+        assert!(
+            output.status.success(),
+            "the emitted fragment must be valid shell: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout)
             .lines()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let uri = emitted
-            .strip_prefix("-Dmaven.version.rules=file://")
-            .unwrap_or_else(|| panic!("expected a file:// rules URI, got `{emitted}`"));
-        assert!(
-            !uri.contains('\''),
-            "the rules URI carries literal apostrophes from the quoted output dir: `{uri}`"
-        );
-        assert!(
-            std::path::Path::new(uri).is_file(),
-            "maven is pointed at `{uri}`, which is not the rules file that exists on disk"
-        );
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Cardinality matrix for the optional `-Dmaven.version.rules=…` flag: it must reach maven as
+    /// exactly one argv entry whenever the scaffolded rules file exists (regardless of whitespace
+    /// in the configured output path or in `$PWD`), and exactly zero when it does not. A prior
+    /// version of this fragment used a bare `$(...)` at the call site, which word-splits its
+    /// captured value on any whitespace -- case (b) below is the one that fragment got wrong: a
+    /// path with a space in it fractured one flag into two argv entries reaching maven. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn maven_version_rules_flag_reaches_maven_as_exactly_one_or_zero_argv() {
+        // (a) rules file exists, no spaces anywhere -> exactly 1 argv.
+        {
+            const PACKAGE: &str = "packages/java";
+            let root = tempfile::tempdir().expect("tempdir");
+            let package = root.path().join(PACKAGE);
+            std::fs::create_dir_all(&package).expect("create package dir");
+            std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
+
+            let argv = rules_flag_argv(&quoted(PACKAGE), root.path());
+            assert_eq!(argv.len(), 1, "expected exactly 1 argv entry, got {argv:?}");
+            let uri = argv[0]
+                .strip_prefix("-Dmaven.version.rules=file://")
+                .unwrap_or_else(|| panic!("expected a file:// rules URI, got {argv:?}"));
+            assert!(
+                std::path::Path::new(uri).is_file(),
+                "maven is pointed at `{uri}`, which is not the rules file that exists on disk"
+            );
+        }
+
+        // (b) rules file exists, output dir path contains a space -> exactly 1 argv (this is the
+        // case the pre-fix bare `$(...)` fractured into 2).
+        {
+            const PACKAGE: &str = "packages/my java";
+            let root = tempfile::tempdir().expect("tempdir");
+            let package = root.path().join(PACKAGE);
+            std::fs::create_dir_all(&package).expect("create package dir");
+            std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
+
+            let argv = rules_flag_argv(&quoted(PACKAGE), root.path());
+            assert_eq!(
+                argv.len(),
+                1,
+                "a space in the configured output path must not fracture the flag: got {argv:?}"
+            );
+            let uri = argv[0]
+                .strip_prefix("-Dmaven.version.rules=file://")
+                .unwrap_or_else(|| panic!("expected a file:// rules URI, got {argv:?}"));
+            assert!(
+                std::path::Path::new(uri).is_file(),
+                "maven is pointed at `{uri}`, which is not the rules file that exists on disk"
+            );
+        }
+
+        // (c) no rules file -> exactly 0 argv (never a stray empty argument).
+        {
+            const PACKAGE: &str = "packages/java";
+            let root = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(root.path().join(PACKAGE)).expect("create package dir");
+
+            let argv = rules_flag_argv(&quoted(PACKAGE), root.path());
+            assert!(
+                argv.is_empty(),
+                "no rules file on disk must emit zero argv entries, not an empty one: got {argv:?}"
+            );
+        }
+
+        // (d) rules file exists, no space in the output dir but `$PWD` itself contains one ->
+        // exactly 1 argv.
+        {
+            const PACKAGE: &str = "packages/java";
+            let root = tempfile::tempdir().expect("tempdir");
+            let space_root = root.path().join("space dir");
+            let package = space_root.join(PACKAGE);
+            std::fs::create_dir_all(&package).expect("create package dir");
+            std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
+
+            let argv = rules_flag_argv(&quoted(PACKAGE), &space_root);
+            assert_eq!(
+                argv.len(),
+                1,
+                "a space in $PWD must not fracture the flag: got {argv:?}"
+            );
+            let uri = argv[0]
+                .strip_prefix("-Dmaven.version.rules=file://")
+                .unwrap_or_else(|| panic!("expected a file:// rules URI, got {argv:?}"));
+            assert!(
+                std::path::Path::new(uri).is_file(),
+                "maven is pointed at `{uri}`, which is not the rules file that exists on disk"
+            );
+        }
     }
 
     /// A configured output path is consumer input reaching `sh -c`. Inside the `echo "…"` that
@@ -504,18 +605,9 @@ mod tests {
         std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
         let witness = root.path().join("executed");
 
-        let fragment = maven_version_rules_flag(&quoted(HOSTILE));
-        let output = std::process::Command::new("sh")
-            .args(["-c", &format!("printf '%s\\n' {fragment}")])
-            .current_dir(root.path())
-            .output()
-            .expect("shell should start");
+        let argv = rules_flag_argv(&quoted(HOSTILE), root.path());
 
-        assert!(output.status.success(), "the emitted fragment must be valid shell");
-        assert!(
-            !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
-            "the rules flag must have been emitted, or this test proved nothing"
-        );
+        assert_eq!(argv.len(), 1, "the rules flag must have been emitted, got {argv:?}");
         assert!(
             !witness.exists(),
             "a command substitution in the configured output path was executed by the update command"
