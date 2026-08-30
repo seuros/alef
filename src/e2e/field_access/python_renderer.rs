@@ -157,11 +157,10 @@ pub(super) fn python_element_owner_type(
 ///
 /// ~keep Retaining the previous owner when there is no map-value edge is not a second guess at the
 /// value's shape — it is declining to make one. `is_typeddict(None)` means "attribute access", a
-/// positive claim, and asserting it for a map whose values the IR could not name (a
-/// `serde_json::Value` blob, a nested map, a foreign type) would render `.field` on what is a
-/// plain `dict` at runtime under the dominant `python_output = "typed-dict"` config — an
-/// `AttributeError` that does not exist today. The only owner this changes is the one the IR can
-/// actually derive.
+/// positive claim. When the value shape is unnamed (a scalar, JSON string carrier, nested map,
+/// or foreign type), retaining the existing owner classification preserves the renderer's prior
+/// behaviour without pretending the IR derived a named target. The only owner this changes is
+/// the one the IR can actually derive.
 fn advance_through_map_access(current_type: Option<String>, field: &str, map: &PythonTypedDictMap) -> Option<String> {
     let advanced = map.advance_map_value(current_type.as_deref(), field);
     advanced.or(current_type)
@@ -487,13 +486,12 @@ mod tests {
         );
     }
 
-    /// A map the IR recorded NO value edge for (values are scalars, a JSON blob, or a foreign
-    /// type) keeps the previous owner rather than asserting attribute access.
+    /// A map the IR recorded NO value edge for (values are scalars, JSON string carriers, nested
+    /// maps, or foreign types) keeps the previous owner rather than asserting a named target.
     ///
-    /// ~keep This is the case the rejected `current_type = None` fix would have broken: a
-    /// `HashMap<String, serde_json::Value>` on a `TypedDict` result is a plain nested `dict` at
-    /// runtime, `["title"]` is correct, and `.title` would be a new `AttributeError`. No edge
-    /// means no derived answer, so the renderer declines to change its answer.
+    /// ~keep No edge means no derived named owner, so the renderer declines to change its answer.
+    /// This is a compatibility control, not a claim that every unnamed value supports the
+    /// trailing field path; PyO3 exposes `TypeRef::Json` as a JSON string carrier, for example.
     #[test]
     fn a_map_with_no_recorded_value_edge_retains_the_owner_classification() {
         let map = typeddict_map(&["ApiResult"], &[], "ApiResult");

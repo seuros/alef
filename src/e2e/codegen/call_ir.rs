@@ -399,7 +399,7 @@ impl<'a> TargetParams<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallIr, TargetParams, named_type};
+    use super::{CallIr, TargetParams, map_value_named_type, named_type};
     use crate::core::ir::{FunctionDef, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
     use crate::e2e::config::CallConfig;
 
@@ -624,6 +624,10 @@ mod tests {
         assert_eq!(map_value_named_type(&vec_of_named), None);
         assert_eq!(map_value_named_type(&TypeRef::Named("Meta".to_string())), None);
         assert_eq!(map_value_named_type(&map_of(TypeRef::String)), None);
+        assert_eq!(
+            map_value_named_type(&map_of(map_of(TypeRef::Named("Meta".to_string())))),
+            None
+        );
         assert_eq!(map_value_named_type(&map_of(vec_of_named)), None);
     }
 

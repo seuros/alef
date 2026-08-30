@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
+use crate::core::config::PythonDtoStyle;
+use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 use crate::e2e::field_access::{FieldResolver, PythonTypedDictMap};
 use crate::e2e::fixture::Assertion;
 
@@ -93,6 +95,57 @@ fn typeddict_resolver(typeddict_types: &[&str], field_types: &[(&str, &str, &str
             .insert(field.to_string(), target.to_string());
     }
     empty_resolver().with_python_typeddict_map(map, Some(root_type.to_string()))
+}
+
+fn map_owner_type_defs() -> Vec<TypeDef> {
+    vec![
+        TypeDef {
+            name: "Report".to_string(),
+            fields: vec![FieldDef {
+                name: "entries".to_string(),
+                ty: TypeRef::Map(
+                    Box::new(TypeRef::String),
+                    Box::new(TypeRef::Named("Metadata".to_string())),
+                ),
+                ..FieldDef::default()
+            }],
+            is_return_type: true,
+            has_default: true,
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "Metadata".to_string(),
+            fields: vec![FieldDef {
+                name: "title".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            is_return_type: true,
+            has_default: true,
+            ..TypeDef::default()
+        },
+    ]
+}
+
+fn production_map_resolver(reexported_types: &[String]) -> FieldResolver {
+    empty_resolver().with_python_typeddict_map(
+        FieldResolver::python_typeddict_fields(&map_owner_type_defs(), PythonDtoStyle::TypedDict, reexported_types),
+        Some("Report".to_string()),
+    )
+}
+
+fn assert_generated_python_runs(setup: &str, assertion: &str) {
+    let script = format!("{setup}\n\ndef test_case():\n{assertion}\ntest_case()\n");
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .expect("python3 must execute generated Python assertion");
+    assert!(
+        output.status.success(),
+        "generated Python assertion failed:\n{}\nscript:\n{script}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// `Option<DataNode>` presence: before the fix this rendered `assert result.data is
@@ -392,6 +445,44 @@ fn a_scalar_field_on_a_non_typeddict_result_type_renders_an_attribute_assertion(
         &make_assertion("equals", Some("status_code"), Some(serde_json::json!(200))),
     );
     assert_eq!(out, "    assert result.status_code == 200\n");
+}
+
+#[test]
+fn a_typeddict_map_value_under_a_native_owner_runs_the_generated_assertion() {
+    let resolver = production_map_resolver(&["Report".to_string()]);
+    let out = render_field_assertion(
+        &resolver,
+        &make_assertion("equals", Some("entries[alpha].title"), Some(serde_json::json!("Doc"))),
+    );
+    assert_eq!(out, "    assert result.entries.get(\"alpha\")[\"title\"] == \"Doc\"\n");
+    assert_generated_python_runs(
+        concat!(
+            "class Report:\n",
+            "    def __init__(self):\n",
+            "        self.entries = {\"alpha\": {\"title\": \"Doc\"}}\n\n",
+            "result = Report()",
+        ),
+        &out,
+    );
+}
+
+#[test]
+fn a_native_map_value_under_a_typeddict_owner_runs_the_generated_assertion() {
+    let resolver = production_map_resolver(&["Metadata".to_string()]);
+    let out = render_field_assertion(
+        &resolver,
+        &make_assertion("equals", Some("entries[alpha].title"), Some(serde_json::json!("Doc"))),
+    );
+    assert_eq!(out, "    assert result[\"entries\"].get(\"alpha\").title == \"Doc\"\n");
+    assert_generated_python_runs(
+        concat!(
+            "class Metadata:\n",
+            "    def __init__(self):\n",
+            "        self.title = \"Doc\"\n\n",
+            "result = {\"entries\": {\"alpha\": Metadata()}}",
+        ),
+        &out,
+    );
 }
 
 /// An `Optional` field owned by a `TypedDict` type narrows via subscript access in both the
