@@ -13,6 +13,11 @@ use super::json_to_csharp;
 /// Render an assertion against a discriminated union variant's inner field.
 /// `variant_var` is the unwrapped union variant (e.g., `variant` from pattern match).
 /// `inner_field` is the field to access on the variant's Value (e.g., `sheet_count`).
+///
+/// ~keep Split into `render_bare_variant_payload_assertion` (no inner field — assert against
+/// the payload value itself) and `render_discriminated_scalar_assertion` (the per-assertion-type
+/// match) to stay under the file's function-length cap. Every statement below is a verbatim
+/// extraction from the original single function; no behavior changed.
 pub(super) fn render_discriminated_union_assertion(
     out: &mut String,
     assertion: &Assertion,
@@ -22,26 +27,8 @@ pub(super) fn render_discriminated_union_assertion(
     _result_is_vec: bool,
     assert_enum_fields: &std::collections::HashMap<String, String>,
 ) {
-    // No field inside the payload — the fixture asserts against the payload VALUE itself (e.g.
-    // `outcome.found` where `Found` wraps `List<Item>` directly, rather than a class with an
-    // inner field). `field_is_collection` here comes from `union_variant_payload_is_collection`
-    // (the caller switches source per `union_variant_field_is_collection`'s doc comment), so
-    // `count_min` is the one assertion type this shape can substantiate today; every other shape
-    // stays the same registered skip a callsite bug used to render as nothing at all. ~keep
     if inner_field.is_empty() {
-        if assertion.assertion_type == "count_min" && field_is_collection {
-            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
-                let payload_expr = format!("{variant_var}.Value");
-                let _ = writeln!(
-                    out,
-                    "            Assert.True(({payload_expr}?.Count ?? 0) >= {count}, \"expected count >= {count}\");"
-                );
-            } else {
-                render_unsupported_assertion(out, assertion);
-            }
-        } else {
-            render_unsupported_assertion(out, assertion);
-        }
+        render_bare_variant_payload_assertion(out, assertion, variant_var, field_is_collection);
         return;
     }
 
@@ -49,86 +36,154 @@ pub(super) fn render_discriminated_union_assertion(
     let mut field_expr = format!("{variant_var}.Value.{field_pascal}");
 
     // Wrap enum fields with display helper
-    if assert_enum_fields.contains_key(&field_pascal) {
-        let type_name = assert_enum_fields.get(&field_pascal).unwrap();
+    if let Some(type_name) = assert_enum_fields.get(&field_pascal) {
         field_expr = format!("{type_name}Display.ToDisplayString({field_expr})");
     }
 
+    render_discriminated_scalar_assertion(out, assertion, &field_expr, field_is_collection);
+}
+
+/// No field inside the payload — the fixture asserts against the payload VALUE itself (e.g.
+/// `outcome.found` where `Found` wraps `List<Item>` directly, rather than a class with an inner
+/// field). `field_is_collection` here comes from `union_variant_payload_is_collection` (the
+/// caller switches source per `union_variant_field_is_collection`'s doc comment), so `count_min`
+/// is the one assertion type this shape can substantiate today; every other shape stays the same
+/// registered skip a callsite bug used to render as nothing at all. ~keep
+fn render_bare_variant_payload_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    variant_var: &str,
+    field_is_collection: bool,
+) {
+    if assertion.assertion_type == "count_min" && field_is_collection {
+        if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+            let payload_expr = format!("{variant_var}.Value");
+            let _ = writeln!(
+                out,
+                "            Assert.True(({payload_expr}?.Count ?? 0) >= {count}, \"expected count >= {count}\");"
+            );
+        } else {
+            render_unsupported_assertion(out, assertion);
+        }
+    } else {
+        render_unsupported_assertion(out, assertion);
+    }
+}
+
+/// Dispatch on assertion type once `field_expr` (the variant's inner-field accessor) is known.
+/// `not_empty`/`is_empty` stay inline — each is a single statement — every other arm is a
+/// verbatim-extracted helper. ~keep
+fn render_discriminated_scalar_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field_expr: &str,
+    field_is_collection: bool,
+) {
     match assertion.assertion_type.as_str() {
-        "equals" => {
-            if let Some(expected) = &assertion.value {
-                let cs_val = json_to_csharp(expected);
-                if expected.is_string() {
-                    let _ = writeln!(out, "            Assert.Equal({cs_val}, {field_expr}!.Trim());");
-                } else if expected.as_bool() == Some(true) {
-                    let _ = writeln!(out, "            Assert.True({field_expr});");
-                } else if expected.as_bool() == Some(false) {
-                    let _ = writeln!(out, "            Assert.False({field_expr});");
-                } else if expected.is_number() && !expected.as_f64().is_some_and(|f| f.fract() != 0.0) {
-                    let _ = writeln!(out, "            Assert.True({field_expr} == {cs_val});");
-                } else {
-                    let _ = writeln!(out, "            Assert.Equal({cs_val}, {field_expr});");
-                }
-            }
-        }
-        "greater_than_or_equal" => {
-            if let Some(val) = &assertion.value {
-                let cs_val = json_to_csharp(val);
-                let _ = writeln!(
-                    out,
-                    "            Assert.True({field_expr} >= {cs_val}, \"expected >= {cs_val}\");"
-                );
-            }
-        }
-        "contains_all" => {
-            if let Some(values) = &assertion.values {
-                let field_as_str = format!("JsonSerializer.Serialize({field_expr})");
-                for val in values {
-                    let lower_val = val.as_str().map(|s| s.to_lowercase());
-                    let cs_val = lower_val
-                        .as_deref()
-                        .map(|s| format!("\"{}\"", escape_csharp(s)))
-                        .unwrap_or_else(|| json_to_csharp(val));
-                    let _ = writeln!(out, "            Assert.Contains({cs_val}, {field_as_str}.ToLower());");
-                }
-            }
-        }
-        "contains" => {
-            if let Some(expected) = &assertion.value {
-                let field_as_str = format!("JsonSerializer.Serialize({field_expr})");
-                let lower_expected = expected.as_str().map(|s| s.to_lowercase());
-                let cs_val = lower_expected
-                    .as_deref()
-                    .map(|s| format!("\"{}\"", escape_csharp(s)))
-                    .unwrap_or_else(|| json_to_csharp(expected));
-                let _ = writeln!(out, "            Assert.Contains({cs_val}, {field_as_str}.ToLower());");
-            }
-        }
+        "equals" => render_discriminated_equals(out, assertion, field_expr),
+        "greater_than_or_equal" => render_discriminated_greater_than_or_equal(out, assertion, field_expr),
+        "contains_all" => render_discriminated_contains_all(out, assertion, field_expr),
+        "contains" => render_discriminated_contains(out, assertion, field_expr),
         "not_empty" => {
             let _ = writeln!(out, "            Assert.NotEmpty({field_expr});");
         }
         "is_empty" => {
             let _ = writeln!(out, "            Assert.Empty({field_expr});");
         }
-        "count_min" if field_is_collection => {
-            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
-                let _ = writeln!(
-                    out,
-                    "            Assert.True(({field_expr}?.Count ?? 0) >= {count}, \"expected count >= {count}\");"
-                );
-            } else {
-                render_unsupported_assertion(out, assertion);
-            }
-        }
+        "count_min" if field_is_collection => render_discriminated_count_min(out, assertion, field_expr),
         _ => {
             render_unsupported_assertion(out, assertion);
         }
     }
 }
 
+fn render_discriminated_equals(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(expected) = &assertion.value {
+        let cs_val = json_to_csharp(expected);
+        if expected.is_string() {
+            let _ = writeln!(out, "            Assert.Equal({cs_val}, {field_expr}!.Trim());");
+        } else if expected.as_bool() == Some(true) {
+            let _ = writeln!(out, "            Assert.True({field_expr});");
+        } else if expected.as_bool() == Some(false) {
+            let _ = writeln!(out, "            Assert.False({field_expr});");
+        } else if expected.is_number() && !expected.as_f64().is_some_and(|f| f.fract() != 0.0) {
+            let _ = writeln!(out, "            Assert.True({field_expr} == {cs_val});");
+        } else {
+            let _ = writeln!(out, "            Assert.Equal({cs_val}, {field_expr});");
+        }
+    }
+}
+
+fn render_discriminated_greater_than_or_equal(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(val) = &assertion.value {
+        let cs_val = json_to_csharp(val);
+        let _ = writeln!(
+            out,
+            "            Assert.True({field_expr} >= {cs_val}, \"expected >= {cs_val}\");"
+        );
+    }
+}
+
+fn render_discriminated_contains_all(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(values) = &assertion.values {
+        let field_as_str = format!("JsonSerializer.Serialize({field_expr})");
+        for val in values {
+            let lower_val = val.as_str().map(|s| s.to_lowercase());
+            let cs_val = lower_val
+                .as_deref()
+                .map(|s| format!("\"{}\"", escape_csharp(s)))
+                .unwrap_or_else(|| json_to_csharp(val));
+            let _ = writeln!(out, "            Assert.Contains({cs_val}, {field_as_str}.ToLower());");
+        }
+    }
+}
+
+fn render_discriminated_contains(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(expected) = &assertion.value {
+        let field_as_str = format!("JsonSerializer.Serialize({field_expr})");
+        let lower_expected = expected.as_str().map(|s| s.to_lowercase());
+        let cs_val = lower_expected
+            .as_deref()
+            .map(|s| format!("\"{}\"", escape_csharp(s)))
+            .unwrap_or_else(|| json_to_csharp(expected));
+        let _ = writeln!(out, "            Assert.Contains({cs_val}, {field_as_str}.ToLower());");
+    }
+}
+
+fn render_discriminated_count_min(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+        let _ = writeln!(
+            out,
+            "            Assert.True(({field_expr}?.Count ?? 0) >= {count}, \"expected count >= {count}\");"
+        );
+    } else {
+        render_unsupported_assertion(out, assertion);
+    }
+}
+
 fn render_unsupported_assertion(out: &mut String, assertion: &Assertion) {
     let reason = AssertionTypeSkip::DiscriminatedUnionAssertionTypeNotSupported.message(&assertion.assertion_type);
     let _ = writeln!(out, "            // skipped: {reason}");
+}
+
+/// An empty suffix means the fixture path named only the variant — no field is checked, so
+/// `union_variant_field_is_collection` (which requires a non-empty field name) always answers
+/// `false` for it. Whether the variant's PAYLOAD itself is a collection is a different,
+/// IR-backed question for that shape. Shared shape with kotlin's identically-named helper —
+/// each backend keeps its own copy since they are separate modules with no shared parent for
+/// this cross-backend concern. ~keep
+fn resolve_union_field_is_collection(
+    field_resolver: &FieldResolver,
+    prefix: &str,
+    union_type: &str,
+    variant: &str,
+    suffix: &str,
+) -> bool {
+    if suffix.is_empty() {
+        field_resolver.union_variant_payload_is_collection(union_type, variant)
+    } else {
+        field_resolver.union_variant_field_is_collection(prefix, variant, suffix)
+    }
 }
 
 pub(super) fn try_render_generic_union_assertion(
@@ -151,15 +206,8 @@ pub(super) fn try_render_generic_union_assertion(
     field.hash(&mut hasher);
     let variant_var = format!("variant_{:08x}", hasher.finish() as u32);
     let container = field_resolver.accessor(&prefix, "csharp", result_var);
-    // An empty suffix means the fixture path named only the variant — no field is checked, so
-    // `union_variant_field_is_collection` (which requires a non-empty field name) always
-    // answers `false` for it. Whether the variant's PAYLOAD itself is a collection is a
-    // different, IR-backed question for that shape. ~keep
-    let field_is_collection = if suffix.is_empty() {
-        field_resolver.union_variant_payload_is_collection(&union_type, &variant)
-    } else {
-        field_resolver.union_variant_field_is_collection(&prefix, &variant, &suffix)
-    };
+    let field_is_collection =
+        resolve_union_field_is_collection(field_resolver, &prefix, &union_type, &variant, &suffix);
     let _ = writeln!(out, "        if ({container} is {union_type}.{variant} {variant_var})");
     let _ = writeln!(out, "        {{");
     render_discriminated_union_assertion(
@@ -237,6 +285,16 @@ mod tests {
                         "_0",
                         TypeRef::Vec(Box::new(TypeRef::Named("FoundEntry".to_string()))),
                     )],
+                    ..EnumVariant::default()
+                },
+                // A tuple variant whose single field is `Vec<primitive>` — no element type
+                // name for `named_type` to resolve, so `variant_payload_types` (and therefore
+                // `variant_payload_is_collection`) never records it at all: this shape stays
+                // out of scope for the count_min-on-bare-payload fix and must fall through to
+                // the pre-existing "union traversal not implemented" skip. ~keep
+                EnumVariant {
+                    name: "Numbers".to_string(),
+                    fields: vec![field("_0", TypeRef::Vec(Box::new(TypeRef::String)))],
                     ..EnumVariant::default()
                 },
             ],
@@ -470,6 +528,37 @@ mod tests {
         assert!(out.contains("result.Results[0].Metadata.Format is FormatMetadata.Html"));
         assert!(out.contains("Value.Headers?.Count ?? 0) >= 2"));
         assert!(!out.contains("skipped:"));
+    }
+
+    /// Scope-limit control: `Numbers(Vec<String>)` — a tuple variant whose payload is
+    /// `Vec<primitive>` rather than `Vec<NamedType>` — has no entry in
+    /// `variant_payload_types` at all (`named_type` cannot resolve a primitive element), so it
+    /// is out of scope for `union_variant_payload_is_collection` and must fall through to the
+    /// PRE-EXISTING "payload never resolved" skip. This proves the documented scope limit is a
+    /// real, visible, registered skip — not a silent drop like the bug this change fixed.
+    #[test]
+    fn bare_union_variant_with_primitive_vec_payload_stays_a_registered_skip_not_silence() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.numbers".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            "details.numbers",
+            &std::collections::HashMap::new(),
+        ));
+        assert!(!out.is_empty(), "must never render nothing at all");
+        assert_eq!(
+            out,
+            "            // skipped: assertion type 'count_min' not yet supported for discriminated union fields\n"
+        );
     }
 
     #[test]

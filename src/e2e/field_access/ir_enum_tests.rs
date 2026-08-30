@@ -341,3 +341,62 @@ fn resolver_union_variant_payload_is_collection_matches_the_ir() {
     assert!(!resolver.union_variant_payload_is_collection("Outcome", "Missing"));
     assert!(!resolver.union_variant_payload_is_collection("UnknownUnion", "Found"));
 }
+
+/// Scope-boundary control (not a defect): `Vec<Vec<T>>` and `Option<Vec<T>>` payloads both
+/// classify as collections through `is_vec_type`'s existing recursion (`Optional` unwraps once,
+/// `Vec` matches immediately regardless of its element type), and `named_type` recurses through
+/// BOTH layers of `Vec<Vec<T>>` to the same innermost named element `variant_payload_types`
+/// already recorded for a single-layer `Vec<T>` -- so the collection-payload classification and
+/// the payload type name it records are both anchored on the OUTER `Vec`, which is exactly what
+/// `render_bare_variant_payload_assertion`'s `.size`/`.Count` ends up asserting against. Pinned
+/// as-is; no production code changed to make this pass. ~keep
+#[test]
+fn variant_payload_is_collection_covers_nested_vec_and_optional_vec_payloads() {
+    let enums = vec![EnumDef {
+        name: "Outcome".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "NestedVec".to_string(),
+                fields: vec![field(
+                    "_0",
+                    TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::Named("Entry".to_string()))))),
+                )],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "OptionalVec".to_string(),
+                fields: vec![field(
+                    "_0",
+                    TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named("Entry".to_string()))))),
+                )],
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }];
+    let map = build_ir_enum_map(&[], &enums);
+
+    assert!(
+        map.variant_payload_is_collection
+            .get("Outcome")
+            .is_some_and(|variants| variants.contains("NestedVec")),
+        "Vec<Vec<Entry>> classifies as a collection payload via the outer Vec"
+    );
+    assert_eq!(
+        map.variant_payload_types.get("Outcome").and_then(|v| v.get("NestedVec")),
+        Some(&("_0".to_string(), "Entry".to_string())),
+        "named_type recurses through both Vec layers to the innermost named element"
+    );
+
+    assert!(
+        map.variant_payload_is_collection
+            .get("Outcome")
+            .is_some_and(|variants| variants.contains("OptionalVec")),
+        "Option<Vec<Entry>> classifies as a collection payload via is_vec_type's Optional unwrap"
+    );
+    assert_eq!(
+        map.variant_payload_types.get("Outcome").and_then(|v| v.get("OptionalVec")),
+        Some(&("_0".to_string(), "Entry".to_string())),
+        "named_type unwraps Option then Vec to the same named element"
+    );
+}

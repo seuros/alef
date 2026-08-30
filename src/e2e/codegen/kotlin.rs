@@ -16,6 +16,9 @@ use std::path::PathBuf;
 use super::E2eCodegen;
 
 mod args;
+mod assertion_field_gates;
+mod assertion_scalar_context;
+mod assertion_scalar_dispatch;
 mod assertions;
 mod call_field_resolver;
 mod discriminated;

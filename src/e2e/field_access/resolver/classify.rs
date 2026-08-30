@@ -1,7 +1,8 @@
+mod collection;
+mod enum_union;
 mod swift_leaf;
 
-use super::super::ir_collection::{element_type_at_path, is_collection_path};
-use super::super::ir_enum::{enum_type_at_path, is_enum_path};
+use super::super::ir_collection::is_collection_path;
 use super::super::leaf_anchor::LeafAnchor;
 use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
@@ -743,140 +744,6 @@ impl FieldResolver {
         }
         let de_indexed = strip_numeric_indices(path);
         de_indexed != path && json_scalar_fields.contains(de_indexed.as_str())
-    }
-
-    /// Check whether `field` is enum-typed: an explicit `fields_enum` config entry (exact or
-    /// alias-resolved) always wins, and — when the config is silent — the IR-derived
-    /// classification (`with_ir_enum_map`) gets the final say. See `ir_enum` module docs for
-    /// why the IR check has to walk the whole path rather than matching on the leaf name
-    /// alone.
-    pub fn is_enum(&self, field: &str) -> bool {
-        let resolved = self.resolve(field);
-        if self.enum_fields.contains(field) || self.enum_fields.contains(resolved) {
-            return true;
-        }
-        is_enum_path(&self.ir_enum_map, resolved)
-    }
-
-    /// Resolve the concrete IR enum type name backing `field`'s leaf segment, when the IR
-    /// walk (see `ir_enum` module docs) positively confirms it. `None` covers both "the IR
-    /// doesn't know" (unresolved root type, config-only classification) and "not an enum
-    /// field" — callers that need to distinguish those must call `is_enum` first.
-    ///
-    /// Used by backends whose emitted accessor for an enum-typed field depends on which
-    /// concrete Rust representation that specific enum has (e.g. Java's plain-enum-with-
-    /// `getValue()` vs. tagged/untagged-union-wrapper split), not just "is this field an
-    /// enum" in the abstract.
-    pub fn ir_enum_type_name(&self, field: &str) -> Option<String> {
-        let resolved = self.resolve(field);
-        enum_type_at_path(&self.ir_enum_map, resolved)
-    }
-
-    /// The single field a tagged-union variant carries, as `(field_name, payload_type_name)`,
-    /// per [`super::super::ir_enum::build_ir_enum_map`]'s `variant_payload_types`.
-    ///
-    /// Meant to be called with the union type name [`Self::ir_enum_type_name`] resolves for a
-    /// [`Self::tagged_union_split`] prefix, and the variant segment that split returned, so a
-    /// caller can keep walking a fixture path's suffix through the variant's own payload type
-    /// once it has narrowed to that variant — the same shape `metadata.format.excel.sheet_count`
-    /// needs after splitting into `("metadata.format", "excel", "sheet_count")`: this answers
-    /// which type `sheet_count` continues into. Returns `None` for a variant with zero fields
-    /// (nothing to narrow into) or more than one (no single payload type), or when the IR never
-    /// described the union type at all.
-    pub fn union_variant_payload(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
-        self.ir_enum_map
-            .variant_payload_types
-            .get(union_type)?
-            .get(variant)
-            .map(|(field_name, type_name)| (field_name.as_str(), type_name.as_str()))
-    }
-
-    /// Whether `variant`'s single payload field (per [`Self::union_variant_payload`]) is itself
-    /// `Vec`-typed (`Variant(Vec<Item>)`) rather than a struct that merely wraps a collection
-    /// field (`Variant(Payload)`, where `Payload.items: Vec<Item>`).
-    ///
-    /// A fixture path that names only the union field and the variant, with no field inside the
-    /// payload (e.g. `outcome.found`, split by [`Self::ir_tagged_union_split`] into a prefix,
-    /// `union_type`, `variant`, and an EMPTY suffix), is asserting against the payload value
-    /// itself. [`Self::union_variant_field_is_collection`] cannot answer that: it requires a
-    /// non-empty field name to walk the payload type's own fields, and correctly answers `false`
-    /// for an empty one. This is the distinct question a caller must ask instead once it finds
-    /// the suffix is empty — see `csharp`/`kotlin`'s `try_render_generic_union_assertion`. ~keep
-    pub fn union_variant_payload_is_collection(&self, union_type: &str, variant: &str) -> bool {
-        self.ir_enum_map
-            .variant_payload_is_collection
-            .get(union_type)
-            .is_some_and(|variants| variants.contains(variant))
-    }
-
-    /// The serde discriminator key and wire value for a concrete tagged-enum variant.
-    pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
-        let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;
-        Some((wire.tag.as_str(), wire.variants.get(variant)?.as_str()))
-    }
-
-    /// Whether the Java binding backend emits a `getValue()` accessor for the enum type
-    /// backing `field`, per `backends::java::gen_bindings::emits_get_value`. `None` when the
-    /// IR does not positively resolve `field` to a concrete enum type (unresolved root type,
-    /// or a field classified as enum only via the hand-maintained `fields_enum` config) — the
-    /// caller must decide its own fallback for "unknown" rather than this method guessing.
-    pub fn java_enum_emits_get_value(&self, field: &str) -> Option<bool> {
-        let name = self.ir_enum_type_name(field)?;
-        Some(!self.java_wrapper_enum_names.contains(&name))
-    }
-
-    /// Whether Ruby's Magnus binding backend lowers the enum type backing `field`'s leaf segment
-    /// to a plain `Hash` (per `ruby_hash_serialized_enum_names`) rather than a `Symbol`. `None`
-    /// when the IR does not positively resolve `field` to a concrete enum type at all (unresolved
-    /// root type, a path segment the IR does not recognize, or a field classified as enum only
-    /// via the hand-maintained `fields_enum` config) — the caller decides its own fallback for
-    /// "unknown" rather than this method guessing.
-    pub fn ruby_enum_serialized_as_hash(&self, field: &str) -> Option<bool> {
-        let name = self.ir_enum_type_name(field)?;
-        Some(self.ruby_hash_serialized_enum_names.contains(&name))
-    }
-
-    /// Check if a field name is the root of a collection type (i.e., the field
-    /// itself returns a `Vec`/array, even though it is not in `fields_array`
-    /// directly).
-    ///
-    /// `fields_array` tracks traversal paths like `choices[0].message.tool_calls`
-    /// — the array element paths — not the bare collection accessor (`choices`).
-    /// `fields_optional` may also contain paths like `data[0].url` that reveal
-    /// `data` is a collection root.
-    ///
-    /// Returns `true` when any entry in `array_fields` or `optional_fields`
-    /// starts with `{field}[`, indicating that `field` is the top-level
-    /// collection getter — and, when config is silent, falls back to the
-    /// IR-derived classification (`with_ir_collection_map`) the same way `is_enum` falls back
-    /// to `with_ir_enum_map`. A field with no per-element path declared anywhere in the fixture
-    /// suite (e.g. a recursive `List<T> Children` nothing ever indexes into) has no config
-    /// signal at all, so without this fallback a caller deciding whether to serialize the field
-    /// for `is_empty`/`contains` would wrongly fall through to a raw `ToString()`-style check.
-    /// ~keep
-    pub fn is_collection_root(&self, field: &str) -> bool {
-        let prefix = format!("{field}[");
-        if self.array_fields.iter().any(|af| af.starts_with(&prefix))
-            || self.optional_fields.iter().any(|of| of.starts_with(&prefix))
-        {
-            return true;
-        }
-        let resolved = self.resolve(field);
-        is_collection_path(&self.ir_collection_map, resolved)
-    }
-
-    /// The IR type name `field`'s elements are, when `field` is a collection reachable from the
-    /// call's own anchored root — e.g. `"rows"` on a `Vec<Row>` field resolves to `"Row"`.
-    ///
-    /// Used to anchor validation of an `Iterate` operation's per-item field names against the
-    /// LOOP ITEM's own type, rather than the call's result type: `default_operations_from_assertions`
-    /// already documents why the latter is the wrong anchor for them. `None` when the IR cannot
-    /// resolve the element type (no anchored root, an unrecognized field, a collection of a
-    /// scalar or foreign type) — callers must treat that as "no answer, don't reject" like every
-    /// other IR oracle here.
-    pub fn collection_element_type(&self, field: &str) -> Option<String> {
-        let resolved = self.resolve(field);
-        element_type_at_path(&self.ir_collection_map, resolved)
     }
 
     /// Whether `field_name` is a binding-visible member of the IR type named `type_name`,

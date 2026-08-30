@@ -82,6 +82,11 @@ pub(super) fn parse_discriminated_union_access(field: &str) -> Option<(String, S
 /// consumer's fixtures happens to wrap a type named `<Variant>Metadata`, but the property
 /// name is a per-variant fact (see `kotlin_field_name_with_type` and its callers), not a
 /// universal constant, so it is a parameter rather than baked in here.
+///
+/// ~keep Split into `render_bare_variant_payload_assertion` (no inner field — assert against the
+/// payload value itself) and `render_discriminated_scalar_assertion` (the per-assertion-type
+/// match) to stay under the file's function-length cap. Every statement below is a verbatim
+/// extraction from the original single function; no behavior changed.
 pub(super) fn render_discriminated_union_assertion(
     out: &mut String,
     assertion: &Assertion,
@@ -90,26 +95,8 @@ pub(super) fn render_discriminated_union_assertion(
     inner_field: &str,
     field_is_collection: bool,
 ) {
-    // No field inside the payload — the fixture asserts against the payload VALUE itself (e.g.
-    // `outcome.found` where `Found` wraps `Vec<Item>` directly, rather than a struct with an
-    // inner field). `field_is_collection` here comes from `union_variant_payload_is_collection`
-    // (the caller switches source per `Self::union_variant_field_is_collection`'s doc comment),
-    // so `count_min` is the one assertion type this shape can substantiate today; every other
-    // shape stays the same registered skip a callsite bug used to render as nothing at all. ~keep
     if inner_field.is_empty() {
-        if assertion.assertion_type == "count_min" && field_is_collection {
-            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
-                let payload_expr = format!("{variant_var}.{payload_field}!!");
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({payload_expr}.size >= {count}, \"expected count >= {count}\")"
-                );
-            } else {
-                render_unsupported_assertion(out, assertion);
-            }
-        } else {
-            render_unsupported_assertion(out, assertion);
-        }
+        render_bare_variant_payload_assertion(out, assertion, variant_var, payload_field, field_is_collection);
         return;
     }
 
@@ -121,98 +108,54 @@ pub(super) fn render_discriminated_union_assertion(
     // arithmetic and ordering operators (`>=`, `>`, etc.) on the receiver.
     let field_expr = format!("{variant_var}.{payload_field}.{field_camel}!!");
 
+    render_discriminated_scalar_assertion(out, assertion, &field_expr, field_is_collection);
+}
+
+/// No field inside the payload — the fixture asserts against the payload VALUE itself (e.g.
+/// `outcome.found` where `Found` wraps `Vec<Item>` directly, rather than a struct with an inner
+/// field). `field_is_collection` here comes from `union_variant_payload_is_collection` (the
+/// caller switches source per `Self::union_variant_field_is_collection`'s doc comment), so
+/// `count_min` is the one assertion type this shape can substantiate today; every other shape
+/// stays the same registered skip a callsite bug used to render as nothing at all. ~keep
+fn render_bare_variant_payload_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    variant_var: &str,
+    payload_field: &str,
+    field_is_collection: bool,
+) {
+    if assertion.assertion_type == "count_min" && field_is_collection {
+        if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+            let payload_expr = format!("{variant_var}.{payload_field}!!");
+            let _ = writeln!(
+                out,
+                "                assertTrue({payload_expr}.size >= {count}, \"expected count >= {count}\")"
+            );
+        } else {
+            render_unsupported_assertion(out, assertion);
+        }
+    } else {
+        render_unsupported_assertion(out, assertion);
+    }
+}
+
+/// Dispatch on assertion type once `field_expr` (the variant's inner-field accessor) is known.
+/// `not_empty`/`is_empty` stay inline — each is a single statement — every other arm is a
+/// verbatim-extracted helper. ~keep
+fn render_discriminated_scalar_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field_expr: &str,
+    field_is_collection: bool,
+) {
     match assertion.assertion_type.as_str() {
-        "equals" => {
-            if let Some(expected) = &assertion.value {
-                let kt_val = json_to_kotlin(expected);
-                if expected.is_string() {
-                    let _ = writeln!(
-                        out,
-                        "                assertEquals({kt_val}, {field_expr}.trim(), \"expected: {}\")",
-                        escape_kotlin(expected.as_str().unwrap_or(""))
-                    );
-                } else if expected.as_bool() == Some(true) {
-                    let _ = writeln!(
-                        out,
-                        "                assertTrue({field_expr} == true, \"expected true\")"
-                    );
-                } else if expected.as_bool() == Some(false) {
-                    let _ = writeln!(
-                        out,
-                        "                assertTrue({field_expr} == false, \"expected false\")"
-                    );
-                } else {
-                    let _ = writeln!(
-                        out,
-                        "                assertEquals({kt_val}, {field_expr}, \"expected: {kt_val}\")"
-                    );
-                }
-            }
-        }
-        "greater_than_or_equal" => {
-            if let Some(val) = &assertion.value {
-                let kt_val = json_to_kotlin(val);
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr} >= {kt_val}, \"expected >= {kt_val}\")"
-                );
-            }
-        }
-        "less_than_or_equal" => {
-            if let Some(val) = &assertion.value {
-                let kt_val = json_to_kotlin(val);
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr} <= {kt_val}, \"expected <= {kt_val}\")"
-                );
-            }
-        }
-        "greater_than" => {
-            if let Some(val) = &assertion.value {
-                let kt_val = json_to_kotlin(val);
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr} > {kt_val}, \"expected > {kt_val}\")"
-                );
-            }
-        }
-        "less_than" => {
-            if let Some(val) = &assertion.value {
-                let kt_val = json_to_kotlin(val);
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr} < {kt_val}, \"expected < {kt_val}\")"
-                );
-            }
-        }
-        "contains" => {
-            if let Some(expected) = &assertion.value
-                && let Some(s) = expected.as_str()
-            {
-                let lower = s.to_lowercase();
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
-                    escape_kotlin(&lower),
-                    escape_kotlin(s)
-                );
-            }
-        }
-        "contains_all" => {
-            if let Some(values) = &assertion.values {
-                for val in values {
-                    if let Some(s) = val.as_str() {
-                        let lower = s.to_lowercase();
-                        let _ = writeln!(
-                            out,
-                            "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
-                            escape_kotlin(&lower),
-                            escape_kotlin(s)
-                        );
-                    }
-                }
-            }
-        }
+        "equals" => render_discriminated_equals(out, assertion, field_expr),
+        "greater_than_or_equal" => render_discriminated_greater_than_or_equal(out, assertion, field_expr),
+        "less_than_or_equal" => render_discriminated_less_than_or_equal(out, assertion, field_expr),
+        "greater_than" => render_discriminated_greater_than(out, assertion, field_expr),
+        "less_than" => render_discriminated_less_than(out, assertion, field_expr),
+        "contains" => render_discriminated_contains(out, assertion, field_expr),
+        "contains_all" => render_discriminated_contains_all(out, assertion, field_expr),
         "not_empty" => {
             let _ = writeln!(
                 out,
@@ -225,25 +168,187 @@ pub(super) fn render_discriminated_union_assertion(
                 "                assertTrue({field_expr}.toString().isEmpty(), \"expected empty value\")"
             );
         }
-        "count_min" if field_is_collection => {
-            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
-                let _ = writeln!(
-                    out,
-                    "                assertTrue({field_expr}.size >= {count}, \"expected count >= {count}\")"
-                );
-            } else {
-                render_unsupported_assertion(out, assertion);
-            }
-        }
+        "count_min" if field_is_collection => render_discriminated_count_min(out, assertion, field_expr),
         _ => {
             render_unsupported_assertion(out, assertion);
         }
     }
 }
 
+fn render_discriminated_equals(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(expected) = &assertion.value {
+        let kt_val = json_to_kotlin(expected);
+        if expected.is_string() {
+            let _ = writeln!(
+                out,
+                "                assertEquals({kt_val}, {field_expr}.trim(), \"expected: {}\")",
+                escape_kotlin(expected.as_str().unwrap_or(""))
+            );
+        } else if expected.as_bool() == Some(true) {
+            let _ = writeln!(
+                out,
+                "                assertTrue({field_expr} == true, \"expected true\")"
+            );
+        } else if expected.as_bool() == Some(false) {
+            let _ = writeln!(
+                out,
+                "                assertTrue({field_expr} == false, \"expected false\")"
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "                assertEquals({kt_val}, {field_expr}, \"expected: {kt_val}\")"
+            );
+        }
+    }
+}
+
+fn render_discriminated_greater_than_or_equal(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(val) = &assertion.value {
+        let kt_val = json_to_kotlin(val);
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr} >= {kt_val}, \"expected >= {kt_val}\")"
+        );
+    }
+}
+
+fn render_discriminated_less_than_or_equal(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(val) = &assertion.value {
+        let kt_val = json_to_kotlin(val);
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr} <= {kt_val}, \"expected <= {kt_val}\")"
+        );
+    }
+}
+
+fn render_discriminated_greater_than(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(val) = &assertion.value {
+        let kt_val = json_to_kotlin(val);
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr} > {kt_val}, \"expected > {kt_val}\")"
+        );
+    }
+}
+
+fn render_discriminated_less_than(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(val) = &assertion.value {
+        let kt_val = json_to_kotlin(val);
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr} < {kt_val}, \"expected < {kt_val}\")"
+        );
+    }
+}
+
+fn render_discriminated_contains(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(expected) = &assertion.value
+        && let Some(s) = expected.as_str()
+    {
+        let lower = s.to_lowercase();
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
+            escape_kotlin(&lower),
+            escape_kotlin(s)
+        );
+    }
+}
+
+fn render_discriminated_contains_all(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(values) = &assertion.values {
+        for val in values {
+            if let Some(s) = val.as_str() {
+                let lower = s.to_lowercase();
+                let _ = writeln!(
+                    out,
+                    "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
+                    escape_kotlin(&lower),
+                    escape_kotlin(s)
+                );
+            }
+        }
+    }
+}
+
+fn render_discriminated_count_min(out: &mut String, assertion: &Assertion, field_expr: &str) {
+    if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+        let _ = writeln!(
+            out,
+            "                assertTrue({field_expr}.size >= {count}, \"expected count >= {count}\")"
+        );
+    } else {
+        render_unsupported_assertion(out, assertion);
+    }
+}
+
 fn render_unsupported_assertion(out: &mut String, assertion: &Assertion) {
     let reason = AssertionTypeSkip::DiscriminatedUnionAssertionTypeNotSupported.message(&assertion.assertion_type);
     let _ = writeln!(out, "                // skipped: {reason}");
+}
+
+/// An empty suffix means the fixture path named only the variant — no field is checked, so
+/// `union_variant_field_is_collection` (which requires a non-empty field name) always answers
+/// `false` for it. Whether the variant's PAYLOAD itself is a collection is a different,
+/// IR-backed question for that shape. Shared shape with csharp's identically-named helper —
+/// each backend keeps its own copy since they are separate modules with no shared parent for
+/// this cross-backend concern. ~keep
+fn resolve_union_field_is_collection(
+    field_resolver: &FieldResolver,
+    prefix: &str,
+    union_type: &str,
+    variant: &str,
+    suffix: &str,
+) -> bool {
+    if suffix.is_empty() {
+        field_resolver.union_variant_payload_is_collection(union_type, variant)
+    } else {
+        field_resolver.union_variant_field_is_collection(prefix, variant, suffix)
+    }
+}
+
+/// The union-traversal skip for a variant whose IR-declared payload `try_render_generic_union_assertion`
+/// could not resolve to a single named field (`union_variant_payload` returned `None`). ~keep
+fn render_union_traversal_not_implemented_skip(out: &mut String, f: &str) {
+    let _ = writeln!(
+        out,
+        "        // skipped: {}",
+        FieldSkip::UnionTraversalNotImplementedForKotlin.message(f)
+    );
+}
+
+/// Resolve the Kotlin-specific binding for a matched union variant: the `when` binding name, the
+/// container accessor to narrow, and the sealed-subclass property that carries the variant's
+/// payload (kotlin vs. kotlin_android accessor style differs; the payload property name is
+/// resolved from the IR via `kotlin_field_name_with_type`, the same helper the Kotlin binding
+/// backend itself uses to name it). Split out of `try_render_generic_union_assertion` to keep it
+/// under the file's function-length cap — verbatim extraction, no behavior change. ~keep
+fn resolve_kotlin_union_variant_binding(
+    field_resolver: &FieldResolver,
+    prefix: &str,
+    variant_pascal: &str,
+    payload_field_name: &str,
+    payload_type: &str,
+    result_var: &str,
+    kotlin_android_style: bool,
+) -> (String, String, String) {
+    let style = if kotlin_android_style {
+        "kotlin_android"
+    } else {
+        "kotlin"
+    };
+    let variant_var = format!("union{variant_pascal}");
+    let container = field_resolver.accessor(prefix, style, result_var);
+    let payload_field = crate::backends::kotlin::kotlin_field_name_with_type(
+        payload_field_name,
+        0,
+        Some(payload_type),
+        variant_pascal,
+        1,
+    );
+    (variant_var, container, payload_field)
 }
 
 /// The IR-general sealed-class narrowing path: recognizes ANY tagged union
@@ -278,41 +383,25 @@ pub(super) fn try_render_generic_union_assertion(
     };
     let Some((payload_field_name, payload_type)) = field_resolver.union_variant_payload(&union_type, &variant_pascal)
     else {
-        let _ = writeln!(
-            out,
-            "        // skipped: {}",
-            FieldSkip::UnionTraversalNotImplementedForKotlin.message(f)
-        );
+        render_union_traversal_not_implemented_skip(out, f);
         return true;
     };
     let payload_field_name = payload_field_name.to_string();
     let payload_type = payload_type.to_string();
 
-    let style = if kotlin_android_style {
-        "kotlin_android"
-    } else {
-        "kotlin"
-    };
-    let variant_var = format!("union{variant_pascal}");
-    let container = field_resolver.accessor(&prefix, style, result_var);
-    let payload_field = crate::backends::kotlin::kotlin_field_name_with_type(
-        &payload_field_name,
-        0,
-        Some(&payload_type),
+    let (variant_var, container, payload_field) = resolve_kotlin_union_variant_binding(
+        field_resolver,
+        &prefix,
         &variant_pascal,
-        1,
+        &payload_field_name,
+        &payload_type,
+        result_var,
+        kotlin_android_style,
     );
     let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
     let _ = writeln!(out, "            is {union_type}.{variant_pascal} -> {{");
-    // An empty suffix means the fixture path named only the variant — no field is checked, so
-    // `union_variant_field_is_collection` (which requires a non-empty field name) always
-    // answers `false` for it. Whether the variant's PAYLOAD itself is a collection is a
-    // different, IR-backed question for that shape. ~keep
-    let field_is_collection = if suffix.is_empty() {
-        field_resolver.union_variant_payload_is_collection(&union_type, &variant_pascal)
-    } else {
-        field_resolver.union_variant_field_is_collection(&prefix, &variant_pascal, &suffix)
-    };
+    let field_is_collection =
+        resolve_union_field_is_collection(field_resolver, &prefix, &union_type, &variant_pascal, &suffix);
     render_discriminated_union_assertion(
         out,
         assertion,
@@ -387,6 +476,16 @@ mod tests {
                         "_0",
                         TypeRef::Vec(Box::new(TypeRef::Named("FoundEntry".to_string()))),
                     )],
+                    ..EnumVariant::default()
+                },
+                // A tuple variant whose single field is `Vec<primitive>` — no element type
+                // name for `named_type` to resolve, so `variant_payload_types` (and therefore
+                // `variant_payload_is_collection`) never records it at all: this shape stays
+                // out of scope for the count_min-on-bare-payload fix and must fall through to
+                // the pre-existing "union traversal not implemented" skip. ~keep
+                EnumVariant {
+                    name: "Numbers".to_string(),
+                    fields: vec![field("_0", TypeRef::Vec(Box::new(TypeRef::String)))],
                     ..EnumVariant::default()
                 },
             ],
@@ -550,6 +649,41 @@ mod tests {
                 "            }\n",
                 "            else -> kotlin.test.assertTrue(false, \"Expected Web variant\")\n",
                 "        }\n",
+            )
+        );
+    }
+
+    /// Scope-limit control: `Numbers(Vec<String>)` — a tuple variant whose payload is
+    /// `Vec<primitive>` rather than `Vec<NamedType>` — has no entry in
+    /// `variant_payload_types` at all (`named_type` cannot resolve a primitive element), so it
+    /// is out of scope for `union_variant_payload_is_collection` and must fall through to the
+    /// PRE-EXISTING "union traversal not implemented" skip. This proves the documented
+    /// scope limit is a real, visible, registered skip — not a silent drop like the bug this
+    /// change fixed.
+    #[test]
+    fn bare_union_variant_with_primitive_vec_payload_stays_a_registered_skip_not_silence() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.numbers".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            true,
+            "details.numbers",
+        ));
+        assert!(!out.is_empty(), "must never render nothing at all");
+        assert_eq!(
+            out,
+            concat!(
+                "        // skipped: field 'details.numbers' crosses a tagged-union variant ",
+                "boundary alef does not yet lower for this variant shape in Kotlin\n",
             )
         );
     }
