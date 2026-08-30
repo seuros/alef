@@ -358,6 +358,9 @@ impl E2eCodegen for JavaCodegen {
 }
 
 mod args;
+mod assertion_result_shape;
+mod assertion_streaming_fields;
+mod assertion_synthetic_fields;
 mod assertion_wildcard;
 mod assertions;
 mod field_shape;
@@ -378,6 +381,8 @@ mod assertion_enum_field_classification_tests;
 mod assertion_indentation_layout_tests;
 #[cfg(test)]
 mod assertion_object_shape_tests;
+#[cfg(test)]
+mod assertion_render_tests;
 #[cfg(test)]
 mod assertion_union_enum_field_classification_tests;
 #[cfg(test)]
