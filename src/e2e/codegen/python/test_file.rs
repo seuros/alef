@@ -7,6 +7,12 @@ mod import_lines;
 #[cfg(test)]
 #[path = "lint_clean_python_tests.rs"]
 mod lint_clean_python_tests;
+// Split out to claw back headroom under the file-size ratchet's baselined ceiling for this
+// file (see `tests/file_size_baseline.txt`) -- these tests have no dependency on anything else
+// in `mod tests` below, so they move cleanly. ~keep
+#[cfg(test)]
+#[path = "test_file_misc_tests.rs"]
+mod test_file_misc_tests;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as FmtWrite;
@@ -748,32 +754,6 @@ fn public_import_names<'a>(import_names: &'a [String], native_imports: &BTreeSet
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::e2e::escape::sanitize_filename;
-    use crate::e2e::fixture::FixtureGroup;
-
-    fn test_filenames(groups: &[FixtureGroup]) -> Vec<String> {
-        groups
-            .iter()
-            .map(|g| format!("test_{}.py", sanitize_filename(&g.category)))
-            .collect()
-    }
-
-    #[test]
-    fn test_filenames_produces_snake_case_names() {
-        let groups = vec![
-            FixtureGroup {
-                category: "MyCategory".to_string(),
-                fixtures: Vec::new(),
-            },
-            FixtureGroup {
-                category: "another-thing".to_string(),
-                fixtures: Vec::new(),
-            },
-        ];
-        let names = test_filenames(&groups);
-        assert_eq!(names[0], "test_mycategory.py");
-        assert_eq!(names[1], "test_another_thing.py");
-    }
 
     #[test]
     fn render_test_file_no_fixtures_produces_header_only() {
@@ -794,19 +774,6 @@ mod tests {
             false,
         );
         assert!(out.contains("E2e tests for category: basic"), "got: {out}");
-    }
-
-    #[test]
-    fn per_call_native_types_are_excluded_from_public_imports() {
-        let import_names = vec!["create_client".to_string(), "WidgetRequest".to_string()];
-        let native_imports = [("my_lib._internal_bindings".to_string(), "WidgetRequest".to_string())]
-            .into_iter()
-            .collect();
-
-        assert_eq!(
-            public_import_names(&import_names, &native_imports),
-            vec!["create_client"]
-        );
     }
 
     /// Direct coverage of the import-deduplication fix on `build_thirdparty_imports`'s
