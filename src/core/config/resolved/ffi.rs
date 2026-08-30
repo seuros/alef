@@ -1,6 +1,6 @@
 //! FFI-related methods for `ResolvedCrateConfig`.
 
-use crate::core::config::KotlinFfiStyle;
+use crate::core::config::{KotlinFfiStyle, abi_grammar};
 
 use super::ResolvedCrateConfig;
 
@@ -67,7 +67,9 @@ impl ResolvedCrateConfig {
     /// 2. Directory name of the user-supplied `[crates.output] ffi` path with
     ///    hyphens replaced by underscores (e.g. `crates/sample-markdown-ffi/src/`
     ///    → `sample_markdown_ffi`). Walks components from the end and skips
-    ///    `src`/`lib`/`include` to find the crate directory.
+    ///    `src`/`lib`/`include` to find the crate directory. A component that is
+    ///    not a valid native artifact basename is an output layout only and is
+    ///    not used as library identity.
     /// 3. `{ffi_prefix}_ffi` fallback
     pub fn ffi_lib_name(&self) -> String {
         if let Some(name) = self.ffi.as_ref().and_then(|f| f.lib_name.as_ref()) {
@@ -87,11 +89,28 @@ impl ResolvedCrateConfig {
                 .rev()
                 .find(|&s| s != "src" && s != "lib" && s != "include");
             if let Some(dir) = crate_dir {
-                return dir.replace('-', "_");
+                let candidate = dir.replace('-', "_");
+                if abi_grammar::validate_native_artifact_basename(&candidate).is_ok() {
+                    return candidate;
+                }
             }
         }
 
         format!("{}_ffi", self.ffi_prefix())
+    }
+
+    /// Whether the effective e2e language set enables the generated C harness.
+    pub(crate) fn c_e2e_enabled(&self) -> bool {
+        let Some(e2e) = self.e2e.as_ref() else {
+            return false;
+        };
+        if e2e.languages.is_empty() {
+            crate::e2e::default_e2e_languages(&self.languages)
+                .iter()
+                .any(|language| language == "c")
+        } else {
+            e2e.languages.iter().any(|language| language == "c")
+        }
     }
 
     /// Get the FFI header name.
@@ -349,6 +368,24 @@ ffi = "crates/sample-markdown-ffi/src/"
 "#,
         );
         assert_eq!(r.ffi_lib_name(), "sample_markdown_ffi");
+    }
+
+    #[test]
+    fn ffi_lib_name_ignores_output_component_that_is_not_an_artifact_name() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+ffi = "/tmp/.generated/src/"
+"#,
+        );
+        assert_eq!(r.ffi_lib_name(), "my_lib_ffi");
     }
 
     #[test]

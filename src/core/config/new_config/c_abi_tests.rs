@@ -20,8 +20,8 @@ sources = ["src/lib.rs"]
 }
 
 #[test]
-fn resolve_rejects_make_active_derived_ffi_library_name() {
-    let error = resolve_error_for(
+fn make_active_output_component_does_not_become_ffi_library_name() {
+    let config: NewAlefConfig = toml::from_str(
         r#"
 [workspace]
 languages = ["ffi"]
@@ -31,8 +31,13 @@ sources = ["src/lib.rs"]
 [crates.output]
 ffi = "crates/$(shell-payload)/src"
 "#,
-    );
-    assert!(error.contains("effective C-ABI lib_name"), "{error}");
+    )
+    .expect("test config parses");
+    let resolved = config
+        .resolve()
+        .expect("output layout is not a library identifier")
+        .remove(0);
+    assert_eq!(resolved.ffi_lib_name(), "sample_core_ffi");
 }
 
 #[test]
@@ -49,10 +54,17 @@ fn resolve_rejects_repository_escaping_c_package_path() {
 
 #[test]
 fn resolve_rejects_c_call_overrides_that_break_target_grammars() {
-    let bad_prefix = resolve_error_for(&c_override_config("e2e.call", "int", "../escape.h"));
+    let bad_prefix = resolve_error_for(&c_override_config("e2e.call", "bad-prefix", "sample.h"));
     assert!(bad_prefix.contains("e2e.call.overrides.c.prefix"), "{bad_prefix}");
     let bad_header = resolve_error_for(&c_override_config("e2e.call", "sample_core", "../escape.h"));
     assert!(bad_header.contains("e2e.call.overrides.c.header"), "{bad_header}");
+}
+
+#[test]
+fn resolve_accepts_reserved_word_as_compositional_c_call_prefix() {
+    let config: NewAlefConfig =
+        toml::from_str(&c_override_config("e2e.call", "int", "sample.h")).expect("test config parses");
+    config.resolve().expect("prefix is composed into longer C symbols");
 }
 
 #[test]
@@ -68,7 +80,7 @@ fn resolve_uses_effective_e2e_languages_for_c_validation() {
 
 #[test]
 fn resolve_validates_named_c_call_overrides() {
-    let error = resolve_error_for(&c_override_config("e2e.calls.secondary", "int", "sample.h"));
+    let error = resolve_error_for(&c_override_config("e2e.calls.secondary", "bad-prefix", "sample.h"));
     assert!(error.contains("e2e.calls.secondary.overrides.c.prefix"), "{error}");
 }
 

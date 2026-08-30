@@ -100,7 +100,7 @@ pub fn package_c_ffi(
 
 fn copy_required_headers(config: &ResolvedCrateConfig, ffi_crate_dir: &Path, include_dir: &Path) -> Result<()> {
     let source_dir = ffi_crate_dir.join("include");
-    for header_name in required_header_names(config) {
+    for header_name in required_header_names(config)? {
         let source = source_dir.join(&header_name);
         fs::copy(&source, include_dir.join(&header_name))
             .with_context(|| format!("copying required C FFI header {}", source.display()))?;
@@ -108,17 +108,21 @@ fn copy_required_headers(config: &ResolvedCrateConfig, ffi_crate_dir: &Path, inc
     Ok(())
 }
 
-fn required_header_names(config: &ResolvedCrateConfig) -> BTreeSet<String> {
+fn required_header_names(config: &ResolvedCrateConfig) -> Result<BTreeSet<String>> {
     let mut headers = BTreeSet::from([config.ffi_header_name()]);
-    let Some(e2e) = config.e2e.as_ref() else {
-        return headers;
+    if !config.c_e2e_enabled() {
+        return Ok(headers);
     };
+    let e2e = config.e2e.as_ref().context("C e2e enabled without e2e config")?;
     for call in std::iter::once(&e2e.call).chain(e2e.calls.values()) {
         if let Some(header) = call.overrides.get("c").and_then(|override_| override_.header.as_ref()) {
+            crate::core::config::abi_grammar::validate_c_header_filename(header)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("validating required C e2e header `{header}`"))?;
             headers.insert(header.clone());
         }
     }
-    headers
+    Ok(headers)
 }
 
 fn publish_lang_config(config: &ResolvedCrateConfig) -> crate::core::config::publish::PublishLanguageConfig {
@@ -220,5 +224,87 @@ header = "sample_batch.h"
 
         assert_eq!(fs::read_to_string(output.join("sample.h")).unwrap(), "canonical");
         assert_eq!(fs::read_to_string(output.join("sample_batch.h")).unwrap(), "batch");
+    }
+
+    #[test]
+    fn package_header_stage_ignores_inactive_c_overrides() {
+        let config: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+
+[crates.e2e]
+languages = ["python"]
+
+[crates.e2e.call]
+function = "extract"
+
+[crates.e2e.call.overrides.c]
+header = "../../escape.h"
+"#,
+        )
+        .expect("config parses");
+        let resolved = config.resolve().expect("inactive C override is not consumed").remove(0);
+        let directory = TempDir::new().expect("temporary directory");
+        let ffi_dir = directory.path().join("ffi");
+        let output = directory.path().join("package/include");
+        fs::create_dir_all(ffi_dir.join("include")).expect("create source include");
+        fs::create_dir_all(&output).expect("create package include");
+        fs::write(ffi_dir.join("include/sample.h"), "canonical").expect("write canonical header");
+
+        copy_required_headers(&resolved, &ffi_dir, &output).expect("stage active package headers only");
+
+        assert_eq!(fs::read_to_string(output.join("sample.h")).unwrap(), "canonical");
+        assert!(!directory.path().join("escape.h").exists());
+    }
+
+    #[test]
+    fn package_header_stage_rejects_active_escaping_override() {
+        let config: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+
+[crates.e2e]
+languages = ["c"]
+
+[crates.e2e.call]
+function = "extract"
+
+[crates.e2e.call.overrides.c]
+header = "sample.h"
+"#,
+        )
+        .expect("config parses");
+        let mut resolved = config.resolve().expect("valid active config resolves").remove(0);
+        resolved
+            .e2e
+            .as_mut()
+            .unwrap()
+            .call
+            .overrides
+            .get_mut("c")
+            .unwrap()
+            .header = Some("../../escape.h".to_string());
+        let directory = TempDir::new().expect("temporary directory");
+        let error = copy_required_headers(&resolved, directory.path(), directory.path())
+            .expect_err("package staging must validate active headers");
+
+        assert!(error.to_string().contains("validating required C e2e header"));
+        assert!(!directory.path().join("escape.h").exists());
     }
 }

@@ -521,7 +521,7 @@ fn validate_ffi_config(crate_name: &str, ffi: &FfiConfig) -> Result<(), ResolveE
 }
 
 fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), ResolveError> {
-    let c_e2e_enabled = effective_c_e2e_enabled(config);
+    let c_e2e_enabled = config.c_e2e_enabled();
     let uses_c_abi = config.ffi.is_some()
         || c_e2e_enabled
         || config.languages.iter().any(|language| {
@@ -573,19 +573,6 @@ fn validate_all_effective_ffi_configs(config: &ResolvedCrateConfig) -> Result<()
         e2e.dep_mode = super::e2e::DependencyMode::Registry;
     }
     validate_effective_ffi_config(&registry_config)
-}
-
-fn effective_c_e2e_enabled(config: &ResolvedCrateConfig) -> bool {
-    let Some(e2e) = config.e2e.as_ref() else {
-        return false;
-    };
-    if e2e.languages.is_empty() {
-        crate::e2e::default_e2e_languages(&config.languages)
-            .iter()
-            .any(|language| language == "c")
-    } else {
-        e2e.languages.iter().any(|language| language == "c")
-    }
 }
 
 fn validate_effective_c_e2e_config(
@@ -642,7 +629,7 @@ fn validate_c_call_override(
         return Ok(());
     };
     if let Some(prefix) = overrides.prefix.as_deref() {
-        abi_grammar::validate_ascii_abi_identifier(prefix)
+        abi_grammar::validate_ascii_abi_prefix(prefix)
             .map_err(|error| invalid(&format!("{field}.overrides.c.prefix"), prefix, error))?;
     }
     if let Some(header) = overrides.header.as_deref() {
