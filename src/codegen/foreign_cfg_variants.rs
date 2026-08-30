@@ -24,11 +24,11 @@
 //! ledger is worse still, since it is settable once per process and would let one test's run
 //! suppress another's. ~keep
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
-use crate::codegen::cfg::is_host_owned_rust_path;
+use crate::codegen::cfg::{enabled_features_for_language, is_host_owned_rust_path};
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, cfg_feature_satisfied};
 
 fn universally_dropped_variant_references(
     api: &ApiSurface,
@@ -156,20 +156,31 @@ fn host_crate_spellings(api: &ApiSurface, config: &ResolvedCrateConfig, language
     spellings
 }
 
-/// Report every foreign-crate enum variant this run's generators will drop for carrying a
-/// `#[cfg(...)]` no generated binding crate can declare.
+/// Report every reachable or indeterminate foreign-crate enum variant this run's generators will
+/// drop for carrying a `#[cfg(...)]` no generated binding crate can declare.
 ///
 /// Call once per generation run, before the per-language loop. The warning claims something
 /// universal -- *every* generated binding crate drops this variant -- so it fires only when the
 /// enum is foreign under every host-crate spelling the requested languages use. When the
 /// spellings disagree (a `[crate] core_import` facade with Dart or Swift also requested) the
 /// claim is not universal, so the fact stays at DEBUG on the backends that actually drop it
-/// rather than being over-reported here as if it applied to all of them. ~keep
+/// rather than being over-reported here as if it applied to all of them. A gate the canonical cfg
+/// evaluator proves false under every requested language's effective features needs no warning:
+/// the source variant is absent from every corresponding core build anyway. Indeterminate target
+/// predicates remain warnings because absence cannot be proven at generation time. ~keep
 pub fn warn_foreign_cfg_gated_variants(api: &ApiSurface, config: &ResolvedCrateConfig, languages: &[Language]) {
     let host_crates = host_crate_spellings(api, config, languages);
     if host_crates.is_empty() {
         return;
     }
+    let enabled_features = languages
+        .iter()
+        .map(|&language| enabled_features_for_language(config, language))
+        .collect::<Vec<_>>();
+    let enabled_feature_refs = enabled_features
+        .iter()
+        .map(|features| features.iter().map(String::as_str).collect::<HashSet<_>>())
+        .collect::<Vec<_>>();
 
     for enum_def in &api.enums {
         if host_crates
@@ -183,15 +194,21 @@ pub fn warn_foreign_cfg_gated_variants(api: &ApiSurface, config: &ResolvedCrateC
             let Some(cfg) = variant.cfg.as_deref() else {
                 continue;
             };
+            if enabled_feature_refs
+                .iter()
+                .all(|features| !cfg_feature_satisfied(Some(cfg), features))
+            {
+                continue;
+            }
             tracing::warn!(
                 enum_name = %enum_def.name,
                 enum_rust_path = %enum_def.rust_path,
                 variant_name = %variant.name,
                 cfg = cfg,
                 owning_crate = owning_crate,
-                "dropping a foreign-crate enum variant from every generated binding: it is gated \
-                 behind a #[cfg(...)] naming a Cargo feature of its own crate, which no generated \
-                 binding crate can declare without an `unexpected cfg condition value` error. \
+                "dropping a reachable or indeterminate foreign-crate enum variant from every \
+                 generated binding: its #[cfg(...)] gate cannot be re-emitted in generated binding \
+                 crates without an `unexpected cfg condition value` error. \
                  Either source-root the owning crate so alef controls its features, or exclude \
                  the enum. Run with RUST_LOG=alef=debug for the per-backend detail"
             );

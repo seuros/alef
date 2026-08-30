@@ -27,10 +27,43 @@ fn config_for(languages: &[Language]) -> ResolvedCrateConfig {
     config.resolve().expect("fixture alef.toml must resolve").remove(0)
 }
 
+fn config_with_features(language_features: &[(Language, &[&str])]) -> ResolvedCrateConfig {
+    let languages = language_features
+        .iter()
+        .map(|(language, _)| format!("\"{language}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let feature_tables = language_features
+        .iter()
+        .map(|(language, features)| {
+            let features = features
+                .iter()
+                .map(|feature| format!("\"{feature}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[crates.{language}]\nfeatures = [{features}]\n")
+        })
+        .collect::<String>();
+    let toml_src = format!(
+        "[workspace]\nlanguages = [{languages}]\n[[crates]]\nname = \"{HOST_CRATE}\"\n\
+         sources = [\"src/lib.rs\"]\n{feature_tables}"
+    );
+    let config: NewAlefConfig = toml::from_str(&toml_src).expect("fixture alef.toml must parse");
+    config.resolve().expect("fixture alef.toml must resolve").remove(0)
+}
+
 fn gated_variant(name: &str) -> EnumVariant {
     EnumVariant {
         name: name.to_string(),
         cfg: Some(GATE.to_string()),
+        ..Default::default()
+    }
+}
+
+fn gated_variant_with_cfg(name: &str, cfg: &str) -> EnumVariant {
+    EnumVariant {
+        name: name.to_string(),
+        cfg: Some(cfg.to_string()),
         ..Default::default()
     }
 }
@@ -135,7 +168,8 @@ fn generators_do_not_repeat_the_same_dropped_variant_once_per_backend_and_direct
 #[test]
 fn the_run_level_pass_reports_a_dropped_variant_exactly_once() {
     let api = surface(foreign_enum(vec![http_variant(), gated_variant(GATED_VARIANT)]));
-    let config = config_for(&FAN_OUT_LANGUAGES);
+    let language_features = FAN_OUT_LANGUAGES.map(|language| (language, &["ws"][..]));
+    let config = config_with_features(&language_features);
 
     warn_foreign_cfg_gated_variants(&api, &config, &FAN_OUT_LANGUAGES);
     run_every_generator(&api, &config);
@@ -159,7 +193,8 @@ fn two_distinct_dropped_variants_are_each_reported() {
         gated_variant("Quic"),
     ]));
 
-    warn_foreign_cfg_gated_variants(&api, &config_for(&FAN_OUT_LANGUAGES), &FAN_OUT_LANGUAGES);
+    let language_features = FAN_OUT_LANGUAGES.map(|language| (language, &["ws"][..]));
+    warn_foreign_cfg_gated_variants(&api, &config_with_features(&language_features), &FAN_OUT_LANGUAGES);
 
     logs_assert(|lines: &[&str]| {
         let websocket = count_lines_at(lines, "WARN");
@@ -231,6 +266,66 @@ fn a_variant_only_some_backends_drop_is_left_to_the_per_backend_detail() {
     assert!(
         !logs_contain(GATED_VARIANT),
         "a drop that is not universal across the run's backends must not be claimed as universal"
+    );
+}
+
+#[tracing_test::traced_test]
+#[test]
+fn a_test_or_testkit_variant_is_not_reported_when_every_language_enables_only_full() {
+    let languages = [Language::Php, Language::Node];
+    let config = config_with_features(&[(Language::Php, &["full"]), (Language::Node, &["full"])]);
+    let variant = gated_variant_with_cfg(GATED_VARIANT, r#"any(test, feature = "testkit")"#);
+
+    warn_foreign_cfg_gated_variants(&surface(foreign_enum(vec![variant])), &config, &languages);
+
+    assert!(
+        !logs_contain(GATED_VARIANT),
+        "the canonical evaluator proves any(test, testkit) unreachable with only full enabled"
+    );
+}
+
+#[tracing_test::traced_test]
+#[test]
+fn a_variant_enabled_for_the_requested_language_is_reported() {
+    let languages = [Language::Php];
+    let config = config_with_features(&[(Language::Php, &["testkit"])]);
+    let variant = gated_variant_with_cfg(GATED_VARIANT, r#"feature = "testkit""#);
+
+    warn_foreign_cfg_gated_variants(&surface(foreign_enum(vec![variant])), &config, &languages);
+
+    assert!(
+        logs_contain(GATED_VARIANT),
+        "an enabled foreign variant is still dropped and actionable"
+    );
+}
+
+#[tracing_test::traced_test]
+#[test]
+fn a_variant_enabled_for_any_requested_language_is_reported() {
+    let languages = [Language::Php, Language::Node];
+    let config = config_with_features(&[(Language::Php, &["testkit"]), (Language::Node, &["full"])]);
+    let variant = gated_variant_with_cfg(GATED_VARIANT, r#"any(test, feature = "testkit")"#);
+
+    warn_foreign_cfg_gated_variants(&surface(foreign_enum(vec![variant])), &config, &languages);
+
+    assert!(
+        logs_contain(GATED_VARIANT),
+        "one enabled language makes the foreign drop actionable for the run"
+    );
+}
+
+#[tracing_test::traced_test]
+#[test]
+fn a_variant_with_an_unknown_target_predicate_is_reported() {
+    let languages = [Language::Php];
+    let config = config_with_features(&[(Language::Php, &[])]);
+    let variant = gated_variant_with_cfg(GATED_VARIANT, r#"target_os = "windows""#);
+
+    warn_foreign_cfg_gated_variants(&surface(foreign_enum(vec![variant])), &config, &languages);
+
+    assert!(
+        logs_contain(GATED_VARIANT),
+        "an indeterminate target predicate must keep the conservative warning"
     );
 }
 
