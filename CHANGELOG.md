@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resolve the Python wildcard element's `TypedDict`-vs-attribute owner from the same
+  result-relative path the container half is rendered from. On an envelope-projected container
+  (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
+  raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
+  element-anchored classification inert on exactly the projected shapes it was added for.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

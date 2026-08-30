@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::e2e::codegen::python::assertions::render_assertion;
+use crate::e2e::codegen::wildcard_element_fixture::{ENVELOPE_ROOT_TYPE, ROOT_TYPE as REPORT_TYPE, envelope_resolver};
 use crate::e2e::field_access::{FieldResolver, PythonTypedDictMap};
 use crate::e2e::fixture::Assertion;
 
@@ -59,9 +60,13 @@ fn envelope_typeddict_resolver() -> FieldResolver {
 }
 
 fn render(resolver: &FieldResolver) -> String {
+    render_field(resolver, "structure[].kind")
+}
+
+fn render_field(resolver: &FieldResolver, field: &str) -> String {
     let assertion = Assertion {
         assertion_type: "contains".to_string(),
-        field: Some("structure[].kind".to_string()),
+        field: Some(field.to_string()),
         value: Some(serde_json::json!("Function")),
         ..Default::default()
     };
@@ -92,9 +97,14 @@ fn wildcard_element_access_style_is_resolved_independently_of_the_container_leve
     );
 }
 
-/// CONTROL: when the element type is ALSO classified as `TypedDict`, the element half subscripts
-/// too -- proving the fix asks the element's own classification rather than always defaulting to
-/// attribute access.
+/// CONTROL against an OVER-BROAD fix, and nothing more. When the element type is also classified
+/// as `TypedDict`, element and container classify identically, so this expectation is what the
+/// pre-fix root-anchored renderer produced too -- it passes with the fix reverted and therefore
+/// discriminates nothing about anchoring. What it does guard is the opposite failure: a "fix" that
+/// hard-coded attribute access for every element half (or that dropped the map lookup entirely)
+/// would render `_e.kind` here and fail. Keep it as the negative bound on
+/// `wildcard_element_access_style_is_resolved_independently_of_the_container_level` above, which
+/// is the test that actually fails when the anchoring regresses. ~keep
 #[test]
 fn wildcard_element_access_subscripts_when_the_element_type_is_also_a_typeddict() {
     let mut resolver = envelope_typeddict_resolver();
@@ -108,5 +118,110 @@ fn wildcard_element_access_subscripts_when_the_element_type_is_also_a_typeddict(
     assert_eq!(
         rendered,
         "    assert any(\"Function\" in str(_e[\"kind\"]) for _e in (result[\"structure\"] or []))\n"
+    );
+}
+
+/// The IR type of the two-level container's intermediate hop (`SampleResult.metadata`), itself a
+/// `TypedDict` -- so both container hops subscript.
+const NESTED_OWNER_TYPE: &str = "SampleMetadata";
+
+/// The IR type of `metadata.favicons`'s elements. NOT a `TypedDict`, so the element half must be
+/// attribute access even though every container hop above it subscripts.
+const NESTED_ELEMENT_TYPE: &str = "SampleLinkInfo";
+
+/// `SampleResult { metadata: SampleMetadata }`, `SampleMetadata { favicons: Vec<SampleLinkInfo> }`
+/// -- a container path with TWO segments, which is the shape the real consumer report used
+/// (`result["metadata"].favicons` then `_e.rel`) and which neither test above reaches: both use a
+/// single-segment `array_part`, so the element-owner walk's loop only ever runs once for them.
+fn nested_container_resolver() -> FieldResolver {
+    let mut map = PythonTypedDictMap {
+        typeddict_types: HashSet::from([ROOT_TYPE.to_string(), NESTED_OWNER_TYPE.to_string()]),
+        ..Default::default()
+    };
+    map.field_types
+        .entry(ROOT_TYPE.to_string())
+        .or_default()
+        .insert("metadata".to_string(), NESTED_OWNER_TYPE.to_string());
+    map.field_types
+        .entry(NESTED_OWNER_TYPE.to_string())
+        .or_default()
+        .insert("favicons".to_string(), NESTED_ELEMENT_TYPE.to_string());
+
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_python_typeddict_map(map, Some(ROOT_TYPE.to_string()))
+}
+
+/// ACCEPTANCE (two-level container): the element-owner walk must advance through EVERY segment of
+/// the container path, not just the first. Both container hops subscript (`SampleResult` and
+/// `SampleMetadata` are `TypedDict`s) while the element stays attribute access.
+///
+/// Pre-fix -- with the element cursor started at `typeddict_map.root_type` -- this rendered
+/// `_e["rel"]`, since `SampleResult` is a `TypedDict`. A walk that consulted only the FIRST
+/// container segment would land on `SampleMetadata`, also a `TypedDict`, and likewise render
+/// `_e["rel"]`; only advancing all the way to `SampleLinkInfo` produces `_e.rel`. ~keep
+#[test]
+fn wildcard_element_owner_is_resolved_through_every_segment_of_a_nested_container() {
+    let rendered = render_field(&nested_container_resolver(), "metadata.favicons[].rel");
+    assert_eq!(
+        rendered,
+        "    assert any(\"Function\" in str(_e.rel) for _e in (result[\"metadata\"][\"favicons\"] or []))\n"
+    );
+}
+
+/// The IR type of `Report.records`'s elements in the shared envelope fixture.
+const ENVELOPE_ELEMENT_TYPE: &str = "Entry";
+
+/// The shared envelope fixture (`Envelope { results: Vec<Report> }`, `Report { records:
+/// Vec<Entry> }`) plus the `TypedDict` classification a `python_output = "typed-dict"` crate
+/// produces for it: every return type in the chain is a `TypedDict`, so the container renders as
+/// `result["results"][0]["records"]` and the element half must subscript too.
+fn envelope_typeddict_projection_resolver() -> FieldResolver {
+    let mut map = PythonTypedDictMap {
+        typeddict_types: HashSet::from([
+            ENVELOPE_ROOT_TYPE.to_string(),
+            REPORT_TYPE.to_string(),
+            ENVELOPE_ELEMENT_TYPE.to_string(),
+        ]),
+        ..Default::default()
+    };
+    map.field_types
+        .entry(ENVELOPE_ROOT_TYPE.to_string())
+        .or_default()
+        .insert("results".to_string(), REPORT_TYPE.to_string());
+    map.field_types
+        .entry(REPORT_TYPE.to_string())
+        .or_default()
+        .insert("records".to_string(), ENVELOPE_ELEMENT_TYPE.to_string());
+
+    envelope_resolver("python").with_python_typeddict_map(map, Some(ENVELOPE_ROOT_TYPE.to_string()))
+}
+
+/// REGRESSION: the element-owner walk must start from the SAME path the container half was
+/// rendered from -- `FieldResolver::result_relative_path`, envelope projection applied -- not from
+/// the raw `resolve`d fixture spelling.
+///
+/// `records` is not declared on `Envelope`; the projection relocates the container to
+/// `results[0].records`. Walking the raw `records` instead evaluates `advance("Envelope",
+/// "records")`, which finds no edge, so the owner resolves to `None`, `is_typeddict(None)` is
+/// `false`, and the element half falls back to attribute access -- rendering `_e.kind` against a
+/// plain `dict`. That is `TypeError: 'dict' object has no attribute 'kind'`, and it means the
+/// element-anchoring fix was inert on exactly the projected shapes it existed to serve.
+///
+/// This test fails with `python_element_accessor` walking `self.resolve(array_path)` and passes
+/// with it walking `self.result_relative_path(array_path)`. The element type being a `TypedDict`
+/// here is load-bearing: if it were not, the correct answer and the `None` fallback would both be
+/// `_e.kind` and the test could not fail. ~keep
+#[test]
+fn wildcard_element_owner_follows_the_containers_envelope_projection() {
+    let rendered = render_field(&envelope_typeddict_projection_resolver(), "records[].kind");
+    assert_eq!(
+        rendered,
+        "    assert any(\"Function\" in str(_e[\"kind\"]) for _e in (result[\"results\"][0][\"records\"] or []))\n"
     );
 }

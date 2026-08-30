@@ -69,9 +69,22 @@ impl FieldResolver {
     /// subscriptable`. This resolves the element owner type by walking `array_path` through
     /// `python_typeddict_map.field_types` (via [`python_element_owner_type`]) and starts the
     /// cursor there instead. ~keep
+    ///
+    /// ~keep The two halves are anchored differently ON PURPOSE, and each half must be walked
+    /// from the path its own renderer used. `element_path` stays on [`Self::resolve`] because it
+    /// is already element-relative (see [`Self::element_accessor`] for what re-projecting it
+    /// does). `array_path` goes through [`Self::result_relative_path`] because that is exactly
+    /// what `render_python_wildcard_assertion` passed to [`Self::accessor`] to render the
+    /// container half: walking the raw `resolve`d spelling instead made the owner cursor
+    /// traverse a path the emitted container does not have. On an envelope root the container
+    /// renders as `result["results"][0]["records"]` while `advance("Envelope", "records")` finds
+    /// no edge — `python_element_owner_type` returns `None`, `is_typeddict(None)` is `false`, and
+    /// the element silently fell back to attribute access, making the element-anchoring fix inert
+    /// on precisely the projected shapes it was meant to cover. Deriving both halves from one
+    /// path is what keeps them from disagreeing about where the container is.
     pub fn python_element_accessor(&self, element_path: &str, array_path: &str, element_var: &str) -> String {
-        let array_effective = self.resolve(array_path);
-        let array_segments = parse_path(array_effective);
+        let array_effective = self.result_relative_path(array_path);
+        let array_segments = parse_path(&array_effective);
         let owner_type = python_element_owner_type(&array_segments, &self.python_typeddict_map);
 
         let effective = self.resolve(element_path);

@@ -118,6 +118,11 @@ fn render_python_with_optionals_from_owner(
 /// segment the map never recorded a traversal edge for. [`PythonTypedDictMap::is_typeddict`]
 /// treats `None` as "attribute access", the correct default for an opaque/native `#[pyclass]`
 /// element type.
+///
+/// ~keep `array_segments` must be parsed from the path the CONTAINER was actually rendered from
+/// (`FieldResolver::result_relative_path`, envelope projection applied), not from the raw fixture
+/// spelling: this walk starts at `root_type`, so a path that skips the projection's hops finds no
+/// edge, returns `None`, and silently answers "attribute access" for every projected container.
 pub(super) fn python_element_owner_type(
     array_segments: &[PathSegment],
     typeddict_map: &PythonTypedDictMap,
@@ -335,5 +340,54 @@ mod tests {
             render_python_with_optionals(&segments, "result", &optional, &map),
             "(result.choices[0].message.tool_calls[0].function.name if result.choices[0].message.tool_calls else None)"
         );
+    }
+
+    /// `python_element_owner_type` must advance the cursor once per container segment, all the way
+    /// to the collection's element type.
+    ///
+    /// ~keep The multi-segment case is the one that can silently half-work: consulting only the
+    /// LAST segment answers `advance("Envelope", "records")` — no such edge, so `None`, which
+    /// `is_typeddict` reads as attribute access — and consulting only the FIRST answers `Report`,
+    /// the container's owner rather than the element's. Only a full walk reaches `Entry`, so this
+    /// expectation separates all three implementations.
+    #[test]
+    fn element_owner_type_advances_through_every_container_segment() {
+        let map = typeddict_map(
+            &["Envelope", "Report", "Entry"],
+            &[("Envelope", "results", "Report"), ("Report", "records", "Entry")],
+            "Envelope",
+        );
+        let segments = parse_path("results[0].records");
+        assert_eq!(python_element_owner_type(&segments, &map), Some("Entry".to_string()));
+    }
+
+    /// An `ArrayField` segment advances by its field NAME; the index is list subscripting and
+    /// carries no type information. Pinned separately because the envelope projection
+    /// `FieldResolver::python_element_accessor` walks always produces an indexed first hop, so a
+    /// walk that skipped `ArrayField` would answer `None` for every projected container.
+    #[test]
+    fn element_owner_type_advances_through_an_indexed_segment_by_field_name() {
+        let map = typeddict_map(&["Report"], &[("Report", "records", "Entry")], "Report");
+        assert_eq!(
+            python_element_owner_type(&parse_path("records[0]"), &map),
+            Some("Entry".to_string())
+        );
+    }
+
+    /// A segment the map recorded no traversal edge for yields `None` — the documented "the IR
+    /// cannot judge this owner" answer, which `is_typeddict` resolves to attribute access, the
+    /// correct default for an opaque/native `#[pyclass]` element.
+    #[test]
+    fn element_owner_type_is_none_for_a_segment_with_no_recorded_edge() {
+        let map = typeddict_map(&["Envelope"], &[("Envelope", "results", "Report")], "Envelope");
+        assert_eq!(python_element_owner_type(&parse_path("records"), &map), None);
+    }
+
+    /// An unresolved root type yields `None` rather than guessing: `advance` short-circuits on a
+    /// `None` owner, so every later segment stays `None` too.
+    #[test]
+    fn element_owner_type_is_none_when_the_root_type_is_unresolved() {
+        let map = PythonTypedDictMap::default();
+        assert_eq!(python_element_owner_type(&parse_path("results.records"), &map), None);
     }
 }
