@@ -21,7 +21,12 @@ pub(super) fn fixture_uses_test_documents(fixture: &Fixture, call: &CallConfig, 
             .as_deref()
             .and_then(|name| type_defs.iter().find(|definition| definition.name == name))
             .is_some_and(|definition| {
-                typed_value_uses_test_documents(value, &TypeRef::Named(definition.name.clone()), type_defs)
+                let element_type = TypeRef::Named(definition.name.clone());
+                if value.is_array() {
+                    typed_value_uses_test_documents(value, &TypeRef::Vec(Box::new(element_type)), type_defs)
+                } else {
+                    typed_value_uses_test_documents(value, &element_type, type_defs)
+                }
             })
     })
 }
@@ -137,5 +142,26 @@ mod tests {
         };
 
         assert!(!super::fixture_uses_test_documents(&fixture, &call, &[request_type()]));
+    }
+
+    #[test]
+    fn batch_nested_bytes_file_path_requires_test_document_working_directory() {
+        let mut argument = object_arg();
+        argument.field = "input.requests".into();
+        let fixture = Fixture {
+            input: serde_json::json!({
+                "requests": [
+                    {"content": "inline text"},
+                    {"content": "documents/sample.bin"}
+                ]
+            }),
+            ..Default::default()
+        };
+        let call = CallConfig {
+            args: vec![argument],
+            ..Default::default()
+        };
+
+        assert!(super::fixture_uses_test_documents(&fixture, &call, &[request_type()]));
     }
 }
