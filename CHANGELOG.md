@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   async signature instead of unconditionally forcing it async for any call taking a trait-bridge
   argument, avoiding a `.resolves` type error under strict TypeScript for synchronous trait
   methods.
+- Restrict the Zig snippet/e2e native library probe to the host's own dynamic-library extension
+  instead of a shared macOS/Linux candidate set, so a stray `.dylib` in a mixed-platform target
+  directory can no longer satisfy validation on Linux (or a stray `.so` on macOS).
 
 ## [0.79.2] - 2026-08-30
 

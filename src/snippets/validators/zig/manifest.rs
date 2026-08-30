@@ -564,22 +564,34 @@ pub(crate) mod tests {
     /// searches for -- its own diagnostic names `{name}.dll`, `{name}.lib`, `lib{name}.a`.
     /// Asserting only that `{name}.dll` is found would still pass with the old unconditional
     /// `lib` prefix left in place beside it, and the probe would go on crediting a library that
-    /// cannot be linked. ~keep
+    /// cannot be linked.
+    ///
+    /// macOS and Linux get their own branches rather than one combined `else`, because a combined
+    /// branch is exactly the bug `native_library::tests` regresses directly: it let a stray
+    /// `.dylib` satisfy a Linux probe (and a stray `.so` satisfy a macOS one). This test only
+    /// covers whichever platform actually runs it; the exhaustive three-platform table lives in
+    /// `native_library::tests`, which does not need `cfg!` to reach the other two. ~keep
     #[test]
     fn the_probe_names_match_what_this_host_actually_produces() {
-        let expected: [&str; 3] = if cfg!(windows) {
-            ["sample_ffi.dll", "sample_ffi.lib", "libsample_ffi.a"]
+        let expected: Vec<&str> = if cfg!(target_os = "windows") {
+            vec!["sample_ffi.dll", "sample_ffi.lib", "libsample_ffi.a"]
+        } else if cfg!(target_os = "macos") {
+            vec!["libsample_ffi.dylib", "libsample_ffi.a"]
         } else {
-            ["libsample_ffi.dylib", "libsample_ffi.so", "libsample_ffi.a"]
+            vec!["libsample_ffi.so", "libsample_ffi.a"]
         };
 
         assert_eq!(linkable_library_names("sample_ffi"), expected);
 
         let directory = tempfile::tempdir().expect("project directory");
-        let never_produced = if cfg!(windows) {
+        // The other platforms' dynamic-library extension: never a name this host's zig searches
+        // for, so a copy left by a different platform's build must not count. ~keep
+        let never_produced = if cfg!(target_os = "windows") {
             "libsample_ffi.dll"
+        } else if cfg!(target_os = "macos") {
+            "libsample_ffi.so"
         } else {
-            "sample_ffi.so"
+            "libsample_ffi.dylib"
         };
         std::fs::write(directory.path().join(never_produced), "fake").unwrap();
 
