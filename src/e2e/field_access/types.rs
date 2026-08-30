@@ -287,6 +287,19 @@ pub struct IrEnumMap {
     /// emits an accessor the binding never declared. `enum_field_types` answers WHICH enum backs a
     /// field; this answers whether that enum is one the accessor exists on. ~keep
     pub data_carrying_enum_names: HashSet<String>,
+    /// `enum_wire_variants[enum_name][serde wire value] -> Rust variant identifier`, restricted
+    /// to variants whose wire value actually DIFFERS from the identifier (i.e. a
+    /// `#[serde(rename)]` or `#[serde(rename_all)]` is in effect) and is unambiguous.
+    ///
+    /// `tagged_enum_wire` cannot answer this: it is populated only for enums carrying a
+    /// `#[serde(tag = "...")]` internal tag, and it maps the other direction (variant -> wire).
+    /// A generator holding a fixture's expected WIRE value and an expression that renders the
+    /// RUST identifier — e.g. Rust e2e's `format!("{:?}", field)` — needs the reverse lookup for
+    /// every enum, tagged or not, to compare the two surfaces without mistaking a rename for a
+    /// value mismatch. Variants whose wire value equals their identifier are deliberately absent
+    /// so a lookup miss means "no rename to reconcile" and the caller keeps its prior behaviour.
+    /// ~keep
+    pub enum_wire_variants: HashMap<String, HashMap<String, String>>,
     pub root_type: Option<String>,
 }
 

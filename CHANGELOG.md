@@ -221,6 +221,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type mismatch in Swift that does not compile. The new
   `FieldSkip::PayloadUnionHasNoScalarWireAccessor` wording is counted by
   `ALEF_E2E_STRICT_FIELD_AVAILABILITY` as a generator gap.
+- Compare Rust e2e `equals` assertions on serde-renamed enum variants against the variant the
+  fixture's wire value names. The assertion stringifies with `format!("{:?}", ..)` because
+  `Debug` is the only trait an arbitrary IR enum is guaranteed to implement, but `Debug` renders
+  the Rust identifier while the fixture records the wire value; under `#[serde(rename)]` or
+  `#[serde(rename_all)]` the two disagreed, so the generated assertion failed for a correct
+  result or passed without ever exercising the rename.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

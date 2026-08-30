@@ -2,6 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::escape::rust_raw_string;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
@@ -20,10 +21,18 @@ pub(super) fn render_equals_assertion(
         if val.is_string() {
             // Enum-typed fields are not guaranteed to implement `Display` — only `Debug`
             // is a safe assumption (the containment predicates already rely on it). For a
-            // unit variant, `{:?}` prints exactly the variant name, matching the fixture's
-            // expected literal. This takes priority over the optional/display-as-text
+            // unit variant, `{:?}` prints exactly the RUST identifier. That equals the
+            // fixture's expected literal only while no serde rename is in effect; when one
+            // is, the fixture carries the WIRE value and the two surfaces disagree, so
+            // `renamed_variant_expected` translates the expectation back onto the surface
+            // `{:?}` actually renders. This takes priority over the optional/display-as-text
             // branches below because those assume the inner type is string-like. ~keep
             let field_is_enum = assertion.field.as_ref().is_some_and(|f| field_resolver.is_enum(f));
+            let expected = if field_is_enum {
+                renamed_variant_expected(assertion.field.as_deref(), val, field_resolver).unwrap_or(expected)
+            } else {
+                expected
+            };
             // When the field is Optional<String> and was NOT pre-unwrapped to a local
             // var (e.g. inside a result_is_vec iteration where the call-site unwrap
             // pass is skipped), emit `.as_deref().unwrap_or("")` so the expression is
@@ -99,6 +108,26 @@ pub(super) fn render_equals_assertion(
             }
         }
     }
+}
+
+/// Rewrite an enum field's fixture expectation from the serde WIRE value to the Rust variant
+/// identifier, so it compares like-for-like against the `format!("{:?}", ..)` expression the
+/// enum branch of [`render_equals_assertion`] emits.
+///
+/// Returns `None` — leaving the fixture literal exactly as authored — whenever the IR cannot
+/// resolve the field to a concrete enum, the expectation is not a string, or no serde rename
+/// separates the wire spelling from the identifier. That last case is the idiomatic one and is
+/// already correct untranslated, which is what makes this purely additive: it can only change
+/// output for a field the IR positively resolves to an enum with a renamed variant matching the
+/// fixture value.
+fn renamed_variant_expected(
+    field: Option<&str>,
+    value: &serde_json::Value,
+    field_resolver: &FieldResolver,
+) -> Option<String> {
+    let wire = value.as_str()?;
+    let variant = field_resolver.enum_variant_for_wire_value(field?, wire)?;
+    Some(rust_raw_string(variant))
 }
 
 /// Whether a wildcard-traversed array element (`links[].link_type`) is enum-typed.
@@ -703,7 +732,14 @@ mod tests {
     /// regardless of whether the real Rust type also derives/implements `Display` — for a
     /// unit variant, `{:?}` renders exactly the variant name, which is what `Display` also
     /// renders for the idiomatic (unrenamed) case, so behavior is preserved for enums that
-    /// do implement Display too. ~keep
+    /// do implement Display too.
+    ///
+    /// That equivalence holds ONLY while the variant is unrenamed, which is why the cases
+    /// below all use unrenamed variants. `{:?}` renders the Rust identifier, whereas a
+    /// `#[serde(rename)]`/`#[serde(rename_all)]` variant's fixture value is the WIRE
+    /// spelling; comparing those two directly checks the wrong surface. That case is
+    /// reconciled on the expectation side by `renamed_variant_expected` and is covered by
+    /// `render_equals_assertion_renamed_enum_variant_compares_wire_value`. ~keep
     #[test]
     fn render_equals_assertion_field_stringification_matches_field_kind() {
         struct Case {

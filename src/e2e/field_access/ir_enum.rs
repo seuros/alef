@@ -77,6 +77,7 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         variant_payload_is_collection,
         tagged_enum_wire: build_tagged_enum_wire(enums),
         data_carrying_enum_names: data_carrying_enum_names(enums),
+        enum_wire_variants: build_enum_wire_variants(enums),
         root_type: None,
     }
 }
@@ -96,6 +97,49 @@ fn data_carrying_enum_names(enums: &[EnumDef]) -> HashSet<String> {
         .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
         .map(|enum_def| enum_def.name.clone())
         .collect()
+}
+
+/// Build `enum_wire_variants[enum_name][wire value] -> Rust variant identifier` — the reverse of
+/// [`build_tagged_enum_wire`]'s per-variant map, for EVERY enum rather than only internally
+/// tagged ones, and restricted to variants a serde rename actually moves off their identifier.
+///
+/// An entry is recorded only when all three hold, so that a lookup hit is unambiguous evidence
+/// that the wire spelling and the Rust spelling disagree:
+///
+/// * the variant's wire value differs from its identifier (no rename means nothing to reconcile);
+/// * no other variant of the same enum produces that same wire value;
+/// * the wire value is not itself the identifier of some other variant of the same enum — such a
+///   value would be a valid answer on both surfaces at once, and translating it would silently
+///   redirect the assertion to a different variant.
+///
+/// Every excluded case leaves the caller with a `None`, i.e. its pre-existing behaviour. ~keep
+fn build_enum_wire_variants(enums: &[EnumDef]) -> HashMap<String, HashMap<String, String>> {
+    let mut per_enum = HashMap::new();
+    for enum_def in enums {
+        let identifiers: HashSet<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
+        let mut by_wire: HashMap<String, String> = HashMap::new();
+        let mut ambiguous: HashSet<String> = HashSet::new();
+        for variant in &enum_def.variants {
+            let wire = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            if wire == variant.name || identifiers.contains(wire.as_str()) {
+                continue;
+            }
+            if by_wire.insert(wire.clone(), variant.name.clone()).is_some() {
+                ambiguous.insert(wire);
+            }
+        }
+        for wire in &ambiguous {
+            by_wire.remove(wire);
+        }
+        if !by_wire.is_empty() {
+            per_enum.insert(enum_def.name.clone(), by_wire);
+        }
+    }
+    per_enum
 }
 
 fn build_tagged_enum_wire(enums: &[EnumDef]) -> HashMap<String, TaggedEnumWire> {

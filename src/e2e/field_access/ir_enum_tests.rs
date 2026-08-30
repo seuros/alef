@@ -404,3 +404,108 @@ fn variant_payload_is_collection_covers_nested_vec_and_optional_vec_payloads() {
         "named_type unwraps Option then Vec to the same named element"
     );
 }
+
+fn variant(name: &str, serde_rename: Option<&str>) -> EnumVariant {
+    EnumVariant {
+        name: name.to_string(),
+        serde_rename: serde_rename.map(str::to_string),
+        ..EnumVariant::default()
+    }
+}
+
+fn wire_variant_enum(rename_all: Option<&str>, variants: Vec<EnumVariant>) -> EnumDef {
+    EnumDef {
+        name: "Kind".to_string(),
+        serde_rename_all: rename_all.map(str::to_string),
+        variants,
+        ..EnumDef::default()
+    }
+}
+
+/// Table-driven contract for `enum_wire_variants`, the wire-value -> Rust-identifier reverse
+/// lookup a generator needs when it renders an enum on the Rust surface (`{:?}`) but compares
+/// against a fixture's serde wire value.
+///
+/// The map must be populated ONLY where the two spellings genuinely disagree and the answer is
+/// unambiguous, because a caller reads a miss as "no rename to reconcile" and keeps the fixture
+/// literal verbatim. Recording an entry that is not a real, unique rename would silently
+/// rewrite a correct expectation into a different variant's.
+#[test]
+fn enum_wire_variants_records_only_unambiguous_renames() {
+    struct Case {
+        name: &'static str,
+        rename_all: Option<&'static str>,
+        variants: Vec<EnumVariant>,
+        lookup: &'static str,
+        expected: Option<&'static str>,
+    }
+    let cases = vec![
+        Case {
+            name: "explicit serde(rename) maps the wire value back to the identifier",
+            rename_all: None,
+            variants: vec![variant("KeyValue", Some("key-value"))],
+            lookup: "key-value",
+            expected: Some("KeyValue"),
+        },
+        Case {
+            name: "rename_all alone is enough to separate the two spellings",
+            rename_all: Some("kebab-case"),
+            variants: vec![variant("KeyValue", None)],
+            lookup: "key-value",
+            expected: Some("KeyValue"),
+        },
+        Case {
+            name: "serde(rename) wins over rename_all",
+            rename_all: Some("kebab-case"),
+            variants: vec![variant("KeyValue", Some("kv"))],
+            lookup: "kv",
+            expected: Some("KeyValue"),
+        },
+        Case {
+            name: "the rename_all spelling is NOT recorded when serde(rename) overrode it",
+            rename_all: Some("kebab-case"),
+            variants: vec![variant("KeyValue", Some("kv"))],
+            lookup: "key-value",
+            expected: None,
+        },
+        Case {
+            name: "an unrenamed variant has nothing to reconcile and is absent",
+            rename_all: None,
+            variants: vec![variant("Plain", None)],
+            lookup: "Plain",
+            expected: None,
+        },
+        Case {
+            name: "a rename_all that is a no-op for this identifier is absent",
+            rename_all: Some("PascalCase"),
+            variants: vec![variant("Plain", None)],
+            lookup: "Plain",
+            expected: None,
+        },
+        Case {
+            name: "two variants renamed onto one wire value are ambiguous and dropped",
+            rename_all: None,
+            variants: vec![variant("First", Some("shared")), variant("Second", Some("shared"))],
+            lookup: "shared",
+            expected: None,
+        },
+        Case {
+            name: "a wire value that is another variant's identifier is valid on both surfaces and dropped",
+            rename_all: None,
+            variants: vec![variant("Alpha", Some("Beta")), variant("Beta", None)],
+            lookup: "Beta",
+            expected: None,
+        },
+    ];
+
+    for case in cases {
+        let enums = vec![wire_variant_enum(case.rename_all, case.variants)];
+        let map = build_ir_enum_map(&[], &enums);
+        let got = map
+            .enum_wire_variants
+            .get("Kind")
+            .and_then(|by_wire| by_wire.get(case.lookup))
+            .map(String::as_str);
+        assert_eq!(got, case.expected, "case '{}'", case.name);
+    }
+}

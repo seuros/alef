@@ -30,6 +30,8 @@ mod iterate_display_safety_tests;
 #[cfg(test)]
 mod manifest_dependency_tests;
 #[cfg(test)]
+mod renamed_enum_wire_assertion_tests;
+#[cfg(test)]
 mod snippet_result_binding_tests;
 #[cfg(test)]
 mod test_backend_tests;

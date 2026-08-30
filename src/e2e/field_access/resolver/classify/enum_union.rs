@@ -82,6 +82,25 @@ impl FieldResolver {
             .is_some_and(|variants| variants.contains(variant))
     }
 
+    /// The Rust variant identifier that a serde `wire` value names, for the enum type backing
+    /// `field` — and only when a rename actually separates the two spellings (see
+    /// [`super::super::super::types::IrEnumMap::enum_wire_variants`] for the exclusions).
+    ///
+    /// A generator that renders an enum value on the RUST surface (`format!("{:?}", ..)`, which
+    /// is all `Debug` guarantees) but compares it against a fixture's WIRE value needs this to
+    /// bring the two onto one surface. `None` means either "the IR cannot resolve this field to
+    /// a concrete enum" or "no rename is in effect", and every caller must treat both the same
+    /// way: keep the fixture value untranslated, which is the behaviour that predates this
+    /// lookup and is correct whenever the identifier IS the wire value.
+    pub fn enum_variant_for_wire_value(&self, field: &str, wire: &str) -> Option<&str> {
+        let enum_name = self.ir_enum_type_name(field)?;
+        self.ir_enum_map
+            .enum_wire_variants
+            .get(&enum_name)?
+            .get(wire)
+            .map(String::as_str)
+    }
+
     /// The serde discriminator key and wire value for a concrete tagged-enum variant.
     pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
         let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;
