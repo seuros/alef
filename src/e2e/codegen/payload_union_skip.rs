@@ -48,6 +48,11 @@ pub(crate) enum UnionLoweringTarget {
     /// kotlin/JVM, which asserts against the Java facade and therefore follows
     /// `backends::java::gen_bindings::types::enums::emits_get_value`.
     KotlinJvm,
+    /// java, the facade [`Self::KotlinJvm`] borrows: same predicate, because it is the same
+    /// `getValue()` on the same generated class. Named separately so the java e2e generator's
+    /// call site reads as what it targets rather than as a kotlin variant it merely shares a
+    /// predicate with, and so the two can diverge without one silently dragging the other. ~keep
+    Java,
     /// swift, whose `: String` raw-value enum declaration (the only one with `.rawValue`) is
     /// reached only when every variant is fieldless.
     Swift,
@@ -66,7 +71,9 @@ pub(crate) fn lacks_scalar_wire_accessor(
     target: UnionLoweringTarget,
 ) -> bool {
     match target {
-        UnionLoweringTarget::KotlinJvm => field_resolver.java_enum_emits_get_value(field) == Some(false),
+        UnionLoweringTarget::KotlinJvm | UnionLoweringTarget::Java => {
+            field_resolver.java_enum_emits_get_value(field) == Some(false)
+        }
         UnionLoweringTarget::Dart | UnionLoweringTarget::KotlinAndroid | UnionLoweringTarget::Swift => {
             field_resolver.ir_enum_is_data_carrying(field) == Some(true)
         }
@@ -190,14 +197,17 @@ mod tests {
             ("unit", UnionLoweringTarget::Dart, false),
             ("unit", UnionLoweringTarget::KotlinAndroid, false),
             ("unit", UnionLoweringTarget::KotlinJvm, false),
+            ("unit", UnionLoweringTarget::Java, false),
             ("unit", UnionLoweringTarget::Swift, false),
             ("untagged", UnionLoweringTarget::Dart, true),
             ("untagged", UnionLoweringTarget::KotlinAndroid, true),
             ("untagged", UnionLoweringTarget::KotlinJvm, true),
+            ("untagged", UnionLoweringTarget::Java, true),
             ("untagged", UnionLoweringTarget::Swift, true),
             ("external", UnionLoweringTarget::Dart, true),
             ("external", UnionLoweringTarget::KotlinAndroid, true),
             ("external", UnionLoweringTarget::KotlinJvm, false),
+            ("external", UnionLoweringTarget::Java, false),
             ("external", UnionLoweringTarget::Swift, true),
         ];
         for (field, target, want) in expected {
@@ -223,6 +233,7 @@ mod tests {
             UnionLoweringTarget::Dart,
             UnionLoweringTarget::KotlinAndroid,
             UnionLoweringTarget::KotlinJvm,
+            UnionLoweringTarget::Java,
             UnionLoweringTarget::Swift,
         ] {
             assert_eq!(
