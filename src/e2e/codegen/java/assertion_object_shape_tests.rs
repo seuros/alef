@@ -6,14 +6,8 @@ use crate::e2e::fixture::Assertion;
 
 use super::assertions::render_assertion;
 
-fn render(ty: TypeRef, optional: bool, array: bool, assertion_type: &str) -> String {
-    let optional_fields = optional
-        .then(|| HashSet::from(["details".to_string()]))
-        .unwrap_or_default();
-    let array_fields = array
-        .then(|| HashSet::from(["details".to_string()]))
-        .unwrap_or_default();
-    let types = vec![
+fn envelope_types(ty: TypeRef, optional: bool) -> Vec<TypeDef> {
+    vec![
         TypeDef {
             name: "Envelope".into(),
             fields: vec![FieldDef {
@@ -28,8 +22,17 @@ fn render(ty: TypeRef, optional: bool, array: bool, assertion_type: &str) -> Str
             name: "Details".into(),
             ..Default::default()
         },
-    ];
-    let resolver = FieldResolver::new(
+    ]
+}
+
+fn envelope_resolver(types: &[TypeDef], optional: bool, array: bool) -> FieldResolver {
+    let optional_fields = optional
+        .then(|| HashSet::from(["details".to_string()]))
+        .unwrap_or_default();
+    let array_fields = array
+        .then(|| HashSet::from(["details".to_string()]))
+        .unwrap_or_default();
+    FieldResolver::new(
         &HashMap::new(),
         &optional_fields,
         &HashSet::new(),
@@ -37,9 +40,14 @@ fn render(ty: TypeRef, optional: bool, array: bool, assertion_type: &str) -> Str
         &HashSet::new(),
     )
     .with_ir_result_fields(
-        FieldResolver::ir_result_field_facts(&types, "java"),
+        FieldResolver::ir_result_field_facts(types, "java"),
         Some("Envelope".into()),
-    );
+    )
+}
+
+fn render(ty: TypeRef, optional: bool, array: bool, assertion_type: &str) -> String {
+    let types = envelope_types(ty, optional);
+    let resolver = envelope_resolver(&types, optional, array);
     let mut output = String::new();
     render_assertion(
         &mut output,
