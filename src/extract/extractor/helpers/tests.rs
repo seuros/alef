@@ -1,7 +1,7 @@
 use super::attributes::{
     extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all,
-    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_serde_with, has_container_serde_default,
-    has_derive, has_derive_path,
+    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_serde_with,
+    has_container_serde_default, has_derive, has_derive_path,
 };
 use super::normalize_rustdoc;
 

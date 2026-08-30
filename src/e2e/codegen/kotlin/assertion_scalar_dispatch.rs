@@ -53,9 +53,21 @@ pub(super) fn render_scalar_pipeline(
     );
 
     render_scalar_assertion(
-        out, assertion, &field_expr, &string_field_expr, &nonnull_field_expr, &string_expr, field_is_optional,
-        field_is_collection, field_is_long, result_var, result_is_simple, result_is_option, kotlin_android_style,
-        is_streaming, not_error_may_assert_presence,
+        out,
+        assertion,
+        &field_expr,
+        &string_field_expr,
+        &nonnull_field_expr,
+        &string_expr,
+        field_is_optional,
+        field_is_collection,
+        field_is_long,
+        result_var,
+        result_is_simple,
+        result_is_option,
+        kotlin_android_style,
+        is_streaming,
+        not_error_may_assert_presence,
     );
 }
 
@@ -169,10 +181,24 @@ fn render_value_arm(
         "starts_with" => render_starts_with_arm(out, assertion, string_expr),
         "ends_with" => render_ends_with_arm(out, assertion, string_expr),
         "min_length" => {
-            render_min_length_arm(out, assertion, result_is_simple, field_expr, result_var, string_field_expr);
+            render_min_length_arm(
+                out,
+                assertion,
+                result_is_simple,
+                field_expr,
+                result_var,
+                string_field_expr,
+            );
         }
         "max_length" => {
-            render_max_length_arm(out, assertion, result_is_simple, field_expr, result_var, string_field_expr);
+            render_max_length_arm(
+                out,
+                assertion,
+                result_is_simple,
+                field_expr,
+                result_var,
+                string_field_expr,
+            );
         }
         "count_min" => render_count_min_arm(out, assertion, nonnull_field_expr),
         "count_equals" => render_count_equals_arm(out, assertion, nonnull_field_expr),

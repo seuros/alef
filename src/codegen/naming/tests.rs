@@ -136,7 +136,11 @@ fn struct_variant_field_wire_name_prefers_field_rename_over_enum_rename_all_fiel
     };
 
     assert_eq!(
-        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            enum_def.rename_all_fields.as_deref()
+        ),
         "radius",
         "an explicit field-level serde_rename must win over the enum's rename_all_fields"
     );
@@ -154,7 +158,11 @@ fn struct_variant_field_wire_name_falls_back_to_rename_all_fields_without_field_
     };
 
     assert_eq!(
-        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            enum_def.rename_all_fields.as_deref()
+        ),
         "innerRadius",
         "with no field-level rename, the enum's rename_all_fields must case the raw field name"
     );
@@ -169,7 +177,11 @@ fn struct_variant_field_wire_name_falls_back_to_raw_name_with_no_rule_at_all() {
     let enum_def = crate::core::ir::EnumDef::default();
 
     assert_eq!(
-        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            enum_def.rename_all_fields.as_deref()
+        ),
         "inner_radius"
     );
 }

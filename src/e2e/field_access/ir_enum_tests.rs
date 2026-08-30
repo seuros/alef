@@ -383,7 +383,9 @@ fn variant_payload_is_collection_covers_nested_vec_and_optional_vec_payloads() {
         "Vec<Vec<Entry>> classifies as a collection payload via the outer Vec"
     );
     assert_eq!(
-        map.variant_payload_types.get("Outcome").and_then(|v| v.get("NestedVec")),
+        map.variant_payload_types
+            .get("Outcome")
+            .and_then(|v| v.get("NestedVec")),
         Some(&("_0".to_string(), "Entry".to_string())),
         "named_type recurses through both Vec layers to the innermost named element"
     );
@@ -395,7 +397,9 @@ fn variant_payload_is_collection_covers_nested_vec_and_optional_vec_payloads() {
         "Option<Vec<Entry>> classifies as a collection payload via is_vec_type's Optional unwrap"
     );
     assert_eq!(
-        map.variant_payload_types.get("Outcome").and_then(|v| v.get("OptionalVec")),
+        map.variant_payload_types
+            .get("Outcome")
+            .and_then(|v| v.get("OptionalVec")),
         Some(&("_0".to_string(), "Entry".to_string())),
         "named_type unwraps Option then Vec to the same named element"
     );

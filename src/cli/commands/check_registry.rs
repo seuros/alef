@@ -436,7 +436,10 @@ mod tests {
     #[test]
     fn scoop_requires_tap_repo() {
         let result = check_scoop("alef", "1.0.0", None);
-        assert!(result.is_err(), "scoop has no default bucket and must require --tap-repo");
+        assert!(
+            result.is_err(),
+            "scoop has no default bucket and must require --tap-repo"
+        );
         assert!(result.unwrap_err().to_string().contains("--tap-repo"));
     }
 

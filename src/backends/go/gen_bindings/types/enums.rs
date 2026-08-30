@@ -229,7 +229,11 @@ pub(crate) fn go_data_enum_variant_field(enum_def: &EnumDef, field: &FieldDef) -
     }
     Some((
         to_go_name(&field.name),
-        wire_field_name(&field.name, field.serde_rename.as_deref(), enum_def.rename_all_fields.as_deref()),
+        wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            enum_def.rename_all_fields.as_deref(),
+        ),
     ))
 }
 

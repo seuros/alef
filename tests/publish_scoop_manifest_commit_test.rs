@@ -56,7 +56,10 @@ impl BucketFixture {
         let bucket_dir = dir.path().join("bucket-checkout");
 
         git_ok(dir.path(), &["init", "-q", "--bare", bare_dir.to_str().unwrap()]);
-        git_ok(dir.path(), &["clone", "-q", bare_dir.to_str().unwrap(), bucket_dir.to_str().unwrap()]);
+        git_ok(
+            dir.path(),
+            &["clone", "-q", bare_dir.to_str().unwrap(), bucket_dir.to_str().unwrap()],
+        );
         git_ok(&bucket_dir, &["config", "user.email", "test@example.invalid"]);
         git_ok(&bucket_dir, &["config", "user.name", "test"]);
 
@@ -78,7 +81,10 @@ impl BucketFixture {
     fn reclone(&self) -> PathBuf {
         let bare_dir = self.dir.path().join("origin.git");
         let target = self.dir.path().join("verify-checkout");
-        git_ok(self.dir.path(), &["clone", "-q", bare_dir.to_str().unwrap(), target.to_str().unwrap()]);
+        git_ok(
+            self.dir.path(),
+            &["clone", "-q", bare_dir.to_str().unwrap(), target.to_str().unwrap()],
+        );
         target
     }
 }
@@ -121,7 +127,10 @@ fn first_publish_of_untracked_manifest_is_committed() {
 
     let log = run_git(&verify_dir, &["log", "--oneline", "-1"]);
     let log_message = String::from_utf8_lossy(&log.stdout);
-    assert!(log_message.contains("alef 1.0.0"), "unexpected commit message: {log_message}");
+    assert!(
+        log_message.contains("alef 1.0.0"),
+        "unexpected commit message: {log_message}"
+    );
 }
 
 #[test]

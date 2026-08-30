@@ -116,7 +116,10 @@ fn required_scoop_bucket_fields_are_present() {
         serde_json::json!("https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json")
     );
     assert_eq!(manifest["bin"], serde_json::json!("alef.exe"));
-    assert_eq!(manifest["suggest"]["vcredist"], serde_json::json!("extras/vcredist2022"));
+    assert_eq!(
+        manifest["suggest"]["vcredist"],
+        serde_json::json!("extras/vcredist2022")
+    );
     assert_eq!(
         manifest["checkver"]["github"],
         serde_json::json!("https://github.com/xberg-io/alef")

@@ -120,4 +120,3 @@ pub fn render_cargo_config(cargo: &ScaffoldCargo) -> String {
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
-

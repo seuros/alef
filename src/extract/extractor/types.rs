@@ -9,8 +9,8 @@ use super::helpers::{
     build_rust_path, extract_alef_error_code, extract_cfg_condition, extract_doc_comments, extract_enum_variant,
     extract_error_message_template, extract_field, extract_field_binding_exclusion_reason,
     extract_field_type_rust_path, extract_serde_container_conversion, extract_serde_rename_all,
-    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_version_annotation,
-    has_cfg_attribute, has_container_serde_default, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
+    extract_serde_rename_all_fields, extract_serde_skip_serializing_if, extract_version_annotation, has_cfg_attribute,
+    has_container_serde_default, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.

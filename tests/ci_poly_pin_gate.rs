@@ -117,12 +117,14 @@ fn ci_workflow_pins_poly_in_the_generated_output_gate() {
 fn uses_line_pins_poly_at_sha_rejects_comment_only_and_reverted_pins() {
     let sha = "fed55c3355480f0d1c23cb6084395e66bbb1cdc8";
 
-    let pinned_uses = "      - name: Install poly\n        uses: Goldziher/poly@fed55c3355480f0d1c23cb6084395e66bbb1cdc8 # v0.22.0\n";
+    let pinned_uses =
+        "      - name: Install poly\n        uses: Goldziher/poly@fed55c3355480f0d1c23cb6084395e66bbb1cdc8 # v0.22.0\n";
     assert!(
         uses_line_pins_poly_at_sha(pinned_uses, sha),
         "a real `uses:` line pinning the SHA must be accepted"
     );
-    let uses_comment_only = "      # Goldziher/poly@v0 currently resolves to fed55c3355480f0d1c23cb6084395e66bbb1cdc8\n";
+    let uses_comment_only =
+        "      # Goldziher/poly@v0 currently resolves to fed55c3355480f0d1c23cb6084395e66bbb1cdc8\n";
     assert!(
         !uses_line_pins_poly_at_sha(uses_comment_only, sha),
         "prose mentioning the tag and SHA, with no `uses:` line, must not satisfy the check"
@@ -150,8 +152,7 @@ fn with_block_pins_poly_version_rejects_comment_only_and_deleted_values() {
         with_block_pins_poly_version(pinned_with, version),
         "a real `with: version:` line must be accepted"
     );
-    let with_comment_only =
-        "        # the SHA is the real supply-chain pin; `version: v0.22.0` in `with:` is kept\n";
+    let with_comment_only = "        # the SHA is the real supply-chain pin; `version: v0.22.0` in `with:` is kept\n";
     assert!(
         !with_block_pins_poly_version(with_comment_only, version),
         "prose that merely mentions `version: v0.22.0` in a comment must not satisfy the check"
@@ -178,8 +179,7 @@ fn run_step_checks_hidden_subcommand_rejects_comment_only_and_reflowed_prose() {
         !run_step_checks_hidden_subcommand(wrapped_comment),
         "a line-wrapped comment describing the probe must not satisfy the check"
     );
-    let reflowed_comment =
-        "      # (2) `poly hooks check --added-large-files --help` must still resolve\n";
+    let reflowed_comment = "      # (2) `poly hooks check --added-large-files --help` must still resolve\n";
     assert!(
         !run_step_checks_hidden_subcommand(reflowed_comment),
         "reflowing that same comment onto one line must still not satisfy the check -- this is \

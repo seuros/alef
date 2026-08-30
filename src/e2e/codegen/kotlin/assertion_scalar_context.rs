@@ -216,7 +216,6 @@ pub(super) fn compute_field_is_collection(assertion: &Assertion, field_resolver:
     })
 }
 
-
 /// Compute every scalar-pipeline context value `render_scalar_assertion` needs, in the same
 /// order `render_assertion` used to compute them inline. Bundles the six `compute_*`/`resolve_*`
 /// helpers above into the one call `render_assertion` makes, so it stays under the file's
@@ -241,8 +240,13 @@ pub(super) fn compute_scalar_context(
         "kotlin"
     };
     let field_expr = resolve_field_expr(assertion, field_resolver, result_var, result_is_simple, accessor_lang);
-    let field_is_optional =
-        resolve_field_is_optional(result_is_simple, &field_expr, assertion, field_resolver, kotlin_android_style);
+    let field_is_optional = resolve_field_is_optional(
+        result_is_simple,
+        &field_expr,
+        assertion,
+        field_resolver,
+        kotlin_android_style,
+    );
     let bare_result_is_nullable = result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
     let string_field_expr = resolve_string_field_expr(
         &field_expr,
@@ -256,8 +260,13 @@ pub(super) fn compute_scalar_context(
     } else {
         field_expr.clone()
     };
-    let string_expr =
-        resolve_string_expr(&field_expr, field_is_enum, field_is_optional, &string_field_expr, kotlin_android_style);
+    let string_expr = resolve_string_expr(
+        &field_expr,
+        field_is_enum,
+        field_is_optional,
+        &string_field_expr,
+        kotlin_android_style,
+    );
     let field_is_long = compute_field_is_long(assertion, field_resolver, fields_c_types);
     let field_is_collection = compute_field_is_collection(assertion, field_resolver);
     (

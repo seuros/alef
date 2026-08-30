@@ -85,4 +85,3 @@ pub(crate) fn cargo_lints_section(config: &ResolvedCrateConfig) -> String {
         format!("\n{rendered}\n")
     }
 }
-

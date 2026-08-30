@@ -156,13 +156,15 @@ fn should_insert_full_dev_dependencies_block_for_pre_vitest_fix_package_json() {
     let dir = tempfile::tempdir().expect("tempdir");
     let pkg_dir = dir.path().join("crates/example-wasm");
     std::fs::create_dir_all(&pkg_dir).expect("create crates/example-wasm");
-    std::fs::write(pkg_dir.join("package.json"), pre_vitest_fix_package_json())
-        .expect("write pre-fix package.json");
+    std::fs::write(pkg_dir.join("package.json"), pre_vitest_fix_package_json()).expect("write pre-fix package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
-    assert!(changed, "a package.json missing devDependencies must be reported as changed");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
+    assert!(
+        changed,
+        "a package.json missing devDependencies must be reported as changed"
+    );
 
     let after_first = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read migrated file");
     let parsed: serde_json::Value = serde_json::from_str(&after_first).expect("migrated file must be valid JSON");
@@ -187,7 +189,10 @@ fn should_insert_full_dev_dependencies_block_for_pre_vitest_fix_package_json() {
 
     let changed_again = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
         .expect("second pass must not error");
-    assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+    assert!(
+        !changed_again,
+        "second pass over an already-migrated file must be a no-op"
+    );
     let after_second = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file after second pass");
     assert_eq!(
         after_first, after_second,
@@ -226,9 +231,12 @@ fn should_add_only_the_missing_coverage_provider_and_never_overwrite_an_existing
     std::fs::write(pkg_dir.join("package.json"), fixture).expect("write fixture package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
-    assert!(changed, "a package.json missing only the coverage provider must be reported as changed");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
+    assert!(
+        changed,
+        "a package.json missing only the coverage provider must be reported as changed"
+    );
 
     let after_first = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read migrated file");
     let parsed: serde_json::Value = serde_json::from_str(&after_first).expect("migrated file must be valid JSON");
@@ -244,7 +252,10 @@ fn should_add_only_the_missing_coverage_provider_and_never_overwrite_an_existing
 
     let changed_again = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
         .expect("second pass must not error");
-    assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+    assert!(
+        !changed_again,
+        "second pass over an already-migrated file must be a no-op"
+    );
     let after_second = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file after second pass");
     assert_eq!(
         after_first, after_second,
@@ -282,8 +293,8 @@ fn should_preserve_a_consumer_added_dev_dependency_while_inserting_the_missing_o
     std::fs::write(pkg_dir.join("package.json"), fixture).expect("write fixture package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
     assert!(changed);
 
     let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read migrated file");
@@ -293,7 +304,10 @@ fn should_preserve_a_consumer_added_dev_dependency_while_inserting_the_missing_o
         "a consumer-added, unrelated dev dependency must survive untouched, got:\n{parsed:#}"
     );
     assert_eq!(parsed["devDependencies"]["vitest"], tv::npm::VITEST);
-    assert_eq!(parsed["devDependencies"]["@vitest/coverage-v8"], tv::npm::VITEST_COVERAGE_V8);
+    assert_eq!(
+        parsed["devDependencies"]["@vitest/coverage-v8"],
+        tv::npm::VITEST_COVERAGE_V8
+    );
 }
 
 /// FOREIGN/unrecognized population, case 1: no alef main/module/types fingerprint at all,
@@ -316,14 +330,17 @@ fn should_not_touch_a_foreign_vitest_package_json_without_the_alef_wasm_shape() 
     std::fs::write(pkg_dir.join("package.json"), hand_written).expect("write foreign package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
     assert!(
         !changed,
         "a package.json without alef's main/module/types shape must never be touched"
     );
     let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
-    assert_eq!(on_disk, hand_written, "a foreign package.json must survive byte-for-byte");
+    assert_eq!(
+        on_disk, hand_written,
+        "a foreign package.json must survive byte-for-byte"
+    );
 }
 
 /// FOREIGN/unrecognized population, case 2: the alef main/module/types fingerprint is
@@ -349,14 +366,17 @@ fn should_not_touch_an_alef_shaped_package_json_missing_the_vitest_test_script()
     std::fs::write(pkg_dir.join("package.json"), hand_written).expect("write foreign package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
     assert!(
         !changed,
         "a package.json without the exact vitest test script anchor must never be touched"
     );
     let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
-    assert_eq!(on_disk, hand_written, "a foreign package.json must survive byte-for-byte");
+    assert_eq!(
+        on_disk, hand_written,
+        "a foreign package.json must survive byte-for-byte"
+    );
 }
 
 /// FOREIGN/unrecognized population, case 3: both `vitest` and the coverage provider are
@@ -386,9 +406,12 @@ fn should_not_touch_a_package_json_that_already_declares_both_dependencies() {
     std::fs::write(pkg_dir.join("package.json"), hand_written).expect("write already-complete package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
-    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path)
-        .expect("migration must not error");
-    assert!(!changed, "a package.json declaring both dependencies must never be touched");
+    let changed =
+        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("migration must not error");
+    assert!(
+        !changed,
+        "a package.json declaring both dependencies must never be touched"
+    );
     let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
     assert_eq!(
         on_disk, hand_written,
@@ -414,8 +437,7 @@ fn repair_wasm_vitest_dev_dependencies_is_idempotent_at_the_string_level() {
 fn migrate_wasm_package_json_vitest_dev_dependencies_is_a_no_op_when_file_does_not_exist() {
     let dir = tempfile::tempdir().expect("tempdir");
     let relative_path = Path::new("crates/example-wasm/package.json");
-    let changed =
-        migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("must not error");
+    let changed = migrate_wasm_package_json_vitest_dev_dependencies(dir.path(), relative_path).expect("must not error");
     assert!(!changed);
     assert!(!dir.path().join(relative_path).exists());
 }
@@ -429,8 +451,7 @@ fn migrate_wasm_package_json_applies_both_repairs_through_the_one_entry_point() 
     let dir = tempfile::tempdir().expect("tempdir");
     let pkg_dir = dir.path().join("crates/example-wasm");
     std::fs::create_dir_all(&pkg_dir).expect("create crates/example-wasm");
-    std::fs::write(pkg_dir.join("package.json"), pre_vitest_fix_package_json())
-        .expect("write pre-fix package.json");
+    std::fs::write(pkg_dir.join("package.json"), pre_vitest_fix_package_json()).expect("write pre-fix package.json");
     let relative_path = Path::new("crates/example-wasm/package.json");
 
     let changed = migrate_wasm_package_json(dir.path(), relative_path).expect("migration must not error");
@@ -454,7 +475,10 @@ fn migrate_wasm_package_json_applies_both_repairs_through_the_one_entry_point() 
     );
 
     let changed_again = migrate_wasm_package_json(dir.path(), relative_path).expect("second pass must not error");
-    assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+    assert!(
+        !changed_again,
+        "second pass over an already-migrated file must be a no-op"
+    );
     let after_second = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file after second pass");
     assert_eq!(
         after_first, after_second,

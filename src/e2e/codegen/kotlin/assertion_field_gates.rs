@@ -23,7 +23,6 @@ use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
-
 /// Try every field-shape gate `render_assertion` consults, in order, before falling through to
 /// its generic scalar-assertion pipeline. Returns `true` (and has already written the full
 /// assertion) the moment one gate handles the fixture; `false` once every gate has declined,
@@ -43,8 +42,7 @@ pub(super) fn try_render_field_shape_gates(
     kotlin_android_style: bool,
     fields_c_types: &std::collections::HashMap<String, String>,
 ) -> bool {
-    if try_render_streaming_usage_field_assertion(out, assertion, is_streaming, kotlin_android_style, fields_c_types)
-    {
+    if try_render_streaming_usage_field_assertion(out, assertion, is_streaming, kotlin_android_style, fields_c_types) {
         return true;
     }
     if try_render_streaming_virtual_field_assertion(out, assertion, is_streaming, kotlin_android_style) {
@@ -65,8 +63,19 @@ pub(super) fn try_render_field_shape_gates(
     if try_render_generic_union_fallback(out, assertion, field_resolver, result_var, kotlin_android_style) {
         return true;
     }
-    let accessor_lang = if kotlin_android_style { "kotlin_android" } else { "kotlin" };
-    try_render_wildcard_traversal_assertion(out, assertion, result_var, field_resolver, result_is_simple, accessor_lang)
+    let accessor_lang = if kotlin_android_style {
+        "kotlin_android"
+    } else {
+        "kotlin"
+    };
+    try_render_wildcard_traversal_assertion(
+        out,
+        assertion,
+        result_var,
+        field_resolver,
+        result_is_simple,
+        accessor_lang,
+    )
 }
 
 /// In streaming context, `usage` and `usage.*` fields must be read from the
@@ -259,9 +268,7 @@ fn render_streaming_virtual_field_count_line(assertion: &Assertion, f: &str, exp
         }
         "count_equals" => {
             if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                format!(
-                    "        assertEquals({n}.toLong(), {expr}.size.toLong(), \"expected exactly {n} elements\")\n"
-                )
+                format!("        assertEquals({n}.toLong(), {expr}.size.toLong(), \"expected exactly {n} elements\")\n")
             } else {
                 streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
             }

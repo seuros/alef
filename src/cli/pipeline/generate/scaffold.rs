@@ -7,10 +7,10 @@ use anyhow::Context as _;
 use std::path::Path;
 use tracing::{debug, warn};
 
-#[path = "ruby_gemfile.rs"]
-mod ruby_gemfile;
 #[path = "scaffold_migrations.rs"]
 mod migrations;
+#[path = "ruby_gemfile.rs"]
+mod ruby_gemfile;
 
 /// Generate scaffold files for given languages.
 ///
