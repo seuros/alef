@@ -43,11 +43,17 @@
             case java.util.Map<?, ?> entries -> !entries.isEmpty();
             default -> true;
         }).isPresent(), "expected non-empty value");
+{% elif field_is_object %}
+        assertNotNull({{ field_expr }}, "expected non-empty value");
 {% else %}
         assertFalse({{ field_expr }}.isEmpty(), "expected non-empty value");
 {% endif %}
 {% elif assertion_type == "is_empty" %}
+{% if field_is_object %}
+        assertNull({{ field_expr }}, "expected empty value");
+{% else %}
         assertTrue({{ field_expr }}.isEmpty(), "expected empty value");
+{% endif %}
 {% elif assertion_type == "contains_any" %}
         assertTrue({{ contains_any_expr }}, "expected to contain at least one of the specified values");
 {% elif assertion_type == "greater_than" %}

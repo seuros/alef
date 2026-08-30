@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discriminators when lowering tagged enum array elements.
 - Detect file-backed byte values nested in typed request objects so every generated E2E backend
   activates its test-document path setup when required.
+- Generate Java empty and non-empty assertions for record fields as nullability checks instead
+  of calling collection-only `isEmpty()` methods.
 
 ## [0.79.2] - 2026-08-30
 

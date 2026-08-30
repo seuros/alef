@@ -485,6 +485,10 @@ pub(super) fn render_assertion(
         .field
         .as_deref()
         .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
+    let field_is_object = assertion
+        .field
+        .as_deref()
+        .is_some_and(|field| field_resolver.is_display_unsafe(field));
 
     // A fixture's `equals` assertion carrying a literal JSON `null` against a field the IR
     // proves is a genuine (non-`Option`) collection -- e.g. `Vec<T>` with `#[serde(default,
@@ -726,6 +730,7 @@ pub(super) fn render_assertion(
             field_expr,
             field_is_enum,
             field_is_array,
+            field_is_object,
             is_string_val,
             is_numeric_val,
             values_java => values_java,
@@ -914,6 +919,90 @@ mod tests {
             true,
         );
         out
+    }
+
+    #[test]
+    fn not_empty_on_record_field_checks_presence_instead_of_is_empty_method() {
+        let types = [
+            crate::core::ir::TypeDef {
+                name: "Envelope".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "details".into(),
+                    ty: crate::core::ir::TypeRef::Named("Details".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            crate::core::ir::TypeDef {
+                name: "Details".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "name".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+        let resolver = make_resolver(HashSet::new(), HashSet::new()).with_ir_result_fields(
+            FieldResolver::ir_result_field_facts(&types, "java"),
+            Some("Envelope".into()),
+        );
+        let assertion = Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("details".into()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "Envelope",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+            true,
+        );
+
+        assert_eq!(
+            out,
+            "        assertNotNull(result.details(), \"expected non-empty value\");\n"
+        );
+
+        let mut empty_out = String::new();
+        render_assertion(
+            &mut empty_out,
+            &Assertion {
+                assertion_type: "is_empty".into(),
+                field: Some("details".into()),
+                ..Default::default()
+            },
+            "result",
+            "Envelope",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+            true,
+        );
+        assert_eq!(
+            empty_out,
+            "        assertNull(result.details(), \"expected empty value\");\n"
+        );
     }
 
     fn is_true_assertion(field: &str) -> Assertion {
