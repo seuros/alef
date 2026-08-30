@@ -21,7 +21,7 @@ use super::visitors::emit_python_visitor_method;
 use args::build_args_and_setup;
 use error_assertions::emit_error_assertion;
 use result_assertions::emit_result_and_assertions;
-pub(super) use typed_values::{render_kwarg_field_value, resolve_field_enum_type};
+pub(super) use typed_values::{KwargRenderContext, render_kwarg_field_value, resolve_field_enum_type};
 
 /// Render a pytest test function for a non-HTTP fixture.
 #[allow(clippy::too_many_arguments)]

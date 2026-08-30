@@ -33,7 +33,7 @@ use super::helpers::{
 use super::http::render_http_test_function;
 use super::test_function::handle_values::collect_used_nested_types;
 use super::test_function::helper_functions::{render_item_texts_helper, render_text_helper};
-use super::test_function::{render_test_function, resolve_field_enum_type};
+use super::test_function::{KwargRenderContext, render_test_function, resolve_field_enum_type};
 
 /// Render a complete Python test file for a single fixture category.
 ///
@@ -295,8 +295,18 @@ pub(super) fn render_test_file(
                 }
                 // Nested config/struct fields also need imports; split out to keep this
                 // already-over-cap file's growth minimal. ~keep
+                let context = KwargRenderContext {
+                    type_defs,
+                    enums,
+                    enum_fields,
+                    docs_files: &[],
+                };
                 import_lines::collect_nested_config_types(
-                    arg, value, constructor_type, type_defs, enums, enum_fields, &mut used_config_types,
+                    arg,
+                    value,
+                    constructor_type,
+                    context,
+                    &mut used_config_types,
                 );
             }
 

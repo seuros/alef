@@ -9,7 +9,7 @@ use crate::e2e::fixture::Fixture;
 
 use super::super::json::json_to_python_literal;
 use super::handle_values::build_handle_kwarg_value;
-use super::typed_values::{emit_bytes_arg, emit_json_object_arg};
+use super::typed_values::{KwargRenderContext, emit_bytes_arg, emit_json_object_arg};
 
 /// Build arg binding lines and kwarg expressions for a fixture call.
 ///
@@ -172,25 +172,28 @@ pub(super) fn build_args_and_setup(
             continue;
         }
 
-        if arg.arg_type == "json_object"
-            && !value.is_null()
-            && emit_json_object_arg(
+        if arg.arg_type == "json_object" && !value.is_null() {
+            let docs_files = fixture.docs_files_for_arg(&arg.field);
+            let context = KwargRenderContext {
+                type_defs,
+                enums,
+                enum_fields,
+                docs_files: &docs_files,
+            };
+            if emit_json_object_arg(
                 &mut arg_bindings,
                 &mut kwarg_exprs,
                 value,
                 var_name,
                 crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, value),
                 options_via,
-                enum_fields,
                 &arg.element_type,
                 &fixture.id,
                 fixture.has_host_root_route(),
-                type_defs,
-                enums,
-                &fixture.docs_files_for_arg(&arg.field),
-            )
-        {
-            continue;
+                context,
+            ) {
+                continue;
+            }
         }
 
         if arg.optional && value.is_null() {

@@ -9,6 +9,26 @@ use crate::e2e::fixture::FixtureDocsFileInput;
 
 use super::super::json::json_to_python_literal;
 
+/// Read-only rendering environment shared, unchanged, across every level of the
+/// `render_kwarg_field_value` recursion (through `render_struct_constructor` and the
+/// nested-container helpers) and reused by the `json_object` arg emitters below. All four
+/// fields are borrows the whole call tree reads but never writes, so the struct derives `Copy`
+/// -- passing it down the recursion is a pointer-width copy, not a clone of `type_defs`/
+/// `enums`/`docs_files` themselves.
+///
+/// `used_struct_types` is deliberately NOT a field here: it is a per-call *output* accumulator
+/// that every level mutates, not read-only shared state, so it stays its own `&mut` argument at
+/// each call site. Folding a mutable accumulator into an otherwise `Copy`, read-only bundle
+/// would force every function to take `&mut KwargRenderContext` and forfeit the very simplicity
+/// -- cheap, ordinary reborrows -- this struct exists to buy. ~keep
+#[derive(Clone, Copy)]
+pub(in crate::e2e::codegen::python) struct KwargRenderContext<'a> {
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+    pub enums: &'a [crate::core::ir::EnumDef],
+    pub enum_fields: &'a HashMap<String, String>,
+    pub docs_files: &'a [FixtureDocsFileInput],
+}
+
 /// Resolve the enum type name for a field if it's an enum type in the TypeDef,
 /// and return None if it's not an enum or the type cannot be resolved.
 pub(in crate::e2e::codegen::python) fn resolve_field_enum_type(
@@ -134,36 +154,23 @@ pub(in crate::e2e::codegen::python) fn resolve_field_map_value_struct_type<'a>(
 /// constructor name this rendering references, so a caller collecting imports can run the
 /// identical traversal instead of a second copy that could disagree with what actually gets
 /// emitted (the same technique `handle_values::collect_used_nested_types` uses). ~keep
-#[allow(clippy::too_many_arguments)]
 pub(in crate::e2e::codegen::python) fn render_kwarg_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> String {
-    if let Some(rendered) = render_enum_field_value(field_name, value, containing_type, type_defs, enums, enum_fields)
+    if let Some(rendered) = render_enum_field_value(field_name, value, containing_type, context) {
+        return rendered;
+    }
+    if let Some(rendered) = render_docs_file_field_value(pointer, context.docs_files) {
+        return rendered;
+    }
+    if let Some(rendered) =
+        render_nested_container_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
     {
-        return rendered;
-    }
-    if let Some(rendered) = render_docs_file_field_value(pointer, docs_files) {
-        return rendered;
-    }
-    if let Some(rendered) = render_nested_container_field_value(
-        field_name,
-        value,
-        containing_type,
-        type_defs,
-        enums,
-        enum_fields,
-        docs_files,
-        pointer,
-        used_struct_types,
-    ) {
         return rendered;
     }
 
@@ -172,59 +179,29 @@ pub(in crate::e2e::codegen::python) fn render_kwarg_field_value(
 
 /// Tries each nested-container shape in turn -- single struct, array-of-structs, then
 /// map-of-structs. The three share an identical signature: each resolves `field_name`'s declared
-/// type against `type_defs` and, on a match, recurses through [`render_struct_constructor`].
+/// type against `context.type_defs` and, on a match, recurses through [`render_struct_constructor`].
 /// Split out of [`render_kwarg_field_value`] to keep that function under the file's per-function
 /// line limit; grouping the three container shapes here (rather than inlining each) is what keeps
-/// the split effective, since all three take the same nine arguments.
-#[allow(clippy::too_many_arguments)]
+/// the split effective.
 fn render_nested_container_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> Option<String> {
-    if let Some(rendered) = render_nested_struct_field_value(
-        field_name,
-        value,
-        containing_type,
-        type_defs,
-        enums,
-        enum_fields,
-        docs_files,
-        pointer,
-        used_struct_types,
-    ) {
+    if let Some(rendered) =
+        render_nested_struct_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
+    {
         return Some(rendered);
     }
-    if let Some(rendered) = render_nested_array_field_value(
-        field_name,
-        value,
-        containing_type,
-        type_defs,
-        enums,
-        enum_fields,
-        docs_files,
-        pointer,
-        used_struct_types,
-    ) {
+    if let Some(rendered) =
+        render_nested_array_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
+    {
         return Some(rendered);
     }
-    render_nested_map_field_value(
-        field_name,
-        value,
-        containing_type,
-        type_defs,
-        enums,
-        enum_fields,
-        docs_files,
-        pointer,
-        used_struct_types,
-    )
+    render_nested_map_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
 }
 
 /// Enum branch of [`render_kwarg_field_value`]: an explicitly configured `enum_fields` entry, or
@@ -235,15 +212,14 @@ fn render_enum_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
+    context: KwargRenderContext<'_>,
 ) -> Option<String> {
-    if let Some(enum_type) = enum_fields.get(field_name) {
+    if let Some(enum_type) = context.enum_fields.get(field_name) {
         if let Some(s) = value.as_str() {
             return Some(format!("{enum_type}(\"{s}\")"));
         }
-    } else if let Some(auto_enum_type) = resolve_field_enum_type(field_name, containing_type, type_defs, enums)
+    } else if let Some(auto_enum_type) =
+        resolve_field_enum_type(field_name, containing_type, context.type_defs, context.enums)
         && let Some(s) = value.as_str()
     {
         return Some(format!("{auto_enum_type}(\"{s}\")"));
@@ -262,47 +238,30 @@ fn render_docs_file_field_value(pointer: &str, docs_files: &[FixtureDocsFileInpu
 
 /// Nested-struct branch of [`render_kwarg_field_value`]: a field typed as another generated
 /// pyclass (optionally `Optional`) renders as that class's constructor call.
-#[allow(clippy::too_many_arguments)]
 fn render_nested_struct_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> Option<String> {
-    let nested = resolve_field_struct_type(field_name, containing_type, type_defs)?;
+    let nested = resolve_field_struct_type(field_name, containing_type, context.type_defs)?;
     let obj = value.as_object()?;
-    Some(render_struct_constructor(
-        nested,
-        obj,
-        type_defs,
-        enums,
-        enum_fields,
-        docs_files,
-        pointer,
-        used_struct_types,
-    ))
+    Some(render_struct_constructor(nested, obj, pointer, context, used_struct_types))
 }
 
 /// Nested-array branch of [`render_kwarg_field_value`]: a field typed `Vec<Struct>` (optionally
 /// `Optional`) renders as a Python list of that class's constructor calls.
-#[allow(clippy::too_many_arguments)]
 fn render_nested_array_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> Option<String> {
-    let elem = resolve_field_element_struct_type(field_name, containing_type, type_defs)?;
+    let elem = resolve_field_element_struct_type(field_name, containing_type, context.type_defs)?;
     let arr = value.as_array()?;
     if !arr.iter().all(|item| item.is_object()) {
         return None;
@@ -313,16 +272,7 @@ fn render_nested_array_field_value(
         .enumerate()
         .map(|(index, obj)| {
             let item_pointer = format!("{pointer}/{index}");
-            render_struct_constructor(
-                elem,
-                obj,
-                type_defs,
-                enums,
-                enum_fields,
-                docs_files,
-                &item_pointer,
-                used_struct_types,
-            )
+            render_struct_constructor(elem, obj, &item_pointer, context, used_struct_types)
         })
         .collect();
     Some(format!("[{}]", items.join(", ")))
@@ -334,19 +284,15 @@ fn render_nested_array_field_value(
 /// fields are always string-keyed JSON objects on the wire, so only the value side needs a
 /// constructor. Falls through (returns `None`) when any entry's value is not itself an object,
 /// so a malformed fixture still reaches the `json_to_python_literal` fallback instead of panicking.
-#[allow(clippy::too_many_arguments)]
 fn render_nested_map_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> Option<String> {
-    let elem = resolve_field_map_value_struct_type(field_name, containing_type, type_defs)?;
+    let elem = resolve_field_map_value_struct_type(field_name, containing_type, context.type_defs)?;
     let map_obj = value.as_object()?;
     if map_obj.values().any(|entry| !entry.is_object()) {
         return None;
@@ -356,16 +302,7 @@ fn render_nested_map_field_value(
         .map(|(key, entry)| {
             let entry_obj = entry.as_object().expect("checked above: every entry is an object");
             let entry_pointer = format!("{pointer}/{}", escape_json_pointer(key));
-            let ctor = render_struct_constructor(
-                elem,
-                entry_obj,
-                type_defs,
-                enums,
-                enum_fields,
-                docs_files,
-                &entry_pointer,
-                used_struct_types,
-            );
+            let ctor = render_struct_constructor(elem, entry_obj, &entry_pointer, context, used_struct_types);
             format!("\"{}\": {ctor}", escape_python(key))
         })
         .collect();
@@ -375,15 +312,11 @@ fn render_nested_map_field_value(
 /// Build a `TypeName(field=value, ...)` constructor call for `type_def`, recursing through
 /// [`render_kwarg_field_value`] for each field so arbitrarily deep nested config types resolve
 /// the same way at every depth.
-#[allow(clippy::too_many_arguments)]
 fn render_struct_constructor(
     type_def: &crate::core::ir::TypeDef,
     obj: &serde_json::Map<String, serde_json::Value>,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> String {
     used_struct_types.insert(type_def.name.clone());
@@ -396,11 +329,8 @@ fn render_struct_constructor(
                 field_name,
                 field_value,
                 Some(type_def.name.as_str()),
-                type_defs,
-                enums,
-                enum_fields,
-                docs_files,
                 &field_pointer,
+                context,
                 used_struct_types,
             );
             format!("{snake_key}={rendered}")
@@ -418,13 +348,10 @@ pub(super) fn emit_json_object_arg(
     var_name: &str,
     options_type: Option<&str>,
     options_via: &str,
-    enum_fields: &HashMap<String, String>,
     element_type: &Option<String>,
     fixture_id: &str,
     has_host_root_route: bool,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    docs_files: &[FixtureDocsFileInput],
+    context: KwargRenderContext<'_>,
 ) -> bool {
     if crate::e2e::codegen::value_contains_mock_url_placeholder(value) {
         return emit_json_object_arg_with_mock_url(
@@ -450,19 +377,7 @@ pub(super) fn emit_json_object_arg(
                 let items: Vec<String> = arr
                     .iter()
                     .filter_map(|v| v.as_object())
-                    .map(|obj| {
-                        let dict_items: Vec<String> = obj
-                            .iter()
-                            .map(|(k, v)| {
-                                format!(
-                                    "{}: {}",
-                                    json_to_python_literal(&serde_json::Value::String(k.clone())),
-                                    json_to_python_literal(v)
-                                )
-                            })
-                            .collect();
-                        format!("{{{}}}", dict_items.join(", "))
-                    })
+                    .map(emit_python_object_item)
                     .collect();
                 arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
                 kwarg_exprs.push(var_name.to_string());
@@ -510,7 +425,7 @@ pub(super) fn emit_json_object_arg(
                     .enumerate()
                     .map(|(index, obj)| {
                         let pointer = format!("/{index}");
-                        emit_python_typed_instance(obj, elem_type, type_defs, enums, enum_fields, docs_files, &pointer)
+                        emit_python_typed_instance(obj, elem_type, &pointer, context)
                     })
                     .collect();
                 arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
@@ -529,11 +444,8 @@ pub(super) fn emit_json_object_arg(
                             k,
                             v,
                             Some(opts_type),
-                            type_defs,
-                            enums,
-                            enum_fields,
-                            docs_files,
                             &field_pointer,
+                            context,
                             &mut used_struct_types,
                         );
                         format!("{snake_key}={py_val}")
@@ -619,7 +531,6 @@ pub(super) fn emit_bytes_arg(
 }
 
 /// Emit a Python dict literal for a typed object-array element.
-#[allow(dead_code)]
 fn emit_python_object_item(obj: &serde_json::Map<String, serde_json::Value>) -> String {
     let items: Vec<String> = obj
         .iter()
@@ -640,11 +551,8 @@ fn emit_python_object_item(obj: &serde_json::Map<String, serde_json::Value>) -> 
 fn emit_python_typed_instance(
     obj: &serde_json::Map<String, serde_json::Value>,
     elem_type: &str,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    enum_fields: &HashMap<String, String>,
-    docs_files: &[FixtureDocsFileInput],
     pointer: &str,
+    context: KwargRenderContext<'_>,
 ) -> String {
     let mut used_struct_types = BTreeSet::new();
     let kwargs: Vec<String> = obj
@@ -652,17 +560,8 @@ fn emit_python_typed_instance(
         .map(|(k, v)| {
             let snake_key = k.to_snake_case();
             let field_pointer = format!("{pointer}/{}", escape_json_pointer(k));
-            let rendered = render_kwarg_field_value(
-                k,
-                v,
-                Some(elem_type),
-                type_defs,
-                enums,
-                enum_fields,
-                docs_files,
-                &field_pointer,
-                &mut used_struct_types,
-            );
+            let rendered =
+                render_kwarg_field_value(k, v, Some(elem_type), &field_pointer, context, &mut used_struct_types);
             format!("{snake_key}={rendered}")
         })
         .collect();

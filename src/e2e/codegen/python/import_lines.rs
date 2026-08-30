@@ -6,12 +6,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::core::ir::{EnumDef, TypeDef};
+use crate::core::ir::TypeDef;
 use crate::e2e::config::ArgMapping;
 use crate::e2e::fixture::Fixture;
 
 use super::super::helpers::is_skipped;
-use super::super::test_function::render_kwarg_field_value;
+use super::super::test_function::{KwargRenderContext, render_kwarg_field_value};
 use super::references_identifier;
 
 /// Collect nested config/struct type names referenced by a `json_object` arg's value -- both the
@@ -26,9 +26,7 @@ pub(super) fn collect_nested_config_types(
     arg: &ArgMapping,
     value: &serde_json::Value,
     constructor_type: Option<&str>,
-    type_defs: &[TypeDef],
-    enums: &[EnumDef],
-    enum_fields: &HashMap<String, String>,
+    context: KwargRenderContext<'_>,
     used_config_types: &mut BTreeSet<String>,
 ) {
     if let Some(obj) = value.as_object() {
@@ -38,11 +36,8 @@ pub(super) fn collect_nested_config_types(
                 key,
                 field_value,
                 constructor_type,
-                type_defs,
-                enums,
-                enum_fields,
-                &[],
                 &format!("/{key}"),
+                context,
                 &mut nested,
             );
             used_config_types.extend(nested);
@@ -59,11 +54,8 @@ pub(super) fn collect_nested_config_types(
                     key,
                     field_value,
                     Some(elem_type.as_str()),
-                    type_defs,
-                    enums,
-                    enum_fields,
-                    &[],
                     &format!("/{key}"),
+                    context,
                     &mut nested,
                 );
                 used_config_types.extend(nested);
@@ -242,15 +234,13 @@ mod tests {
         let arg = config_arg();
         let value = serde_json::json!({"nested": {"value": "x"}});
         let mut used_config_types: BTreeSet<String> = BTreeSet::new();
-        collect_nested_config_types(
-            &arg,
-            &value,
-            Some("ExtractionConfig"),
-            &type_defs,
-            &[],
-            &HashMap::new(),
-            &mut used_config_types,
-        );
+        let context = KwargRenderContext {
+            type_defs: &type_defs,
+            enums: &[],
+            enum_fields: &HashMap::new(),
+            docs_files: &[],
+        };
+        collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
 
         assert_eq!(
             used_config_types,
@@ -292,15 +282,13 @@ mod tests {
         let arg = config_arg();
         let value = serde_json::json!({"profiles": {"first": {"value": "x"}}});
         let mut used_config_types: BTreeSet<String> = BTreeSet::new();
-        collect_nested_config_types(
-            &arg,
-            &value,
-            Some("ExtractionConfig"),
-            &type_defs,
-            &[],
-            &HashMap::new(),
-            &mut used_config_types,
-        );
+        let context = KwargRenderContext {
+            type_defs: &type_defs,
+            enums: &[],
+            enum_fields: &HashMap::new(),
+            docs_files: &[],
+        };
+        collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
 
         assert_eq!(
             used_config_types,
@@ -339,7 +327,13 @@ mod tests {
         arg.element_type = Some("BatchFileItem".to_string());
         let value = serde_json::json!([{"nested": {"value": "x"}}]);
         let mut used_config_types: BTreeSet<String> = BTreeSet::new();
-        collect_nested_config_types(&arg, &value, None, &type_defs, &[], &HashMap::new(), &mut used_config_types);
+        let context = KwargRenderContext {
+            type_defs: &type_defs,
+            enums: &[],
+            enum_fields: &HashMap::new(),
+            docs_files: &[],
+        };
+        collect_nested_config_types(&arg, &value, None, context, &mut used_config_types);
 
         assert_eq!(
             used_config_types,
@@ -380,15 +374,13 @@ mod tests {
         let arg = config_arg();
         let value = serde_json::json!({"nested": {"value": "x"}});
         let mut used_config_types: BTreeSet<String> = BTreeSet::new();
-        collect_nested_config_types(
-            &arg,
-            &value,
-            Some("ExtractionConfig"),
-            &type_defs,
-            &[],
-            &HashMap::new(),
-            &mut used_config_types,
-        );
+        let context = KwargRenderContext {
+            type_defs: &type_defs,
+            enums: &[],
+            enum_fields: &HashMap::new(),
+            docs_files: &[],
+        };
+        collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
         assert!(
             used_config_types.contains("GhostConfig"),
             "test setup: GhostConfig must be collected as a candidate for this to be a real test of pruning"
