@@ -206,7 +206,7 @@ pub fn write_scaffold_files_report(
         }
     }
     for file in prepared.into_values() {
-        let full_path = base_dir.join(&file.path);
+        let full_path = super::write::contained_output_path(base_dir, &file.path)?;
         // Asked once per file, not re-derived at each refusal site below: the identical
         // predicate `alef adopt` gates `--clobber-create-once-seeds` on, so a refusal this
         // guard reports and adopt's own refusal of the same path can never disagree. ~keep
@@ -811,6 +811,23 @@ fn normalize_poly_config(full_path: &Path, base_dir: &Path) {
 #[cfg(test)]
 mod merge_managed_toml_tests {
     use super::*;
+
+    #[test]
+    fn scaffold_write_boundary_rejects_an_escaping_generated_file() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let base = temporary.path().join("base");
+        std::fs::create_dir(&base).expect("base directory");
+        let files = vec![GeneratedFile {
+            path: "../escaped.rs".into(),
+            content: "pub fn generated() {}\n".into(),
+            generated_header: true,
+        }];
+
+        let error = write_scaffold_files_report(&files, &base, true)
+            .expect_err("escaping scaffold GeneratedFile path must be rejected");
+        assert!(error.to_string().contains("not contained"), "{error}");
+        assert!(!temporary.path().join("escaped.rs").exists());
+    }
 
     fn exclude_values(merged: &str) -> Vec<String> {
         let doc = merged

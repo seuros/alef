@@ -184,6 +184,10 @@ impl NewAlefConfig {
         let kotlin_android = krate.kotlin_android.clone().or_else(|| ws.kotlin_android.clone());
         let csharp = krate.csharp.clone().or_else(|| ws.csharp.clone());
         let dart = krate.dart.clone().or_else(|| ws.dart.clone());
+        let swift = krate.swift.clone().or_else(|| ws.swift.clone());
+        let gleam = krate.gleam.clone().or_else(|| ws.gleam.clone());
+        let zig = krate.zig.clone().or_else(|| ws.zig.clone());
+        let r = krate.r.clone().or_else(|| ws.r.clone());
 
         validate_language_specific_path_fields(
             &krate.name,
@@ -196,6 +200,14 @@ impl NewAlefConfig {
                 kotlin_package: kotlin.as_ref().and_then(|c| c.package.as_deref()),
                 kotlin_android_package: kotlin_android.as_ref().and_then(|c| c.package.as_deref()),
                 csharp_namespace: csharp.as_ref().and_then(|c| c.namespace.as_deref()),
+                python_module_name: python.as_ref().and_then(|c| c.module_name.as_deref()),
+                elixir_app_name: elixir.as_ref().and_then(|c| c.app_name.as_deref()),
+                gleam_app_name: gleam.as_ref().and_then(|c| c.app_name.as_deref()),
+                swift_module_name: swift.as_ref().and_then(|c| c.module_name.as_deref()),
+                zig_module_name: zig.as_ref().and_then(|c| c.module_name.as_deref()),
+                ruby_gem_name: ruby.as_ref().and_then(|c| c.gem_name.as_deref()),
+                php_extension_name: php.as_ref().and_then(|c| c.extension_name.as_deref()),
+                r_package_name: r.as_ref().and_then(|c| c.package_name.as_deref()),
                 python_scaffold_output: python.as_ref().and_then(|c| c.scaffold_output.as_deref()),
                 node_scaffold_output: node.as_ref().and_then(|c| c.scaffold_output.as_deref()),
                 ruby_scaffold_output: ruby.as_ref().and_then(|c| c.scaffold_output.as_deref()),
@@ -373,11 +385,11 @@ impl NewAlefConfig {
             kotlin,
             kotlin_android,
             jni,
-            swift: krate.swift.clone().or_else(|| ws.swift.clone()),
-            gleam: krate.gleam.clone().or_else(|| ws.gleam.clone()),
+            swift,
+            gleam,
             csharp,
-            r: krate.r.clone().or_else(|| ws.r.clone()),
-            zig: krate.zig.clone().or_else(|| ws.zig.clone()),
+            r,
+            zig,
             exclude: krate.exclude.clone(),
             include: krate.include.clone(),
             output_paths,
@@ -670,7 +682,10 @@ fn validate_crate_name_path_safety(crate_name: &str) -> Result<(), ResolveError>
 /// [`validate_relative_path_field`], which only rejects an absolute value or a `..` component.
 /// The four dotted package/namespace fields go through [`validate_package_like_field`], which
 /// accounts for the `.replace('.', "/")` every one of those backends applies before joining the
-/// value onto an output directory. ~keep
+/// value onto an output directory. Module, app, gem, extension, and package names that become
+/// generated filenames or directories use the flat-segment validator; even where a current
+/// backend normalizes one of them, validating the merged source value keeps later sinks from
+/// silently weakening containment. ~keep
 fn validate_language_specific_path_fields(crate_name: &str, fields: PathSafetyFields<'_>) -> Result<(), ResolveError> {
     validate_path_segment_field(crate_name, fields.jni_crate_dir, "jni.crate_dir")?;
     validate_relative_path_field(crate_name, fields.node_crate_dir, "node.crate_dir")?;
@@ -680,6 +695,14 @@ fn validate_language_specific_path_fields(crate_name: &str, fields: PathSafetyFi
     validate_package_like_field(crate_name, fields.kotlin_package, "kotlin.package")?;
     validate_package_like_field(crate_name, fields.kotlin_android_package, "kotlin_android.package")?;
     validate_package_like_field(crate_name, fields.csharp_namespace, "csharp.namespace")?;
+    validate_path_segment_field(crate_name, fields.python_module_name, "python.module_name")?;
+    validate_path_segment_field(crate_name, fields.elixir_app_name, "elixir.app_name")?;
+    validate_path_segment_field(crate_name, fields.gleam_app_name, "gleam.app_name")?;
+    validate_path_segment_field(crate_name, fields.swift_module_name, "swift.module_name")?;
+    validate_path_segment_field(crate_name, fields.zig_module_name, "zig.module_name")?;
+    validate_path_segment_field(crate_name, fields.ruby_gem_name, "ruby.gem_name")?;
+    validate_path_segment_field(crate_name, fields.php_extension_name, "php.extension_name")?;
+    validate_path_segment_field(crate_name, fields.r_package_name, "r.package_name")?;
     validate_path_field(crate_name, fields.python_scaffold_output, "python.scaffold_output")?;
     validate_path_field(crate_name, fields.node_scaffold_output, "node.scaffold_output")?;
     validate_path_field(crate_name, fields.ruby_scaffold_output, "ruby.scaffold_output")?;
@@ -699,6 +722,14 @@ struct PathSafetyFields<'a> {
     kotlin_package: Option<&'a str>,
     kotlin_android_package: Option<&'a str>,
     csharp_namespace: Option<&'a str>,
+    python_module_name: Option<&'a str>,
+    elixir_app_name: Option<&'a str>,
+    gleam_app_name: Option<&'a str>,
+    swift_module_name: Option<&'a str>,
+    zig_module_name: Option<&'a str>,
+    ruby_gem_name: Option<&'a str>,
+    php_extension_name: Option<&'a str>,
+    r_package_name: Option<&'a str>,
     python_scaffold_output: Option<&'a Path>,
     node_scaffold_output: Option<&'a Path>,
     ruby_scaffold_output: Option<&'a Path>,

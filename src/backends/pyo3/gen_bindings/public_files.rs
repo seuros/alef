@@ -132,3 +132,33 @@ pub(super) fn generate_public_api(
 
     Ok(files)
 }
+
+#[cfg(test)]
+mod path_safety_tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+
+    #[test]
+    fn python_stubs_sink_fires_with_a_contained_module_path() {
+        let parsed: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "sample-core"
+sources = []
+[crates.python]
+module_name = "safe_module"
+[crates.python.stubs]
+output = "stubs"
+"#,
+        )
+        .expect("valid config");
+        let config = parsed.resolve().expect("resolve").remove(0);
+
+        let files = generate_type_stubs(&ApiSurface::default(), &config).expect("stubs render");
+        assert_eq!(files.len(), 1, "the conditional stubs sink must fire");
+        assert_eq!(files[0].path, PathBuf::from("stubs/safe_module.pyi"));
+        crate::core::config::output::validate_output_path(&files[0].path).expect("stub path remains contained");
+    }
+}

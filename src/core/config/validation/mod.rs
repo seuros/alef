@@ -744,7 +744,10 @@ dart = "packages/dart/lib/src"
         let config = resolve_first(toml_str);
         let err = validate_resolved(&config).expect_err("a `/` in the derived Dart library name must be rejected");
         let message = err.to_string();
-        assert!(message.contains("sample/evil"), "error should name the crate: {message}");
+        assert!(
+            message.contains("sample/evil"),
+            "error should name the crate: {message}"
+        );
         assert!(
             message.contains("dart.lib_name"),
             "error should point at the Dart library name: {message}"

@@ -575,6 +575,32 @@ sources = []
         }
     }
 
+    #[test]
+    fn zig_seeded_test_sink_fires_with_a_contained_module_path() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["zig"]
+[[crates]]
+name = "sample-core"
+sources = []
+[crates.zig]
+module_name = "safe_module"
+"#,
+        );
+        let api = ApiSurface {
+            functions: vec![trivial_function("ping")],
+            ..ApiSurface::default()
+        };
+
+        let files = scaffold_zig(&api, &config).expect("Zig scaffold renders");
+        let seed = files
+            .iter()
+            .find(|file| file.path == *"packages/zig/test/safe_module_test.zig")
+            .expect("the conditional seeded-test sink must fire");
+        crate::core::config::output::validate_output_path(&seed.path).expect("seed path remains contained");
+    }
+
     /// The strongest available check: a visible zero-arg, primitive-returning function is
     /// actually called, not just checked for existence.
     #[test]

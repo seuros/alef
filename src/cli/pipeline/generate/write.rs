@@ -1,6 +1,7 @@
 use super::normalization::normalize_content;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::Language;
+use crate::core::config::output::validate_output_path;
 use crate::core::hash;
 use anyhow::Context as _;
 use rayon::prelude::*;
@@ -95,6 +96,17 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
+}
+
+pub(crate) fn contained_output_path(base_dir: &Path, emitted_path: &Path) -> anyhow::Result<std::path::PathBuf> {
+    validate_output_path(emitted_path).map_err(|detail| {
+        anyhow::anyhow!(
+            "generated output path `{}` is not contained beneath `{}`: {detail}",
+            emitted_path.display(),
+            base_dir.display()
+        )
+    })?;
+    Ok(base_dir.join(emitted_path))
 }
 
 /// The **ownership** predicate: extensions where a missing `alef:hash:` marker is
@@ -516,7 +528,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     // own refusal of the same path can never disagree about which one it is. ~keep
     let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
-        let full_path = base_dir.join(&file.path);
+        let full_path = contained_output_path(base_dir, &file.path)?;
         let create_once = crate::cli::commands::adopt::is_create_once_seed(file);
         let (content, is_text) = if super::binary::is_base64_binary_output(&full_path) {
             (super::binary::decode_base64_binary(&full_path, &file.content)?, false)
@@ -889,3 +901,38 @@ mod refusal_drift_tests;
 mod stamp_scope_tests;
 #[cfg(test)]
 mod tree_format_stamp_tests;
+
+#[cfg(test)]
+mod output_containment_tests {
+    use super::*;
+
+    #[test]
+    fn generated_file_write_boundary_rejects_portable_escape_shapes() {
+        for emitted in [
+            "../escaped.rs",
+            r"..\escaped.rs",
+            "/tmp/escaped.rs",
+            r"C:\escaped.rs",
+            "C:escaped.rs",
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let base = temporary.path().join("base");
+            std::fs::create_dir(&base).expect("base directory");
+            let files = vec![(
+                Language::Rust,
+                vec![GeneratedFile {
+                    path: emitted.into(),
+                    content: "pub fn generated() {}\n".into(),
+                    generated_header: true,
+                }],
+            )];
+
+            let error = write_files_report(&files, &base).expect_err("escaping GeneratedFile path must be rejected");
+            assert!(error.to_string().contains("not contained"), "{error}");
+            assert!(
+                !temporary.path().join("escaped.rs").exists(),
+                "write boundary must reject before creating an escaped file for {emitted:?}"
+            );
+        }
+    }
+}

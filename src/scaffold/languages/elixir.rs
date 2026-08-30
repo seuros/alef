@@ -690,3 +690,39 @@ excluded_default_features = ["heic"]
         );
     }
 }
+
+#[cfg(test)]
+mod path_safety_tests {
+    use super::*;
+    use crate::core::config::{NewAlefConfig, TraitBridgeConfig};
+
+    #[test]
+    fn elixir_trait_bridge_sink_fires_with_a_contained_app_path() {
+        let parsed: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["elixir"]
+[[crates]]
+name = "sample-core"
+sources = []
+[crates.elixir]
+app_name = "safe_app"
+[crates.scaffold]
+license = "MIT"
+"#,
+        )
+        .expect("valid config");
+        let mut config = parsed.resolve().expect("resolve").remove(0);
+        config.trait_bridges = vec![TraitBridgeConfig {
+            trait_name: "Backend".into(),
+            ..TraitBridgeConfig::default()
+        }];
+
+        let files = scaffold_elixir(&ApiSurface::default(), &config).expect("Elixir scaffold renders");
+        let bridge = files
+            .iter()
+            .find(|file| file.path.to_string_lossy().ends_with("safe_app/backend_bridge.ex"))
+            .expect("the conditional trait-bridge sink must fire");
+        crate::core::config::output::validate_output_path(&bridge.path).expect("trait-bridge path remains contained");
+    }
+}
