@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Recognize `scoop` as a release target in `alef release-metadata`, so consumers can use the
+  emitted `release_scoop` flag to gate a Scoop-bucket publish job. Like `homebrew`, it implies
+  `cli` because Scoop manifests point at prebuilt CLI release archives.
+
 ### Fixed
 
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object

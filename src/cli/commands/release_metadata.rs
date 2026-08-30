@@ -19,6 +19,7 @@ pub const ALL_RELEASE_TARGETS: &[&str] = &[
     "crates",
     "docker",
     "homebrew",
+    "scoop",
     "java",
     "csharp",
     "go",
@@ -118,8 +119,10 @@ pub fn compute(
 
     let enabled = parse_targets(targets_csv, &valid_targets)?;
 
+    // ~keep Both OS package managers distribute the prebuilt CLI archives rather than building
+    // from source, so either one on its own still needs the `cli` target's release assets.
     let mut enabled = enabled;
-    if enabled.get("homebrew").copied().unwrap_or(false) {
+    if enabled.get("homebrew").copied().unwrap_or(false) || enabled.get("scoop").copied().unwrap_or(false) {
         enabled.insert("cli".to_string(), true);
     }
 
@@ -323,6 +326,27 @@ mod tests {
         let meta = compute("v4.0.0", "homebrew", None, "workflow_dispatch", false, false, None).unwrap();
         assert!(meta.targets["homebrew"]);
         assert!(meta.targets["cli"]);
+    }
+
+    #[test]
+    fn compute_scoop_implies_cli() {
+        let meta = compute("v4.0.0", "scoop", None, "workflow_dispatch", false, false, None).unwrap();
+        assert!(meta.targets["scoop"]);
+        assert!(meta.targets["cli"]);
+    }
+
+    /// Consumers can gate a Scoop publish job on `release_scoop`, so the emitted JSON must carry
+    /// the key even when the target is off. A missing key reads as an empty string in a GitHub
+    /// Actions `if:` and would skip the job silently.
+    #[test]
+    fn json_output_has_release_scoop_both_ways() {
+        let enabled = compute("v1.0.0", "scoop", None, "release", false, false, None).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&enabled.to_json().unwrap()).unwrap();
+        assert_eq!(val["release_scoop"], serde_json::json!(true));
+
+        let disabled = compute("v1.0.0", "python", None, "release", false, false, None).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&disabled.to_json().unwrap()).unwrap();
+        assert_eq!(val["release_scoop"], serde_json::json!(false));
     }
 
     #[test]
