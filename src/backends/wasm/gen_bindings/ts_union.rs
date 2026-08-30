@@ -17,7 +17,7 @@
 
 use ahash::{AHashMap, AHashSet};
 
-use crate::codegen::naming::{to_node_name, wire_variant_value};
+use crate::codegen::naming::{wire_field_name, wire_variant_value};
 use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 
 use super::enums::is_untagged_data_enum;
@@ -142,7 +142,12 @@ pub(super) fn build_untagged_enum_ts_plans(
         // if that has not happened yet. ~keep
         if !ctx.resolved_names.contains_key(&enum_def.name) {
             ctx.in_progress.insert(enum_def.name.clone());
-            let members: Vec<String> = enum_def.variants.iter().map(|v| ctx.map_variant(v)).collect();
+            let rename_all_fields = enum_def.rename_all_fields.as_deref();
+            let members: Vec<String> = enum_def
+                .variants
+                .iter()
+                .map(|v| ctx.map_variant(v, rename_all_fields))
+                .collect();
             ctx.in_progress.remove(&enum_def.name);
             let ts_type_name = format!("{prefix}{}", enum_def.name);
             ctx.resolved_names.insert(enum_def.name.clone(), ts_type_name.clone());
@@ -260,7 +265,7 @@ struct TsMapContext<'a> {
 }
 
 impl TsMapContext<'_> {
-    fn map_variant(&mut self, variant: &EnumVariant) -> String {
+    fn map_variant(&mut self, variant: &EnumVariant, rename_all_fields: Option<&str>) -> String {
         if variant.fields.is_empty() {
             // A fieldless variant of an otherwise data-carrying untagged enum serializes as
             // serde's unit representation: JSON `null`.
@@ -273,15 +278,29 @@ impl TsMapContext<'_> {
             let members: Vec<String> = variant.fields.iter().map(|f| self.map_type(&f.ty)).collect();
             return format!("[{}]", members.join(", "));
         }
-        let fields = self.map_fields(&variant.fields);
+        let fields = self.map_fields(&variant.fields, rename_all_fields);
         render_inline_object(&fields)
     }
 
-    fn map_fields(&mut self, fields: &[FieldDef]) -> Vec<TsField> {
+    /// Every member this module declares is STRUCTURAL: the runtime value is a plain JS object
+    /// `serde_wasm_bindgen` produced from, or will deserialize into, the CORE Rust type (the
+    /// field's `JsValue` goes straight through `serde_wasm_bindgen::from_value` into
+    /// `core::{Type}` -- see `codegen::conversions::binding_to_core::fields`). Its keys are
+    /// therefore serde WIRE names. A `#[wasm_bindgen]` getter's `to_node_name` host name never
+    /// appears on this path, because no wrapper class sits on it.
+    ///
+    /// Declaring the host name here disagreed with the very deserializer the module doc says it
+    /// does not touch: a core field `max_chars` was declared `maxChars`, and
+    /// `serde_wasm_bindgen::from_value` on an object written against that declaration falls
+    /// through to `unwrap_or_default()`. `backends::napi::gen_bindings::errors`'s
+    /// `untagged_variant_dts_type` is the same declaration for the same runtime mechanism and
+    /// resolves the key the same way; `backends::go`'s `go_data_enum_variant_field` is the
+    /// sibling that has always kept the host name and the wire key apart. ~keep
+    fn map_fields(&mut self, fields: &[FieldDef], rename_all: Option<&str>) -> Vec<TsField> {
         fields
             .iter()
             .map(|f| TsField {
-                name: to_node_name(&f.name),
+                name: wire_field_name(&f.name, f.serde_rename.as_deref(), rename_all),
                 ts_type: self.map_field_type(f),
             })
             .collect()
@@ -356,7 +375,7 @@ impl TsMapContext<'_> {
             return "any".to_string();
         }
         self.in_progress.insert(type_def.name.clone());
-        let fields = self.map_fields(&type_def.fields);
+        let fields = self.map_fields(&type_def.fields, type_def.serde_rename_all.as_deref());
         self.in_progress.remove(&type_def.name);
         self.resolved_names.insert(type_def.name.clone(), ts_name.clone());
         self.decls.push(TsAuxDecl::Interface {

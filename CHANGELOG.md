@@ -161,6 +161,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
   on any failure and asserted nothing; it now binds both ABI failure channels and requires the
   failure to have carried a message or a non-catch-all error-set member.
+- Declare an `#[serde(untagged)]` data enum's struct-variant field keys in the Node and WASM
+  TypeScript surfaces as serde wire names rather than host camelCase property names. Both
+  backends bridge these values straight into the core Rust type through serde, so the
+  previously declared host spelling described a shape neither deserializer accepts and
+  silently fell through to the enum's `Default`. `rename_all_fields` is now honored, and the
+  enum's variant-level `rename_all` is no longer applied to field keys.
 - Derive the synthesized discriminator key for a tagged-object enum lowering from one
   shared authority (`codegen::serde_enum_repr::tagged_object_tag_key`). The Ruby/Magnus
   `from_hash` dispatcher previously fell back to `kind` while every other backend fell back

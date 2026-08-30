@@ -383,7 +383,7 @@ pub(super) fn gen_dts(
                     // place the real per-variant shapes can be expressed. (~keep)
                     lines.push(format!("export type {ts_name} ="));
                     for variant in &e.variants {
-                        lines.push(format!("  | {}", untagged_variant_dts_type(variant)));
+                        lines.push(format!("  | {}", untagged_variant_dts_type(e, variant)));
                     }
                 } else {
                     lines.push(format!("export declare enum {ts_name} {{"));
@@ -652,7 +652,7 @@ pub(crate) fn internal_tagged_union_dts_lines(e: &EnumDef, ts_name: &str) -> Vec
 /// a newtype variant serializes as its inner value, a multi-field tuple variant as a TS tuple,
 /// a struct variant as its own object, and a unit variant as `null`. There is no discriminant —
 /// serde distinguishes untagged variants structurally at deserialize time. (~keep)
-fn untagged_variant_dts_type(variant: &EnumVariant) -> String {
+fn untagged_variant_dts_type(enum_def: &EnumDef, variant: &EnumVariant) -> String {
     if variant.fields.is_empty() {
         return "null".to_string();
     }
@@ -667,12 +667,34 @@ fn untagged_variant_dts_type(variant: &EnumVariant) -> String {
         .fields
         .iter()
         .map(|field| {
-            let js_name = to_node_name(&field.name);
+            // WIRE names, not host names. An untagged data enum is the one napi shape whose
+            // value never passes through a `#[napi(object)]` struct: `gen_enum` routes it to
+            // `gen_untagged_data_enum_as_value_wrapper`, a `#[serde(transparent)]` newtype over
+            // `serde_json::Value`, and the generated `impl From<Js{Enum}> for core::{Enum}` is
+            // `serde_json::from_value(val.0)` straight into the CORE type. The keys that
+            // deserializer accepts are therefore the core type's serde names -- there is no
+            // `js_name` anywhere on this path to make `to_node_name` true.
+            //
+            // Declaring `to_node_name(&field.name)` here made this the exact defect shape the
+            // `.d.ts`/runtime enum-shape parity tests exist to catch, one layer deeper: a core
+            // field `max_chars` was declared `maxChars`, and `from_value` on the object a caller
+            // wrote against that declaration falls through to `unwrap_or_default()` -- the wrong
+            // variant, silently, with no error to trace back.
+            //
+            // The container rule for a struct variant's field names is `rename_all_fields`, NOT
+            // the enum's `serde_rename_all` (which cases VARIANT names) -- the same two-namespace
+            // split `backends::go::gen_bindings::types::field_shape::go_data_enum_variant_field`
+            // already honors, which is the sibling backend that got this right. ~keep
+            let wire_name = crate::codegen::naming::wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                enum_def.rename_all_fields.as_deref(),
+            );
             let ts_ty = dts_type(&field.ty);
             if matches!(field.ty, TypeRef::Optional(_)) {
-                format!("{js_name}?: {ts_ty}")
+                format!("{wire_name}?: {ts_ty}")
             } else {
-                format!("{js_name}: {ts_ty}")
+                format!("{wire_name}: {ts_ty}")
             }
         })
         .collect();
