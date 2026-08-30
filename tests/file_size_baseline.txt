@@ -29,7 +29,6 @@ src/backends/zig/gen_bindings/functions.rs 1494
 src/cli/cache.rs 1189
 src/cli/commands/validate_versions.rs 1022
 src/cli/pipeline/generate/header_freshness.rs 1622
-src/cli/pipeline/generate/scaffold.rs 1067
 src/cli/pipeline/generate/tests.rs 2450
 src/cli/pipeline/version_tests/sync_versions.rs 1276
 src/codegen/config_gen/tests/defaults.rs 1224
@@ -69,7 +68,6 @@ src/readme/tests/template.rs 1371
 src/scaffold/languages/dart.rs 1358
 src/scaffold/languages/swift.rs 1827
 src/scaffold/languages/zig.rs 1113
-src/scaffold/mod.rs 1212
 src/scaffold/tests/ffi_go_java_ruby.rs 1081
 src/scaffold/tests/poly.rs 1068
 tests/adapters_adapter_test.rs 1301
