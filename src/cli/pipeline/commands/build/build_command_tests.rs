@@ -1,6 +1,16 @@
 use super::*;
 use crate::core::backend::{BuildConfig, BuildDependency};
 
+/// A directory as it is spelled *inside an emitted shell command* — a quoted word, not a bare
+/// path. Expectations derive it from `quote_word` rather than restating one quoting spelling, so
+/// a change to the escaping policy cannot silently repoint a command at a different directory:
+/// the escaping itself is proved separately, and once, by
+/// `core::config::shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile
+/// value through a real shell. ~keep
+fn quoted(dir: &str) -> String {
+    crate::core::config::shell::quote_word(dir)
+}
+
 #[test]
 fn csharp_build_command_uses_verbosity_flag_not_query_mode() {
     let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
@@ -218,13 +228,14 @@ sources = ["src/lib.rs"]
         post_build: Vec::new(),
     };
 
+    let dir = quoted("packages/kotlin");
     assert_eq!(
         build_command_for(Language::Kotlin, &build_config, &config, false),
-        "cd packages/kotlin && gradle build"
+        format!("cd {dir} && gradle build")
     );
     assert_eq!(
         build_command_for(Language::Kotlin, &build_config, &config, true),
-        "cd packages/kotlin && gradle build -Prelease"
+        format!("cd {dir} && gradle build -Prelease")
     );
 }
 
@@ -281,7 +292,7 @@ kotlin_android = '{deep_source_dir}/'
         post_build: Vec::new(),
     };
 
-    let expected_root = project_root.display().to_string();
+    let expected_root = quoted(&project_root.display().to_string());
     assert_eq!(
         build_command_for(Language::KotlinAndroid, &build_config, &config, false),
         format!("cd {expected_root} && gradle assembleDebug")
@@ -352,10 +363,10 @@ kotlin_android = '{deep_source_dir}/'
 
     // The configured output path carries a trailing separator and the fallback returns it
     // verbatim, so the expectation must too -- `cd <dir>/` is what a real run emits. ~keep
-    let expected = deep_source_dir.display().to_string();
+    let expected = quoted(&format!("{}/", deep_source_dir.display()));
     assert_eq!(
         build_command_for(Language::KotlinAndroid, &build_config, &config, false),
-        format!("cd {expected}/ && gradle assembleDebug")
+        format!("cd {expected} && gradle assembleDebug")
     );
 }
 
@@ -417,6 +428,14 @@ package = "dev.alpha"
         cli_release, default_release,
         "build_command_for's gradle arm must resolve the same KotlinAndroid release command as \
          build_defaults, not the umbrella `gradle build -Prelease` shared with Kotlin"
+    );
+    // Equality alone is satisfied by both sides being wrong in the same way. The commands reach
+    // `sh -c` with a consumer-configured directory in them, so pin the property that made them
+    // diverge in the first place: the directory is a *quoted word*, on both sides. ~keep
+    assert_eq!(
+        cli_build,
+        format!("cd {} && gradle assembleDebug", quoted("packages/kotlin-android")),
+        "both call sites must shell-quote the directory they cd into"
     );
 }
 

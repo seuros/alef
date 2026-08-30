@@ -12,6 +12,24 @@ fn ruby_update_command(output_dir: &str) -> String {
     )
 }
 
+/// The optional `-Dmaven.version.rules=…` argument, emitted only when the scaffolded
+/// `versions-rules.xml` is actually on disk.
+///
+/// `output_dir` arrives already shell-quoted (`'packages/java'`), and that is exactly why this
+/// fragment cannot be written as one flat double-quoted string: inside `echo "…"` a single quote
+/// is a *literal character*, not a quoting operator, so interpolating there emits
+/// `file:///repo/'packages/java'/versions-rules.xml` — a URI with apostrophes in it that names no
+/// file, silently disarming the rules maven was told to read. The interpolation therefore closes
+/// the double quotes around it (`…/"{output_dir}"/versions-rules.xml`) so the already-quoted word
+/// concatenates into the same argument while still being quoted *by the shell*, which keeps a
+/// `$(…)` or backtick in a configured output path inert. Verified against a real `sh`, not by
+/// reading. ~keep
+fn maven_version_rules_flag(output_dir: &str) -> String {
+    format!(
+        "$([ -f {output_dir}/versions-rules.xml ] && echo \"-Dmaven.version.rules=file://${{PWD}}/\"{output_dir}\"/versions-rules.xml\")"
+    )
+}
+
 /// Return the default update configuration for a language.
 ///
 /// The `output_dir` is the package directory where scaffolded files live
@@ -121,16 +139,19 @@ pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext
                 format!("cd {output_dir} && go mod tidy"),
             ])),
         },
-        Language::Java => UpdateConfig {
-            precondition: Some(require_tool("mvn")),
-            before: None,
-            update: Some(StringOrVec::Single(format!(
-                "mvn -f {output_dir}/pom.xml versions:use-latest-releases $([ -f {output_dir}/versions-rules.xml ] && echo \"-Dmaven.version.rules=file://${{PWD}}/{output_dir}/versions-rules.xml\") --batch-mode --no-transfer-progress"
-            ))),
-            upgrade: Some(StringOrVec::Single(format!(
-                "mvn -f {output_dir}/pom.xml versions:use-latest-releases -DallowMajorUpdates=true $([ -f {output_dir}/versions-rules.xml ] && echo \"-Dmaven.version.rules=file://${{PWD}}/{output_dir}/versions-rules.xml\") --batch-mode --no-transfer-progress"
-            ))),
-        },
+        Language::Java => {
+            let rules_flag = maven_version_rules_flag(&output_dir);
+            UpdateConfig {
+                precondition: Some(require_tool("mvn")),
+                before: None,
+                update: Some(StringOrVec::Single(format!(
+                    "mvn -f {output_dir}/pom.xml versions:use-latest-releases {rules_flag} --batch-mode --no-transfer-progress"
+                ))),
+                upgrade: Some(StringOrVec::Single(format!(
+                    "mvn -f {output_dir}/pom.xml versions:use-latest-releases -DallowMajorUpdates=true {rules_flag} --batch-mode --no-transfer-progress"
+                ))),
+            }
+        }
         Language::Csharp => UpdateConfig {
             precondition: Some(format!(
                 "command -v dotnet >/dev/null 2>&1 && [ -n \"$(find {output_dir} -maxdepth 3 \\( -name '*.sln' -o -name '*.csproj' \\) 2>/dev/null | head -1)\" ]"
@@ -402,6 +423,16 @@ mod tests {
         }
     }
 
+    /// The directory as it is spelled *inside the emitted shell command* — a quoted word, not a
+    /// bare path. Expectations derive it from `quote_word` rather than restating one quoting
+    /// spelling, so a change to the escaping policy cannot silently repoint a command at a
+    /// different directory: the escaping is proved separately, and once, by
+    /// `shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile value
+    /// through a real shell. ~keep
+    fn quoted(dir: &str) -> String {
+        super::super::shell::quote_word(dir)
+    }
+
     #[test]
     fn java_update_uses_maven_versions() {
         let c = cfg(Language::Java, "packages/java");
@@ -410,8 +441,84 @@ mod tests {
         assert!(update.contains("versions:use-latest-releases"));
         assert!(upgrade.contains("allowMajorUpdates=true"));
         assert!(
-            update.contains("[ -f packages/java/versions-rules.xml ]"),
-            "java update should make versions-rules.xml optional"
+            update.contains(&format!("[ -f {}/versions-rules.xml ]", quoted("packages/java"))),
+            "java update should make versions-rules.xml optional, got: {update}"
+        );
+    }
+
+    /// The emitted `-Dmaven.version.rules=` value is built inside an `echo "…"`, where a single
+    /// quote is a literal character rather than a quoting operator. Asserting on the command
+    /// *text* cannot tell a correct URI from one carrying stray apostrophes, so this runs the
+    /// fragment through a real `sh` and checks the path it produces actually names the rules
+    /// file on disk. Fails on the flat-double-quoted form this replaced. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn java_version_rules_flag_names_a_file_that_exists() {
+        const PACKAGE: &str = "packages/java";
+        let root = tempfile::tempdir().expect("tempdir");
+        let package = root.path().join(PACKAGE);
+        std::fs::create_dir_all(&package).expect("create package dir");
+        std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
+
+        let fragment = maven_version_rules_flag(&quoted(PACKAGE));
+        let output = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '%s\\n' {fragment}")])
+            .current_dir(root.path())
+            .output()
+            .expect("shell should start");
+        // Joined rather than indexed: the `$(…)` is deliberately unquoted (quoting it would hand
+        // maven an empty argument when no rules file exists), so a `$TMPDIR` containing a space
+        // splits the substitution into several words. That is a real, pre-existing limitation of
+        // the unquoted substitution and not what this test is about — reassembling keeps the test
+        // measuring the emitted path rather than the runner's temp directory. ~keep
+        let emitted = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let uri = emitted
+            .strip_prefix("-Dmaven.version.rules=file://")
+            .unwrap_or_else(|| panic!("expected a file:// rules URI, got `{emitted}`"));
+        assert!(
+            !uri.contains('\''),
+            "the rules URI carries literal apostrophes from the quoted output dir: `{uri}`"
+        );
+        assert!(
+            std::path::Path::new(uri).is_file(),
+            "maven is pointed at `{uri}`, which is not the rules file that exists on disk"
+        );
+    }
+
+    /// A configured output path is consumer input reaching `sh -c`. Inside the `echo "…"` that
+    /// builds the rules URI, `;` is inert but `$(…)` is not — so the check that matters is that
+    /// no command substitution runs, not that no semicolon survives. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn java_version_rules_flag_does_not_execute_a_configured_output_path() {
+        // The hostile directory and its rules file must really exist, or the `[ -f … ]` guard
+        // short-circuits and the `echo` this test exists to exercise never runs — the check
+        // would then pass while examining nothing. ~keep
+        const HOSTILE: &str = "packages/java$(touch executed)";
+        let root = tempfile::tempdir().expect("tempdir");
+        let package = root.path().join(HOSTILE);
+        std::fs::create_dir_all(&package).expect("create hostile package dir");
+        std::fs::write(package.join("versions-rules.xml"), "<ruleset/>\n").expect("write rules file");
+        let witness = root.path().join("executed");
+
+        let fragment = maven_version_rules_flag(&quoted(HOSTILE));
+        let output = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '%s\\n' {fragment}")])
+            .current_dir(root.path())
+            .output()
+            .expect("shell should start");
+
+        assert!(output.status.success(), "the emitted fragment must be valid shell");
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+            "the rules flag must have been emitted, or this test proved nothing"
+        );
+        assert!(
+            !witness.exists(),
+            "a command substitution in the configured output path was executed by the update command"
         );
     }
 
@@ -420,8 +527,9 @@ mod tests {
         let c = cfg(Language::Csharp, "packages/csharp");
         let update = c.update.unwrap().commands().join(" ");
         let upgrade = c.upgrade.unwrap().commands().join(" ");
-        assert!(update.contains("find packages/csharp"), "update should locate csproj");
-        assert!(upgrade.contains("find packages/csharp"), "upgrade should locate csproj");
+        let find = format!("find {}", quoted("packages/csharp"));
+        assert!(update.contains(&find), "update should locate csproj, got: {update}");
+        assert!(upgrade.contains(&find), "upgrade should locate csproj, got: {upgrade}");
     }
 
     #[test]
@@ -429,8 +537,8 @@ mod tests {
         let c = cfg(Language::Csharp, "packages/csharp");
         let pre = c.precondition.unwrap();
         assert!(
-            pre.contains("find packages/csharp"),
-            "precondition should search for project file"
+            pre.contains(&format!("find {}", quoted("packages/csharp"))),
+            "precondition should search for project file, got: {pre}"
         );
         assert!(pre.contains("dotnet"), "precondition should still require dotnet CLI");
     }
@@ -480,7 +588,7 @@ mod tests {
             "Swift update should use swift package update, got: {update}"
         );
         assert!(
-            update.contains("--package-path packages/swift"),
+            update.contains(&format!("--package-path {}", quoted("packages/swift"))),
             "Swift update should include package path, got: {update}"
         );
     }

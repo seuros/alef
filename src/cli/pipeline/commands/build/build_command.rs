@@ -423,6 +423,14 @@ pub(super) fn build_command_for(
             // this call site and `default_build_config`'s own Kotlin/KotlinAndroid arms deriving
             // the same answer instead of two independent ones (xberg-io/alef#259). ~keep
             let task = crate::core::config::build_defaults::gradle_build_task(lang, release);
+            // Quoted for the same reason `build_defaults` quotes its own `cd {output_dir}`: this
+            // string reaches `sh -c`, and `build_dir` is derived from a consumer-configured
+            // `[crates.output]` path (or from a directory name found beside it on disk). It is
+            // also what keeps this arm byte-identical to the built-in default the two call sites
+            // are cross-checked against in `kotlin_android_gradle_arm_matches_build_defaults_default`
+            // — an unquoted answer here would be a *different command* from the one alef ships as
+            // the default, which is exactly the divergence xberg-io/alef#259 was about. ~keep
+            let build_dir = crate::core::config::shell::quote_word(&build_dir);
             format!("cd {build_dir} && gradle {task}")
         }
         "swift" => {

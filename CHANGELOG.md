@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   override text itself is left untouched, since it is meant to run as shell). Composed shell
   commands are now logged with env var values redacted (names only) to avoid leaking secrets
   into command-execution logs.
+- Shell-quote the directory `alef build`'s gradle command changes into. `build_command_for`'s
+  `"gradle"` arm interpolated a consumer-configured `[crates.output]` path into `cd {dir} &&
+  gradle …` unquoted, while the built-in default for the same language quoted it — so the two
+  producers emitted different commands and only one of them was injection-safe.
 
 ### Added
 
@@ -37,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
+  already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
+  a literal character rather than a quoting operator, so maven was handed
+  `file:///repo/'packages/java'/versions-rules.xml` — a URI naming no file, silently disarming
+  the version rules it was told to apply.
 - Stop the generated WASM crate's `[features] default = [...]` from re-enabling a core-crate
   feature its own dependency line had just disabled. `gen_cargo_toml` emits
   `default-features = false, features = [...]` on the core dep whenever `[crates.wasm] features`
