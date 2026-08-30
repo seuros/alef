@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   casts, including unit variants passed in directly typed arrays.
 - Preserve raw payloads for untagged N-API enum arrays and honor custom, renamed, and synthesized
   discriminators when lowering tagged enum array elements.
-- Detect file-backed byte values nested in typed request objects so every generated E2E backend
-  activates its test-document path setup when required.
+- Detect file-backed byte values nested in typed request objects and batch arrays so every
+  generated E2E backend activates its test-document path setup when required.
 - Generate Java empty and non-empty assertions for record fields as nullability checks instead
   of calling collection-only `isEmpty()` methods.
 - Generate Go assertions from the binding's emitted pointer/value field shape, avoiding invalid
