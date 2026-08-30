@@ -6,6 +6,8 @@
 //! Split out of `assertions.rs`, which is over the 1000-line cap and may not grow.
 
 use super::*;
+use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::field_access::FieldResolver;
 use std::collections::{HashMap, HashSet};
 
 /// Run the shared field funnel over a rendered body and return its verdicts, so a test can
@@ -28,19 +30,18 @@ fn render_streaming(assertion: &Assertion) -> String {
         &HashSet::new(),
     );
     let mut out = String::new();
-    render_assertion(
-        &mut out,
-        assertion,
-        "result",
-        "pkg",
-        &resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        true,
-        None,
-    );
+    let context = AssertionRenderContext {
+        result_var: "result",
+        import_alias: "pkg",
+        field_resolver: &resolver,
+        optional_locals: &HashMap::new(),
+        numeric_scalar_fields: &HashSet::new(),
+        result_is_simple: false,
+        result_is_array: false,
+        is_streaming: true,
+        streaming_item_type: None,
+    };
+    render_assertion(&mut out, &context, assertion);
     out
 }
 

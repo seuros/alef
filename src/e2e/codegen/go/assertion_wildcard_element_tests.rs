@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::assertions::render_assertion;
+use super::assertions::{AssertionRenderContext, render_assertion};
 use crate::e2e::codegen::wildcard_element_fixture::{
     WILDCARD_FIELD, assert_container_accessor_appears_once, assert_element_relative, contains_assertion,
     envelope_resolver, report_resolver,
@@ -26,19 +26,18 @@ const CONTAINER_ACCESSOR: &str = ".Records";
 
 fn render(resolver: &FieldResolver) -> String {
     let mut out = String::new();
-    render_assertion(
-        &mut out,
-        &contains_assertion(WILDCARD_FIELD),
-        "result",
-        "sample",
-        resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        false,
-        None,
-    );
+    let context = AssertionRenderContext {
+        result_var: "result",
+        import_alias: "sample",
+        field_resolver: resolver,
+        optional_locals: &HashMap::new(),
+        numeric_scalar_fields: &HashSet::new(),
+        result_is_simple: false,
+        result_is_array: false,
+        is_streaming: false,
+        streaming_item_type: None,
+    };
+    render_assertion(&mut out, &context, &contains_assertion(WILDCARD_FIELD));
     out
 }
 

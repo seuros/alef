@@ -4,6 +4,7 @@
 //! Split out of `assertions.rs`, which is over the 1000-line cap and may not grow.
 
 use super::*;
+use crate::e2e::field_access::FieldResolver;
 use std::collections::{HashMap, HashSet};
 
 fn make_assertion(field: &str, value: &str) -> Assertion {
@@ -24,6 +25,26 @@ fn contains_assertion(field: &str, value: &str) -> Assertion {
     }
 }
 
+/// Shared fixture setup: every test in this file renders one assertion against a
+/// resolver-configured `result` value, with every other `AssertionRenderContext` field
+/// held at its default (non-streaming, non-array, no optional locals) value.
+fn render_with_resolver(assertion: &Assertion, resolver: &FieldResolver) -> String {
+    let mut out = String::new();
+    let context = AssertionRenderContext {
+        result_var: "result",
+        import_alias: "pkg",
+        field_resolver: resolver,
+        optional_locals: &HashMap::new(),
+        numeric_scalar_fields: &HashSet::new(),
+        result_is_simple: false,
+        result_is_array: false,
+        is_streaming: false,
+        streaming_item_type: None,
+    };
+    render_assertion(&mut out, &context, assertion);
+    out
+}
+
 fn render_bare(assertion: &Assertion) -> String {
     let resolver = FieldResolver::new(
         &HashMap::new(),
@@ -32,21 +53,7 @@ fn render_bare(assertion: &Assertion) -> String {
         &HashSet::new(),
         &HashSet::new(),
     );
-    let mut out = String::new();
-    render_assertion(
-        &mut out,
-        assertion,
-        "result",
-        "pkg",
-        &resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        false,
-        None,
-    );
-    out
+    render_with_resolver(assertion, &resolver)
 }
 
 /// Render `assertion` against a resolver where `optional_field` is the one field
@@ -62,21 +69,7 @@ fn render_with_optional_field(assertion: &Assertion, optional_field: &str) -> St
         &HashSet::new(),
         &HashSet::new(),
     );
-    let mut out = String::new();
-    render_assertion(
-        &mut out,
-        assertion,
-        "result",
-        "pkg",
-        &resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        false,
-        None,
-    );
-    out
+    render_with_resolver(assertion, &resolver)
 }
 
 fn is_true_assertion(field: &str) -> Assertion {
@@ -197,20 +190,7 @@ fn go_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
     )
     .with_ir_fields(reachable, HashSet::new(), HashSet::new());
     let assertion = make_assertion("data", "hello");
-    let mut out = String::new();
-    render_assertion(
-        &mut out,
-        &assertion,
-        "result",
-        "pkg",
-        &resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        false,
-        None,
-    );
+    let out = render_with_resolver(&assertion, &resolver);
     assert!(!out.contains("skipped"), "got: {out}");
 }
 
@@ -233,19 +213,6 @@ fn go_ir_excluded_field_present_in_result_fields_is_still_skipped() {
     )
     .with_ir_fields(HashSet::new(), excluded, HashSet::new());
     let assertion = make_assertion("internal_diagnostics", "hello");
-    let mut out = String::new();
-    render_assertion(
-        &mut out,
-        &assertion,
-        "result",
-        "pkg",
-        &resolver,
-        &HashMap::new(),
-        &HashSet::new(),
-        false,
-        false,
-        false,
-        None,
-    );
+    let out = render_with_resolver(&assertion, &resolver);
     assert!(out.contains("skipped"), "got: {out}");
 }

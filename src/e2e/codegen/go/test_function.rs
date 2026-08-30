@@ -615,6 +615,20 @@ pub(super) fn render_test_function_with_facts(
         .filter_map(|a| a.field.as_deref())
         .collect();
 
+    // Call-invariant across every assertion in this fixture's loop below -- built once
+    // rather than threaded as separate parameters through each `render_assertion` call.
+    let assertion_context = super::assertions::AssertionRenderContext {
+        result_var: &effective_result_var,
+        import_alias,
+        field_resolver,
+        optional_locals: &optional_locals,
+        numeric_scalar_fields: &numeric_scalar_fields,
+        result_is_simple,
+        result_is_array,
+        is_streaming,
+        streaming_item_type,
+    };
+
     // `out` accumulates every fixture's rendered function in this file (see the
     // caller in `test_file.rs`), so the strict-availability scan below must only
     // look at the text this fixture's own assertion loop appends — scanning the
@@ -652,71 +666,23 @@ pub(super) fn render_test_function_with_facts(
                 if field_resolver.is_valid_for_result(f) {
                     let is_struct_value = !guard.contains('[') && !guard.contains('(') && !guard.contains("map");
                     if is_struct_value {
-                        render_assertion(
-                            out,
-                            assertion,
-                            &effective_result_var,
-                            import_alias,
-                            field_resolver,
-                            &optional_locals,
-                            &numeric_scalar_fields,
-                            result_is_simple,
-                            result_is_array,
-                            is_streaming,
-                            streaming_item_type,
-                        );
+                        render_assertion(out, &assertion_context, assertion);
                         continue;
                     }
                     let _ = writeln!(out, "\tif {guard} != nil {{");
                     let mut nil_buf = String::new();
-                    render_assertion(
-                        &mut nil_buf,
-                        assertion,
-                        &effective_result_var,
-                        import_alias,
-                        field_resolver,
-                        &optional_locals,
-                        &numeric_scalar_fields,
-                        result_is_simple,
-                        result_is_array,
-                        is_streaming,
-                        streaming_item_type,
-                    );
+                    render_assertion(&mut nil_buf, &assertion_context, assertion);
                     for line in nil_buf.lines() {
                         let _ = writeln!(out, "\t{line}");
                     }
                     let _ = writeln!(out, "\t}}");
                 } else {
-                    render_assertion(
-                        out,
-                        assertion,
-                        &effective_result_var,
-                        import_alias,
-                        field_resolver,
-                        &optional_locals,
-                        &numeric_scalar_fields,
-                        result_is_simple,
-                        result_is_array,
-                        is_streaming,
-                        streaming_item_type,
-                    );
+                    render_assertion(out, &assertion_context, assertion);
                 }
                 continue;
             }
         }
-        render_assertion(
-            out,
-            assertion,
-            &effective_result_var,
-            import_alias,
-            field_resolver,
-            &optional_locals,
-            &numeric_scalar_fields,
-            result_is_simple,
-            result_is_array,
-            is_streaming,
-            streaming_item_type,
-        );
+        render_assertion(out, &assertion_context, assertion);
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &out[assertions_start..],
