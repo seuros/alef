@@ -77,6 +77,32 @@ fn generated_gradle_project_dir(files: &[GeneratedFile]) -> PathBuf {
         .to_path_buf()
 }
 
+/// Undo POSIX single-quote grouping so a token lifted out of a shell command can be compared as
+/// a path.
+///
+/// The build command is a *shell* string (`cd 'packages/kotlin-android' && gradle …`) — the
+/// quoting is what stops a configured `[crates.output]` path from being executed. Comparing the
+/// raw token against a `PathBuf` would compare quoting spelling rather than the directory, and
+/// would fail whenever the escaping policy changes without the target directory moving, which is
+/// the opposite of what this test exists to detect. ~keep
+fn unquote_shell_word(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut chars = word.chars();
+    let mut in_single = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => in_single = !in_single,
+            '\\' if !in_single => {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// The directory the resolved build command changes into, parsed back out of the command a
 /// consumer's `alef build` would run.
 fn build_command_target_dir(config: &ResolvedCrateConfig) -> PathBuf {
@@ -93,7 +119,7 @@ fn build_command_target_dir(config: &ResolvedCrateConfig) -> PathBuf {
         .split_once(" &&")
         .map(|(dir, _)| dir)
         .unwrap_or_else(|| panic!("expected `cd <dir> && …` in the kotlin_android build command, got `{command}`"));
-    PathBuf::from(dir)
+    PathBuf::from(unquote_shell_word(dir))
 }
 
 #[test]

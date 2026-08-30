@@ -392,6 +392,16 @@ mod tests {
         default_build_config(lang, dir, crate_name, &ctx)
     }
 
+    /// The directory as it is spelled *inside the emitted shell command* — a quoted word, not a
+    /// bare path. Expectations derive it from `quote_word` rather than restating one quoting
+    /// spelling, so a change to the escaping policy cannot silently repoint a command at a
+    /// different directory: the escaping itself is proved separately, and once, by
+    /// `shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile value
+    /// through a real shell. ~keep
+    fn quoted(dir: &str) -> String {
+        super::super::shell::quote_word(dir)
+    }
+
     #[test]
     fn generated_build_quotes_configured_output_directory() {
         let malicious = "packages/go; touch /tmp/alef-build; #";
@@ -506,12 +516,12 @@ mod tests {
         let c = cfg(Language::Elixir, "packages/elixir", "my-lib");
 
         assert_eq!(
-            c.dependency_precondition.as_deref(),
-            Some("[ -d packages/elixir/deps ]")
+            c.dependency_precondition,
+            Some(format!("[ -d {}/deps ]", quoted("packages/elixir")))
         );
         assert_eq!(
-            c.dependency_remediation.as_deref(),
-            Some("cd packages/elixir && mix deps.get")
+            c.dependency_remediation,
+            Some(format!("cd {} && mix deps.get", quoted("packages/elixir")))
         );
     }
 
@@ -596,8 +606,34 @@ mod tests {
         let c = cfg(Language::Ffi, "packages/ffi", "my-lib");
         let build = c.build.unwrap().commands().join(" ");
         let release = c.build_release.unwrap().commands().join(" ");
-        assert_eq!(build, "cargo build --manifest-path packages/ffi/Cargo.toml");
-        assert_eq!(release, "cargo build --release --manifest-path packages/ffi/Cargo.toml");
+        let manifest = format!("{}/Cargo.toml", quoted("packages/ffi"));
+        assert_eq!(build, format!("cargo build --manifest-path {manifest}"));
+        assert_eq!(release, format!("cargo build --release --manifest-path {manifest}"));
+    }
+
+    /// `--manifest-path 'packages/ffi'/Cargo.toml` quotes only the *prefix* of a path, which reads
+    /// as a mistake and would be one in a tool that took the argument literally. It is not: `sh`
+    /// concatenates the quoted word with the unquoted suffix into a single argument before cargo
+    /// ever sees it. Text assertions cannot tell that apart from a genuinely malformed path, so
+    /// this one asks a real shell what argv cargo receives. ~keep
+    #[cfg(unix)]
+    #[test]
+    fn ffi_manifest_path_reaches_cargo_as_one_unquoted_path() {
+        let command = cfg(Language::Ffi, "packages/ffi", "my-lib")
+            .build
+            .expect("ffi build command")
+            .commands()
+            .join(" ");
+        let output = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '%s\\n' {command}")])
+            .output()
+            .expect("shell should start");
+        let argv: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+
+        assert_eq!(argv, ["cargo", "build", "--manifest-path", "packages/ffi/Cargo.toml"]);
     }
 
     #[test]
@@ -701,8 +737,9 @@ mod tests {
         let c = cfg(Language::KotlinAndroid, "packages/kotlin-android", "my-lib");
         let build = c.build.unwrap().commands().join(" ");
         let release = c.build_release.unwrap().commands().join(" ");
-        assert_eq!(build, "cd packages/kotlin-android && gradle assembleDebug");
-        assert_eq!(release, "cd packages/kotlin-android && gradle assembleRelease");
+        let dir = quoted("packages/kotlin-android");
+        assert_eq!(build, format!("cd {dir} && gradle assembleDebug"));
+        assert_eq!(release, format!("cd {dir} && gradle assembleRelease"));
         assert_eq!(c.precondition.as_deref(), Some("command -v gradle >/dev/null 2>&1"));
     }
 
@@ -764,7 +801,7 @@ package = "dev.alpha"
             "Swift build should use swift build, got: {build}"
         );
         assert!(
-            build.contains("--package-path packages/swift"),
+            build.contains(&format!("--package-path {}", quoted("packages/swift"))),
             "Swift build should include package path, got: {build}"
         );
         assert!(

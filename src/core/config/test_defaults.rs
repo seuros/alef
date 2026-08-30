@@ -321,6 +321,16 @@ mod tests {
         default_test_config(lang, dir, &ctx)
     }
 
+    /// The directory as it is spelled *inside the emitted shell command* — a quoted word, not a
+    /// bare path. Expectations derive it from `quote_word` rather than restating one quoting
+    /// spelling, so a change to the escaping policy cannot silently repoint a command at a
+    /// different directory: the escaping itself is proved separately, and once, by
+    /// `shell::tests::quote_word_preserves_literal_shell_value`, which runs a hostile value
+    /// through a real shell. ~keep
+    fn quoted(dir: &str) -> String {
+        super::super::shell::quote_word(dir)
+    }
+
     #[test]
     fn generated_test_quotes_configured_output_directory() {
         let malicious = "packages/python; touch /tmp/alef-test; #";
@@ -523,7 +533,7 @@ mod tests {
             "Swift test should use swift test, got: {cmd}"
         );
         assert!(
-            cmd.contains("--package-path packages/swift"),
+            cmd.contains(&format!("--package-path {}", quoted("packages/swift"))),
             "Swift test should include package path, got: {cmd}"
         );
     }

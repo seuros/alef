@@ -128,6 +128,34 @@ fn generated_kotlin_source_dir(files: &[GeneratedFile]) -> PathBuf {
         .to_path_buf()
 }
 
+/// Undo POSIX single-quote grouping so a token lifted out of a shell command can be compared as
+/// a path.
+///
+/// The build commands are *shell* strings (`mvn -f 'packages/java'/pom.xml …`, `cd
+/// 'packages/kotlin' && gradle …`) — the quoting is what stops a configured `[crates.output]`
+/// path from being executed, and `sh` concatenates the quoted word with its unquoted suffix into
+/// one argument before maven ever sees it. Comparing the raw token against a `PathBuf` would
+/// compare quoting spelling rather than the directory, and would fail whenever the escaping
+/// policy changes without the target directory moving, which is the opposite of what this test
+/// exists to detect. ~keep
+fn unquote_shell_word(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut chars = word.chars();
+    let mut in_single = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => in_single = !in_single,
+            '\\' if !in_single => {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// The project root `mvn -f {root}/pom.xml …` targets, parsed back out of the command a
 /// consumer's `alef build` would actually run.
 fn build_command_target_dir_java(config: &ResolvedCrateConfig) -> PathBuf {
@@ -142,7 +170,7 @@ fn build_command_target_dir_java(config: &ResolvedCrateConfig) -> PathBuf {
         .map(|(_, rest)| rest)
         .unwrap_or_else(|| panic!("expected `mvn -f <path>/pom.xml …` in the java build command, got `{command}`"));
     let pom_path = after_flag.split_once(' ').map_or(after_flag, |(path, _)| path);
-    PathBuf::from(pom_path)
+    PathBuf::from(unquote_shell_word(pom_path))
         .parent()
         .expect("a resolved pom.xml path always has a parent directory")
         .to_path_buf()
@@ -161,7 +189,7 @@ fn build_command_target_dir_kotlin(config: &ResolvedCrateConfig) -> PathBuf {
         .strip_prefix("cd ")
         .unwrap_or_else(|| panic!("expected the kotlin build command to start with `cd `, got `{command}`"));
     let dir = after_cd.split_once(" &&").map_or(after_cd, |(dir, _)| dir);
-    PathBuf::from(dir)
+    PathBuf::from(unquote_shell_word(dir))
 }
 
 #[test]
