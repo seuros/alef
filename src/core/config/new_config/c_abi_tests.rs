@@ -72,6 +72,21 @@ fn resolve_validates_named_c_call_overrides() {
     assert!(error.contains("e2e.calls.secondary.overrides.c.prefix"), "{error}");
 }
 
+#[test]
+fn resolve_validates_registry_c_package_after_local_resolution() {
+    let invalid_name = resolve_error_for(&registry_c_config("test_apps", "bad/name", "../../crates/sample-ffi"));
+    assert!(invalid_name.contains("e2e.registry.packages.c.name"), "{invalid_name}");
+    let invalid_path = resolve_error_for(&registry_c_config("test_apps", "sample-ffi", "../../../outside"));
+    assert!(invalid_path.contains("e2e.registry.packages.c.path"), "{invalid_path}");
+}
+
+#[test]
+fn resolve_validates_registry_output_after_local_resolution() {
+    let error = resolve_error_for(&registry_c_config("../outside", "sample-ffi", "../crates/sample-ffi"));
+    assert!(error.contains("e2e.registry.output"), "{error}");
+    assert!(error.contains("escapes the repository root"), "{error}");
+}
+
 fn c_package_config(path: &str, e2e_language: Option<&str>) -> String {
     let top_language = if e2e_language == Some("c") { "python" } else { "c" };
     let e2e_languages = e2e_language.map_or_else(String::new, |language| format!("languages = [\"{language}\"]"));
@@ -110,6 +125,30 @@ function = "sample"
 {named_call}[crates.{call_table}.overrides.c]
 prefix = "{prefix}"
 header = "{header}"
+"#
+    )
+}
+
+fn registry_c_config(output: &str, name: &str, path: &str) -> String {
+    format!(
+        r#"
+[workspace]
+languages = ["c"]
+[[crates]]
+name = "sample-core"
+sources = ["src/lib.rs"]
+[crates.e2e]
+output = "e2e"
+[crates.e2e.call]
+function = "sample"
+[crates.e2e.packages.c]
+name = "sample-ffi"
+path = "../crates/sample-ffi"
+[crates.e2e.registry]
+output = "{output}"
+[crates.e2e.registry.packages.c]
+name = "{name}"
+path = "{path}"
 "#
     )
 }

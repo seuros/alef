@@ -197,11 +197,7 @@ impl E2eCodegen for CCodegen {
         let call = &e2e_config.call;
         let overrides = call.overrides.get(lang);
         let result_var = call.effective_result_var();
-        let prefix = overrides
-            .and_then(|o| o.prefix.as_ref())
-            .cloned()
-            .or_else(|| config.ffi.as_ref().and_then(|ffi| ffi.prefix.as_ref()).cloned())
-            .unwrap_or_default();
+        let prefix = effective_c_prefix(call, config);
         let header = overrides
             .and_then(|o| o.header.as_ref())
             .cloned()
@@ -401,12 +397,7 @@ fn render_c_snippet(
         &fixture.tags,
         &fixture.input,
     );
-    let prefix = call
-        .overrides
-        .get("c")
-        .and_then(|value| value.prefix.clone())
-        .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
-        .unwrap_or_else(|| config.ffi_prefix());
+    let prefix = effective_c_prefix(call, config);
     if info.client_factory.is_none()
         && info.c_engine_factory.is_none()
         && !prefix.is_empty()
@@ -439,6 +430,13 @@ fn render_c_snippet(
         type_defs,
         ir,
     })
+}
+
+fn effective_c_prefix(call: &CallConfig, config: &ResolvedCrateConfig) -> String {
+    call.overrides
+        .get("c")
+        .and_then(|value| value.prefix.clone())
+        .unwrap_or_else(|| config.ffi_prefix())
 }
 
 /// Resolve per-call-config C-specific settings for a given call config and lang.
@@ -1275,6 +1273,36 @@ pub fn emit_test_backend(
 #[cfg(test)]
 mod snippet_tests {
     use super::*;
+
+    #[test]
+    fn full_generation_uses_the_derived_ffi_prefix() {
+        let group = FixtureGroup {
+            category: "basic".into(),
+            fixtures: vec![Fixture {
+                id: "clear".into(),
+                description: "Clear".into(),
+                ..Fixture::default()
+            }],
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "clear".into();
+        e2e.call.returns_void = true;
+        let config = ResolvedCrateConfig {
+            name: "sample-core".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let generated = CCodegen
+            .generate(&[group], &e2e, &config, &[], &[], &[], &[])
+            .expect("C harness renders");
+        let test = generated
+            .iter()
+            .find(|file| file.path.ends_with("test_basic.c"))
+            .expect("category test is emitted");
+        assert!(test.content.contains("SAMPLE_COREAlefHandle"), "{}", test.content);
+        assert!(test.content.contains("sample_core_clear_free("), "{}", test.content);
+        assert!(!test.content.contains(" _clear_free("), "{}", test.content);
+    }
 
     #[test]
     fn snippet_keeps_header_and_call_without_test_harness() {

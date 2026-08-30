@@ -384,7 +384,7 @@ impl NewAlefConfig {
             cargo_lints: krate.cargo_lints.clone(),
             verify: krate.verify.clone(),
         };
-        validate_effective_ffi_config(&resolved)?;
+        validate_all_effective_ffi_configs(&resolved)?;
         Ok(resolved)
     }
 }
@@ -563,6 +563,18 @@ fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), Res
     Ok(())
 }
 
+fn validate_all_effective_ffi_configs(config: &ResolvedCrateConfig) -> Result<(), ResolveError> {
+    validate_effective_ffi_config(config)?;
+    if config.e2e.is_none() {
+        return Ok(());
+    }
+    let mut registry_config = config.clone();
+    if let Some(e2e) = registry_config.e2e.as_mut() {
+        e2e.dep_mode = super::e2e::DependencyMode::Registry;
+    }
+    validate_effective_ffi_config(&registry_config)
+}
+
 fn effective_c_e2e_enabled(config: &ResolvedCrateConfig) -> bool {
     let Some(e2e) = config.e2e.as_ref() else {
         return false;
@@ -590,17 +602,30 @@ fn validate_effective_c_e2e_config(
     for (name, call) in named_calls {
         validate_c_call_override(&format!("e2e.calls.{name}"), call, invalid)?;
     }
+    let registry_mode = e2e.dep_mode == super::e2e::DependencyMode::Registry;
+    let package_field = if registry_mode {
+        "e2e.registry.packages.c"
+    } else {
+        "e2e.packages.c"
+    };
     if let Some(name) = package.as_ref().and_then(|package| package.name.as_deref()) {
         abi_grammar::validate_native_artifact_basename(name)
-            .map_err(|error| invalid("e2e.packages.c.name", name, error))?;
+            .map_err(|error| invalid(&format!("{package_field}.name"), name, error))?;
     }
+    let output = e2e.effective_output();
+    let output_field = if registry_mode {
+        "e2e.registry.output"
+    } else {
+        "e2e.output"
+    };
+    abi_grammar::validate_c_output_base(output).map_err(|error| invalid(output_field, output, error))?;
     let path = package
         .as_ref()
         .and_then(|package| package.path.as_deref())
         .map(str::to_string)
         .unwrap_or_else(|| config.ffi_crate_path());
-    abi_grammar::validate_c_make_path(&path, e2e.effective_output())
-        .map_err(|error| invalid("e2e.packages.c.path", &path, error))
+    abi_grammar::validate_c_make_path(&path, output)
+        .map_err(|error| invalid(&format!("{package_field}.path"), &path, error))
 }
 
 fn validate_c_call_override(

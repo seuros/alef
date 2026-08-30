@@ -115,7 +115,17 @@ pub fn validate_c_make_path(value: &str, output_base: &str) -> Result<(), String
     Ok(())
 }
 
+/// Validate that a generated C harness output root is a repository-relative path.
+pub fn validate_c_output_base(value: &str) -> Result<(), String> {
+    lexical_relative_depth(value).map(|_| ())
+}
+
 fn lexical_relative_depth(value: &str) -> Result<usize, String> {
+    if value.starts_with('/') || value.contains('\\') {
+        return Err(format!(
+            "output base `{value}` must be a repository-relative POSIX path"
+        ));
+    }
     let mut depth = 0;
     for component in value.split('/') {
         match component {
@@ -512,6 +522,9 @@ mod tests {
         assert!(validate_c_make_path("../../$(shell touch pwned)", "e2e").is_err());
         assert!(validate_c_make_path("../../../outside", "e2e").is_err());
         assert!(validate_c_make_path("../../../outside", "e2e/nested/../..").is_err());
+        assert!(validate_c_make_path("../crates/sample-ffi", "/tmp/e2e").is_err());
+        assert!(validate_c_make_path("../crates/sample-ffi", r"C:\tmp\e2e").is_err());
+        assert!(validate_c_make_path("../crates/sample-ffi", "../outside/e2e").is_err());
     }
 
     // -- ascii abi identifier -------------------------------------------------
