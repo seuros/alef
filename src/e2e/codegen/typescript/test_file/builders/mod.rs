@@ -285,6 +285,47 @@ fn bigint_value_literal(val: &serde_json::Value) -> String {
     to_bigint_literal(&json_to_js(val))
 }
 
+/// ~keep wasm-bindgen declares `Vec<u64>`/`Vec<i64>` as `BigUint64Array`/`BigInt64Array`
+/// (`wasm-bindgen-cli-support`'s `VectorKind` descriptor), so collection lowering must preserve
+/// both the recursive IR element type and the typed-array ABI shape.
+fn wasm_typed_value_expression(val: &serde_json::Value, field_type: &TypeRef) -> Option<String> {
+    match field_type {
+        TypeRef::Optional(inner) => wasm_typed_value_expression(val, inner),
+        TypeRef::Primitive(primitive) if crate::backends::wasm::gen_bindings::is_bigint_primitive(primitive) => {
+            Some(bigint_value_literal(val))
+        }
+        TypeRef::Vec(inner) => {
+            let values = val.as_array()?;
+            let constructor = match inner.as_ref() {
+                TypeRef::Primitive(crate::core::ir::PrimitiveType::U64) => Some("BigUint64Array"),
+                TypeRef::Primitive(crate::core::ir::PrimitiveType::I64) => Some("BigInt64Array"),
+                _ => None,
+            };
+            let mut changed = constructor.is_some();
+            let values = values
+                .iter()
+                .map(|value| {
+                    if let Some(expression) = wasm_typed_value_expression(value, inner) {
+                        changed = true;
+                        expression
+                    } else {
+                        json_to_js(value)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            if let Some(constructor) = constructor {
+                Some(format!("{constructor}.from([{values}])"))
+            } else if changed {
+                Some(format!("[{values}]"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Find the `FieldDef` on `owner_type` that fixture key `key` refers to, matching either the
 /// field's Rust name or its wire name (`#[serde(rename = ...)]` / a container `rename_all`) —
 /// a fixture may key a field either way, exactly as `refuse_undeclared_json_keys` accepts both
@@ -587,6 +628,13 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             let (expr, needs_await) = ts_bytes_value_expression(val);
             needs_async = needs_async || needs_await;
             stmts.push(format!("{var}.{camel_key} = {expr};"));
+            continue;
+        }
+        if lang == "wasm"
+            && let Some(field_type) = field_type
+            && let Some(expression) = wasm_typed_value_expression(val, field_type)
+        {
+            stmts.push(format!("{var}.{camel_key} = {expression};"));
             continue;
         }
         if let serde_json::Value::Object(nested_obj) = val {

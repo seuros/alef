@@ -27,6 +27,24 @@ fn limits_type_def() -> TypeDef {
                 ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
                 ..Default::default()
             },
+            crate::core::ir::FieldDef {
+                name: "unsigned_values".into(),
+                ty: TypeRef::Vec(Box::new(TypeRef::Primitive(crate::core::ir::PrimitiveType::U64))),
+                ..Default::default()
+            },
+            crate::core::ir::FieldDef {
+                name: "signed_values".into(),
+                ty: TypeRef::Vec(Box::new(TypeRef::Primitive(crate::core::ir::PrimitiveType::I64))),
+                ..Default::default()
+            },
+            crate::core::ir::FieldDef {
+                name: "optional_values".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(
+                    crate::core::ir::PrimitiveType::U64,
+                ))))),
+                optional: true,
+                ..Default::default()
+            },
         ],
         ..Default::default()
     }
@@ -109,5 +127,68 @@ fn a_node_u64_field_stays_a_plain_number() {
     assert!(
         !expression.contains("42n"),
         "NAPI takes a number for u64; a BigInt literal would be a type error: {expression}"
+    );
+}
+
+#[test]
+fn wasm_u64_and_i64_collections_use_bigint_typed_arrays_without_precision_loss() {
+    let expression = build(
+        "wasm",
+        serde_json::json!({
+            "unsigned_values": [9_007_199_254_740_993_u64, 42_u64],
+            "signed_values": [-9_007_199_254_740_993_i64, -7_i64]
+        }),
+    );
+
+    assert!(
+        expression.contains("_u0.unsignedValues = BigUint64Array.from([9007199254740993n, 42n]);"),
+        "Vec<u64> must match wasm-bindgen's BigUint64Array setter exactly: {expression}"
+    );
+    assert!(
+        expression.contains("_u0.signedValues = BigInt64Array.from([-9007199254740993n, -7n]);"),
+        "Vec<i64> must match wasm-bindgen's BigInt64Array setter exactly: {expression}"
+    );
+    assert!(
+        !expression.contains("Number("),
+        "collection lowering must not pass exact integers through Number: {expression}"
+    );
+}
+
+#[test]
+fn an_optional_wasm_u64_collection_uses_the_same_typed_array_lowering() {
+    let expression = build(
+        "wasm",
+        serde_json::json!({ "optional_values": [9_007_199_254_740_993_u64] }),
+    );
+
+    assert!(
+        expression.contains("_u0.optionalValues = BigUint64Array.from([9007199254740993n]);"),
+        "Option<Vec<u64>> must preserve the collection's wasm ABI shape: {expression}"
+    );
+}
+
+#[test]
+fn node_big_integer_collections_remain_plain_number_arrays() {
+    let expression = build(
+        "node",
+        serde_json::json!({
+            "unsigned_values": [42_u64],
+            "signed_values": [-7_i64],
+            "optional_values": [8_u64]
+        }),
+    );
+
+    assert!(
+        expression.contains("unsignedValues: [42]")
+            && expression.contains("signedValues: [-7]")
+            && expression.contains("optionalValues: [8]"),
+        "NAPI collections must stay ordinary JS arrays: {expression}"
+    );
+    assert!(
+        !expression.contains("BigUint64Array")
+            && !expression.contains("BigInt64Array")
+            && !expression.contains("42n")
+            && !expression.contains("-7n"),
+        "the wasm-only lowering must not leak into Node: {expression}"
     );
 }
