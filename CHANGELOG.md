@@ -9,19 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Stop `rust_default_via_source_deserialize` (used by the Magnus, PHP, NAPI, and Rustler
-  backends via `default_value_for_field_in_type`) treating a `#[derive(Default)]`-seeded
-  `typed_default = Some(DefaultValue::Empty)` as proof that serde will fill a sibling field when
-  its wire key is absent. `#[derive(Default)]` seeds `Empty` on every field of the container,
-  including ones with no serde attribute at all, so the old predicate silently omitted every
-  required sibling from the generated JSON probe, leaving `placeholders` empty and emitting
-  `serde_json::from_str(r#"{}"#)` — a call that panics at runtime the first time a binding
-  constructs the type's defaults. The predicate now consults only `sibling.default` (the durable
-  field-level serde-default marker `extract_field` sets and nothing later overwrites) and
-  `TypeDef::serde_container_default`, the same two facts
-  `backends::go::gen_bindings::types::helpers::needs_omitempty_pointer` already gates the
-  equivalent Go decision on. A required sibling with no safe placeholder now correctly fails
-  generation with a `compile_error!` instead of emitting the empty-object probe.
 - Stop reaching `sh -c` with config-supplied values interpolated into shell text. The Go
   test-app run default and every clean-command default (including destructive `rm -rf` paths)
   now build typed argv (`ArgvRunConfig`/`ArgvStep`, run via `Command::new(..).args(..)` with
@@ -81,6 +68,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   referenced via `${var:+"$var"}` — the POSIX idiom for a word that is exactly one argv entry when
   set and exactly zero when unset — instead of a bare substitution, which either word-splits or
   (if simply quoted) hands maven a stray empty argument when no rules file exists.
+- Stop `rust_default_via_source_deserialize` (used by the Magnus, PHP, NAPI, and Rustler
+  backends via `default_value_for_field_in_type`) treating a `#[derive(Default)]`-seeded
+  `typed_default = Some(DefaultValue::Empty)` as proof that serde will fill a sibling field when
+  its wire key is absent. `#[derive(Default)]` seeds `Empty` on every field of the container,
+  including ones with no serde attribute at all, so the old predicate silently omitted every
+  required sibling from the generated JSON probe, leaving `placeholders` empty and emitting
+  `serde_json::from_str(r#"{}"#)` — a call that panics at runtime the first time a binding
+  constructs the type's defaults. The predicate now consults only `sibling.default` (the durable
+  field-level serde-default marker `extract_field` sets and nothing later overwrites) and
+  `TypeDef::serde_container_default`, the same two facts
+  `backends::go::gen_bindings::types::helpers::needs_omitempty_pointer` already gates the
+  equivalent Go decision on. A required sibling with no safe placeholder now correctly fails
+  generation with a `compile_error!` instead of emitting the empty-object probe.
 - Stop the generated WASM crate's `[features] default = [...]` from re-enabling a core-crate
   feature its own dependency line had just disabled. `gen_cargo_toml` emits
   `default-features = false, features = [...]` on the core dep whenever `[crates.wasm] features`
