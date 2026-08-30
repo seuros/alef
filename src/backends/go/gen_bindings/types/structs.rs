@@ -53,6 +53,33 @@ pub(in crate::backends::go::gen_bindings) fn go_struct_field_names(typ: &TypeDef
         .collect()
 }
 
+pub(crate) fn go_struct_field_type(
+    typ: &TypeDef,
+    field: &FieldDef,
+    enum_names: &std::collections::HashSet<&str>,
+    passthrough_enum_names: &std::collections::HashSet<&str>,
+    data_enum_names: &std::collections::HashSet<&str>,
+    struct_names: &std::collections::HashSet<&str>,
+) -> Cow<'static, str> {
+    let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
+    let is_sealed_interface = matches!(&field.ty, TypeRef::Named(name) if data_enum_names.contains(name.as_str()));
+    let is_unresolved_named = matches!(&field.ty, TypeRef::Named(name)
+        if !enum_names.contains(name.as_str())
+            && !passthrough_enum_names.contains(name.as_str())
+            && !data_enum_names.contains(name.as_str())
+            && !struct_names.contains(name.as_str()));
+
+    if is_unresolved_named {
+        Cow::Borrowed("*json.RawMessage")
+    } else if is_sealed_interface {
+        go_type(&field.ty)
+    } else if field.optional || use_default_pointer {
+        go_optional_field_type(field)
+    } else {
+        go_field_type(field)
+    }
+}
+
 /// Generate a Go struct type definition with json tags for marshaling.
 /// Accepts enum_names (unit enums), passthrough_enum_names (untagged enums emitted
 /// as `json.RawMessage`-backed named types) and data_enum_names (sealed-interface enums).
@@ -120,25 +147,20 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             && (field.default.is_some() || typ.serde_container_default)
             && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
 
-        let is_sealed_interface = matches!(&field.ty, TypeRef::Named(n) if data_enum_names.contains(n.as_str()));
-
         let is_unresolved_named = matches!(&field.ty, TypeRef::Named(n)
             if !enum_names.contains(n.as_str())
                 && !passthrough_enum_names.contains(n.as_str())
                 && !data_enum_names.contains(n.as_str())
                 && !struct_names.contains(n.as_str()));
 
-        let field_type = if is_unresolved_named {
-            Cow::Borrowed("*json.RawMessage")
-        } else if is_sealed_interface {
-            go_type(&field.ty)
-        } else if field.optional {
-            go_optional_field_type(field)
-        } else if use_default_pointer {
-            go_optional_field_type(field)
-        } else {
-            go_field_type(field)
-        };
+        let field_type = go_struct_field_type(
+            typ,
+            field,
+            enum_names,
+            passthrough_enum_names,
+            data_enum_names,
+            struct_names,
+        );
 
         // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
         let json_name = wire_field_name(

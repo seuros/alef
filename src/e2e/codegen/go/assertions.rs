@@ -10,6 +10,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
 
+use super::assertion_field_shape::resolve_assertion_field_shape;
 use super::json_values::json_to_go;
 use super::method_calls::build_go_method_call;
 
@@ -388,55 +389,26 @@ pub(super) fn render_assertion(
         }
     };
 
-    let is_optional = assertion
-        .field
-        .as_ref()
-        .map(|f| {
-            let resolved = field_resolver.resolve(f);
-            let check_path = resolved
-                .strip_suffix(".length")
-                .or_else(|| resolved.strip_suffix(".count"))
-                .or_else(|| resolved.strip_suffix(".size"))
-                .unwrap_or(resolved);
-            field_resolver
-                .target_field_is_optional(check_path)
-                .unwrap_or_else(|| field_resolver.is_optional(check_path))
-                && !optional_locals.contains_key(f.as_str())
-        })
-        .unwrap_or(false);
-
-    let field_is_array_for_len = assertion
-        .field
-        .as_ref()
-        .map(|f| {
-            let resolved = field_resolver.resolve(f);
-            let check_path = resolved
-                .strip_suffix(".length")
-                .or_else(|| resolved.strip_suffix(".count"))
-                .or_else(|| resolved.strip_suffix(".size"))
-                .unwrap_or(resolved);
-            field_resolver.is_array(check_path)
-        })
-        .unwrap_or(false);
+    let field_shape = resolve_assertion_field_shape(assertion, field_resolver, optional_locals);
+    let is_optional = field_shape.is_optional;
+    let field_is_pointer = field_shape.is_pointer;
+    let field_is_nullable = field_shape.is_nullable;
+    let field_is_array_for_len = field_shape.is_array_for_len;
     let field_expr =
-        if is_optional && field_expr.starts_with("len(") && field_expr.ends_with(')') && !field_is_array_for_len {
+        if field_is_pointer && field_expr.starts_with("len(") && field_expr.ends_with(')') && !field_is_array_for_len {
             let inner = &field_expr[4..field_expr.len() - 1];
             format!("len(*{inner})")
         } else {
             field_expr
         };
-    let nil_guard_expr = if is_optional && field_expr.starts_with("len(*") {
+    let nil_guard_expr = if field_is_pointer && field_expr.starts_with("len(*") {
         Some(field_expr[5..field_expr.len() - 1].to_string())
     } else {
         None
     };
 
-    let field_is_slice = assertion
-        .field
-        .as_ref()
-        .map(|f| field_resolver.is_array(field_resolver.resolve(f)))
-        .unwrap_or(false);
-    let deref_field_expr = if is_optional && !field_expr.starts_with("len(") && !field_is_slice {
+    let field_is_slice = field_shape.is_slice;
+    let deref_field_expr = if field_is_pointer && !field_expr.starts_with("len(") && !field_is_slice {
         format!("*{field_expr}")
     } else {
         field_expr.clone()
@@ -460,18 +432,20 @@ pub(super) fn render_assertion(
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
                 if expected.is_string() {
-                    let string_field = if is_optional && !field_expr.starts_with("len(") {
+                    let string_field = if field_is_pointer && !field_expr.starts_with("len(") {
                         format!("string(*{field_expr})")
                     } else {
                         format!("string({field_expr})")
                     };
-                    if is_optional && !field_expr.starts_with("len(") {
+                    if field_is_nullable && !field_expr.starts_with("len(") {
                         let _ = writeln!(out_ref, "\tif {field_expr} == nil || {string_field} != {go_val} {{");
                     } else {
                         let _ = writeln!(out_ref, "\tif {string_field} != {go_val} {{");
                     }
+                } else if field_is_pointer && !field_expr.starts_with("len(") {
+                    let _ = writeln!(out_ref, "\tif {field_expr} == nil || {deref_field_expr} != {go_val} {{");
                 } else if is_optional && !field_expr.starts_with("len(") {
-                    let _ = writeln!(out_ref, "\tif {field_expr} != nil && {deref_field_expr} != {go_val} {{");
+                    let _ = writeln!(out_ref, "\tif {field_expr} != nil && {field_expr} != {go_val} {{");
                 } else {
                     let _ = writeln!(out_ref, "\tif {field_expr} != {go_val} {{");
                 }
@@ -489,7 +463,7 @@ pub(super) fn render_assertion(
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
                     format!("jsonString({field_expr})")
-                } else if is_opt {
+                } else if field_is_pointer {
                     format!("string(*{field_expr})")
                 } else if field_is_array {
                     format!("jsonString({field_expr})")
@@ -527,7 +501,7 @@ pub(super) fn render_assertion(
                     let go_val = json_to_go(val);
                     let field_for_contains = if is_opt && field_is_array {
                         format!("jsonString({field_expr})")
-                    } else if is_opt {
+                    } else if field_is_pointer {
                         format!("string(*{field_expr})")
                     } else if field_is_array {
                         format!("jsonString({field_expr})")
@@ -559,7 +533,7 @@ pub(super) fn render_assertion(
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
                     format!("jsonString({field_expr})")
-                } else if is_opt {
+                } else if field_is_pointer {
                     format!("string(*{field_expr})")
                 } else if field_is_array {
                     format!("jsonString({field_expr})")
@@ -632,7 +606,7 @@ pub(super) fn render_assertion(
                     is_optional && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()));
                 let field_for_contains = if is_opt && field_is_array {
                     format!("jsonString({field_expr})")
-                } else if is_opt {
+                } else if field_is_pointer {
                     format!("string(*{field_expr})")
                 } else if field_is_array {
                     format!("jsonString({field_expr})")
@@ -761,7 +735,7 @@ pub(super) fn render_assertion(
         "starts_with" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_prefix = if is_optional
+                let field_for_prefix = if field_is_pointer
                     && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
                 {
                     format!("string(*{field_expr})")
@@ -932,9 +906,14 @@ pub(super) fn render_assertion(
             {
                 if is_optional {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+                    let len_expr = if field_is_pointer {
+                        format!("len(*{field_expr})")
+                    } else {
+                        format!("len({field_expr})")
+                    };
                     let _ = writeln!(
                         out_ref,
-                        "\t\tassert.GreaterOrEqual(t, len(*{field_expr}), {n}, \"expected length >= {n}\")"
+                        "\t\tassert.GreaterOrEqual(t, {len_expr}, {n}, \"expected length >= {n}\")"
                     );
                     let _ = writeln!(out_ref, "\t}}");
                 } else if field_expr.starts_with("len(") {
@@ -956,9 +935,14 @@ pub(super) fn render_assertion(
             {
                 if is_optional {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
+                    let len_expr = if field_is_pointer {
+                        format!("len(*{field_expr})")
+                    } else {
+                        format!("len({field_expr})")
+                    };
                     let _ = writeln!(
                         out_ref,
-                        "\t\tassert.LessOrEqual(t, len(*{field_expr}), {n}, \"expected length <= {n}\")"
+                        "\t\tassert.LessOrEqual(t, {len_expr}, {n}, \"expected length <= {n}\")"
                     );
                     let _ = writeln!(out_ref, "\t}}");
                 } else if field_expr.starts_with("len(") {
@@ -977,7 +961,7 @@ pub(super) fn render_assertion(
         "ends_with" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_suffix = if is_optional
+                let field_for_suffix = if field_is_pointer
                     && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
                 {
                     format!("string(*{field_expr})")
@@ -995,7 +979,7 @@ pub(super) fn render_assertion(
         "matches_regex" => {
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
-                let field_for_regex = if is_optional
+                let field_for_regex = if field_is_pointer
                     && !optional_locals.contains_key(assertion.field.as_ref().unwrap_or(&String::new()))
                 {
                     format!("*{field_expr}")

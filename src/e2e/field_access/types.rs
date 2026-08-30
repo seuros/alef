@@ -159,6 +159,9 @@ pub struct FieldResolver {
 /// * `optional_fields[type_name]` — fields of `type_name` the *generated binding* declares as
 ///   possibly-absent, per the [`crate::e2e::field_access::OptionalityRule`] the map was built
 ///   with. Not the same question as "is the Rust field `Option<T>`": see that enum.
+/// * `pointer_fields[type_name]` — fields whose authoritative Go declaration starts with `*`.
+///   This stays separate from optionality because slices and interfaces are nullable values,
+///   while an unresolved required named field is emitted as `*json.RawMessage`.
 /// * `declared_fields[type_name]` — every binding-visible field of `type_name`, i.e. the members
 ///   a generated accessor may legally name.
 /// * `unresolvable_named_fields[type_name]` — declared fields whose type names ANOTHER user type
@@ -183,6 +186,7 @@ pub struct FieldResolver {
 pub struct IrResultFieldMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub optional_fields: HashMap<String, HashSet<String>>,
+    pub pointer_fields: HashMap<String, HashSet<String>>,
     pub declared_fields: HashMap<String, HashSet<String>>,
     pub unresolvable_named_fields: HashMap<String, HashSet<String>>,
     pub display_safe_fields: HashMap<String, HashSet<String>>,

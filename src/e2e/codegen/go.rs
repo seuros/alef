@@ -16,6 +16,11 @@ use std::path::PathBuf;
 use super::E2eCodegen;
 use super::client;
 
+mod assertion_field_shape;
+
+#[cfg(test)]
+mod field_shape_tests;
+
 fn resolve_handle_config_type(
     arg: &crate::e2e::config::ArgMapping,
     options_type: Option<&str>,

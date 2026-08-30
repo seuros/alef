@@ -180,11 +180,11 @@ impl FieldResolver {
         false
     }
 
-    /// The target binding's anchored optionality for this exact field, when the IR can resolve
-    /// it. Unlike [`Self::is_optional`], `Some(false)` can override a language-agnostic config
-    /// entry whose Rust optionality lowers to a non-pointer target type.
-    pub fn target_field_is_optional(&self, field: &str) -> Option<bool> {
-        super::super::ir_result_fields::optionality_at_path(&self.ir_result_field_map, self.resolve(field))
+    /// Whether the target binding emits this exact field as a pointer, when the anchored IR can
+    /// resolve it. This is independent of Rust optionality: Go slices and sealed interfaces are
+    /// nullable values, while unresolved required named fields use `*json.RawMessage`.
+    pub fn target_field_is_pointer(&self, field: &str) -> Option<bool> {
+        super::super::ir_result_fields::pointer_at_path(&self.ir_result_field_map, self.resolve(field))
     }
 
     /// Check whether `field`'s resolved leaf type is one alef cannot vouch for as implementing

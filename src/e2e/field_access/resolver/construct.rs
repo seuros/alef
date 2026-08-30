@@ -429,6 +429,18 @@ impl FieldResolver {
         build_ir_result_field_map(type_defs, OptionalityRule::for_language(language))
     }
 
+    pub(crate) fn ir_result_field_facts_with_enums(
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        language: &str,
+    ) -> IrResultFieldMap {
+        super::super::ir_result_fields::build_ir_result_field_map_with_enums(
+            type_defs,
+            enums,
+            OptionalityRule::for_language(language),
+        )
+    }
+
     /// Attach IR field facts anchored at `root_type` — the IR type name the call's declared
     /// return type resolves to, per `codegen::call_ir::resolve_declared_result_type`.
     ///

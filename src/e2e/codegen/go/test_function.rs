@@ -92,34 +92,6 @@ fn emit_trait_bridge_cleanup(out: &mut String, fixture: &Fixture, base_function_
     }
 }
 
-pub(super) fn fixture_has_go_callable(fixture: &Fixture, e2e_config: &crate::e2e::config::E2eConfig) -> bool {
-    if fixture.is_http_test() {
-        return false;
-    }
-    let call_config = e2e_config.resolve_call_for_fixture(
-        fixture.call.as_deref(),
-        &fixture.id,
-        &fixture.resolved_category(),
-        &fixture.tags,
-        &fixture.input,
-    );
-    if call_config.skip_languages.iter().any(|l| l == "go") {
-        return false;
-    }
-    let go_override = call_config
-        .overrides
-        .get("go")
-        .or_else(|| e2e_config.call.overrides.get("go"));
-    if go_override.and_then(|o| o.client_factory.as_deref()).is_some() {
-        return true;
-    }
-    let fn_name = go_override
-        .and_then(|o| o.function.as_deref())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(call_config.function.as_str());
-    !fn_name.is_empty()
-}
-
 pub(super) struct GoTestFunctionContext<'a> {
     pub(super) import_alias: &'a str,
     pub(super) e2e_config: &'a crate::e2e::config::E2eConfig,
@@ -171,7 +143,8 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &fixture.input,
     );
     let lang = call_resolver::LANG;
-    let call_field_resolver = call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs);
+    let call_field_resolver =
+        call_resolver::build_call_field_resolver(e2e_config, call_config, functions, type_defs, enums);
     let field_resolver = &call_field_resolver;
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides
@@ -586,10 +559,10 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                 continue;
             }
             let resolved = field_resolver.resolve(f);
-            let is_optional = field_resolver
-                .target_field_is_optional(resolved)
-                .unwrap_or_else(|| field_resolver.is_optional(resolved));
-            if is_optional && !optional_locals.contains_key(f.as_str()) {
+            let is_pointer = field_resolver
+                .target_field_is_pointer(resolved)
+                .unwrap_or_else(|| field_resolver.is_optional(resolved) && !field_resolver.is_array(resolved));
+            if is_pointer && !optional_locals.contains_key(f.as_str()) {
                 let is_string_field = assertion.value.as_ref().is_some_and(|v| v.is_string());
                 let is_array_field = field_resolver.is_array(resolved);
                 // Both plain-string and display_as_text optional fields only need a
@@ -1000,6 +973,7 @@ impl client::TestClientRenderer for GoTestClientRenderer {
 
 #[path = "test_function/call_resolver.rs"]
 mod call_resolver;
+pub(super) use call_resolver::fixture_has_go_callable;
 
 #[cfg(test)]
 #[path = "test_function/declared_error_value_tests.rs"]

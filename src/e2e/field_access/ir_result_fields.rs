@@ -28,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::shared::binding_fields;
-use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
 use crate::e2e::codegen::call_ir::named_type;
 
 use super::parse::{parse_path, segment_name};
@@ -47,9 +47,6 @@ pub(crate) enum OptionalityRule {
     /// The NAPI rule, per `backends::napi::gen_bindings::types::napi_field_is_optional`: the
     /// field's own type, OR its owner implementing `Default`.
     Napi,
-    /// The Go binding's emitted pointer shape. Optional slices, maps, and bytes stay reference
-    /// values, while optional scalars and DTOs become pointers.
-    Go,
 }
 
 impl OptionalityRule {
@@ -57,20 +54,14 @@ impl OptionalityRule {
     pub(crate) fn for_language(language: &str) -> Self {
         match language {
             "node" | "typescript" => Self::Napi,
-            "go" => Self::Go,
             _ => Self::DeclaredType,
         }
     }
 
-    fn applies_to(self, field: &FieldDef, owner: &TypeDef, struct_names: &HashSet<&str>) -> bool {
+    fn applies_to(self, field: &FieldDef, owner: &TypeDef) -> bool {
         match self {
             Self::DeclaredType => field.optional,
             Self::Napi => crate::backends::napi::napi_field_is_optional(field, owner),
-            Self::Go => {
-                let uses_optional_mapping =
-                    field.optional || crate::backends::go::needs_omitempty_pointer(owner, field, struct_names);
-                uses_optional_mapping && crate::backends::go::type_map::go_optional_field_type(field).starts_with('*')
-            }
         }
     }
 }
@@ -82,10 +73,34 @@ impl OptionalityRule {
 /// field is absent here exactly as it is absent from the generated class — a derived accessor
 /// for it would not compile.
 pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: OptionalityRule) -> IrResultFieldMap {
+    build_ir_result_field_map_with_enums(type_defs, &[], rule)
+}
+
+pub(super) fn build_ir_result_field_map_with_enums(
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    rule: OptionalityRule,
+) -> IrResultFieldMap {
     let struct_names: HashSet<&str> = type_defs.iter().map(|type_def| type_def.name.as_str()).collect();
+    let enum_names: HashSet<&str> = enums
+        .iter()
+        .filter(|definition| crate::backends::go::is_unit_struct_field_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
+    let passthrough_enum_names: HashSet<&str> = enums
+        .iter()
+        .filter(|definition| crate::backends::go::is_passthrough_raw_message_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
+    let data_enum_names: HashSet<&str> = enums
+        .iter()
+        .filter(|definition| crate::backends::go::is_data_interface_struct_field_enum(definition))
+        .map(|definition| definition.name.as_str())
+        .collect();
 
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut optional_fields: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut pointer_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut declared_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut unresolvable_named_fields: HashMap<String, HashSet<String>> = HashMap::new();
     let mut display_safe_fields: HashMap<String, HashSet<String>> = HashMap::new();
@@ -96,8 +111,23 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
                 .entry(type_def.name.clone())
                 .or_default()
                 .insert(field.name.clone());
-            if rule.applies_to(field, type_def, &struct_names) {
+            if rule.applies_to(field, type_def) {
                 optional_fields
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone());
+            }
+            if crate::backends::go::go_struct_field_type(
+                type_def,
+                field,
+                &enum_names,
+                &passthrough_enum_names,
+                &data_enum_names,
+                &struct_names,
+            )
+            .starts_with('*')
+            {
+                pointer_fields
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone());
@@ -132,6 +162,7 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
     IrResultFieldMap {
         field_types,
         optional_fields,
+        pointer_fields,
         declared_fields,
         unresolvable_named_fields,
         display_safe_fields,
@@ -174,6 +205,16 @@ pub(super) fn optionality_at_path(map: &IrResultFieldMap, path: &str) -> Option<
     let (owner, leaf) = walk_to_owner_from(map, root, path)?;
     Some(
         map.optional_fields
+            .get(owner)
+            .is_some_and(|fields| fields.contains(&leaf)),
+    )
+}
+
+pub(super) fn pointer_at_path(map: &IrResultFieldMap, path: &str) -> Option<bool> {
+    let root = map.root_type.as_deref()?;
+    let (owner, leaf) = walk_to_owner_from(map, root, path)?;
+    Some(
+        map.pointer_fields
             .get(owner)
             .is_some_and(|fields| fields.contains(&leaf)),
     )

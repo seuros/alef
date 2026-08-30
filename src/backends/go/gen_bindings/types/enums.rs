@@ -422,7 +422,7 @@ fn gen_adjacent_tagged_enum_type(enum_def: &EnumDef) -> String {
 /// Delegates to [`go_enum_representation`] rather than restating its conditions: callers
 /// outside this module partition enums with this predicate and must see the same answer the
 /// emitter acted on, or a type is declared one way and referenced another. ~keep
-pub(in crate::backends::go::gen_bindings) fn is_passthrough_raw_message_enum(enum_def: &EnumDef) -> bool {
+pub(crate) fn is_passthrough_raw_message_enum(enum_def: &EnumDef) -> bool {
     go_enum_representation(enum_def) == GoEnumRepresentation::RawMessage
 }
 

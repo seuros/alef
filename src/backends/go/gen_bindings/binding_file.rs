@@ -6,7 +6,7 @@ use super::methods::{gen_method_wrapper, gen_streaming_method_wrapper};
 use super::types::{
     gen_config_options, gen_duration_millis_helper, gen_enum_type, gen_last_error_helper, gen_opaque_type,
     gen_opaque_type_free_only, gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
-    is_passthrough_raw_message_enum, is_tuple_field,
+    is_passthrough_raw_message_enum,
 };
 use crate::codegen::naming::{field_uses_duration_map_wire, go_type_name, to_go_name};
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig, TraitBridgeConfig};
@@ -293,13 +293,7 @@ pub(super) fn gen_go_file(
     let unit_enum_names: std::collections::HashSet<&str> = api
         .enums
         .iter()
-        .filter(|e| {
-            !exclude_types.contains(&e.name)
-                && e.variants
-                    .iter()
-                    .all(|v| v.fields.is_empty() || v.fields.iter().all(is_tuple_field))
-        })
-        .filter(|e| !is_passthrough_raw_message_enum(e))
+        .filter(|e| !exclude_types.contains(&e.name) && super::types::is_unit_struct_field_enum(e))
         .map(|e| e.name.as_str())
         .collect();
     let passthrough_enum_names: std::collections::HashSet<&str> = api
@@ -343,12 +337,7 @@ pub(super) fn gen_go_file(
     let data_enum_names: std::collections::HashSet<&str> = api
         .enums
         .iter()
-        .filter(|e| {
-            !exclude_types.contains(&e.name)
-                && e.variants
-                    .iter()
-                    .any(|v| !v.fields.is_empty() && v.fields.iter().any(|f| !is_tuple_field(f)))
-        })
+        .filter(|e| !exclude_types.contains(&e.name) && super::types::is_data_interface_struct_field_enum(e))
         .map(|e| e.name.as_str())
         .collect();
 
