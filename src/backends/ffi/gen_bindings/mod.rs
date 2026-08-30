@@ -95,7 +95,7 @@ impl Backend for FfiBackend {
                     go_output_dir.as_deref(),
                     &prefix,
                     &ffi_capsule_types,
-                ),
+                )?,
                 generated_header: false,
             },
         ];

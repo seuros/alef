@@ -167,7 +167,8 @@ fn go_header_destination_escapes_the_composed_rust_path() {
         Some("packages/go/evil\"; panic!(\"pwned\"); //"),
         "sample",
         &HashMap::new(),
-    );
+    )
+    .expect("valid build.rs paths");
     let syntax = syn::parse_file(&build).expect("generated build.rs remains valid Rust");
     let mut visitor = GeneratedBuildVisitor::default();
     visitor.visit_file(&syntax);
@@ -193,10 +194,28 @@ fn go_header_destination_is_relative_to_ffi_crate_root() {
         Some("packages/go"),
         "sample",
         &HashMap::new(),
-    );
+    )
+    .expect("valid build.rs paths");
     assert!(
         build.contains(r#"Path::new("../../../packages/go/include/sample.h")"#),
         "{build}"
+    );
+}
+
+#[test]
+fn go_header_destination_rejects_non_relative_output() {
+    let error = super::super::helpers::gen_build_rs(
+        "sample.h",
+        "libsample_ffi",
+        "crates/sample-ffi",
+        Some("C:tmp/go"),
+        "sample",
+        &HashMap::new(),
+    )
+    .expect_err("drive-relative output must be rejected");
+    assert!(
+        error.to_string().contains("repository-relative POSIX path"),
+        "unexpected error: {error:#}"
     );
 }
 

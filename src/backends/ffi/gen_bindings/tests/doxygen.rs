@@ -494,7 +494,8 @@ fn test_build_rs_rewrites_prefixed_capsule_return_type() {
         None,
         "ts_pack",
         &capsule_types,
-    );
+    )
+    .expect("valid build.rs paths");
     assert!(
         build.contains(r#"header.replace("TS_PACKTSLanguage", "TSLanguage")"#),
         "build.rs must rewrite the prefixed capsule pointee back to the unprefixed prelude name:\n{build}"
@@ -514,7 +515,8 @@ fn test_build_rs_omits_capsule_fixup_when_no_capsule_types() {
         None,
         "ts_pack",
         &std::collections::HashMap::new(),
-    );
+    )
+    .expect("valid build.rs paths");
     assert!(
         !build.contains("header.replace"),
         "build.rs must not emit a capsule fixup when no capsule types are configured:\n{build}"
@@ -547,7 +549,8 @@ fn test_build_rs_capsule_fixup_uses_shouty_snake_case_prefix() {
         None,
         "SampleCore",
         &capsule_types,
-    );
+    )
+    .expect("valid build.rs paths");
     assert!(
         build.contains(r#"header.replace("SAMPLE_CORETSLanguage", "TSLanguage")"#),
         "build.rs must rewrite the shouty-snake-prefixed capsule pointee, matching the header cbindgen \

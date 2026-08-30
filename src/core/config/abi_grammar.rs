@@ -140,7 +140,7 @@ fn lexical_relative_depth(value: &str) -> Result<usize, String> {
 
 fn has_windows_drive_prefix(value: &str) -> bool {
     let bytes = value.as_bytes();
-    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 pub fn relative_repo_path(from_directory: &str, target: &str) -> Result<String, String> {
@@ -171,16 +171,15 @@ fn normalized_relative_components(value: &str) -> Result<Vec<String>, String> {
     Ok(parts)
 }
 
-/// Validate a bare ASCII ABI identifier: `[ffi] prefix` and a capsule's
+/// Validate a standalone bare ASCII ABI identifier, such as a capsule's
 /// `c_return_type`.
 ///
 /// **Grammar:** `^[A-Za-z][A-Za-z0-9_]*$` — a portable file-scope C identifier
 /// (ISO C §6.4.2.1) that excludes the implementation-reserved leading `_` space.
 ///
-/// **Source:** both fields become part of, or the entirety of, a `#[no_mangle]
-/// extern "C"` symbol name or a cbindgen-declared C type name — every C-ABI
-/// backend this project generates for (cbindgen, Go cgo, JNI, C# P/Invoke) only
-/// portably links ASCII C identifiers.
+/// **Source:** this value becomes a complete cbindgen-declared C type name, so
+/// it must also avoid C keywords. Every C-ABI backend this project generates
+/// for only portably links ASCII C identifiers.
 ///
 /// **Active construct beyond quote/backslash/control chars:** none for a bare
 /// identifier destined for an identifier position — but `c_return_type` also
@@ -197,6 +196,11 @@ pub fn validate_ascii_abi_identifier(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an ASCII ABI namespace prefix.
+///
+/// The prefix is always combined with another identifier component before it
+/// becomes a C symbol, so a C keyword is valid here even though it is invalid
+/// as a standalone identifier.
 pub fn validate_ascii_abi_prefix(value: &str) -> Result<(), String> {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -568,6 +572,7 @@ mod tests {
     #[test]
     fn c_output_base_rejects_windows_drive_absolute_path() {
         assert!(validate_c_output_base("C:/tmp/e2e").is_err());
+        assert!(validate_c_output_base("C:tmp/e2e").is_err());
     }
 
     // -- ascii abi identifier -------------------------------------------------

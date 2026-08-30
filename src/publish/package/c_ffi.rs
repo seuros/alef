@@ -3,7 +3,8 @@
 use super::PackageArtifact;
 use crate::core::config::ResolvedCrateConfig;
 use crate::publish::platform::RustTarget;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -53,10 +54,7 @@ pub fn package_c_ffi(
     }
 
     let ffi_crate_dir = crate::publish::ffi_stage::find_ffi_crate_dir_pub(config, workspace_root);
-    let header_src = ffi_crate_dir.join("include").join(&header_name);
-    if header_src.exists() {
-        fs::copy(&header_src, include_dir.join(&header_name))?;
-    }
+    copy_required_headers(config, &ffi_crate_dir, &include_dir)?;
 
     let pub_config = publish_lang_config(config);
     if pub_config.pkg_config.unwrap_or(true) {
@@ -98,6 +96,29 @@ pub fn package_c_ffi(
         name: archive_name,
         checksum: None,
     })
+}
+
+fn copy_required_headers(config: &ResolvedCrateConfig, ffi_crate_dir: &Path, include_dir: &Path) -> Result<()> {
+    let source_dir = ffi_crate_dir.join("include");
+    for header_name in required_header_names(config) {
+        let source = source_dir.join(&header_name);
+        fs::copy(&source, include_dir.join(&header_name))
+            .with_context(|| format!("copying required C FFI header {}", source.display()))?;
+    }
+    Ok(())
+}
+
+fn required_header_names(config: &ResolvedCrateConfig) -> BTreeSet<String> {
+    let mut headers = BTreeSet::from([config.ffi_header_name()]);
+    let Some(e2e) = config.e2e.as_ref() else {
+        return headers;
+    };
+    for call in std::iter::once(&e2e.call).chain(e2e.calls.values()) {
+        if let Some(header) = call.overrides.get("c").and_then(|override_| override_.header.as_ref()) {
+            headers.insert(header.clone());
+        }
+    }
+    headers
 }
 
 fn publish_lang_config(config: &ResolvedCrateConfig) -> crate::core::config::publish::PublishLanguageConfig {
@@ -149,4 +170,55 @@ fn generate_cmake_version(version: &str) -> String {
          \x20\x20set(PACKAGE_VERSION_UNSUITABLE TRUE)\n\
          endif()\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn package_header_stage_copies_named_call_headers() {
+        let config: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+header_name = "sample.h"
+
+[crates.e2e]
+fixtures = "fixtures"
+
+[crates.e2e.call]
+function = "extract"
+
+[crates.e2e.calls.batch]
+function = "extract_batch"
+
+[crates.e2e.calls.batch.overrides.c]
+header = "sample_batch.h"
+"#,
+        )
+        .expect("config parses");
+        let resolved = config.resolve().expect("config resolves").remove(0);
+        let directory = TempDir::new().expect("temporary directory");
+        let ffi_dir = directory.path().join("ffi");
+        let output = directory.path().join("package/include");
+        fs::create_dir_all(ffi_dir.join("include")).expect("create source include");
+        fs::create_dir_all(&output).expect("create package include");
+        fs::write(ffi_dir.join("include/sample.h"), "canonical").expect("write canonical header");
+        fs::write(ffi_dir.join("include/sample_batch.h"), "batch").expect("write named header");
+
+        copy_required_headers(&resolved, &ffi_dir, &output).expect("stage package headers");
+
+        assert_eq!(fs::read_to_string(output.join("sample.h")).unwrap(), "canonical");
+        assert_eq!(fs::read_to_string(output.join("sample_batch.h")).unwrap(), "batch");
+    }
 }

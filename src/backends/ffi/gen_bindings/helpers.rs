@@ -582,7 +582,7 @@ pub(super) fn gen_build_rs(
     go_output_dir: Option<&str>,
     prefix: &str,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
-) -> String {
+) -> anyhow::Result<String> {
     // Must match `gen_cbindgen_toml`'s `prefix_upper` above. The capsule fixup rewrites capsule
     // pointee type names as they literally appear in the generated header text, and the feature
     // stamp has to spell both the include guard (`{prefix_upper}_H`) and the guard macros
@@ -603,14 +603,14 @@ pub(super) fn gen_build_rs(
         Some(go_dir) => {
             let go_dir = go_dir.trim_end_matches('/');
             let target = format!("{go_dir}/include/{header_name}");
-            let relative =
-                crate::core::config::abi_grammar::relative_repo_path(ffi_crate_root, &target).unwrap_or(target);
+            let relative = crate::core::config::abi_grammar::relative_repo_path(ffi_crate_root, &target)
+                .map_err(anyhow::Error::msg)?;
             let destination = super::rust_literal::escape_rust_str_literal(&relative);
             format!("        Path::new(\"{destination}\"),\n")
         }
         None => String::new(),
     };
-    crate::backends::ffi::template_env::render(
+    Ok(crate::backends::ffi::template_env::render(
         "build_rs.jinja",
         minijinja::context! {
             header_name => &escaped_header_name,
@@ -619,7 +619,7 @@ pub(super) fn gen_build_rs(
             go_header_destination => go_header_destination,
             capsule_header_fixup => capsule_header_fixup,
         },
-    )
+    ))
 }
 
 #[derive(serde::Serialize)]
@@ -996,7 +996,8 @@ mod tests {
             None,
             "SampleCore",
             &capsule_types,
-        );
+        )
+        .expect("valid build.rs paths");
 
         let guard_macro = cbindgen
             .lines()
