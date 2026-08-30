@@ -77,7 +77,25 @@ pub(crate) fn repair_missing_cfg_binding_features(
         if !languages.contains(&language) {
             continue;
         }
-        let manifest_path = crate::codegen::cfg::resolve_against_workspace_root(config, &relative_manifest);
+        // Contained before the read, not after: `std::fs::write` below follows a symlinked
+        // ancestor exactly as the scaffold migrations' temporary files do, and `relative_manifest`
+        // is config-derived (`ruby_native_manifest_path`, `elixir_native_crate_dir`, the Dart
+        // crate directory). Logged and skipped rather than propagated, matching this function's
+        // best-effort contract. ~keep
+        let root = crate::codegen::cfg::workspace_root(config);
+        let manifest_path =
+            match crate::cli::pipeline::generate::write::contained_output_path(&root, &relative_manifest) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        language = %language,
+                        manifest = %relative_manifest.display(),
+                        %error,
+                        "refusing to repair a binding manifest that does not resolve inside the workspace root"
+                    );
+                    continue;
+                }
+            };
         let Ok(existing) = std::fs::read_to_string(&manifest_path) else {
             continue;
         };

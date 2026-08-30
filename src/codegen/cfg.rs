@@ -678,11 +678,20 @@ pub fn merge_missing_cfg_features(
 /// relative to the project root) can locate a file next to it on disk.
 #[must_use]
 pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &Path) -> std::path::PathBuf {
-    let root = config
+    workspace_root(config).join(relative)
+}
+
+/// The root [`resolve_against_workspace_root`] joins onto.
+///
+/// Exposed separately because a caller that has to *contain* a resolved path needs the root and
+/// the relative half apart -- `crate::cli::pipeline::generate::write::contained_output_path` takes
+/// both, and re-splitting an already-joined path cannot recover them. ~keep
+#[must_use]
+pub fn workspace_root(config: &ResolvedCrateConfig) -> std::path::PathBuf {
+    config
         .workspace_root
         .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    root.join(relative)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 /// Warn when the binding crate's own (already-scaffolded) Cargo.toml at `manifest_path` does not

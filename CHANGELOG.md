@@ -341,6 +341,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `poly.toml` repairs run unconditionally on paths that never enter the emitted file list at all.
   A symlinked `packages/`, `.cargo` or `poly.toml` therefore carried a repair outside the project
   even when every path component was a compile-time literal.
+- Contain the best-effort binding-manifest `[features]` repair the same way. It resolves a
+  config-derived manifest path (`[crates.output]`, the crate name) against the workspace root and
+  rewrites it with a plain `fs::write`, so a symlinked ancestor carried the repair outside the
+  workspace. A path that does not resolve inside the root is now logged and skipped, matching the
+  rest of that function's best-effort contract.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

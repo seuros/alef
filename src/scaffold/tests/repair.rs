@@ -235,3 +235,44 @@ fn repair_is_a_no_op_when_no_manifest_exists_yet() {
         "this repair must never create a manifest that was never scaffolded"
     );
 }
+
+/// The manifest path is config-derived (`[crates.output] ruby` feeds `package_dir`, the crate
+/// name feeds the `ext/<crate>_rb` segment), and this repair writes with a plain `fs::write`,
+/// which follows a symlinked ancestor just as the scaffold migrations' temporary files do. So a
+/// lexically-innocent relative manifest lands outside the workspace the moment one of its
+/// existing ancestor directories is a symlink -- and a repository can ship that symlink in its
+/// own tracked tree.
+///
+/// Unix-only because staging the escape needs `std::os::unix::fs::symlink`; the check itself is
+/// not gated. The ordinary-directory counterpart is
+/// `repair_adds_missing_features_to_both_ruby_and_elixir_manifests` above, which is what proves
+/// this refusal is narrow rather than a blanket rejection of every pre-existing manifest. ~keep
+#[test]
+#[cfg(unix)]
+fn repair_refuses_a_manifest_reached_through_a_symlinked_ancestor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws_root = dir.path().join("workspace");
+    let outside = dir.path().join("outside");
+    let config = sample_config(&ws_root);
+    write_core_crate_manifest(&ws_root);
+
+    let ruby_relative = ruby_native_manifest_path(&config);
+    let linked_parent = ws_root.join(ruby_relative.parent().expect("manifest has a parent"));
+    std::fs::create_dir_all(linked_parent.parent().expect("native dir has a parent")).expect("create ext dir");
+    std::fs::create_dir(&outside).expect("create outside dir");
+    std::fs::write(outside.join("Cargo.toml"), EXISTING_MANIFEST).expect("write outside manifest");
+    std::os::unix::fs::symlink(&outside, &linked_parent).expect("symlink");
+
+    let api = sample_api();
+    let repaired = repair_missing_cfg_binding_features(&api, &config, &[Language::Ruby]);
+
+    assert!(
+        repaired.is_empty(),
+        "a manifest reached through a symlinked ancestor must not be repaired, got: {repaired:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join("Cargo.toml")).expect("outside manifest"),
+        EXISTING_MANIFEST,
+        "the repair rewrote a manifest outside the workspace root"
+    );
+}
