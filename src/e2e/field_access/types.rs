@@ -258,6 +258,15 @@ pub struct IrEnumMap {
     /// variants are deliberately not recorded here: there is no single payload type to advance
     /// into, and a caller must fall back to its own "not implemented" handling for that shape.
     pub variant_payload_types: HashMap<String, HashMap<String, (String, String)>>,
+    /// `variant_payload_is_collection[enum_name]` — variant names (a subset of
+    /// `variant_payload_types[enum_name]`'s keys) whose single payload field's *declared* type is
+    /// itself `Vec<T>` (`Variant(Vec<Item>)`), rather than a struct that merely wraps one
+    /// (`Variant(Payload)`). `variant_payload_types` unwraps `Vec` the same way it unwraps
+    /// `Option` when resolving the payload's named type, so it alone cannot tell those two shapes
+    /// apart; this set is the shape distinction a caller needs when a fixture path names only the
+    /// variant with no field inside it — asserting a collection check directly against the
+    /// payload value only makes sense for the first shape. ~keep
+    pub variant_payload_is_collection: HashMap<String, HashSet<String>>,
     /// `tagged_enum_wire[enum_name] -> (serde_tag, Rust variant -> serde wire value)`.
     /// Carries the exact discriminator spellings assertion generators need at runtime.
     pub tagged_enum_wire: HashMap<String, TaggedEnumWire>,

@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through two `RustVec`-backed segments. Scan subscripts quote/escape-aware so a map key
   containing `]` closes correctly, and refuse (rather than emit broken Swift for) a mixed
   map-then-vec chain that reaches accessor-building without IR data to refuse it earlier.
+- Generate real C# and Kotlin `count_min` assertions against a discriminated-union variant's
+  payload value itself when a fixture path names only the variant (e.g. `outcome.found` for
+  `Found(Vec<Item>)`), instead of silently dropping the assertion; unsubstantiable shapes now
+  render an explicit registered skip rather than nothing at all.
 
 ## [0.79.2] - 2026-08-30
 

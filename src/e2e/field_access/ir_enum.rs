@@ -67,11 +67,14 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         }
     }
 
+    let (variant_payload_types, variant_payload_is_collection) = build_variant_payload_types(enums);
+
     IrEnumMap {
         field_types,
         enum_fields,
         enum_field_types,
-        variant_payload_types: build_variant_payload_types(enums),
+        variant_payload_types,
+        variant_payload_is_collection,
         tagged_enum_wire: build_tagged_enum_wire(enums),
         root_type: None,
     }
@@ -99,14 +102,27 @@ fn build_tagged_enum_wire(enums: &[EnumDef]) -> HashMap<String, TaggedEnumWire> 
         .collect()
 }
 
-/// `variant_payload_types[enum][variant] -> (field_name, payload_type_name)` for every
+/// Builds `variant_payload_types[enum][variant] -> (field_name, payload_type_name)` for every
 /// tagged-union variant that carries exactly one field whose type resolves to a `Named` IR
-/// type (through `Option`/`Vec` unwrapping, via [`named_type`]). A variant with zero or
-/// several fields has no single payload type to record, so it is left out — callers asking
-/// for it get `None` and must fall back to their own unimplemented-shape handling rather than
+/// type (through `Option`/`Vec` unwrapping, via [`named_type`]), alongside
+/// `variant_payload_is_collection[enum]` — the subset of those variants whose payload field is
+/// itself `Vec`-typed (`Variant(Vec<Item>)`) rather than a struct that merely wraps one
+/// (`Variant(Payload)`); `named_type` unwraps `Vec` the same way it unwraps `Option`, so the
+/// first map alone cannot distinguish the two shapes. A variant with zero or several fields has
+/// no single payload type to record, so it is left out of both — callers asking for it get
+/// `None`/`false` and must fall back to their own unimplemented-shape handling rather than
 /// receive a misleading answer for one of several fields.
-fn build_variant_payload_types(enums: &[EnumDef]) -> HashMap<String, HashMap<String, (String, String)>> {
+/// `variant_payload_types[enum][variant] -> (field_name, payload_type_name)` — see
+/// [`IrEnumMap::variant_payload_types`] for the field this feeds.
+type VariantPayloadTypeMap = HashMap<String, HashMap<String, (String, String)>>;
+
+/// `variant_payload_is_collection[enum] -> variant names` — see
+/// [`IrEnumMap::variant_payload_is_collection`] for the field this feeds.
+type VariantPayloadCollectionMap = HashMap<String, HashSet<String>>;
+
+fn build_variant_payload_types(enums: &[EnumDef]) -> (VariantPayloadTypeMap, VariantPayloadCollectionMap) {
     let mut variant_payload_types: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
+    let mut variant_payload_is_collection: HashMap<String, HashSet<String>> = HashMap::new();
     for enum_def in enums {
         for variant in &enum_def.variants {
             let [only_field] = variant.fields.as_slice() else {
@@ -119,9 +135,15 @@ fn build_variant_payload_types(enums: &[EnumDef]) -> HashMap<String, HashMap<Str
                 .entry(enum_def.name.clone())
                 .or_default()
                 .insert(variant.name.clone(), (only_field.name.clone(), named.to_string()));
+            if super::ir_collection::is_vec_type(&only_field.ty) {
+                variant_payload_is_collection
+                    .entry(enum_def.name.clone())
+                    .or_default()
+                    .insert(variant.name.clone());
+            }
         }
     }
-    variant_payload_types
+    (variant_payload_types, variant_payload_is_collection)
 }
 
 /// Walk `map.field_types` from `root` through `prefix`, returning the owner type the path's

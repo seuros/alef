@@ -90,7 +90,26 @@ pub(super) fn render_discriminated_union_assertion(
     inner_field: &str,
     field_is_collection: bool,
 ) {
+    // No field inside the payload — the fixture asserts against the payload VALUE itself (e.g.
+    // `outcome.found` where `Found` wraps `Vec<Item>` directly, rather than a struct with an
+    // inner field). `field_is_collection` here comes from `union_variant_payload_is_collection`
+    // (the caller switches source per `Self::union_variant_field_is_collection`'s doc comment),
+    // so `count_min` is the one assertion type this shape can substantiate today; every other
+    // shape stays the same registered skip a callsite bug used to render as nothing at all. ~keep
     if inner_field.is_empty() {
+        if assertion.assertion_type == "count_min" && field_is_collection {
+            if let Some(count) = assertion.value.as_ref().and_then(serde_json::Value::as_u64) {
+                let payload_expr = format!("{variant_var}.{payload_field}!!");
+                let _ = writeln!(
+                    out,
+                    "                assertTrue({payload_expr}.size >= {count}, \"expected count >= {count}\")"
+                );
+            } else {
+                render_unsupported_assertion(out, assertion);
+            }
+        } else {
+            render_unsupported_assertion(out, assertion);
+        }
         return;
     }
 
@@ -285,7 +304,15 @@ pub(super) fn try_render_generic_union_assertion(
     );
     let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
     let _ = writeln!(out, "            is {union_type}.{variant_pascal} -> {{");
-    let field_is_collection = field_resolver.union_variant_field_is_collection(&prefix, &variant_pascal, &suffix);
+    // An empty suffix means the fixture path named only the variant — no field is checked, so
+    // `union_variant_field_is_collection` (which requires a non-empty field name) always
+    // answers `false` for it. Whether the variant's PAYLOAD itself is a collection is a
+    // different, IR-backed question for that shape. ~keep
+    let field_is_collection = if suffix.is_empty() {
+        field_resolver.union_variant_payload_is_collection(&union_type, &variant_pascal)
+    } else {
+        field_resolver.union_variant_field_is_collection(&prefix, &variant_pascal, &suffix)
+    };
     render_discriminated_union_assertion(
         out,
         assertion,
@@ -347,6 +374,19 @@ mod tests {
                 EnumVariant {
                     name: "Pair".to_string(),
                     fields: vec![field("left", TypeRef::String), field("right", TypeRef::String)],
+                    ..EnumVariant::default()
+                },
+                // A tuple variant whose single field wraps a collection DIRECTLY
+                // (`Found(Vec<FoundEntry>)`), rather than a struct with a collection field
+                // inside it (`Web(WebPayload)`, `WebPayload.entries: Vec<String>`). A fixture
+                // path naming only this variant (`details.found`, no inner field) asserts
+                // against the payload value itself. ~keep
+                EnumVariant {
+                    name: "Found".to_string(),
+                    fields: vec![field(
+                        "_0",
+                        TypeRef::Vec(Box::new(TypeRef::Named("FoundEntry".to_string()))),
+                    )],
                     ..EnumVariant::default()
                 },
             ],
@@ -439,6 +479,79 @@ mod tests {
         assert!(out.contains("DetailUnion.Web"));
         assert!(out.contains("payload.entries!!.size >= 2"));
         assert!(!out.contains("skipped:"));
+    }
+
+    /// Regression: a fixture path naming only the variant (`details.found`, no inner field)
+    /// against a variant whose single payload field is ITSELF a collection
+    /// (`Found(Vec<FoundEntry>)`) used to silently drop the assertion — `inner_field.is_empty()`
+    /// returned before ever reaching a match arm, and `union_variant_field_is_collection`
+    /// answers `false` for an empty field name regardless of the payload's real shape. It must
+    /// now render a real size assertion against the payload value itself.
+    #[test]
+    fn count_min_on_a_bare_union_variant_collection_payload_renders_a_size_assertion() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.found".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            true,
+            "details.found",
+        ));
+        assert_eq!(
+            out,
+            concat!(
+                "        when (val unionFound = result.details) {\n",
+                "            is DetailUnion.Found -> {\n",
+                "                assertTrue(unionFound.entry!!.size >= 2, \"expected count >= 2\")\n",
+                "            }\n",
+                "            else -> kotlin.test.assertTrue(false, \"Expected Found variant\")\n",
+                "        }\n",
+            )
+        );
+    }
+
+    /// Negative control for the fix above: a bare-variant path (no inner field) against a
+    /// variant whose single payload field is a STRUCT, not a collection (`Web(WebPayload)`),
+    /// must stay an explicit, registered skip rather than being mistaken for the
+    /// collection-payload shape.
+    #[test]
+    fn count_min_on_a_bare_union_variant_scalar_payload_stays_an_explicit_skip() {
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("details.web".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        assert!(try_render_generic_union_assertion(
+            &mut out,
+            &assertion,
+            &resolver(),
+            "result",
+            true,
+            "details.web",
+        ));
+        assert_eq!(
+            out,
+            concat!(
+                "        when (val unionWeb = result.details) {\n",
+                "            is DetailUnion.Web -> {\n",
+                "                // skipped: assertion type 'count_min' not yet supported ",
+                "for discriminated union fields\n",
+                "            }\n",
+                "            else -> kotlin.test.assertTrue(false, \"Expected Web variant\")\n",
+                "        }\n",
+            )
+        );
     }
 
     #[test]

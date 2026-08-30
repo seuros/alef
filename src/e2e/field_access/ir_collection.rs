@@ -71,7 +71,12 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
 
 /// `true` when `ty` is `Vec<T>`, seeing through an `Option` wrapper the same way
 /// `named_type` does.
-fn is_vec_type(ty: &crate::core::ir::TypeRef) -> bool {
+///
+/// `pub(super)` rather than private: [`super::ir_enum::build_variant_payload_types`] reuses this
+/// exact check to record whether a tagged-union variant's single payload field is itself a
+/// collection (`Variant(Vec<Item>)`), rather than a struct wrapping one — the same "is this a
+/// `Vec`, seeing through `Option`" question, answered once. ~keep
+pub(super) fn is_vec_type(ty: &crate::core::ir::TypeRef) -> bool {
     match ty {
         crate::core::ir::TypeRef::Vec(_) => true,
         crate::core::ir::TypeRef::Optional(inner) => is_vec_type(inner),

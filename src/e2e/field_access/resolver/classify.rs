@@ -791,6 +791,24 @@ impl FieldResolver {
             .map(|(field_name, type_name)| (field_name.as_str(), type_name.as_str()))
     }
 
+    /// Whether `variant`'s single payload field (per [`Self::union_variant_payload`]) is itself
+    /// `Vec`-typed (`Variant(Vec<Item>)`) rather than a struct that merely wraps a collection
+    /// field (`Variant(Payload)`, where `Payload.items: Vec<Item>`).
+    ///
+    /// A fixture path that names only the union field and the variant, with no field inside the
+    /// payload (e.g. `outcome.found`, split by [`Self::ir_tagged_union_split`] into a prefix,
+    /// `union_type`, `variant`, and an EMPTY suffix), is asserting against the payload value
+    /// itself. [`Self::union_variant_field_is_collection`] cannot answer that: it requires a
+    /// non-empty field name to walk the payload type's own fields, and correctly answers `false`
+    /// for an empty one. This is the distinct question a caller must ask instead once it finds
+    /// the suffix is empty — see `csharp`/`kotlin`'s `try_render_generic_union_assertion`. ~keep
+    pub fn union_variant_payload_is_collection(&self, union_type: &str, variant: &str) -> bool {
+        self.ir_enum_map
+            .variant_payload_is_collection
+            .get(union_type)
+            .is_some_and(|variants| variants.contains(variant))
+    }
+
     /// The serde discriminator key and wire value for a concrete tagged-enum variant.
     pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
         let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;

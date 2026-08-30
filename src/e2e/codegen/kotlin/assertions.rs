@@ -236,8 +236,16 @@ pub(super) fn render_assertion(
             None => f,
         };
         let container = field_resolver.accessor(format_path, "kotlin_android", result_var);
-        let field_is_collection =
-            field_resolver.union_variant_field_is_collection(format_path, &variant_pascal, &inner_field);
+        // An empty `inner_field` means the fixture path named only the variant (e.g.
+        // `metadata.format.pdf`) — no field inside the payload is being checked, so
+        // `union_variant_field_is_collection` (which requires a non-empty field name) always
+        // answers `false`. Whether the `FormatMetadata` variant's payload itself is a collection
+        // is the distinct question `union_variant_payload_is_collection` answers instead. ~keep
+        let field_is_collection = if inner_field.is_empty() {
+            field_resolver.union_variant_payload_is_collection("FormatMetadata", &variant_pascal)
+        } else {
+            field_resolver.union_variant_field_is_collection(format_path, &variant_pascal, &inner_field)
+        };
         let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
         let _ = writeln!(out, "            is FormatMetadata.{variant_pascal} -> {{");
         super::discriminated::render_discriminated_union_assertion(

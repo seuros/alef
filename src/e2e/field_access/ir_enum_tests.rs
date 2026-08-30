@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 use crate::e2e::field_access::FieldResolver;
 
 use super::ir_enum::{build_ir_enum_map, is_enum_path};
@@ -253,4 +253,91 @@ fn a_resolver_with_no_ir_enum_map_wired_in_behaves_exactly_as_before() {
 
     let resolver = resolver.with_enum_fields(HashSet::from(["kind".to_string()]));
     assert!(resolver.is_enum("kind"));
+}
+
+/// `variant_payload_is_collection` must distinguish a tuple variant whose single field is
+/// itself `Vec<T>` (`Found(Vec<Entry>)`) from a variant wrapping a struct that merely contains
+/// a collection field elsewhere (`Wrapped(Payload)`) — the shape distinction
+/// `FieldResolver::union_variant_payload_is_collection` needs when a fixture path names only
+/// the variant, with no field inside its payload (the "the payload itself is the list" case
+/// `csharp`/`kotlin` count_min assertions used to silently drop).
+#[test]
+fn variant_payload_is_collection_distinguishes_a_direct_vec_payload_from_a_wrapping_struct() {
+    let enums = vec![EnumDef {
+        name: "Outcome".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Found".to_string(),
+                fields: vec![field("_0", TypeRef::Vec(Box::new(TypeRef::Named("Entry".to_string()))))],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Wrapped".to_string(),
+                fields: vec![field("payload", TypeRef::Named("Payload".to_string()))],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Empty".to_string(),
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }];
+    let map = build_ir_enum_map(&[], &enums);
+
+    assert!(
+        map.variant_payload_is_collection
+            .get("Outcome")
+            .is_some_and(|variants| variants.contains("Found")),
+        "Found(Vec<Entry>) wraps a collection directly"
+    );
+    assert!(
+        !map.variant_payload_is_collection
+            .get("Outcome")
+            .is_some_and(|variants| variants.contains("Wrapped")),
+        "Wrapped(Payload) wraps a struct, not a collection"
+    );
+    assert!(
+        !map.variant_payload_is_collection
+            .get("Outcome")
+            .is_some_and(|variants| variants.contains("Empty")),
+        "a fieldless variant has no payload to classify"
+    );
+}
+
+/// The resolver-level surface `csharp`/`kotlin` call: `union_variant_payload_is_collection`
+/// answers `true` for the direct-`Vec` variant and `false` for both the struct-wrapping variant
+/// and an unknown union/variant name, without ever needing a field name — unlike
+/// `union_variant_field_is_collection`, which requires one and cannot answer this question.
+#[test]
+fn resolver_union_variant_payload_is_collection_matches_the_ir() {
+    let enums = vec![EnumDef {
+        name: "Outcome".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Found".to_string(),
+                fields: vec![field("_0", TypeRef::Vec(Box::new(TypeRef::Named("Entry".to_string()))))],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Wrapped".to_string(),
+                fields: vec![field("payload", TypeRef::Named("Payload".to_string()))],
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }];
+    let resolver = FieldResolver::new(
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(&[], &enums), None);
+
+    assert!(resolver.union_variant_payload_is_collection("Outcome", "Found"));
+    assert!(!resolver.union_variant_payload_is_collection("Outcome", "Wrapped"));
+    assert!(!resolver.union_variant_payload_is_collection("Outcome", "Missing"));
+    assert!(!resolver.union_variant_payload_is_collection("UnknownUnion", "Found"));
 }
