@@ -287,7 +287,7 @@ impl Backend for ZigBackend {
             .iter()
             .filter(|t| !exclude_types.contains(&t.name) && !t.is_opaque && t.has_serde)
         {
-            emit_type(ty, &mut content);
+            emit_type(ty, config, &mut content);
             content.push('\n');
         }
 

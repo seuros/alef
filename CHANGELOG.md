@@ -174,6 +174,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
   on any failure and asserted nothing; it now binds both ABI failure channels and requires the
   failure to have carried a message or a non-catch-all error-set member.
+- Honor `[crates.zig] rename_fields` for Zig struct members and `[crates.dart] rename_fields` for
+  the Dart FFI style's `@freezed` parameters. Both were silent no-ops: Zig never consulted the
+  config, and the Dart emitter passed a hardcoded `None` into `naming::public_field_name`, which
+  made the seam look wired while discarding every configured rename. Only a crate that already
+  sets `rename_fields` for those languages sees different output. Fifteen further backends still
+  ignore `rename_fields`; `tests/rename_fields_backend_coverage.rs` records the full
+  emitter-by-emitter audit, and `backends::ffi`, `backends::jni`, the Kotlin JVM target and
+  Dart's FRB style now document at their emission sites why they have no public field surface.
 - Name the PHP e2e DTO literal's named arguments with the same helper the PHP binding uses for
   its `#[php(constructor)]` parameters. A field whose name is a PHP reserved word was
   escaped on the call side only, producing `Unknown named parameter`.

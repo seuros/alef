@@ -12,6 +12,10 @@
 //! - `jni` crate used at the JNI boundary; the consumer's `Cargo.toml` must
 //!   declare `jni` as a dependency.
 //!
+//! This backend emits no DTO type and therefore no public field surface, so
+//! `[crates.jni] rename_fields` has nothing to govern: the Android target's field
+//! names belong to `backends::kotlin_android`'s data classes. ~keep
+//!
 //! This backend is **not** registered in the alef-cli dispatch table as a
 //! standalone language target. It is driven by `Language::Jni` which is always
 //! paired with `Language::KotlinAndroid`. The [`JniBackend`] struct is exported

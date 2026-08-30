@@ -84,7 +84,7 @@ pub(crate) fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Re
         .unwrap_or_default();
 
     for ty in api.types.iter().filter(|t| !exclude_types.contains(t.name.as_str())) {
-        emit_type(ty, &mut content);
+        emit_type(ty, config, &mut content);
         content.push('\n');
     }
 

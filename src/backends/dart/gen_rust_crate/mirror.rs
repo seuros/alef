@@ -27,6 +27,14 @@ fn emit_rust_doc(doc: &str, indent: &str, out: &mut String) {
     }
 }
 
+/// Emit the `#[frb(mirror)]` Rust struct flutter_rust_bridge reads to generate the Dart class.
+///
+/// `[crates.dart] rename_fields` does not apply on this path, and cannot: under the default
+/// `DartStyle::Frb`, alef emits no Dart source at all — FRB derives the Dart property names from
+/// this mirror's Rust field names using its own casing rule. The field names here must therefore
+/// stay identical to the core type's, or the mirror stops mirroring. The Dart field surface
+/// `rename_fields` does govern is `DartStyle::Ffi`'s `@freezed` parameters, handled in
+/// `gen_ffi::types::dart_field_identifier`. ~keep
 pub(crate) fn emit_mirror_struct(out: &mut String, ty: &TypeDef, source_crate_name: &str) {
     use crate::backends::dart::template_env;
 

@@ -116,6 +116,15 @@ pub(super) fn gen_type_free(typ: &TypeDef, prefix: &str, core_import: &str) -> S
     )
 }
 
+/// Emit the `extern "C"` accessor that reads one field of `typ` through its opaque handle.
+///
+/// `[crates.ffi] rename_fields` deliberately does not reach here, and this is the C backend's
+/// whole answer to it: `field.name` is not a field identifier on this surface, it is one
+/// component of a global C symbol (`{prefix}_{type_snake}_{field_name}`). A C consumer never
+/// spells `value.field` — the type crosses the ABI as an opaque handle and every read goes
+/// through a function like this one. Renaming the component would rename an exported symbol,
+/// which is an ABI break wearing a naming preference's clothes. The C backend therefore has no
+/// public DTO field surface for `rename_fields` to govern. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gen_field_accessor(
     typ: &TypeDef,

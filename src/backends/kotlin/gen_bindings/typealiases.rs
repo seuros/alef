@@ -42,6 +42,11 @@ pub(super) fn emit_typealiases(
                 },
             ));
         } else {
+            // A DTO on the Kotlin JVM target is a `typealias` onto the Java record, not a
+            // Kotlin declaration of its own, so this target has no field identifier to rename:
+            // `[crates.kotlin] rename_fields` for a JVM-target DTO is governed by the Java
+            // backend's record components. Honoring it here as well would give one field two
+            // spellings across a `typealias`, which does not compile. ~keep
             body.push_str(&crate::backends::kotlin::template_env::render(
                 "typealias_type.jinja",
                 minijinja::context! {

@@ -1,14 +1,22 @@
-use crate::codegen::naming::{PublicIdentifierKind, pascal_to_snake, public_host_identifier, wire_variant_value};
+use crate::codegen::naming::{
+    PublicIdentifierKind, pascal_to_snake, public_field_name, public_host_identifier, wire_variant_value,
+};
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::config::Language;
+use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef, TypeRef};
 
 use crate::backends::zig::type_map::ZigMapper;
 
 use super::helpers::emit_cleaned_zig_doc;
 
-pub(crate) fn emit_type(ty: &TypeDef, out: &mut String) {
+/// Emit a Zig struct for an IR struct type.
+///
+/// `config` is threaded in only so the field identifiers can honor `[crates.zig] rename_fields`.
+/// Zig struct members are the public field surface a consumer both constructs and reads by name,
+/// so a configured rename that this emitter ignored would leave the consumer's `alef.toml` a
+/// silent no-op rather than an error. ~keep
+pub(crate) fn emit_type(ty: &TypeDef, config: &ResolvedCrateConfig, out: &mut String) {
     emit_cleaned_zig_doc(out, &ty.doc, "");
     out.push_str(&crate::backends::zig::template_env::render(
         "type_header.jinja",
@@ -22,12 +30,22 @@ pub(crate) fn emit_type(ty: &TypeDef, out: &mut String) {
         out.push_str(&crate::backends::zig::template_env::render(
             "type_field.jinja",
             minijinja::context! {
-                field_name => public_host_identifier(Language::Zig, PublicIdentifierKind::Field, &field.name),
+                field_name => zig_field_identifier(ty, field, config),
                 field_type => ty_str,
             },
         ));
     }
     out.push_str("};\n");
+}
+
+/// Resolve a Zig struct member identifier, applying `[crates.zig] rename_fields` before casing.
+///
+/// Enum payload struct members deliberately do not go through here: `rename_fields` is keyed
+/// `"TypeName.field_name"`, and an enum variant's payload has no unambiguous `TypeName` to key
+/// on, so a lookup would silently miss rather than rename. ~keep
+fn zig_field_identifier(ty: &TypeDef, field: &crate::core::ir::FieldDef, config: &ResolvedCrateConfig) -> String {
+    let renamed = config.resolve_field_name(Language::Zig, &ty.name, &field.name);
+    public_field_name(Language::Zig, &field.name, renamed.as_deref())
 }
 
 pub(crate) fn emit_enum(en: &EnumDef, out: &mut String) {

@@ -1,7 +1,7 @@
 use crate::codegen::naming::{PublicIdentifierKind, public_field_name, public_host_identifier};
 use crate::codegen::shared::binding_fields;
-use crate::core::config::Language;
-use crate::core::ir::{EnumDef, TypeDef};
+use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::ir::{EnumDef, FieldDef, TypeDef};
 
 use super::type_map::dart_type;
 use crate::backends::dart::template_env;
@@ -12,7 +12,7 @@ use crate::backends::dart::template_env;
 /// `Pointer<Void>`. For value types with fields, fields are Dart-typed
 /// and the class is annotated with `@freezed` to enable copyWith, toJson,
 /// value equality, and hashCode generation via build_runner.
-pub(super) fn emit_type(ty: &TypeDef, out: &mut String) {
+pub(super) fn emit_type(ty: &TypeDef, config: &ResolvedCrateConfig, out: &mut String) {
     if !ty.doc.is_empty() {
         let doc_lines: Vec<String> = ty.doc.lines().map(ToString::to_string).collect();
         out.push_str(&template_env::render(
@@ -48,7 +48,7 @@ pub(super) fn emit_type(ty: &TypeDef, out: &mut String) {
     if visible_fields.len() == 1 {
         let field = visible_fields[0];
         let ty_str = dart_type(&field.ty, field.optional);
-        let name = public_field_name(Language::Dart, &field.name, None);
+        let name = dart_field_identifier(ty, field, config);
         out.push_str(&template_env::render(
             "freezed_class_single_param.jinja",
             minijinja::context! {
@@ -66,7 +66,7 @@ pub(super) fn emit_type(ty: &TypeDef, out: &mut String) {
         ));
         for field in &visible_fields {
             let ty_str = dart_type(&field.ty, field.optional);
-            let name = public_field_name(Language::Dart, &field.name, None);
+            let name = dart_field_identifier(ty, field, config);
             if !field.doc.is_empty() {
                 let doc_lines: Vec<String> = field.doc.lines().map(ToString::to_string).collect();
                 out.push_str(&template_env::render(
@@ -126,6 +126,17 @@ fn declared_variants<'a>(
 /// Data variants (tagged unions) cannot be expressed ergonomically via
 /// `dart:ffi` since C has no stable tagged-union ABI. Non-unit variants
 /// emit an unsupported comment and are skipped.
+/// Resolve a `@freezed` constructor parameter name, applying `[crates.dart] rename_fields`.
+///
+/// `public_field_name`'s third argument was previously hardcoded `None`, which made the seam
+/// look wired while silently discarding every configured rename. A `@freezed` named parameter
+/// is simultaneously the class's public property, so this one identifier is the whole Dart FFI
+/// field surface. ~keep
+fn dart_field_identifier(ty: &TypeDef, field: &FieldDef, config: &ResolvedCrateConfig) -> String {
+    let renamed = config.resolve_field_name(Language::Dart, &ty.name, &field.name);
+    public_field_name(Language::Dart, &field.name, renamed.as_deref())
+}
+
 pub(super) fn emit_enum(
     en: &EnumDef,
     host_crate_name: &str,
