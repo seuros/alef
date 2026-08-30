@@ -8,6 +8,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, warn};
 
+mod containment;
 mod report;
 
 // Re-exported at this path, not moved out from under callers: `super::write::WriteReport` and
@@ -98,14 +99,24 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The single gate every generated path passes through before either writer touches the disk.
+///
+/// Both halves run here, in this order, and both run *before* the caller's `create_dir_all` and
+/// before `atomic_write`'s `NamedTempFile::new_in`: a containment check that fires after the
+/// directory has been created has already let the escape happen. `write_files_report` calls this
+/// while preparing content and creates directories only once the whole preparation loop has
+/// succeeded; `write_scaffold_files_report` calls it at the top of its per-file loop, ahead of
+/// that file's own `create_dir_all`. ~keep
 pub(crate) fn contained_output_path(base_dir: &Path, emitted_path: &Path) -> anyhow::Result<std::path::PathBuf> {
-    validate_output_path(emitted_path).map_err(|detail| {
-        anyhow::anyhow!(
-            "generated output path `{}` is not contained beneath `{}`: {detail}",
-            emitted_path.display(),
-            base_dir.display()
-        )
-    })?;
+    validate_output_path(emitted_path)
+        .and_then(|()| containment::ensure_no_symlink_escape(base_dir, emitted_path))
+        .map_err(|detail| {
+            anyhow::anyhow!(
+                "generated output path `{}` is not contained beneath `{}`: {detail}",
+                emitted_path.display(),
+                base_dir.display()
+            )
+        })?;
     Ok(base_dir.join(emitted_path))
 }
 
@@ -899,6 +910,8 @@ mod marker_syntax_tests;
 mod refusal_drift_tests;
 #[cfg(test)]
 mod stamp_scope_tests;
+#[cfg(test)]
+mod symlink_containment_tests;
 #[cfg(test)]
 mod tree_format_stamp_tests;
 

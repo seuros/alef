@@ -328,6 +328,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rename moved it off. The wildcard predicate was the strictest, having no `to_lowercase()`
   to soften the comparison. Every surface now translates through one shared lookup, so a single
   enum cannot be reconciled one way by `assert_eq!` and another by `assert!`.
+- Refuse a generated output path whose already-existing ancestor directory is a symlink leaving the
+  project root. The write boundary was purely lexical, so `create_dir_all` and the atomic writer's
+  temporary file both followed a symlink a repository can ship in its own tree, and a
+  lexically-safe emitted path landed outside the project. The check now resolves the deepest
+  existing ancestor and compares it against the canonicalized base directory, before any directory
+  is created; a base reached through a symlink (macOS `/tmp`, a symlinked checkout) and symlinks
+  that stay inside the project are unaffected.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.
