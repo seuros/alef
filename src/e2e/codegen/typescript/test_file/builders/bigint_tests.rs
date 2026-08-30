@@ -39,9 +39,7 @@ fn limits_type_def() -> TypeDef {
             },
             crate::core::ir::FieldDef {
                 name: "optional_values".into(),
-                ty: TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(
-                    crate::core::ir::PrimitiveType::U64,
-                ))))),
+                ty: TypeRef::Vec(Box::new(TypeRef::Primitive(crate::core::ir::PrimitiveType::U64))),
                 optional: true,
                 ..Default::default()
             },
@@ -163,7 +161,7 @@ fn an_optional_wasm_u64_collection_uses_the_same_typed_array_lowering() {
 
     assert!(
         expression.contains("_u0.optionalValues = BigUint64Array.from([9007199254740993n]);"),
-        "Option<Vec<u64>> must preserve the collection's wasm ABI shape: {expression}"
+        "an optional Vec<u64> must preserve the collection's wasm ABI shape: {expression}"
     );
 }
 

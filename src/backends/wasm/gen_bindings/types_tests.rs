@@ -93,6 +93,30 @@ fn gen_getter_setter_required_vec_unit_enum_unchanged() {
     );
 }
 
+#[test]
+fn optional_u64_vec_accessors_keep_the_wasm_bigint_vector_shape() {
+    let field = FieldDef {
+        name: "values".to_string(),
+        ty: TypeRef::Vec(Box::new(TypeRef::Primitive(crate::core::ir::PrimitiveType::U64))),
+        optional: true,
+        ..Default::default()
+    };
+    let enums = AHashSet::new();
+    let tagged = AHashSet::new();
+
+    let getter = gen_getter(&field, &mapper(), &enums, &tagged, false, &no_untagged_ts_types());
+    let setter = gen_setter(&field, &mapper(), &enums, false, &tagged, &no_untagged_ts_types());
+
+    assert!(
+        getter.contains("-> Option<Vec<u64>>"),
+        "the getter must expose wasm-bindgen's optional BigUint64Array source shape: {getter}"
+    );
+    assert!(
+        setter.contains("value: Option<Vec<u64>>"),
+        "the setter must expose wasm-bindgen's optional BigUint64Array source shape: {setter}"
+    );
+}
+
 /// A field and an inherent method sharing the same name each mint `pub fn {name}(&self)`
 /// in the generated `#[wasm_bindgen]` impl block. Without a collision guard, both the
 /// field-getter emitter and the method-wrapper emitter would define the function, which
