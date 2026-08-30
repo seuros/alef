@@ -91,6 +91,7 @@ impl Backend for FfiBackend {
                 content: gen_build_rs(
                     &header_name,
                     &format!("lib{lib_name}"),
+                    &crate_root.to_string_lossy(),
                     go_output_dir.as_deref(),
                     &prefix,
                     &ffi_capsule_types,

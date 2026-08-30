@@ -121,7 +121,7 @@ pub fn validate_c_output_base(value: &str) -> Result<(), String> {
 }
 
 fn lexical_relative_depth(value: &str) -> Result<usize, String> {
-    if value.starts_with('/') || value.contains('\\') {
+    if value.starts_with('/') || value.contains('\\') || has_windows_drive_prefix(value) {
         return Err(format!(
             "output base `{value}` must be a repository-relative POSIX path"
         ));
@@ -136,6 +136,39 @@ fn lexical_relative_depth(value: &str) -> Result<usize, String> {
         }
     }
     Ok(depth)
+}
+
+fn has_windows_drive_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+pub fn relative_repo_path(from_directory: &str, target: &str) -> Result<String, String> {
+    let from = normalized_relative_components(from_directory)?;
+    let to = normalized_relative_components(target)?;
+    let shared = from.iter().zip(&to).take_while(|(left, right)| left == right).count();
+    let mut parts = vec![".."; from.len() - shared];
+    parts.extend(to[shared..].iter().map(String::as_str));
+    Ok(if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    })
+}
+
+fn normalized_relative_components(value: &str) -> Result<Vec<String>, String> {
+    lexical_relative_depth(value)?;
+    let mut parts = Vec::new();
+    for component in value.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            normal => parts.push(normal.to_string()),
+        }
+    }
+    Ok(parts)
 }
 
 /// Validate a bare ASCII ABI identifier: `[ffi] prefix` and a capsule's
@@ -157,6 +190,14 @@ fn lexical_relative_depth(value: &str) -> Result<usize, String> {
 /// by construction, which is why the escaping step at that call site is
 /// defense-in-depth rather than the only guard.
 pub fn validate_ascii_abi_identifier(value: &str) -> Result<(), String> {
+    validate_ascii_abi_prefix(value)?;
+    if is_c_reserved_keyword(value) {
+        return Err(format!("`{value}` is a reserved C keyword"));
+    }
+    Ok(())
+}
+
+pub fn validate_ascii_abi_prefix(value: &str) -> Result<(), String> {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
         return Err("must not be empty".to_string());
@@ -168,9 +209,6 @@ pub fn validate_ascii_abi_identifier(value: &str) -> Result<(), String> {
         return Err(format!(
             "`{value}` may only contain ASCII letters, digits, and `_` after the first character"
         ));
-    }
-    if is_c_reserved_keyword(value) {
-        return Err(format!("`{value}` is a reserved C keyword"));
     }
     Ok(())
 }
@@ -527,12 +565,23 @@ mod tests {
         assert!(validate_c_make_path("../crates/sample-ffi", "../outside/e2e").is_err());
     }
 
+    #[test]
+    fn c_output_base_rejects_windows_drive_absolute_path() {
+        assert!(validate_c_output_base("C:/tmp/e2e").is_err());
+    }
+
     // -- ascii abi identifier -------------------------------------------------
 
     #[test]
     fn abi_identifier_accepts_default_shape() {
         assert_eq!(validate_ascii_abi_identifier("my_lib"), Ok(()));
         assert_eq!(validate_ascii_abi_identifier("TSLanguage"), Ok(()));
+    }
+
+    #[test]
+    fn abi_prefix_accepts_keyword_when_used_as_namespace() {
+        assert_eq!(validate_ascii_abi_prefix("int"), Ok(()));
+        assert!(validate_ascii_abi_identifier("int").is_err());
     }
 
     #[test]

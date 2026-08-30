@@ -487,8 +487,14 @@ fn test_build_rs_rewrites_prefixed_capsule_return_type() {
             package_version: None,
         },
     );
-    let build =
-        super::super::helpers::gen_build_rs("ts_pack.h", "libts_pack_core_ffi", None, "ts_pack", &capsule_types);
+    let build = super::super::helpers::gen_build_rs(
+        "ts_pack.h",
+        "libts_pack_core_ffi",
+        "crates/ts-pack-ffi",
+        None,
+        "ts_pack",
+        &capsule_types,
+    );
     assert!(
         build.contains(r#"header.replace("TS_PACKTSLanguage", "TSLanguage")"#),
         "build.rs must rewrite the prefixed capsule pointee back to the unprefixed prelude name:\n{build}"
@@ -504,6 +510,7 @@ fn test_build_rs_omits_capsule_fixup_when_no_capsule_types() {
     let build = super::super::helpers::gen_build_rs(
         "ts_pack.h",
         "libts_pack_core_ffi",
+        "crates/ts-pack-ffi",
         None,
         "ts_pack",
         &std::collections::HashMap::new(),
@@ -533,7 +540,14 @@ fn test_build_rs_capsule_fixup_uses_shouty_snake_case_prefix() {
             package_version: None,
         },
     );
-    let build = super::super::helpers::gen_build_rs("sample.h", "libsample_ffi", None, "SampleCore", &capsule_types);
+    let build = super::super::helpers::gen_build_rs(
+        "sample.h",
+        "libsample_ffi",
+        "crates/sample-ffi",
+        None,
+        "SampleCore",
+        &capsule_types,
+    );
     assert!(
         build.contains(r#"header.replace("SAMPLE_CORETSLanguage", "TSLanguage")"#),
         "build.rs must rewrite the shouty-snake-prefixed capsule pointee, matching the header cbindgen \

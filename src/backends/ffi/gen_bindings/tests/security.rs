@@ -163,6 +163,7 @@ fn go_header_destination_escapes_the_composed_rust_path() {
     let build = super::super::helpers::gen_build_rs(
         "sample.h",
         "libsample_ffi",
+        "crates/sample-ffi",
         Some("packages/go/evil\"; panic!(\"pwned\"); //"),
         "sample",
         &HashMap::new(),
@@ -173,13 +174,29 @@ fn go_header_destination_escapes_the_composed_rust_path() {
     assert!(
         visitor
             .string_literals
-            .contains(&"../../../packages/go/evil\"; panic!(\"pwned\"); /include/sample.h".to_string()),
+            .contains(&"../../packages/go/evil\"; panic!(\"pwned\"); /include/sample.h".to_string()),
         "generated string literals: {:?}",
         visitor.string_literals
     );
     assert_eq!(
         visitor.panic_macros, 0,
         "payload must remain data, never executable syntax"
+    );
+}
+
+#[test]
+fn go_header_destination_is_relative_to_ffi_crate_root() {
+    let build = super::super::helpers::gen_build_rs(
+        "sample.h",
+        "libsample_ffi",
+        "native/ffi/deep",
+        Some("packages/go"),
+        "sample",
+        &HashMap::new(),
+    );
+    assert!(
+        build.contains(r#"Path::new("../../../packages/go/include/sample.h")"#),
+        "{build}"
     );
 }
 

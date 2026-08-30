@@ -29,9 +29,9 @@ use super::{CallIr, json_to_c, resolve_call_info};
 pub(super) fn render_visitor_test_file(
     fixtures: &[&Fixture],
     header: &str,
-    prefix: &str,
+    _prefix: &str,
     e2e_config: &E2eConfig,
-    _config: &ResolvedCrateConfig,
+    config: &ResolvedCrateConfig,
     ir: CallIr<'_>,
 ) -> anyhow::Result<String> {
     use crate::e2e::fixture::CallbackAction;
@@ -45,7 +45,20 @@ pub(super) fn render_visitor_test_file(
     let _ = writeln!(out, "#include <string.h>");
     let _ = writeln!(out, "#include <stdio.h>");
     let _ = writeln!(out, "#include <stdlib.h>");
-    let _ = writeln!(out, "#include \"{header}\"");
+    let mut headers = std::collections::BTreeSet::from([header.to_string()]);
+    for fixture in fixtures {
+        let call = e2e_config.resolve_call_for_fixture(
+            fixture.call.as_deref(),
+            &fixture.id,
+            &fixture.resolved_category(),
+            &fixture.tags,
+            &fixture.input,
+        );
+        headers.insert(super::effective_c_header(call, config));
+    }
+    for header in headers {
+        let _ = writeln!(out, "#include \"{header}\"");
+    }
     let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
 
@@ -53,16 +66,6 @@ pub(super) fn render_visitor_test_file(
     // uppercase: the two disagree for any prefix with an internal word boundary. Derive it from
     // the same helper the header producer uses so the emitted code cannot name a type the header
     // never declares. ~keep
-    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
-    let visitor_type_stem = prefix.to_pascal_case();
-    let visitor_callbacks_type = format!("{prefix_upper}{visitor_type_stem}VisitorCallbacks");
-    // The C FFI re-defines the visitor context as a stem-prefixed struct
-    // (mirror of `HtmVisitorCallbacks`) so the callback signatures take the
-    // C-friendly view, NOT the opaque Rust `NodeContext` handle. Match the
-    // FFI naming pattern instead of reading the trait_bridge.context_type
-    // (which names the Rust-core type, not the FFI re-export).
-    let visitor_context_type = format!("{prefix_upper}{visitor_type_stem}Context");
-
     for (i, fixture) in fixtures.iter().enumerate() {
         let fn_name = sanitize_ident(&fixture.id);
         let description = &fixture.description;
@@ -78,6 +81,11 @@ pub(super) fn render_visitor_test_file(
         // `trait_bridge_derived_c_identity` classifies, so there is nothing for it to match
         // here. ~keep
         let call_info = resolve_call_info(call_config, "c", ir, None);
+        let prefix = super::effective_c_prefix(call_config, config);
+        let prefix_upper = crate::codegen::c_consumer::export_type_prefix(&prefix);
+        let visitor_type_stem = prefix.to_pascal_case();
+        let visitor_callbacks_type = format!("{prefix_upper}{visitor_type_stem}VisitorCallbacks");
+        let visitor_context_type = format!("{prefix_upper}{visitor_type_stem}Context");
         let function_name = call_info.function_name.as_str();
         let options_type_name = call_info.options_type_name.as_str();
         let options_type_snake = options_type_name.to_snake_case();

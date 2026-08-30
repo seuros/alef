@@ -578,6 +578,7 @@ fn toml_multiline_basic_string(value: &str) -> String {
 pub(super) fn gen_build_rs(
     header_name: &str,
     lib_name: &str,
+    ffi_crate_root: &str,
     go_output_dir: Option<&str>,
     prefix: &str,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
@@ -601,14 +602,10 @@ pub(super) fn gen_build_rs(
     let go_header_destination = match go_output_dir {
         Some(go_dir) => {
             let go_dir = go_dir.trim_end_matches('/');
-            let depth = std::path::Path::new(go_dir)
-                .components()
-                .filter(|c| matches!(c, std::path::Component::Normal(_)))
-                .count()
-                .max(1);
-            let to_root = "../".repeat(depth);
-            let destination =
-                super::rust_literal::escape_rust_str_literal(&format!("{to_root}{go_dir}/include/{header_name}"));
+            let target = format!("{go_dir}/include/{header_name}");
+            let relative =
+                crate::core::config::abi_grammar::relative_repo_path(ffi_crate_root, &target).unwrap_or(target);
+            let destination = super::rust_literal::escape_rust_str_literal(&relative);
             format!("        Path::new(\"{destination}\"),\n")
         }
         None => String::new(),
@@ -992,7 +989,14 @@ mod tests {
         };
         let capsule_types = std::collections::HashMap::new();
         let cbindgen = gen_cbindgen_toml("SampleCore", &api, &capsule_types, &std::collections::BTreeSet::new());
-        let build = gen_build_rs("sample.h", "libsample_ffi", None, "SampleCore", &capsule_types);
+        let build = gen_build_rs(
+            "sample.h",
+            "libsample_ffi",
+            "crates/sample-ffi",
+            None,
+            "SampleCore",
+            &capsule_types,
+        );
 
         let guard_macro = cbindgen
             .lines()

@@ -472,7 +472,7 @@ fn validate_ffi_config(crate_name: &str, ffi: &FfiConfig) -> Result<(), ResolveE
         abi_grammar::validate_native_artifact_basename(lib_name).map_err(|e| invalid("lib_name", lib_name, e))?;
     }
     if let Some(prefix) = ffi.prefix.as_ref() {
-        abi_grammar::validate_ascii_abi_identifier(prefix).map_err(|e| invalid("prefix", prefix, e))?;
+        abi_grammar::validate_ascii_abi_prefix(prefix).map_err(|e| invalid("prefix", prefix, e))?;
     }
     for feature in ffi
         .features
@@ -551,7 +551,7 @@ fn validate_effective_ffi_config(config: &ResolvedCrateConfig) -> Result<(), Res
         ))
     };
     let prefix = config.ffi_prefix();
-    abi_grammar::validate_ascii_abi_identifier(&prefix).map_err(|error| invalid("prefix", &prefix, error))?;
+    abi_grammar::validate_ascii_abi_prefix(&prefix).map_err(|error| invalid("prefix", &prefix, error))?;
     let header = config.ffi_header_name();
     abi_grammar::validate_c_header_filename(&header).map_err(|error| invalid("header_name", &header, error))?;
     let lib = config.ffi_lib_name();
@@ -619,11 +619,16 @@ fn validate_effective_c_e2e_config(
         "e2e.output"
     };
     abi_grammar::validate_c_output_base(output).map_err(|error| invalid(output_field, output, error))?;
-    let path = package
+    let explicit_path = package
         .as_ref()
         .and_then(|package| package.path.as_deref())
-        .map(str::to_string)
-        .unwrap_or_else(|| config.ffi_crate_path());
+        .map(str::to_string);
+    let path = match explicit_path {
+        Some(path) => path,
+        None => config
+            .ffi_crate_path_from(&format!("{output}/c"))
+            .map_err(|error| invalid(&format!("{package_field}.path"), output, error))?,
+    };
     abi_grammar::validate_c_make_path(&path, output)
         .map_err(|error| invalid(&format!("{package_field}.path"), &path, error))
 }

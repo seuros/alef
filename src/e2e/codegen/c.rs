@@ -253,7 +253,9 @@ impl E2eCodegen for CCodegen {
             .as_ref()
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| config.ffi_crate_path());
+            .map(Ok)
+            .unwrap_or_else(|| config.ffi_crate_path_from(&format!("{}/c", e2e_config.effective_output())))
+            .map_err(anyhow::Error::msg)?;
 
         // Generate Makefile.
         let mut category_names: Vec<String> = active_groups
@@ -437,6 +439,13 @@ fn effective_c_prefix(call: &CallConfig, config: &ResolvedCrateConfig) -> String
         .get("c")
         .and_then(|value| value.prefix.clone())
         .unwrap_or_else(|| config.ffi_prefix())
+}
+
+fn effective_c_header(call: &CallConfig, config: &ResolvedCrateConfig) -> String {
+    call.overrides
+        .get("c")
+        .and_then(|value| value.header.clone())
+        .unwrap_or_else(|| config.ffi_header_name())
 }
 
 /// Resolve per-call-config C-specific settings for a given call config and lang.
@@ -1082,7 +1091,7 @@ fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
     header: &str,
-    prefix: &str,
+    _prefix: &str,
     result_var: &str,
     e2e_config: &E2eConfig,
     lang: &str,
@@ -1102,7 +1111,20 @@ fn render_test_file(
     let _ = writeln!(out, "#include <string.h>");
     let _ = writeln!(out, "#include <stdio.h>");
     let _ = writeln!(out, "#include <stdlib.h>");
-    let _ = writeln!(out, "#include \"{header}\"");
+    let mut headers = std::collections::BTreeSet::from([header.to_string()]);
+    for fixture in fixtures {
+        let call = e2e_config.resolve_call_for_fixture(
+            fixture.call.as_deref(),
+            &fixture.id,
+            &fixture.resolved_category(),
+            &fixture.tags,
+            &fixture.input,
+        );
+        headers.insert(effective_c_header(call, config));
+    }
+    for header in headers {
+        let _ = writeln!(out, "#include \"{header}\"");
+    }
     let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
 
@@ -1151,6 +1173,7 @@ fn render_test_file(
             &fixture.tags,
             &fixture.input,
         );
+        let prefix = effective_c_prefix(fixture_call, config);
         if let Some(co) = fixture_call.overrides.get(lang) {
             for k in co.enum_fields.keys() {
                 effective_fields_enum.insert(k.clone());
@@ -1209,7 +1232,7 @@ fn render_test_file(
         render_test_function_impl(
             &mut out,
             fixture,
-            prefix,
+            &prefix,
             &call_info.function_name,
             result_var,
             &call_info.args,
@@ -1302,6 +1325,49 @@ mod snippet_tests {
         assert!(test.content.contains("SAMPLE_COREAlefHandle"), "{}", test.content);
         assert!(test.content.contains("sample_core_clear_free("), "{}", test.content);
         assert!(!test.content.contains(" _clear_free("), "{}", test.content);
+    }
+
+    #[test]
+    fn full_generation_uses_named_call_prefix_and_header() {
+        let group = FixtureGroup {
+            category: "basic".into(),
+            fixtures: vec![Fixture {
+                id: "secondary".into(),
+                call: Some("secondary".into()),
+                ..Fixture::default()
+            }],
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "default_call".into();
+        e2e.calls.insert(
+            "secondary".into(),
+            CallConfig {
+                function: "secondary_call".into(),
+                returns_void: true,
+                overrides: HashMap::from([(
+                    "c".into(),
+                    crate::e2e::config::CallOverride {
+                        prefix: Some("secondary".into()),
+                        header: Some("secondary.h".into()),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample-core".into(),
+            ..Default::default()
+        };
+        let files = CCodegen.generate(&[group], &e2e, &config, &[], &[], &[], &[]).unwrap();
+        let test = files.iter().find(|file| file.path.ends_with("test_basic.c")).unwrap();
+        assert!(test.content.contains("#include \"secondary.h\""), "{}", test.content);
+        assert!(test.content.contains("SECONDARYAlefHandle"), "{}", test.content);
+        assert!(
+            test.content.contains("secondary_secondary_call_free("),
+            "{}",
+            test.content
+        );
     }
 
     #[test]

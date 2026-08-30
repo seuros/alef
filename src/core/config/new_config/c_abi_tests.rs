@@ -87,6 +87,32 @@ fn resolve_validates_registry_output_after_local_resolution() {
     assert!(error.contains("escapes the repository root"), "{error}");
 }
 
+#[test]
+fn custom_c_output_derives_semantic_local_ffi_path() {
+    let config: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["c"]
+[[crates]]
+name = "sample-core"
+sources = ["src/lib.rs"]
+[crates.output]
+ffi = "native/ffi/deep/src"
+[crates.e2e]
+output = "nested/e2e"
+[crates.e2e.call]
+function = "sample"
+"#,
+    )
+    .unwrap();
+    let resolved = config.resolve().expect("custom output must resolve").remove(0);
+    let output = resolved.e2e.as_ref().unwrap().effective_output();
+    let path = resolved
+        .ffi_crate_path_from(&format!("{output}/c"))
+        .expect("relative path");
+    assert_eq!(path, "../../../native/ffi/deep");
+}
+
 fn c_package_config(path: &str, e2e_language: Option<&str>) -> String {
     let top_language = if e2e_language == Some("c") { "python" } else { "c" };
     let e2e_languages = e2e_language.map_or_else(String::new, |language| format!("languages = [\"{language}\"]"));

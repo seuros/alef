@@ -172,6 +172,10 @@ impl ResolvedCrateConfig {
         format!("../../{}", self.ffi_crate_relative_dir())
     }
 
+    pub fn ffi_crate_path_from(&self, consumer_directory: &str) -> Result<String, String> {
+        crate::core::config::abi_grammar::relative_repo_path(consumer_directory, &self.ffi_crate_relative_dir())
+    }
+
     /// Get the relative path to the FFI crate from the generated swift-bridge
     /// Rust crate (`packages/swift/rust/`).
     ///
