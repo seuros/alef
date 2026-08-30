@@ -3,6 +3,9 @@ use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::{ApiSurface, MethodDef, TypeDef};
 use std::collections::HashMap;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn gen_visitor_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,
@@ -11,6 +14,7 @@ pub(super) fn gen_visitor_bridge(
     core_crate: &str,
     type_paths: &HashMap<String, String>,
     api: &ApiSurface,
+    pyclass_absent_types: &ahash::AHashSet<String>,
 ) -> anyhow::Result<String> {
     let result_metadata = crate::codegen::visitor_result::required_visitor_result_metadata(api, bridge_cfg)?;
     let context_helper = crate::codegen::visitor_context::visitor_context_helper(
@@ -20,11 +24,14 @@ pub(super) fn gen_visitor_bridge(
         crate::codegen::visitor_context::VisitorContextBackend::Pyo3,
     )?;
 
+    let binding_class = context_binding_class(api, bridge_cfg, pyclass_absent_types);
     let helper_fn = crate::backends::pyo3::template_env::render(
-        "trait_bridge/nodecontext_to_py_dict.jinja",
+        "trait_bridge/nodecontext_to_py_object.jinja",
         minijinja::context! {
             context_type_path => context_helper.type_path,
             context_field_lines => context_helper.field_lines,
+            binding_type_name => binding_class.map(|typ| typ.name.clone()),
+            build_binding_type => binding_class.is_some(),
         },
     );
 
@@ -60,6 +67,51 @@ pub(super) fn gen_visitor_bridge(
     Ok(out)
 }
 
+/// The context type a visitor callback can hand the host as the generated `#[pyclass]` the `.pyi`
+/// stub advertises for it, rather than as an untyped `dict`. `None` keeps the dict shape.
+///
+/// Four independently necessary conditions, none of them a fresh rule invented here:
+/// - the `.pyi` stub declares the class at all — `gen_stubs::classes` filters `binding_excluded`
+///   and `gen_stubs::protocol` additionally treats `api.excluded_type_paths` as absent, so a
+///   context reached through either exclusion has no class for the bridge to construct;
+/// - `impl From<core::T> for T` is actually emitted, asked through the same shared predicate the
+///   type emitter itself gates on
+///   ([`crate::codegen::conversions::core_to_binding_from_impl_emitted`] over
+///   `core_to_binding_convertible_types(api, &[])` — the identical set and the identical
+///   `&[]` exclusions `generate_bindings` passes). Re-deriving eligibility here instead would let
+///   the bridge emit `.into()` against a `From` impl that was never generated;
+/// - the conversion is reachable from what the bridge holds: the generated `From` takes the core
+///   value **by value** and the bridge only has `&core::T`, so `T: Clone` is required to get there;
+/// - the module emits the `#[pyclass]` at all: `pyclass_absent_types` is
+///   [`crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names`], the
+///   same set the `#[pyclass]` loop filters on, so a context removed by `[crates.python]
+///   exclude_types` or routed through `capsule_types` cannot be constructed here. Deriving this
+///   from the IR alone is what let a config-only exclusion through: no IR flag records it, so the
+///   bridge emitted `Py<Ctx>::from(..)` against a struct the emitter had skipped and the generated
+///   crate did not compile.
+///
+/// The `.pyi` protocol stub calls this same function, so the class the stub names on a visitor
+/// callback's context parameter and the object the bridge actually passes cannot diverge. ~keep
+pub fn context_binding_class<'a>(
+    api: &'a ApiSurface,
+    bridge_cfg: &TraitBridgeConfig,
+    pyclass_absent_types: &ahash::AHashSet<String>,
+) -> Option<&'a TypeDef> {
+    let context_type = bridge_cfg.context_type.as_deref()?;
+    let context_def = api.types.iter().find(|type_def| type_def.name == *context_type)?;
+    if context_def.binding_excluded || api.excluded_type_paths.contains_key(context_type) {
+        return None;
+    }
+    if pyclass_absent_types.contains(context_type) {
+        return None;
+    }
+    if !context_def.is_clone {
+        return None;
+    }
+    let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+    crate::codegen::conversions::core_to_binding_from_impl_emitted(context_def, &core_to_binding).then_some(context_def)
+}
+
 /// Generate a single visitor-style trait method that tries Python dispatch, falls back to default.
 ///
 /// For each method the generated code:
@@ -92,7 +144,9 @@ fn gen_visitor_method(
         other => param_type(other, "", false, type_paths),
     };
 
-    let py_args = build_visitor_py_args(method, bridge_cfg);
+    let default_result_expr = crate::codegen::visitor_result::default_result_expr(&ret_ty, result_metadata);
+    let VisitorPyArgs { setup, args: py_args } =
+        build_visitor_py_args(method, bridge_cfg, struct_name, name, &default_result_expr);
 
     let py_call = if py_args.is_empty() {
         format!("obj.call_method0(\"{name}\")")
@@ -107,7 +161,8 @@ fn gen_visitor_method(
             method_name => name,
             sig => sig,
             ret_ty => ret_ty,
-            default_result_expr => crate::codegen::visitor_result::default_result_expr(&ret_ty, result_metadata),
+            arg_setup => setup,
+            default_result_expr => default_result_expr,
             unknown_string_result_expr => crate::codegen::visitor_result::unknown_string_result_expr(
                 &ret_ty,
                 result_metadata,
@@ -124,15 +179,36 @@ fn gen_visitor_method(
     out.push_str(&method_code);
 }
 
+/// The rendered pieces of a visitor method's Python call: statements that must run before the
+/// call, and the comma-joined argument expressions themselves.
+struct VisitorPyArgs {
+    setup: String,
+    args: String,
+}
+
 /// Build Python call argument expressions for a visitor method.
 ///
-/// - configured context params: converted to a Python dict via `nodecontext_to_py_dict`
+/// - configured context params: built by `nodecontext_to_py_object` in a `setup` statement, which
+///   hands the host an instance of the generated `#[pyclass]` the `.pyi` stub advertises for that
+///   parameter (a plain dict only when the context type cannot be built from a borrowed core
+///   value). The statement form exists so the construction's `PyErr` has somewhere to go: this
+///   trait method is infallible on the Rust side, so the error is logged with its message and the
+///   configured default action is returned. Building it inline in the argument tuple is what
+///   forced the previous `Err(_) => py.None()`, which handed the callback a `None` typed as the
+///   context class and lost the error entirely. ~keep
 /// - `&str` params: passed directly (PyO3 handles `&str` → Python str coercion)
 /// - `Option<&str>` params: passed as `Option<&str>` (PyO3 maps `None` → Python `None`)
 /// - `bool` and integer params: passed directly
 /// - `&[String]` / `Vec<String>` params: passed as Python lists
-fn build_visitor_py_args(method: &MethodDef, bridge_cfg: &TraitBridgeConfig) -> String {
+fn build_visitor_py_args(
+    method: &MethodDef,
+    bridge_cfg: &TraitBridgeConfig,
+    struct_name: &str,
+    method_name: &str,
+    default_result_expr: &str,
+) -> VisitorPyArgs {
     use crate::core::ir::TypeRef;
+    let mut setup = String::new();
     let args: Vec<String> = method
         .params
         .iter()
@@ -140,11 +216,23 @@ fn build_visitor_py_args(method: &MethodDef, bridge_cfg: &TraitBridgeConfig) -> 
             if let TypeRef::Named(n) = &p.ty
                 && Some(n.as_str()) == bridge_cfg.context_type.as_deref()
             {
-                return if p.is_ref {
-                    format!("nodecontext_to_py_dict(py, {})", p.name)
+                let borrow_expr = if p.is_ref {
+                    p.name.clone()
                 } else {
-                    format!("nodecontext_to_py_dict(py, &{})", p.name)
+                    format!("&{}", p.name)
                 };
+                let arg_name = format!("{}_py", p.name);
+                setup.push_str(&crate::backends::pyo3::template_env::render(
+                    "trait_bridge/visitor_context_arg.jinja",
+                    minijinja::context! {
+                        arg_name => arg_name,
+                        borrow_expr => borrow_expr,
+                        wrapper => struct_name,
+                        method_name => method_name,
+                        default_result_expr => default_result_expr,
+                    },
+                ));
+                return arg_name;
             }
             if p.optional && matches!(&p.ty, TypeRef::String) && p.is_ref {
                 return p.name.clone();
@@ -174,9 +262,10 @@ fn build_visitor_py_args(method: &MethodDef, bridge_cfg: &TraitBridgeConfig) -> 
             p.name.clone()
         })
         .collect();
-    if args.len() == 1 {
+    let args = if args.len() == 1 {
         format!("{},", args[0])
     } else {
         args.join(", ")
-    }
+    };
+    VisitorPyArgs { setup, args }
 }

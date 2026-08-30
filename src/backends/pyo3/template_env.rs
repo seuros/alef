@@ -86,8 +86,12 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/trait_bridge/registration_fn.jinja"),
     ),
     (
-        "trait_bridge/nodecontext_to_py_dict.jinja",
-        include_str!("templates/trait_bridge/nodecontext_to_py_dict.jinja"),
+        "trait_bridge/nodecontext_to_py_object.jinja",
+        include_str!("templates/trait_bridge/nodecontext_to_py_object.jinja"),
+    ),
+    (
+        "trait_bridge/visitor_context_arg.jinja",
+        include_str!("templates/trait_bridge/visitor_context_arg.jinja"),
     ),
     (
         "trait_bridge/visitor_struct.jinja",

@@ -4,7 +4,7 @@ fn {{ method_name }}({{ sig }}) -> {{ ret_ty }} {
         if !obj.hasattr("{{ method_name }}").unwrap_or(false) {
             return {{ default_result_expr }};
         }
-
+{{ arg_setup }}
         match {{ py_call }} {
             // Visitor callbacks are infallible on the Rust side — log the host
             // exception before substituting the default action.

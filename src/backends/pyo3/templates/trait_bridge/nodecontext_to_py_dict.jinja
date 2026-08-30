@@ -1,8 +1,0 @@
-fn nodecontext_to_py_dict<'py>(
-    py: Python<'py>,
-    ctx: &{{ context_type_path }},
-) -> pyo3::Bound<'py, pyo3::types::PyDict> {
-    let d = pyo3::types::PyDict::new(py);
-{{ context_field_lines }}
-    d
-}

@@ -1,0 +1,20 @@
+{#- Binds a visitor callback's context argument before the Python call.
+
+   A statement rather than an inline argument expression so the construction's `PyErr` has
+   somewhere to go. The trait method is infallible on the Rust side, so the error is logged with
+   its message and the configured default action is returned -- the callback is never invoked with
+   a stand-in object.
+
+   Context variables:
+   - arg_name: local binding the call's argument tuple references
+   - borrow_expr: `&core::Context` expression handed to the helper
+   - wrapper / method_name: tracing fields identifying the bridge and callback
+   - default_result_expr: the configured default visit result
+#}
+        let {{ arg_name }} = match nodecontext_to_py_object(py, {{ borrow_expr }}) {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::error!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "failed to build visitor context object; using default action");
+                return {{ default_result_expr }};
+            }
+        };

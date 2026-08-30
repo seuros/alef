@@ -646,6 +646,7 @@ impl Backend for Pyo3Backend {
                 .as_ref()
                 .map(|c| c.reexported_types.clone())
                 .unwrap_or_default();
+            let bridge_pyclass_absent_types = binding_exclusions::pyclass_absent_type_names(config, &api.types);
             builder.add_item(&crate::backends::pyo3::template_env::render(
                 "trait_bridge/options_from_native_helper.jinja",
                 minijinja::context! {
@@ -662,6 +663,7 @@ impl Backend for Pyo3Backend {
                         &config.error_constructor_expr(),
                         api,
                         &reexported_types,
+                        &bridge_pyclass_absent_types,
                     )?;
                     for imp in &bridge.imports {
                         builder.add_import(imp);

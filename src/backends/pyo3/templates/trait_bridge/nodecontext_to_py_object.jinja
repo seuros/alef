@@ -1,0 +1,21 @@
+{#- Builds the Python object a visitor callback receives for its context parameter.
+
+   Context variables:
+   - context_type_path: full Rust path of the core context type
+   - build_binding_type: emit the generated `#[pyclass]` instead of an untyped dict
+   - binding_type_name: name of that `#[pyclass]` (only read when build_binding_type)
+   - context_field_lines: dict-population lines (only read when not build_binding_type)
+#}
+fn nodecontext_to_py_object<'py>(
+    py: Python<'py>,
+    ctx: &{{ context_type_path }},
+) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+{% if build_binding_type %}
+    let value: {{ binding_type_name }} = ctx.clone().into();
+    Ok(pyo3::Bound::new(py, value)?.into_any())
+{% else %}
+    let d = pyo3::types::PyDict::new(py);
+{{ context_field_lines }}
+    Ok(d.into_any())
+{% endif %}
+}

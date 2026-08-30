@@ -38,6 +38,23 @@ pub fn active_bridge_trait<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) 
     crate::codegen::generators::trait_bridge::active_bridge_trait_def(bridge, api, &TARGET_SPELLINGS)
 }
 
+/// Whether PyO3 emits this bridge as a *visitor* bridge -- the shape whose callbacks receive a
+/// context object and whose Rust side substitutes a default result rather than propagating a host
+/// error.
+///
+/// Shared because the `.pyi` protocol stub has to annotate the context parameter with whatever the
+/// visitor bridge actually hands the host, and only this shape has a context parameter at all: a
+/// `register_fn` (plugin) bridge marshals its parameters normally, so applying the visitor's
+/// fallback annotation there would describe a shape the bridge never produces. ~keep
+pub fn is_visitor_bridge(trait_type: &TypeDef, bridge_cfg: &TraitBridgeConfig) -> bool {
+    bridge_cfg.type_alias.is_some()
+        && bridge_cfg.register_fn.is_none()
+        && bridge_cfg.super_trait.is_none()
+        && trait_type.methods.iter().all(|m| m.has_default_impl)
+}
+
+pub use visitor_bridge::context_binding_class;
+
 pub fn gen_trait_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,
@@ -46,6 +63,7 @@ pub fn gen_trait_bridge(
     error_constructor: &str,
     api: &ApiSurface,
     reexported_types: &[String],
+    pyclass_absent_types: &ahash::AHashSet<String>,
 ) -> anyhow::Result<BridgeOutput> {
     let type_paths: HashMap<String, String> = api
         .types
@@ -63,12 +81,7 @@ pub fn gen_trait_bridge(
         )
         .collect();
 
-    let is_visitor_bridge = bridge_cfg.type_alias.is_some()
-        && bridge_cfg.register_fn.is_none()
-        && bridge_cfg.super_trait.is_none()
-        && trait_type.methods.iter().all(|m| m.has_default_impl);
-
-    if is_visitor_bridge {
+    if is_visitor_bridge(trait_type, bridge_cfg) {
         let trait_path = trait_type.rust_path.replace('-', "_");
         let struct_name = crate::codegen::generators::trait_bridge::bridge_wrapper_name("Py", bridge_cfg);
         let code = gen_visitor_bridge(
@@ -79,6 +92,7 @@ pub fn gen_trait_bridge(
             core_import,
             &type_paths,
             api,
+            pyclass_absent_types,
         )?;
         Ok(BridgeOutput { imports: vec![], code })
     } else {
@@ -694,6 +708,7 @@ mod tests {
             "SampleError::Message { message: {msg} }",
             &api,
             &[],
+            &ahash::AHashSet::new(),
         )
         .expect("visitor bridge should generate");
 

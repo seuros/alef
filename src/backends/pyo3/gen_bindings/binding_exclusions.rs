@@ -29,7 +29,12 @@ pub(crate) fn pyclass_absent_type_names(config: &ResolvedCrateConfig, types: &[T
         .as_ref()
         .map(|python| python.exclude_types.iter().cloned().collect())
         .unwrap_or_default();
-    absent.extend(types.iter().filter(|typ| typ.binding_excluded).map(|typ| typ.name.clone()));
+    absent.extend(
+        types
+            .iter()
+            .filter(|typ| typ.binding_excluded)
+            .map(|typ| typ.name.clone()),
+    );
 
     let capsule_types = config
         .python
