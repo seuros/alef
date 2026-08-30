@@ -176,6 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type` for the same IR enum. The magnus fallback was unreachable in production — its only
   call site is guarded by `serde_tag.is_some()` — so this removes a latent trap rather than
   fixing an observed cross-binding failure.
+- Render an `#[serde(untagged)]` variant's TypeScript property keys through one shared
+  renderer (`codegen::naming::ts_property_key`) in the Node and WASM emitters. A wire name is
+  not an identifier: a `#[serde(rename = "content-type")]` key emitted bare is a `.d.ts` syntax
+  error, and for WASM it took the whole shared `typescript_custom_section` with it.
+- Declare a WASM untagged-enum payload struct's structural interface under a `Wire`-suffixed
+  name. The bare `Wasm{Name}` is already the wasm-bindgen class, and TypeScript merges an
+  interface into a same-named class silently, publishing the interface's serde wire keys as
+  phantom members on every class instance alongside the real host accessors.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

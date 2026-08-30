@@ -606,3 +606,37 @@ fn qualified_type_path_prefixes_bare_names_and_leaves_qualified_ones_alone() {
         );
     }
 }
+
+/// Moved here verbatim from an inline `mod duration_wire_tests` in `naming.rs` when
+/// `naming::ts_property_key` was added: `naming.rs` sat at exactly the 1,000-line cap
+/// `tests/file_size_ratchet.rs` enforces, so the `mod` declaration had to be paid for. Uses
+/// absolute paths rather than `use super::*` so it does not depend on a glob-of-a-glob resolving.
+mod duration_wire_tests {
+    use crate::codegen::naming::field_uses_duration_map_wire;
+    use crate::core::ir::{FieldDef, PrimitiveType, TypeRef};
+
+    fn duration_field(serde_with: Option<&str>) -> FieldDef {
+        FieldDef {
+            ty: TypeRef::Duration,
+            serde_with: serde_with.map(str::to_string),
+            ..FieldDef::default()
+        }
+    }
+
+    #[test]
+    fn duration_field_without_serde_with_uses_the_derived_map_wire() {
+        assert!(field_uses_duration_map_wire(&duration_field(None)));
+    }
+
+    #[test]
+    fn duration_field_with_serde_with_uses_the_scalar_wire() {
+        assert!(!field_uses_duration_map_wire(&duration_field(Some("duration_ms"))));
+    }
+
+    #[test]
+    fn non_duration_field_never_uses_the_duration_map_wire() {
+        let mut field = duration_field(None);
+        field.ty = TypeRef::Primitive(PrimitiveType::U64);
+        assert!(!field_uses_duration_map_wire(&field));
+    }
+}

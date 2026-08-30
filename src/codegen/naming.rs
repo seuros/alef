@@ -3,6 +3,8 @@ use crate::core::ir::{FieldDef, TypeRef};
 use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
+pub mod ts_property_key;
+
 /// Distinct name surfaces used by generated bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameSurface {
@@ -109,36 +111,6 @@ pub fn wire_variant_value(variant_name: &str, serde_rename: Option<&str>, rename
 /// `invalid type: map, expected u64`. See `FieldDef::serde_with`.
 pub fn field_uses_duration_map_wire(field: &FieldDef) -> bool {
     matches!(field.ty, TypeRef::Duration) && field.serde_with.is_none()
-}
-
-#[cfg(test)]
-mod duration_wire_tests {
-    use super::*;
-
-    fn duration_field(serde_with: Option<&str>) -> FieldDef {
-        FieldDef {
-            ty: TypeRef::Duration,
-            serde_with: serde_with.map(str::to_string),
-            ..FieldDef::default()
-        }
-    }
-
-    #[test]
-    fn duration_field_without_serde_with_uses_the_derived_map_wire() {
-        assert!(field_uses_duration_map_wire(&duration_field(None)));
-    }
-
-    #[test]
-    fn duration_field_with_serde_with_uses_the_scalar_wire() {
-        assert!(!field_uses_duration_map_wire(&duration_field(Some("duration_ms"))));
-    }
-
-    #[test]
-    fn non_duration_field_never_uses_the_duration_map_wire() {
-        let mut field = duration_field(None);
-        field.ty = TypeRef::Primitive(crate::core::ir::PrimitiveType::U64);
-        assert!(!field_uses_duration_map_wire(&field));
-    }
 }
 
 /// Resolve a public field/property identifier, applying `rename_fields` before language casing.

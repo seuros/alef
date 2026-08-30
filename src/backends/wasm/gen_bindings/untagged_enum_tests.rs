@@ -564,11 +564,11 @@ fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
         "actual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("export interface WasmContentPart {\n    text: string;\n    kind: string;\n}"),
+        lib_rs.contains("export interface WasmContentPartWire {\n    text: string;\n    kind: string;\n}"),
         "actual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("export type WasmUserContent = string | WasmContentPart[];"),
+        lib_rs.contains("export type WasmUserContent = string | WasmContentPartWire[];"),
         "actual:\n{lib_rs}"
     );
     // `ToolChoiceMode` is ALSO independently emitted as a real `Wasm{Enum}` wasm-bindgen TS enum
@@ -579,11 +579,11 @@ fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
         "actual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("export interface WasmSpecificToolChoice {\n    name: string;\n}"),
+        lib_rs.contains("export interface WasmSpecificToolChoiceWire {\n    name: string;\n}"),
         "actual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("export type WasmToolChoice = WasmToolChoiceModeWire | WasmSpecificToolChoice;"),
+        lib_rs.contains("export type WasmToolChoice = WasmToolChoiceModeWire | WasmSpecificToolChoiceWire;"),
         "actual:\n{lib_rs}"
     );
     assert!(
@@ -659,5 +659,163 @@ fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
     assert!(
         !lib_rs.contains("serde_wasm_bindgen::to_value(&val.input)"),
         "conversions must use the display-text bridge, not serde_wasm_bindgen;\nactual:\n{lib_rs}"
+    );
+}
+
+/// A struct reached as an untagged-enum payload is described twice in the SAME `.d.ts`: once as
+/// `export class Wasm{Name}` (wasm-bindgen's rendering of the `#[wasm_bindgen] pub struct` every
+/// `api.types` entry gets, whose members are `to_node_name` HOST accessors) and once as the
+/// structural interface `ts_union` emits for the plain JSON object `serde_wasm_bindgen` actually
+/// produces (whose members are serde WIRE keys).
+///
+/// TypeScript merges an `interface` into a same-named `class` silently -- it is a legal
+/// declaration merge, not `TS2300` -- so sharing the bare name would not fail loudly. It would
+/// graft the wire keys onto the class type, and `tsc` would then accept `detail.max_chars` on a
+/// class instance where only `maxChars` exists at runtime: `undefined`, no error, on the exact
+/// host/wire boundary the field-naming fix above exists to keep straight. The interface must
+/// therefore carry the `Wire` suffix `map_named_enum` already gives a fieldless enum's alias.
+#[test]
+fn untagged_payload_struct_interface_cannot_merge_with_its_wasm_bindgen_class() {
+    let mut api = empty_api();
+    api.enums = vec![EnumDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        variants: vec![EnumVariant {
+            name: "Part".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::Named("Detail".to_string()),
+                ..Default::default()
+            }],
+            is_tuple: true,
+            ..Default::default()
+        }],
+        has_serde: true,
+        serde_untagged: true,
+        ..Default::default()
+    }];
+    api.types = vec![
+        TypeDef {
+            name: "Detail".to_string(),
+            rust_path: "test_lib::Detail".to_string(),
+            fields: vec![FieldDef {
+                name: "max_chars".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            has_serde: true,
+            ..Default::default()
+        },
+        TypeDef {
+            name: "Envelope".to_string(),
+            rust_path: "test_lib::Envelope".to_string(),
+            fields: vec![FieldDef {
+                name: "payload".to_string(),
+                ty: TypeRef::Named("Payload".to_string()),
+                ..Default::default()
+            }],
+            has_serde: true,
+            ..Default::default()
+        },
+    ];
+    api.functions = vec![function_taking("Envelope")];
+
+    let config = make_config();
+    let files = WasmBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content;
+
+    // Without this the test proves nothing: if no `WasmDetail` class were emitted there would be
+    // no declaration for a bare interface to merge with, and the suffix would be busywork.
+    assert!(
+        lib_rs.contains("pub struct WasmDetail {"),
+        "the payload struct must still get its own wasm-bindgen class;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export interface WasmDetailWire {\n    max_chars: string;\n}"),
+        "the structural interface must be declared under the Wire name, keyed by the serde wire \
+         name;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("export interface WasmDetail {"),
+        "an interface under the class's own name merges into it and publishes a phantom \
+         `max_chars` member on every WasmDetail instance;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmPayload = WasmDetailWire;"),
+        "the union must reference the name actually declared, not the bare class name;\nactual:\n{lib_rs}"
+    );
+}
+
+/// The companion to the merge test: a wire name that is not a legal TypeScript identifier must be
+/// emitted as a quoted key. `content-type` interpolated bare parses as a subtraction, so the whole
+/// `typescript_custom_section` string -- every union in the crate -- becomes a `.d.ts` syntax
+/// error. Both this emitter and `backends::napi::gen_bindings::errors` route through
+/// `codegen::naming::ts_property_key` so they cannot disagree about when quoting is needed.
+#[test]
+fn untagged_payload_struct_quotes_a_wire_name_that_is_not_an_identifier() {
+    let mut api = empty_api();
+    api.enums = vec![EnumDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        variants: vec![EnumVariant {
+            name: "Part".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::Named("Header".to_string()),
+                ..Default::default()
+            }],
+            is_tuple: true,
+            ..Default::default()
+        }],
+        has_serde: true,
+        serde_untagged: true,
+        ..Default::default()
+    }];
+    api.types = vec![
+        TypeDef {
+            name: "Header".to_string(),
+            rust_path: "test_lib::Header".to_string(),
+            fields: vec![FieldDef {
+                name: "content_type".to_string(),
+                ty: TypeRef::String,
+                serde_rename: Some("content-type".to_string()),
+                ..Default::default()
+            }],
+            has_serde: true,
+            ..Default::default()
+        },
+        TypeDef {
+            name: "Envelope".to_string(),
+            rust_path: "test_lib::Envelope".to_string(),
+            fields: vec![FieldDef {
+                name: "payload".to_string(),
+                ty: TypeRef::Named("Payload".to_string()),
+                ..Default::default()
+            }],
+            has_serde: true,
+            ..Default::default()
+        },
+    ];
+    api.functions = vec![function_taking("Envelope")];
+
+    let config = make_config();
+    let files = WasmBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content;
+
+    assert!(
+        lib_rs.contains("export interface WasmHeaderWire {\n    \"content-type\": string;\n}"),
+        "a kebab-case wire name must be emitted as a quoted key;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("    content-type: string;"),
+        "an unquoted kebab-case key is a TypeScript syntax error;\nactual:\n{lib_rs}"
     );
 }

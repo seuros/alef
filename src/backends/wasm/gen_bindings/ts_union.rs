@@ -17,6 +17,7 @@
 
 use ahash::{AHashMap, AHashSet};
 
+use crate::codegen::naming::ts_property_key::ts_property_key;
 use crate::codegen::naming::{wire_field_name, wire_variant_value};
 use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 
@@ -129,7 +130,7 @@ pub(super) fn build_untagged_enum_ts_plans(
         exclude_types,
         opaque_type_names,
         prefix,
-        in_progress: AHashSet::default(),
+        in_progress: AHashMap::default(),
         resolved_names: AHashMap::default(),
         decls: Vec::new(),
     };
@@ -141,7 +142,12 @@ pub(super) fn build_untagged_enum_ts_plans(
         // in that case its declaration is already pending in `ctx.decls`; only expand it here
         // if that has not happened yet. ~keep
         if !ctx.resolved_names.contains_key(&enum_def.name) {
-            ctx.in_progress.insert(enum_def.name.clone());
+            // An untagged data enum keeps the bare `{prefix}{name}`: unlike a struct it gets no
+            // `#[wasm_bindgen]` class of its own (it is bridged as `JsValue`), so there is no
+            // class declaration for its alias to merge with — and the name is what
+            // `typescript_type = "..."` points the getter at. ~keep
+            let ts_type_name = format!("{prefix}{}", enum_def.name);
+            ctx.in_progress.insert(enum_def.name.clone(), ts_type_name.clone());
             let rename_all_fields = enum_def.rename_all_fields.as_deref();
             let members: Vec<String> = enum_def
                 .variants
@@ -149,7 +155,6 @@ pub(super) fn build_untagged_enum_ts_plans(
                 .map(|v| ctx.map_variant(v, rename_all_fields))
                 .collect();
             ctx.in_progress.remove(&enum_def.name);
-            let ts_type_name = format!("{prefix}{}", enum_def.name);
             ctx.resolved_names.insert(enum_def.name.clone(), ts_type_name.clone());
             ctx.decls.push(TsAuxDecl::Alias {
                 name: ts_type_name,
@@ -249,17 +254,22 @@ struct TsMapContext<'a> {
     exclude_types: &'a AHashSet<String>,
     opaque_type_names: &'a AHashSet<String>,
     prefix: &'a str,
-    /// Names currently being expanded — breaks cycles (self- or mutually-recursive types) by
-    /// resolving a re-entrant reference to a name instead of recursing again. Every name in here
-    /// resolves to the plain `{prefix}{name}` form (only a fully-resolved fieldless enum gets a
-    /// suffixed name — see `resolved_names` — and a fieldless enum has no fields to recurse
-    /// through, so it can never appear here mid-expansion).
-    in_progress: AHashSet<String>,
+    /// Rust source name -> the TS name it is *being* declared under, for names whose expansion is
+    /// still on the stack. Breaks cycles (self- or mutually-recursive types) by resolving a
+    /// re-entrant reference to that name instead of recursing again.
+    ///
+    /// It carries the declared name rather than being a bare set because a struct's declared name
+    /// is not derivable from its Rust name alone — `map_named_struct` suffixes it — and a
+    /// self-recursive struct hits this branch, not `resolved_names`. Recomputing `{prefix}{name}`
+    /// here instead would point the recursive field at the wasm-bindgen *class*, which is the
+    /// exact merge this module's suffixing exists to prevent. ~keep
+    in_progress: AHashMap<String, String>,
     /// Rust source name -> the TS name it was actually declared under, once expansion finishes.
-    /// A struct or a nested untagged union keeps the bare `{prefix}{name}`; a fieldless enum gets
-    /// a `Wire`-suffixed name instead (see `map_named_enum`) — so a *second* reference to an
-    /// already-resolved name must look up the name actually used here rather than recomputing
-    /// `{prefix}{name}` blind, or it would point at the wrong (unsuffixed, colliding) name. ~keep
+    /// A nested untagged union keeps the bare `{prefix}{name}`; a struct and a fieldless enum
+    /// each get a `Wire`-suffixed name instead (see `map_named_struct` / `map_named_enum`) — so a
+    /// *second* reference to an already-resolved name must look up the name actually used here
+    /// rather than recomputing `{prefix}{name}` blind, or it would point at the wrong
+    /// (unsuffixed, colliding) name. ~keep
     resolved_names: AHashMap<String, String>,
     decls: Vec<TsAuxDecl>,
 }
@@ -296,11 +306,16 @@ impl TsMapContext<'_> {
     /// `untagged_variant_dts_type` is the same declaration for the same runtime mechanism and
     /// resolves the key the same way; `backends::go`'s `go_data_enum_variant_field` is the
     /// sibling that has always kept the host name and the wire key apart. ~keep
+    ///
+    /// A wire name, unlike a host identifier, is not guaranteed to be spellable bare —
+    /// `#[serde(rename = "content-type")]` emitted raw is a `.d.ts` syntax error that takes the
+    /// whole `typescript_custom_section` down with it — so every key goes through
+    /// `naming::ts_property_key`, shared with the napi emitter that declares the same shape. ~keep
     fn map_fields(&mut self, fields: &[FieldDef], rename_all: Option<&str>) -> Vec<TsField> {
         fields
             .iter()
             .map(|f| TsField {
-                name: wire_field_name(&f.name, f.serde_rename.as_deref(), rename_all),
+                name: ts_property_key(&wire_field_name(&f.name, f.serde_rename.as_deref(), rename_all)),
                 ts_type: self.map_field_type(f),
             })
             .collect()
@@ -357,8 +372,8 @@ impl TsMapContext<'_> {
             return resolved.clone();
         }
         let ts_name = format!("{}{name}", self.prefix);
-        if self.in_progress.contains(name) {
-            return ts_name;
+        if let Some(being_declared) = self.in_progress.get(name) {
+            return being_declared.clone();
         }
         if let Some(enum_def) = self.api.enums.iter().find(|e| e.name == name) {
             return self.map_named_enum(enum_def, ts_name);
@@ -370,19 +385,37 @@ impl TsMapContext<'_> {
         "any".to_string()
     }
 
+    /// Declare a struct payload's shape as an interface — under a `Wire`-suffixed name, never the
+    /// bare `{prefix}{Name}`.
+    ///
+    /// The bare name is already taken: `gen_struct` emits a `#[wasm_bindgen] pub struct
+    /// {prefix}{Name}`, which wasm-bindgen renders into the SAME `.d.ts` as `export class
+    /// {prefix}{Name}`. TypeScript merges an `interface` into a `class` of the same name silently
+    /// — it is a legal declaration merge, not an error — so the bare name would not collide
+    /// loudly, it would graft this interface's members onto the class type. The class's real
+    /// members are `to_node_name` host accessors (`maxChars`); this interface's are serde wire
+    /// keys (`max_chars`). Merging publishes the union of both on every class instance, so `tsc`
+    /// accepts `instance.max_chars` — a property that is `undefined` at runtime, on the exact
+    /// host/wire boundary this module's field-naming fix exists to keep straight.
+    ///
+    /// `map_named_enum` already suffixes a fieldless enum's alias for the same reason (its bare
+    /// name is claimed by a real wasm-bindgen `enum`); this is that precedent applied to the
+    /// struct case, which has the worse failure mode because `interface`/`class` merge instead of
+    /// erroring. ~keep
     fn map_named_struct(&mut self, type_def: &TypeDef, ts_name: String) -> String {
         if type_def.is_opaque {
             return "any".to_string();
         }
-        self.in_progress.insert(type_def.name.clone());
+        let wire_name = format!("{ts_name}Wire");
+        self.in_progress.insert(type_def.name.clone(), wire_name.clone());
         let fields = self.map_fields(&type_def.fields, type_def.serde_rename_all.as_deref());
         self.in_progress.remove(&type_def.name);
-        self.resolved_names.insert(type_def.name.clone(), ts_name.clone());
+        self.resolved_names.insert(type_def.name.clone(), wire_name.clone());
         self.decls.push(TsAuxDecl::Interface {
-            name: ts_name.clone(),
+            name: wire_name.clone(),
             fields,
         });
-        ts_name
+        wire_name
     }
 
     fn map_named_enum(&mut self, enum_def: &EnumDef, ts_name: String) -> String {

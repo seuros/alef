@@ -213,3 +213,81 @@ fn should_apply_rename_all_fields_and_not_rename_all_to_an_untagged_variants_fie
         );
     }
 }
+
+/// The ground truth for the non-identifier key case. `#[serde(rename = "content-type")]` is
+/// ordinary serde and its wire name is not a legal TypeScript identifier. Mirrored by
+/// [`header_fixture_enum`].
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum SampleHeaderInput {
+    Detailed {
+        #[serde(rename = "content-type")]
+        content_type: String,
+    },
+}
+
+const HEADER_ENUM_NAME: &str = "SampleHeaderInput";
+
+/// The IR mirror of [`SampleHeaderInput`].
+fn header_fixture_enum() -> EnumDef {
+    EnumDef {
+        name: HEADER_ENUM_NAME.to_string(),
+        rust_path: format!("sample_core::{HEADER_ENUM_NAME}"),
+        has_serde: true,
+        serde_untagged: true,
+        variants: vec![EnumVariant {
+            name: "Detailed".to_string(),
+            fields: vec![FieldDef {
+                name: "content_type".to_string(),
+                ty: TypeRef::String,
+                serde_rename: Some("content-type".to_string()),
+                ..FieldDef::default()
+            }],
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    }
+}
+
+/// Declaring the wire key instead of the host name is only half the fix: a wire name is not an
+/// identifier and cannot be interpolated bare. `content-type: string` parses as a subtraction, so
+/// the emitted member is a syntax error that takes its whole declaration down with it -- for wasm,
+/// the single shared `typescript_custom_section` carrying every union in the crate.
+///
+/// Both backends resolve the key through `codegen::naming::ts_property_key`, so this fails in
+/// both if either stops calling it. Reverting that call emits the bare key and trips the second
+/// assertion; reverting the quoting rule inside the renderer trips it for both backends at once.
+#[test]
+fn should_quote_an_untagged_variant_key_that_is_not_a_typescript_identifier() {
+    let wire_key = serde_key_for(
+        &serde_json::to_string(&SampleHeaderInput::Detailed {
+            content_type: "text/plain".to_string(),
+        })
+        .expect("serializes"),
+    );
+    assert_eq!(wire_key, "content-type", "serde writes the renamed key verbatim");
+
+    for (backend, declaration) in [
+        ("napi", napi_declaration(header_fixture_enum())),
+        ("wasm", wasm_declaration(header_fixture_enum())),
+    ] {
+        assert!(
+            !declaration.is_empty(),
+            "{backend} must emit a declaration for the fixture"
+        );
+        assert!(
+            declaration.contains("\"content-type\": string"),
+            "{backend} must declare the kebab-case wire key as a quoted property key:\n{declaration}"
+        );
+        assert!(
+            !declaration.contains("content-type: string"),
+            "{backend} must not emit the wire key bare -- it is not a legal TypeScript \
+             identifier:\n{declaration}"
+        );
+        assert!(
+            !declaration.contains("contentType"),
+            "{backend} must not fall back to the host spelling for a value that never passes \
+             through a wrapper object:\n{declaration}"
+        );
+    }
+}

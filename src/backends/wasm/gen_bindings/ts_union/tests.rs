@@ -158,7 +158,7 @@ fn content_part_type() -> TypeDef {
 }
 
 /// `enum UserContent { Text(String), Parts(Vec<ContentPart>) }` ->
-/// `string | AlefContentPart[]` plus an emitted `AlefContentPart` interface.
+/// `string | AlefContentPartWire[]` plus an emitted `AlefContentPartWire` interface.
 #[test]
 fn user_content_maps_to_string_or_content_part_array() {
     let enum_def = EnumDef {
@@ -179,12 +179,12 @@ fn user_content_maps_to_string_or_content_part_array() {
     let plan = plan_for(&enum_def, &api);
 
     assert!(
-        plan.contains("export type AlefUserContent = string | AlefContentPart[];"),
+        plan.contains("export type AlefUserContent = string | AlefContentPartWire[];"),
         "actual:\n{}",
         plan
     );
     assert!(
-        plan.contains("export interface AlefContentPart {\n    text: string;\n    kind: string;\n}"),
+        plan.contains("export interface AlefContentPartWire {\n    text: string;\n    kind: string;\n}"),
         "actual:\n{}",
         plan
     );
@@ -219,7 +219,7 @@ fn assistant_content_maps_to_string_or_assistant_part_array() {
     }];
     let plan = plan_for(&enum_def, &api);
     assert!(
-        plan.contains("export type AlefAssistantContent = string | AlefAssistantPart[];"),
+        plan.contains("export type AlefAssistantContent = string | AlefAssistantPartWire[];"),
         "actual:\n{}",
         plan
     );
@@ -280,7 +280,7 @@ fn tool_choice_maps_unit_enum_and_struct_newtype_variants() {
         // real wasm-bindgen `enum WasmToolChoiceMode` (numeric ABI discriminant) emitted
         // unconditionally for every fieldless enum — a different, incompatible runtime shape
         // from this union member's serde wire string. See `map_named_enum`'s `~keep` note.
-        plan.contains("export type AlefToolChoice = AlefToolChoiceModeWire | AlefSpecificToolChoice;"),
+        plan.contains("export type AlefToolChoice = AlefToolChoiceModeWire | AlefSpecificToolChoiceWire;"),
         "actual:\n{}",
         plan
     );
@@ -290,7 +290,7 @@ fn tool_choice_maps_unit_enum_and_struct_newtype_variants() {
         plan
     );
     assert!(
-        plan.contains("export interface AlefSpecificToolChoice {\n    name: string;\n}"),
+        plan.contains("export interface AlefSpecificToolChoiceWire {\n    name: string;\n}"),
         "actual:\n{}",
         plan
     );
@@ -567,13 +567,13 @@ fn self_referential_struct_terminates_and_reuses_its_own_name() {
     let plan = plan_for(&enum_def, &api);
 
     assert!(
-        plan.contains("export interface AlefTreeNode {\n    value: string;\n    children: AlefTreeNode[];\n}"),
+        plan.contains("export interface AlefTreeNodeWire {\n    value: string;\n    children: AlefTreeNodeWire[];\n}"),
         "the self-reference must resolve to the interface's own name, not re-expand or fall back to any;\nactual:\n{}",
         plan
     );
     // The interface must be emitted exactly once, not once per reference.
     assert_eq!(
-        plan.matches("export interface AlefTreeNode").count(),
+        plan.matches("export interface AlefTreeNodeWire").count(),
         1,
         "actual:\n{}",
         plan
@@ -616,13 +616,13 @@ fn mutually_recursive_structs_terminate_and_dedupe() {
     let plan = plan_for(&enum_def, &api);
 
     assert_eq!(
-        plan.matches("export interface AlefNodeA").count(),
+        plan.matches("export interface AlefNodeAWire").count(),
         1,
         "actual:\n{}",
         plan
     );
     assert_eq!(
-        plan.matches("export interface AlefNodeB").count(),
+        plan.matches("export interface AlefNodeBWire").count(),
         1,
         "actual:\n{}",
         plan
@@ -658,7 +658,7 @@ fn optional_flag_field_appends_undefined_once() {
     }];
     let plan = plan_for(&enum_def, &api);
     assert!(
-        plan.contains("export interface AlefHasOptional {\n    maybe: string | undefined;\n}"),
+        plan.contains("export interface AlefHasOptionalWire {\n    maybe: string | undefined;\n}"),
         "actual:\n{}",
         plan
     );
@@ -690,12 +690,12 @@ fn shared_struct_reference_is_emitted_once() {
     }];
     let plan = plan_for(&enum_def, &api);
     assert!(
-        plan.contains("export type AlefSharedRef = AlefShared | AlefShared[];"),
+        plan.contains("export type AlefSharedRef = AlefSharedWire | AlefSharedWire[];"),
         "actual:\n{}",
         plan
     );
     assert_eq!(
-        plan.matches("export interface AlefShared").count(),
+        plan.matches("export interface AlefSharedWire").count(),
         1,
         "actual:\n{}",
         plan
@@ -817,19 +817,19 @@ fn struct_shared_by_two_unions_is_referenced_by_both() {
     assert!(
         all_plans
             .custom_section
-            .contains("export type AlefFirstHolder = AlefShared;"),
+            .contains("export type AlefFirstHolder = AlefSharedWire;"),
         "actual:\n{}",
         all_plans.custom_section
     );
     assert!(
         all_plans
             .custom_section
-            .contains("export type AlefSecondHolder = AlefShared;"),
+            .contains("export type AlefSecondHolder = AlefSharedWire;"),
         "actual:\n{}",
         all_plans.custom_section
     );
     assert_eq!(
-        all_plans.custom_section.matches("export interface AlefShared").count(),
+        all_plans.custom_section.matches("export interface AlefSharedWire").count(),
         1,
         "actual:\n{}",
         all_plans.custom_section

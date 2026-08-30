@@ -2,6 +2,7 @@
 
 use super::enums;
 use super::types::{opaque_instance_method_is_dropped, opaque_static_method_is_dropped};
+use crate::codegen::naming::ts_property_key::ts_property_key;
 use crate::codegen::naming::{node_type_name, to_node_name, wire_variant_value};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types};
 use crate::core::config::NodeCapsuleTypeConfig;
@@ -685,16 +686,23 @@ fn untagged_variant_dts_type(enum_def: &EnumDef, variant: &EnumVariant) -> Strin
             // the enum's `serde_rename_all` (which cases VARIANT names) -- the same two-namespace
             // split `backends::go::gen_bindings::types::field_shape::go_data_enum_variant_field`
             // already honors, which is the sibling backend that got this right. ~keep
+            //
+            // A wire name is not an identifier and cannot be interpolated bare: kebab-case from
+            // `#[serde(rename_all = "kebab-case")]` parses as a subtraction, so it must go
+            // through `ts_property_key`, the one renderer `backends::wasm::gen_bindings::ts_union`
+            // also uses -- two emitters describing the same runtime object must not disagree
+            // about when a key needs quoting. ~keep
             let wire_name = crate::codegen::naming::wire_field_name(
                 &field.name,
                 field.serde_rename.as_deref(),
                 enum_def.rename_all_fields.as_deref(),
             );
+            let key = ts_property_key(&wire_name);
             let ts_ty = dts_type(&field.ty);
             if matches!(field.ty, TypeRef::Optional(_)) {
-                format!("{wire_name}?: {ts_ty}")
+                format!("{key}?: {ts_ty}")
             } else {
-                format!("{wire_name}: {ts_ty}")
+                format!("{key}: {ts_ty}")
             }
         })
         .collect();
