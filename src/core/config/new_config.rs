@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::abi_grammar;
 use super::extras::{Language, is_known_language};
 use super::languages::FfiConfig;
-use super::output::{BuildCommandConfig, GeneratedHeaderConfig, ScaffoldConfig};
+use super::output::{
+    BuildCommandConfig, GeneratedHeaderConfig, ScaffoldConfig, validate_output_path, validate_output_segment,
+};
 use super::package_metadata::PackageMetadataConfig;
 use super::raw_crate::RawCrateConfig;
 use super::resolve_helpers::{merge_map, resolve_output_paths};
@@ -165,6 +167,32 @@ impl NewAlefConfig {
         };
 
         let output_paths = resolve_output_paths(krate, &ws.output_template, &languages, multi_crate);
+
+        // Per-language config, merged crate-over-workspace, computed once here so the path-safety
+        // checks below and the struct literal at the end of this function see the same values —
+        // duplicating the `.clone().or_else(...)` merge in both places would let them drift.
+        let node = krate.node.clone().or_else(|| ws.node.clone());
+        let wasm = krate.wasm.clone().or_else(|| ws.wasm.clone());
+        let jni = krate.jni.clone().or_else(|| ws.jni.clone());
+        let java = krate.java.clone().or_else(|| ws.java.clone());
+        let kotlin = krate.kotlin.clone().or_else(|| ws.kotlin.clone());
+        let kotlin_android = krate.kotlin_android.clone().or_else(|| ws.kotlin_android.clone());
+        let csharp = krate.csharp.clone().or_else(|| ws.csharp.clone());
+        let dart = krate.dart.clone().or_else(|| ws.dart.clone());
+
+        validate_language_specific_path_fields(
+            &krate.name,
+            PathSafetyFields {
+                jni_crate_dir: jni.as_ref().and_then(|c| c.crate_dir.as_deref()),
+                node_crate_dir: node.as_ref().and_then(|c| c.crate_dir.as_deref()),
+                wasm_crate_dir: wasm.as_ref().and_then(|c| c.crate_dir.as_deref()),
+                dart_lib_name: dart.as_ref().and_then(|c| c.lib_name.as_deref()),
+                java_package: java.as_ref().and_then(|c| c.package.as_deref()),
+                kotlin_package: kotlin.as_ref().and_then(|c| c.package.as_deref()),
+                kotlin_android_package: kotlin_android.as_ref().and_then(|c| c.package.as_deref()),
+                csharp_namespace: csharp.as_ref().and_then(|c| c.namespace.as_deref()),
+            },
+        )?;
 
         let lint = merge_map(&ws.lint, &krate.lint);
         let test = merge_map(&ws.test, &krate.test);
@@ -323,21 +351,21 @@ impl NewAlefConfig {
             languages,
             targets,
             python: krate.python.clone().or_else(|| ws.python.clone()),
-            node: krate.node.clone().or_else(|| ws.node.clone()),
+            node,
             ruby: krate.ruby.clone().or_else(|| ws.ruby.clone()),
             php: krate.php.clone().or_else(|| ws.php.clone()),
             elixir: krate.elixir.clone().or_else(|| ws.elixir.clone()),
-            wasm: krate.wasm.clone().or_else(|| ws.wasm.clone()),
+            wasm,
             ffi: effective_ffi,
             go: krate.go.clone().or_else(|| ws.go.clone()),
-            java: krate.java.clone().or_else(|| ws.java.clone()),
-            dart: krate.dart.clone().or_else(|| ws.dart.clone()),
-            kotlin: krate.kotlin.clone().or_else(|| ws.kotlin.clone()),
-            kotlin_android: krate.kotlin_android.clone().or_else(|| ws.kotlin_android.clone()),
-            jni: krate.jni.clone().or_else(|| ws.jni.clone()),
+            java,
+            dart,
+            kotlin,
+            kotlin_android,
+            jni,
             swift: krate.swift.clone().or_else(|| ws.swift.clone()),
             gleam: krate.gleam.clone().or_else(|| ws.gleam.clone()),
-            csharp: krate.csharp.clone().or_else(|| ws.csharp.clone()),
+            csharp,
             r: krate.r.clone().or_else(|| ws.r.clone()),
             zig: krate.zig.clone().or_else(|| ws.zig.clone()),
             exclude: krate.exclude.clone(),
@@ -592,6 +620,114 @@ fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Langua
         .map_err(|error| invalid("[crates.dart].pubspec_name", &pubspec_name, error))?;
     let library_name = resolved.dart_library_name();
     validate_dart_library_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
+/// Validate every explicit per-language config override that becomes part of a generated
+/// output path, called once from `resolve_one` with the already-merged (crate-over-workspace)
+/// value for each field.
+///
+/// `jni.crate_dir` and `dart.lib_name` are documented single flat names (`crates/<jni
+/// crate_dir>-jni/`; the Dart `library` declaration), so any `/` in them is already invalid
+/// input and [`validate_path_segment_field`] rejects it outright. `node.crate_dir` and
+/// `wasm.crate_dir` are, by contrast, documented and tested (see
+/// `package_dir_node_crate_dir_override_takes_precedence` in `resolved::lookups`) to hold a
+/// full relative path such as `"crates/sample-markdown-node"` — rejecting `/` there would break
+/// that legitimate, already-shipped shape, so they get the narrower
+/// [`validate_relative_path_field`], which only rejects an absolute value or a `..` component.
+/// The four dotted package/namespace fields go through [`validate_package_like_field`], which
+/// accounts for the `.replace('.', "/")` every one of those backends applies before joining the
+/// value onto an output directory. ~keep
+fn validate_language_specific_path_fields(crate_name: &str, fields: PathSafetyFields<'_>) -> Result<(), ResolveError> {
+    validate_path_segment_field(crate_name, fields.jni_crate_dir, "jni.crate_dir")?;
+    validate_relative_path_field(crate_name, fields.node_crate_dir, "node.crate_dir")?;
+    validate_relative_path_field(crate_name, fields.wasm_crate_dir, "wasm.crate_dir")?;
+    validate_path_segment_field(crate_name, fields.dart_lib_name, "dart.lib_name")?;
+    validate_package_like_field(crate_name, fields.java_package, "java.package")?;
+    validate_package_like_field(crate_name, fields.kotlin_package, "kotlin.package")?;
+    validate_package_like_field(crate_name, fields.kotlin_android_package, "kotlin_android.package")?;
+    validate_package_like_field(crate_name, fields.csharp_namespace, "csharp.namespace")?;
+    Ok(())
+}
+
+/// The already-merged (crate-over-workspace) values [`validate_language_specific_path_fields`]
+/// checks, bundled into one struct so the call site takes two arguments instead of nine.
+struct PathSafetyFields<'a> {
+    jni_crate_dir: Option<&'a str>,
+    node_crate_dir: Option<&'a str>,
+    wasm_crate_dir: Option<&'a str>,
+    dart_lib_name: Option<&'a str>,
+    java_package: Option<&'a str>,
+    kotlin_package: Option<&'a str>,
+    kotlin_android_package: Option<&'a str>,
+    csharp_namespace: Option<&'a str>,
+}
+
+/// Validate an explicit config override documented as a single flat name (e.g. `[crates.jni]
+/// crate_dir`, which becomes the `<crate_dir>` in `crates/<crate_dir>-jni/`; `[crates.dart]
+/// lib_name`, the Dart `library` declaration) rather than a multi-segment path.
+///
+/// Rejects a NUL byte or path separator (`validate_output_segment`) — a legitimate value for
+/// either field never contains `/` — and, once that passes, rejects the value resolving to a
+/// bare `..` on its own (`validate_output_path`): `jni_output_path` and the Dart barrel-file
+/// path both format the value in with a fixed literal suffix (`-jni`, `.dart`), which defeats a
+/// bare `..` becoming a real `ParentDir` component there, but this check does not rely on that
+/// incidental protection — a bare `..` is never a legitimate value for either field regardless.
+/// A value of `None` (the field left unset) is not validated. For `jni.crate_dir` the default
+/// (`config.name`) is unvalidated here, but every crate targeting a language present in
+/// `OutputTemplate` — which `jni` always pairs with (`kotlin_android` is required alongside it,
+/// see the check above) — already runs `config.name` through this same pair of checks via
+/// `resolve_output_paths` → `OutputTemplate::resolve`. `dart.lib_name`'s fallback is the one
+/// exception with no equivalent implicit coverage — a crate can target only Dart with an
+/// explicit `[crates.output].dart` override, bypassing `OutputTemplate::resolve` entirely —
+/// so `validation::validate_dart_library_name` checks that resolved, post-default value
+/// separately.
+fn validate_path_segment_field(crate_name: &str, value: Option<&str>, label: &str) -> Result<(), ResolveError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    validate_output_segment(value, label)
+        .and_then(|()| validate_output_path(Path::new(value)))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))
+}
+
+/// Validate an explicit config override documented and tested to hold a full relative path
+/// rather than a single flat segment — `[crates.node] crate_dir` and `[crates.wasm]
+/// crate_dir`, which may legitimately be e.g. `"crates/sample-markdown-node"` (see
+/// `package_dir_node_crate_dir_override_takes_precedence` in `resolved::lookups`).
+///
+/// Unlike [`validate_path_segment_field`], this does not reject `/` — that is expected,
+/// legitimate structure here. It only rejects the value resolving to an absolute path or
+/// containing a `..` component (`validate_output_path`), which is what would let it escape the
+/// output tree once `ResolvedCrateConfig::package_dir`'s Node/Wasm arms return it verbatim and a
+/// caller (`cli::pipeline::format::poly_paths`, `cli::pipeline::generate::orphans`) does
+/// `base_dir.join(package_dir)`. A value of `None` is not validated; see
+/// [`validate_path_segment_field`] for why the unset case is safe by construction.
+fn validate_relative_path_field(crate_name: &str, value: Option<&str>, label: &str) -> Result<(), ResolveError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    validate_output_path(Path::new(value))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: invalid {label}: {detail}")))
+}
+
+/// Validate an explicit dotted package/namespace override (`[java] package`, `[kotlin]
+/// package`, `[kotlin_android] package`, `[csharp] namespace`) that every one of those
+/// backends turns into nested path segments via `value.replace('.', "/")` before joining it
+/// onto an output directory.
+///
+/// The raw value itself must not contain a path separator or NUL
+/// (`validate_output_segment`); separately, the slash-converted form must not collapse to an
+/// absolute path or a `..` component (`validate_output_path`) — a value that *starts* with a
+/// `.` (e.g. `".foo"`) turns into a leading `/` after the replace, which `PathBuf::join`
+/// treats as a full override of whatever output directory it's joined onto, discarding it
+/// entirely. A value of `None` is not validated: the derived default for each of these fields
+/// (repo-URL reverse-DNS derivation, or a literal placeholder) can never contain a `.`-led
+/// component or a raw separator, so it is safe by construction.
+fn validate_package_like_field(crate_name: &str, value: Option<&str>, label: &str) -> Result<(), ResolveError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    validate_output_segment(value, label)
+        .and_then(|()| validate_output_path(Path::new(&value.replace('.', "/"))))
+        .map_err(|detail| ResolveError::InvalidConfig(format!("crate `{crate_name}`: {detail}")))
 }
 
 /// Validate a single `crate_attributes` entry.
@@ -968,3 +1104,5 @@ fn merge_build_command_maps(
 mod c_abi_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod path_safety_tests;

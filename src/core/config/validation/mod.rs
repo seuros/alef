@@ -17,6 +17,8 @@
 
 mod preconditions;
 
+use super::extras::Language;
+use super::output::validate_output_segment;
 use super::resolved::ResolvedCrateConfig;
 use crate::core::config::extras::Language;
 use crate::core::error::AlefError;
@@ -48,7 +50,26 @@ pub fn validate_resolved(config: &ResolvedCrateConfig) -> Result<(), AlefError> 
     })?;
     validate_section("clean", &config.clean, clean_main_fields, |c| c.precondition.as_deref())?;
     validate_trait_bridges(config)?;
+    validate_dart_library_name(config)?;
     Ok(())
+}
+
+/// Reject a derived Dart library/barrel-file name that would escape the output tree once
+/// `DartBackend::generate_bindings` writes it.
+///
+/// `[dart] lib_name` is validated at config-resolution time when explicitly set (see
+/// `new_config::validate_path_segment_field`), but when it is unset the effective name falls
+/// back through `dart_pubspec_name()` to the crate name with only hyphens replaced —
+/// unlike the reverse-DNS package derivation Java/Kotlin fall back to, that fallback does not
+/// strip path separators from an unusual crate `name`. There is no single config key to name
+/// in that case (the value comes from a chain of defaults, not one field), so this check runs
+/// against the resolved, post-default value here rather than in `resolve_one`.
+fn validate_dart_library_name(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
+    if !config.targets(Language::Dart) {
+        return Ok(());
+    }
+    validate_output_segment(&config.dart_library_name(), "dart.lib_name (derived from crate name)")
+        .map_err(|detail| AlefError::Config(format!("crate `{}`: {detail}", config.name)))
 }
 
 /// Reject a trait bridge that declares a registration function it cannot emit.
@@ -693,5 +714,80 @@ check = "custom-linter src/"
         let config = resolve_first(toml_str);
         validate_resolved(&config).expect("custom node lint must validate");
         assert!(!logs_contain("matches the built-in default"));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // `validate_dart_library_name`: the "derived default with no config key to reject" case --
+    // `[dart] lib_name` is checked at config-resolution time when explicitly set (see
+    // `new_config::path_safety_tests`), but its fallback to the crate name (with only hyphens
+    // replaced) is a value with no single field to name, so it is checked here instead against
+    // the resolved config.
+    // -----------------------------------------------------------------------------------------
+
+    #[test]
+    fn dart_library_name_rejects_a_crate_name_containing_a_path_separator_when_unconfigured() {
+        // `[crates.output].dart` is set explicitly so this crate's only targeted language
+        // bypasses `resolve_output_paths`'s own crate-name check entirely -- the scenario this
+        // check exists to close: no `[dart] lib_name`/`pubspec_name`, and nothing else in
+        // `resolve_one` would have caught this crate name.
+        let toml_str = r#"
+[workspace]
+languages = ["dart"]
+
+[[crates]]
+name = "sample/evil"
+sources = ["src/lib.rs"]
+
+[crates.output]
+dart = "packages/dart/lib/src"
+"#;
+        let config = resolve_first(toml_str);
+        let err = validate_resolved(&config).expect_err("a `/` in the derived Dart library name must be rejected");
+        let message = err.to_string();
+        assert!(message.contains("sample/evil"), "error should name the crate: {message}");
+        assert!(
+            message.contains("dart.lib_name"),
+            "error should point at the Dart library name: {message}"
+        );
+        assert!(
+            message.contains("path separators are not allowed"),
+            "error should explain why: {message}"
+        );
+    }
+
+    #[test]
+    fn dart_library_name_accepts_an_ordinary_crate_name_when_unconfigured() {
+        let toml_str = r#"
+[workspace]
+languages = ["dart"]
+
+[[crates]]
+name = "sample-core"
+sources = ["src/lib.rs"]
+"#;
+        let config = resolve_first(toml_str);
+        validate_resolved(&config).expect("an ordinary crate name must still validate");
+    }
+
+    #[test]
+    fn dart_library_name_is_not_checked_for_a_crate_that_does_not_target_dart() {
+        // Same hazardous crate-name shape as the rejection test above, but for a crate that
+        // never targets Dart -- `dart_library_name()` is irrelevant to it and must not be
+        // evaluated. `[crates.output].python` is set explicitly so the crate name still bypasses
+        // `resolve_output_paths`'s own check for its one targeted language, isolating this test
+        // to `validate_dart_library_name` alone rather than a different, unrelated panic.
+        let toml_str = r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "sample/evil"
+sources = ["src/lib.rs"]
+
+[crates.output]
+python = "packages/python"
+"#;
+        let config = resolve_first(toml_str);
+        validate_resolved(&config).expect("a crate not targeting dart must not be checked");
     }
 }
