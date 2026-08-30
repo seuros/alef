@@ -21,28 +21,50 @@ use super::visitors::emit_python_visitor_method;
 use args::build_args_and_setup;
 use error_assertions::emit_error_assertion;
 use result_assertions::emit_result_and_assertions;
-pub(super) use typed_values::{KwargRenderContext, render_kwarg_field_value, resolve_field_enum_type};
+pub(super) use typed_values::{KwargRenderContext, LeafSource, render_kwarg_field_value, resolve_field_enum_type};
+
+/// Read-only inputs to [`render_test_function`], bundled because every field is invariant
+/// borrowed/`Copy` state describing the fixture category being rendered -- `out`, the string
+/// buffer the function appends rendered lines to, stays its own `&mut` parameter alongside
+/// `fixture` (the one subject each call renders), matching the split `KwargRenderContext`/
+/// `ArgSink` draw in `typed_values.rs`.
+#[derive(Clone, Copy)]
+pub(super) struct RenderTestFunctionContext<'a> {
+    pub e2e_config: &'a E2eConfig,
+    pub config: &'a crate::core::config::ResolvedCrateConfig,
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+    pub enums: &'a [crate::core::ir::EnumDef],
+    pub functions: &'a [crate::core::ir::FunctionDef],
+    pub errors: &'a [crate::core::ir::ErrorDef],
+    pub options_type: Option<&'a str>,
+    pub options_via: &'a str,
+    pub enum_fields: &'a HashMap<String, String>,
+    pub handle_nested_types: &'a HashMap<String, String>,
+    pub handle_dict_types: &'a HashSet<String>,
+    pub force_bind_result: bool,
+    pub convertible_types: &'a ahash::AHashSet<String>,
+    pub crate_has_serde: bool,
+}
 
 /// Render a pytest test function for a non-HTTP fixture.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn render_test_function(
-    out: &mut String,
-    fixture: &Fixture,
-    e2e_config: &E2eConfig,
-    config: &crate::core::config::ResolvedCrateConfig,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    functions: &[crate::core::ir::FunctionDef],
-    errors: &[crate::core::ir::ErrorDef],
-    options_type: Option<&str>,
-    options_via: &str,
-    enum_fields: &HashMap<String, String>,
-    handle_nested_types: &HashMap<String, String>,
-    handle_dict_types: &HashSet<String>,
-    force_bind_result: bool,
-    convertible_types: &ahash::AHashSet<String>,
-    crate_has_serde: bool,
-) {
+pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context: RenderTestFunctionContext<'_>) {
+    let RenderTestFunctionContext {
+        e2e_config,
+        config,
+        type_defs,
+        enums,
+        functions,
+        errors,
+        options_type,
+        options_via,
+        enum_fields,
+        handle_nested_types,
+        handle_dict_types,
+        force_bind_result,
+        convertible_types,
+        crate_has_serde,
+    } = context;
+
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
     let mut call_config = e2e_config.resolve_call_for_fixture(
@@ -184,18 +206,18 @@ pub(super) fn render_test_function(
     };
     let async_kw = if is_async { "async " } else { "" };
 
-    let (arg_bindings, kwarg_exprs, teardown_block) = build_args_and_setup(
-        fixture,
+    let arg_setup_context = args::ArgSetupContext {
         call_config,
-        effective_options_type,
-        effective_options_via,
+        options_type: effective_options_type,
+        options_via: effective_options_via,
         enum_fields,
         handle_nested_types,
         handle_dict_types,
         config,
         type_defs,
         enums,
-    );
+    };
+    let (arg_bindings, kwarg_exprs, teardown_block) = build_args_and_setup(fixture, arg_setup_context);
 
     // Build visitor class if present
     let mut visitor_class = String::new();
@@ -428,24 +450,23 @@ mod tests {
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
         let mut out = String::new();
-        render_test_function(
-            &mut out,
-            &fixture,
-            &e2e_config,
-            &config,
-            &type_defs,
-            &enums,
-            &[],
-            &[],
-            None,
-            "kwargs",
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            false,
-            &ahash::AHashSet::new(),
-            false,
-        );
+        let context = RenderTestFunctionContext {
+            e2e_config: &e2e_config,
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+            functions: &[],
+            errors: &[],
+            options_type: None,
+            options_via: "kwargs",
+            enum_fields: &HashMap::new(),
+            handle_nested_types: &HashMap::new(),
+            handle_dict_types: &HashSet::new(),
+            force_bind_result: false,
+            convertible_types: &ahash::AHashSet::new(),
+            crate_has_serde: false,
+        };
+        render_test_function(&mut out, &fixture, context);
         assert!(out.contains("pytest.mark.skip"), "got: {out}");
         assert!(out.contains("not supported"), "got: {out}");
     }

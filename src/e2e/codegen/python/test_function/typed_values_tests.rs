@@ -72,6 +72,7 @@ fn emit_json_object_arg_enum_field_emits_constructor_call() {
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
     assert!(done);
@@ -115,6 +116,7 @@ fn emit_json_object_arg_dict_mode_emits_literal() {
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
     assert!(done);
@@ -148,6 +150,7 @@ fn emit_json_object_arg_reads_documented_nested_file() {
         enums: &[],
         enum_fields: &HashMap::new(),
         docs_files: &docs_files,
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "input", &spec, &mock, context);
 
@@ -210,6 +213,7 @@ fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_field() {
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
 
@@ -273,6 +277,7 @@ fn emit_json_object_arg_batch_mode_constructs_nested_struct_field_in_each_item()
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "items", &spec, &mock, context);
 
@@ -340,6 +345,7 @@ fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_map_values() {
         enums: &enums,
         enum_fields: &HashMap::new(),
         docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
     let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
 
@@ -351,37 +357,85 @@ fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_map_values() {
     );
 }
 
-/// A map field whose declared value type is not itself a known struct (e.g. `Map<String,
-/// String>`) must fall through to the plain-dict fallback unchanged.
+/// A map value type that is not itself a known struct (e.g. `Map<String, String>`) must fall
+/// through -- [`render_value_for_type_ref`] returns `None` so the caller reaches the plain-dict
+/// fallback unchanged.
 #[test]
-fn resolve_field_map_value_struct_type_returns_none_for_non_struct_map_value() {
-    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+fn render_value_for_type_ref_returns_none_for_non_struct_map_value() {
+    use crate::core::ir::TypeRef;
 
-    let type_def = TypeDef {
-        name: "ExtractionConfig".to_string(),
-        rust_path: "demo::ExtractionConfig".to_string(),
-        fields: vec![FieldDef {
-            name: "labels".to_string(),
-            ty: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
-            ..Default::default()
-        }],
-        ..Default::default()
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &enums,
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
     };
-    let type_defs = vec![type_def];
+    let type_ref = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
+    let value = serde_json::json!({"a": "b"});
+    let mut used_struct_types = BTreeSet::new();
 
-    let result = resolve_field_map_value_struct_type("labels", Some("ExtractionConfig"), &type_defs);
-    assert_eq!(result, None);
+    let result = render_value_for_type_ref(&type_ref, &value, "", context, &mut used_struct_types);
+    assert!(result.is_none(), "got: {result:?}");
 }
 
-/// `Optional<Map<String, Struct>>` must unwrap the same way `Optional<Vec<Struct>>` does for
-/// [`resolve_field_element_struct_type`].
+/// `Optional<Map<String, Struct>>` must unwrap the same way `Optional<Vec<Struct>>` does --
+/// direct coverage of the `Optional` arm wrapping the `Map` arm in
+/// [`render_value_for_type_ref`].
 #[test]
-fn resolve_field_map_value_struct_type_unwraps_optional() {
+fn render_value_for_type_ref_unwraps_optional_map_of_structs() {
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
     let inner_type = TypeDef {
         name: "NestedConfig".to_string(),
         rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "model".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let type_defs = vec![inner_type];
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &enums,
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+    let type_ref = TypeRef::Optional(Box::new(TypeRef::Map(
+        Box::new(TypeRef::String),
+        Box::new(TypeRef::Named("NestedConfig".to_string())),
+    )));
+    let value = serde_json::json!({"first": {"model": "standard"}});
+    let mut used_struct_types = BTreeSet::new();
+
+    let result = render_value_for_type_ref(&type_ref, &value, "", context, &mut used_struct_types);
+    assert_eq!(result.as_deref(), Some(r#"{"first": NestedConfig(model="standard")}"#));
+}
+
+/// Uniform-recursion regression, the "mixed null/object" control: a `Map<String,
+/// Optional<Struct>>` field where individual entries may independently be null or an object --
+/// neither shape the former shape-by-shape dispatch enumerated (it only handled a direct
+/// `Map<K, Struct>` value, not one whose values are themselves `Optional`). Each entry must
+/// resolve on its own: a null entry renders `None`, an object entry still constructs its own
+/// class -- one null entry must not revert the whole map to a raw-dict fallback.
+#[test]
+fn emit_json_object_arg_kwargs_mode_handles_mixed_null_and_object_map_values() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let inner_type = TypeDef {
+        name: "NestedConfig".to_string(),
+        rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "model".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
         ..Default::default()
     };
     let outer_type = TypeDef {
@@ -389,18 +443,209 @@ fn resolve_field_map_value_struct_type_unwraps_optional() {
         rust_path: "demo::ExtractionConfig".to_string(),
         fields: vec![FieldDef {
             name: "profiles".to_string(),
-            ty: TypeRef::Optional(Box::new(TypeRef::Map(
+            ty: TypeRef::Map(
                 Box::new(TypeRef::String),
-                Box::new(TypeRef::Named("NestedConfig".to_string())),
-            ))),
+                Box::new(TypeRef::Optional(Box::new(TypeRef::Named("NestedConfig".to_string())))),
+            ),
             ..Default::default()
         }],
         ..Default::default()
     };
     let type_defs = vec![outer_type, inner_type];
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
 
-    let result = resolve_field_map_value_struct_type("profiles", Some("ExtractionConfig"), &type_defs);
-    assert_eq!(result.map(|t| t.name.as_str()), Some("NestedConfig"));
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!({"profiles": {"first": {"model": "standard"}, "second": null}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &enums,
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
+
+    assert!(done);
+    assert_eq!(
+        bindings,
+        [r#"    opts = ExtractionConfig(profiles={"first": NestedConfig(model="standard"), "second": None})"#],
+        "a null map entry must render as None without reverting the whole map to a raw dict, got: {bindings:?}"
+    );
+}
+
+/// Uniform-recursion regression, the "genuinely nested containers" control: a `Map<String,
+/// Vec<Struct>>` field -- a combination the former shape-by-shape dispatch never enumerated (it
+/// handled a direct `Map<K, Struct>` value and a top-level `Vec<Struct>` field, but not a map
+/// whose *values* are themselves arrays of structs). This falls out of the same recursion with
+/// no per-combination code.
+#[test]
+fn emit_json_object_arg_kwargs_mode_constructs_nested_struct_map_of_vec_values() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let inner_type = TypeDef {
+        name: "NestedConfig".to_string(),
+        rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "model".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let outer_type = TypeDef {
+        name: "ExtractionConfig".to_string(),
+        rust_path: "demo::ExtractionConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "groups".to_string(),
+            ty: TypeRef::Map(
+                Box::new(TypeRef::String),
+                Box::new(TypeRef::Vec(Box::new(TypeRef::Named("NestedConfig".to_string())))),
+            ),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let type_defs = vec![outer_type, inner_type];
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!({"groups": {"team": [{"model": "standard"}, {"model": "pro"}]}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &enums,
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
+
+    assert!(done);
+    assert_eq!(
+        bindings,
+        [
+            r#"    opts = ExtractionConfig(groups={"team": [NestedConfig(model="standard"), NestedConfig(model="pro")]})"#
+        ],
+        "a map value's own Vec<Struct> field must construct each element with its own class, got: {bindings:?}"
+    );
+}
+
+/// Direct unit test on the `$mock_url` leaf renderer: a JSON-pointer path must become a chain
+/// of Python subscripts on the runtime holder.
+#[test]
+fn runtime_dict_index_expression_builds_subscript_chain_from_pointer() {
+    assert_eq!(
+        runtime_dict_index_expression("opts_data", "/profiles/first/model"),
+        r#"opts_data["profiles"]["first"]["model"]"#
+    );
+}
+
+/// Array-index segments (all-ASCII-digit) must render as bare integer subscripts, not quoted
+/// string keys -- `json.loads` turns a JSON array into a Python list.
+#[test]
+fn runtime_dict_index_expression_renders_array_index_as_integer_subscript() {
+    assert_eq!(
+        runtime_dict_index_expression("opts_data", "/items/0/model"),
+        r#"opts_data["items"][0]["model"]"#
+    );
+}
+
+/// Regression for the `$mock_url` short-circuit defect: before this fix,
+/// `emit_json_object_arg_with_mock_url` never received `context` at all, so a nested struct
+/// field inside a `$mock_url` fixture always fell back to `opts_type(**json.loads(...))` --
+/// dict-typed nested fields, not the generated pyclass. The nested constructor must still
+/// appear, with its leaf pulling the runtime-substituted value out of the parsed dict instead
+/// of embedding the still placeholder-laden literal.
+#[test]
+fn emit_json_object_arg_with_mock_url_constructs_nested_struct_field_from_runtime_dict() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let inner_type = TypeDef {
+        name: "NestedConfig".to_string(),
+        rust_path: "demo::NestedConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "url".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let outer_type = TypeDef {
+        name: "ExtractionConfig".to_string(),
+        rust_path: "demo::ExtractionConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "nested".to_string(),
+            ty: TypeRef::Named("NestedConfig".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let type_defs = vec![outer_type, inner_type];
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+    let mut bindings = Vec::new();
+    let mut exprs = Vec::new();
+    let mut sink = ArgSink {
+        bindings: &mut bindings,
+        kwarg_exprs: &mut exprs,
+    };
+    let value = serde_json::json!({"nested": {"url": "$mock_url/path"}});
+    let spec = ConstructorSpec {
+        options_type: Some("ExtractionConfig"),
+        options_via: "kwargs",
+        element_type: &None,
+    };
+    let mock = MockUrlInfo {
+        fixture_id: "fixture",
+        has_host_root_route: false,
+    };
+    let context = KwargRenderContext {
+        type_defs: &type_defs,
+        enums: &enums,
+        enum_fields: &HashMap::new(),
+        docs_files: &[],
+        leaf_source: LeafSource::Literal,
+    };
+    let done = emit_json_object_arg(&mut sink, &value, "opts", &spec, &mock, context);
+
+    assert!(done);
+    let rendered = bindings.join("\n");
+    assert!(
+        rendered.contains(r#"NestedConfig(url=opts_data["nested"]["url"])"#),
+        "the nested struct field must still be constructed with its own class under $mock_url \
+         substitution, pulling the substituted value from the runtime dict, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("**json.loads"),
+        "must not fall back to unpacking a raw dict, got:\n{rendered}"
+    );
 }
 
 #[test]

@@ -10,8 +10,26 @@ use crate::e2e::fixture::Fixture;
 use super::super::json::json_to_python_literal;
 use super::handle_values::build_handle_kwarg_value;
 use super::typed_values::{
-    ArgSink, ConstructorSpec, KwargRenderContext, MockUrlInfo, emit_bytes_arg, emit_json_object_arg,
+    ArgSink, ConstructorSpec, KwargRenderContext, LeafSource, MockUrlInfo, emit_bytes_arg, emit_json_object_arg,
 };
+
+/// Read-only inputs to [`build_args_and_setup`], bundled because every field is invariant
+/// borrowed/`Copy` state the whole per-arg loop reads -- the loop's own accumulators
+/// (`arg_bindings`, `kwarg_exprs`, `teardown`, `placeholder_positions`) are mutated every
+/// iteration, so they stay ordinary locals rather than fields here, matching the split
+/// `KwargRenderContext`/`ArgSink` draw in `typed_values.rs`.
+#[derive(Clone, Copy)]
+pub(super) struct ArgSetupContext<'a> {
+    pub call_config: &'a crate::e2e::config::CallConfig,
+    pub options_type: Option<&'a str>,
+    pub options_via: &'a str,
+    pub enum_fields: &'a HashMap<String, String>,
+    pub handle_nested_types: &'a HashMap<String, String>,
+    pub handle_dict_types: &'a HashSet<String>,
+    pub config: &'a crate::core::config::ResolvedCrateConfig,
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+    pub enums: &'a [crate::core::ir::EnumDef],
+}
 
 /// Build arg binding lines and kwarg expressions for a fixture call.
 ///
@@ -19,19 +37,22 @@ use super::typed_values::{
 /// contains statements emitted after the fixture call and its assertions —
 /// trait-bridge fixtures populate it with `unregister_<trait>("<name>")` so
 /// pytest's shared-process registry state is restored between tests.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_args_and_setup(
     fixture: &Fixture,
-    call_config: &crate::e2e::config::CallConfig,
-    options_type: Option<&str>,
-    options_via: &str,
-    enum_fields: &HashMap<String, String>,
-    handle_nested_types: &HashMap<String, String>,
-    handle_dict_types: &HashSet<String>,
-    config: &crate::core::config::ResolvedCrateConfig,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
+    context: ArgSetupContext<'_>,
 ) -> (Vec<String>, Vec<String>, String) {
+    let ArgSetupContext {
+        call_config,
+        options_type,
+        options_via,
+        enum_fields,
+        handle_nested_types,
+        handle_dict_types,
+        config,
+        type_defs,
+        enums,
+    } = context;
+
     let mut arg_bindings = Vec::new();
     let mut kwarg_exprs = Vec::new();
     let mut teardown = String::new();
@@ -48,16 +69,15 @@ pub(super) fn build_args_and_setup(
         let var_name = &arg.name;
 
         if arg.arg_type == "handle" {
-            emit_handle_arg(
-                &mut arg_bindings,
-                &mut kwarg_exprs,
+            let handle_context = HandleArgContext {
                 fixture,
                 arg,
                 var_name,
                 options_type,
                 handle_nested_types,
                 handle_dict_types,
-            );
+            };
+            emit_handle_arg(&mut arg_bindings, &mut kwarg_exprs, handle_context);
             continue;
         }
 
@@ -194,6 +214,7 @@ pub(super) fn build_args_and_setup(
                 enums,
                 enum_fields,
                 docs_files: &docs_files,
+                leaf_source: LeafSource::Literal,
             };
             if emit_json_object_arg(&mut sink, value, var_name, &spec, &mock, context) {
                 continue;
@@ -243,17 +264,29 @@ pub(super) fn build_args_and_setup(
     (arg_bindings, kwarg_exprs, teardown)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn emit_handle_arg(
-    arg_bindings: &mut Vec<String>,
-    kwarg_exprs: &mut Vec<String>,
-    fixture: &Fixture,
-    arg: &crate::e2e::config::ArgMapping,
-    var_name: &str,
-    options_type: Option<&str>,
-    handle_nested_types: &HashMap<String, String>,
-    handle_dict_types: &HashSet<String>,
-) {
+/// Read-only inputs to [`emit_handle_arg`], bundled because every field is invariant borrowed
+/// state describing the one "handle" arg being emitted -- `arg_bindings`/`kwarg_exprs` stay
+/// their own `&mut` parameters since `emit_handle_arg` mutates both.
+#[derive(Clone, Copy)]
+struct HandleArgContext<'a> {
+    fixture: &'a Fixture,
+    arg: &'a crate::e2e::config::ArgMapping,
+    var_name: &'a str,
+    options_type: Option<&'a str>,
+    handle_nested_types: &'a HashMap<String, String>,
+    handle_dict_types: &'a HashSet<String>,
+}
+
+fn emit_handle_arg(arg_bindings: &mut Vec<String>, kwarg_exprs: &mut Vec<String>, context: HandleArgContext<'_>) {
+    let HandleArgContext {
+        fixture,
+        arg,
+        var_name,
+        options_type,
+        handle_nested_types,
+        handle_dict_types,
+    } = context;
+
     let constructor_name = format!("create_{}", arg.name.to_snake_case());
     let config_value = resolve_field(&fixture.input, &arg.field);
     if config_value.is_null() || config_value.is_object() && config_value.as_object().is_some_and(|o| o.is_empty()) {
@@ -326,18 +359,18 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let (bindings, exprs, _teardown) = build_args_and_setup(
-            &fixture,
-            &call_config,
-            None,
-            "kwargs",
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &config,
-            &type_defs,
-            &enums,
-        );
+        let context = ArgSetupContext {
+            call_config: &call_config,
+            options_type: None,
+            options_via: "kwargs",
+            enum_fields: &HashMap::new(),
+            handle_nested_types: &HashMap::new(),
+            handle_dict_types: &HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        };
+        let (bindings, exprs, _teardown) = build_args_and_setup(&fixture, context);
         assert!(bindings.is_empty());
         assert!(exprs.is_empty());
     }

@@ -4,9 +4,8 @@
 //! Declared as a submodule of `test_file` (its only caller), not a sibling under `python`,
 //! so `super` below reaches `test_file` first and `python::helpers` needs one more `super`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
-use crate::core::ir::TypeDef;
 use crate::e2e::config::ArgMapping;
 use crate::e2e::fixture::Fixture;
 
@@ -98,53 +97,63 @@ pub(super) fn compute_pytest_and_sys_import_needs(
     (needs_pytest, needs_sys_import)
 }
 
+/// Which stdlib/third-party bare imports a rendered test file needs, decided by the caller from
+/// fixture/config inspection before the body is rendered. Bundled because every flag here is
+/// read-only, invariant input to [`finalize_stdlib_and_bare_imports`] -- unlike
+/// `stdlib_imports`/`thirdparty_bare`, which that function mutates, so those stay their own
+/// `&mut Vec<String>` parameters rather than folding into this `Copy` struct (the same split
+/// `KwargRenderContext`/`ArgSink` draw in `typed_values.rs`).
+#[derive(Clone, Copy)]
+pub(super) struct ImportNeeds {
+    pub has_http_tests: bool,
+    pub needs_base64_import: bool,
+    pub needs_json_import: bool,
+    pub needs_os_import: bool,
+    pub needs_path_import: bool,
+    pub needs_sys_import: bool,
+    pub needs_pytest: bool,
+}
+
 /// Finalizes `stdlib_imports`/`thirdparty_bare`: adds `json`/`re` when the already-rendered
 /// `fixtures_body` actually references them (`http_test.jinja` only needs those modules for
 /// fixtures whose request/response shape reaches the branch that uses them — reading the
 /// answer off the rendered body keeps this the one source of truth instead of a second copy
 /// of `http.rs`'s branch conditions that could silently drift from it), adds the
 /// unconditional/precomputed entries, and sorts each list isort-canonically. ~keep
-#[allow(clippy::too_many_arguments)]
 pub(super) fn finalize_stdlib_and_bare_imports(
     fixtures_body: &str,
-    has_http_tests: bool,
-    needs_base64_import: bool,
-    needs_json_import: bool,
-    needs_os_import: bool,
-    needs_path_import: bool,
-    needs_sys_import: bool,
-    needs_pytest: bool,
+    needs: ImportNeeds,
     stdlib_imports: &mut Vec<String>,
     thirdparty_bare: &mut Vec<String>,
 ) {
-    let needs_json_import = needs_json_import
+    let needs_json_import = needs.needs_json_import
         || references_identifier(fixtures_body, "json.dumps")
         || references_identifier(fixtures_body, "json.loads");
     let needs_re_import =
         references_identifier(fixtures_body, "re.match") || references_identifier(fixtures_body, "re.search");
 
-    if needs_base64_import {
+    if needs.needs_base64_import {
         stdlib_imports.push("import base64".to_string());
     }
     if needs_json_import {
         stdlib_imports.push("import json".to_string());
     }
-    if needs_os_import {
+    if needs.needs_os_import {
         stdlib_imports.push("import os".to_string());
     }
-    if needs_path_import {
+    if needs.needs_path_import {
         stdlib_imports.push("from pathlib import Path".to_string());
     }
     if needs_re_import {
         stdlib_imports.push("import re".to_string());
     }
-    if has_http_tests {
+    if needs.has_http_tests {
         stdlib_imports.push("import urllib.request".to_string());
     }
-    if needs_sys_import {
+    if needs.needs_sys_import {
         stdlib_imports.push("import sys".to_string());
     }
-    if needs_pytest {
+    if needs.needs_pytest {
         thirdparty_bare.push("import pytest".to_string());
     }
     // A plain lexicographic sort interleaves `from X import Y` before `import Z` whenever X
@@ -187,8 +196,10 @@ pub(super) fn prune_unreferenced_from_imports(imports: &mut Vec<String>, emitted
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ir::{FieldDef, TypeRef};
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+    use crate::e2e::codegen::python::test_function::LeafSource;
     use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::HashMap;
 
     fn config_arg() -> ArgMapping {
         ArgMapping {
@@ -239,6 +250,7 @@ mod tests {
             enums: &[],
             enum_fields: &HashMap::new(),
             docs_files: &[],
+            leaf_source: LeafSource::Literal,
         };
         collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
 
@@ -287,6 +299,7 @@ mod tests {
             enums: &[],
             enum_fields: &HashMap::new(),
             docs_files: &[],
+            leaf_source: LeafSource::Literal,
         };
         collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
 
@@ -332,6 +345,7 @@ mod tests {
             enums: &[],
             enum_fields: &HashMap::new(),
             docs_files: &[],
+            leaf_source: LeafSource::Literal,
         };
         collect_nested_config_types(&arg, &value, None, context, &mut used_config_types);
 
@@ -379,6 +393,7 @@ mod tests {
             enums: &[],
             enum_fields: &HashMap::new(),
             docs_files: &[],
+            leaf_source: LeafSource::Literal,
         };
         collect_nested_config_types(&arg, &value, Some("ExtractionConfig"), context, &mut used_config_types);
         assert!(
@@ -473,7 +488,10 @@ mod tests {
 
         let e2e_config = e2e_config_with_options_type("ExtractionConfig");
         let config = crate::core::config::ResolvedCrateConfig::default();
-        let fixture = fixture_with_input("nested_object", serde_json::json!({"config": {"nested": {"value": "x"}}}));
+        let fixture = fixture_with_input(
+            "nested_object",
+            serde_json::json!({"config": {"nested": {"value": "x"}}}),
+        );
         let fixtures: Vec<&Fixture> = vec![&fixture];
 
         let out = super::super::render_test_file(
@@ -632,6 +650,65 @@ mod tests {
         assert!(
             out.contains(r#"{"first": NestedConfig(value="#),
             "the map value must be constructed, got:\n{out}"
+        );
+    }
+
+    /// End-to-end control for the `$mock_url` typed-lowering fix (`typed_values.rs`): a nested
+    /// config field carrying a `$mock_url` placeholder must still construct through its own
+    /// class in the actually-rendered test file, not fall back to a raw dict just because the
+    /// value needs runtime placeholder substitution.
+    #[test]
+    fn render_test_file_constructs_nested_config_class_for_mock_url_fixture() {
+        let outer = TypeDef {
+            name: "ExtractionConfig".to_string(),
+            rust_path: "demo::ExtractionConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "nested".to_string(),
+                ty: TypeRef::Named("NestedConfig".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let inner = TypeDef {
+            name: "NestedConfig".to_string(),
+            rust_path: "demo::NestedConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "url".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let type_defs = vec![outer, inner];
+
+        let e2e_config = e2e_config_with_options_type("ExtractionConfig");
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let fixture = fixture_with_input(
+            "nested_mock_url",
+            serde_json::json!({"config": {"nested": {"url": "$mock_url/path"}}}),
+        );
+        let fixtures: Vec<&Fixture> = vec![&fixture];
+
+        let out = super::super::render_test_file(
+            "smoke",
+            &fixtures,
+            &e2e_config,
+            &config,
+            &type_defs,
+            &[],
+            &[],
+            &[],
+            false,
+        );
+
+        assert!(
+            out.contains("NestedConfig(url="),
+            "the nested struct field must still be constructed with its own class for a \
+             $mock_url fixture, got:\n{out}"
+        );
+        assert!(
+            !out.contains("**json.loads"),
+            "the nested constructor must not fall back to unpacking a raw dict, got:\n{out}"
         );
     }
 }

@@ -29,7 +29,7 @@ use crate::e2e::codegen::resolve_field;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
-use self::import_lines::{compute_pytest_and_sys_import_needs, finalize_stdlib_and_bare_imports};
+use self::import_lines::{ImportNeeds, compute_pytest_and_sys_import_needs, finalize_stdlib_and_bare_imports};
 use super::helpers::{
     self, BytesKind, classify_bytes_value, python_method_helper_import, resolve_client_factory, resolve_enum_fields,
     resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types, resolve_handle_nested_types,
@@ -38,7 +38,9 @@ use super::helpers::{
 use super::http::render_http_test_function;
 use super::test_function::handle_values::collect_used_nested_types;
 use super::test_function::helper_functions::{render_item_texts_helper, render_text_helper};
-use super::test_function::{KwargRenderContext, render_test_function, resolve_field_enum_type};
+use super::test_function::{
+    KwargRenderContext, LeafSource, RenderTestFunctionContext, render_test_function, resolve_field_enum_type,
+};
 
 /// Render a complete Python test file for a single fixture category.
 ///
@@ -274,21 +276,14 @@ pub(super) fn render_test_file(
                 let constructor_type =
                     crate::e2e::codegen::recipe::json_object_constructor_type(arg, fixture_opts_type.as_deref(), value);
                 if let Some(obj) = value.as_object() {
-                    // Collect explicitly configured enum fields. Auto-detected
-                    // enums (resolve_field_enum_type below) must mirror the
-                    // render path in test_function.rs — otherwise the kwarg
-                    // builder will emit `OutputFormat.MARKDOWN` while this
-                    // import collector never adds `OutputFormat`, producing a
-                    // `NameError` at test runtime.
-                    for key in obj.keys() {
-                        if let Some(enum_type) = enum_fields.get(key) {
-                            used_enum_types.insert(enum_type.clone());
-                        } else if let Some(auto_enum_type) =
-                            resolve_field_enum_type(key, constructor_type, type_defs, enums)
-                        {
-                            used_enum_types.insert(auto_enum_type);
-                        }
-                    }
+                    collect_json_object_enum_types(
+                        obj,
+                        constructor_type,
+                        enum_fields,
+                        type_defs,
+                        enums,
+                        &mut used_enum_types,
+                    );
                 }
                 // Collect the config type itself (e.g., ExtractionConfig, EmbeddingConfig)
                 if let Some(opts_type) = constructor_type
@@ -305,6 +300,7 @@ pub(super) fn render_test_file(
                     enums,
                     enum_fields,
                     docs_files: &[],
+                    leaf_source: LeafSource::Literal,
                 };
                 import_lines::collect_nested_config_types(
                     arg,
@@ -372,27 +368,27 @@ pub(super) fn render_test_file(
     // unit does not actually reference, so widening the candidate set cannot add a dead import. ~keep
     let has_non_http_fixtures = fixtures.iter().any(|f| !f.is_http_test());
     if has_non_http_fixtures {
-        build_thirdparty_imports(
+        let thirdparty_import_context = ThirdpartyImportContext {
             fixtures,
             e2e_config,
             config,
-            &module,
-            &function_name,
-            client_factory.as_deref(),
-            &effective_options_type,
-            effective_options_via,
-            from_json_module.as_deref(),
+            module: &module,
+            function_name: &function_name,
+            client_factory: client_factory.as_deref(),
+            options_type: &effective_options_type,
+            options_via: effective_options_via,
+            from_json_module: from_json_module.as_deref(),
             needs_options_type,
             enum_fields,
             handle_nested_types,
             handle_dict_types,
-            &used_enum_types,
-            &used_config_types,
+            used_enum_types: &used_enum_types,
+            used_config_types: &used_config_types,
             type_defs,
-            &convertible_types,
+            convertible_types: &convertible_types,
             crate_has_serde,
-            &mut thirdparty_from,
-        );
+        };
+        build_thirdparty_imports(thirdparty_import_context, &mut thirdparty_from);
     }
 
     thirdparty_from.sort();
@@ -403,30 +399,28 @@ pub(super) fn render_test_file(
         if fixture.is_http_test() {
             render_http_test_function(&mut fixtures_body, fixture);
         } else {
-            render_test_function(
-                &mut fixtures_body,
-                fixture,
+            let render_test_function_context = RenderTestFunctionContext {
                 e2e_config,
                 config,
                 type_defs,
                 enums,
                 functions,
                 errors,
-                effective_options_type.as_deref(),
-                effective_options_via,
+                options_type: effective_options_type.as_deref(),
+                options_via: effective_options_via,
                 enum_fields,
                 handle_nested_types,
                 handle_dict_types,
                 force_bind_result,
-                &convertible_types,
+                convertible_types: &convertible_types,
                 crate_has_serde,
-            );
+            };
+            render_test_function(&mut fixtures_body, fixture, render_test_function_context);
         }
         let _ = writeln!(fixtures_body);
     }
 
-    finalize_stdlib_and_bare_imports(
-        &fixtures_body,
+    let import_needs = ImportNeeds {
         has_http_tests,
         needs_base64_import,
         needs_json_import,
@@ -434,9 +428,8 @@ pub(super) fn render_test_file(
         needs_path_import,
         needs_sys_import,
         needs_pytest,
-        &mut stdlib_imports,
-        &mut thirdparty_bare,
-    );
+    };
+    finalize_stdlib_and_bare_imports(&fixtures_body, import_needs, &mut stdlib_imports, &mut thirdparty_bare);
 
     // Each helper is emitted iff the unit that ships in this file references it. The two
     // are gated separately because they have independent callers: the array
@@ -477,6 +470,29 @@ pub(super) fn render_test_file(
     crate::e2e::template_env::render("python/test_file.jinja", ctx)
 }
 
+/// Collect explicitly configured enum fields for one `json_object` arg's object value.
+/// Auto-detected enums (`resolve_field_enum_type`) must mirror the render path in
+/// `test_function.rs` -- otherwise the kwarg builder emits `OutputFormat.MARKDOWN` while this
+/// import collector never adds `OutputFormat`, producing a `NameError` at test runtime. Split
+/// out of `render_test_file`'s import-collection loop to keep that loop's nesting depth under
+/// the file's cap.
+fn collect_json_object_enum_types(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    constructor_type: Option<&str>,
+    enum_fields: &std::collections::HashMap<String, String>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    used_enum_types: &mut BTreeSet<String>,
+) {
+    for key in obj.keys() {
+        if let Some(enum_type) = enum_fields.get(key) {
+            used_enum_types.insert(enum_type.clone());
+        } else if let Some(auto_enum_type) = resolve_field_enum_type(key, constructor_type, type_defs, enums) {
+            used_enum_types.insert(auto_enum_type);
+        }
+    }
+}
+
 /// True when `name` occurs in `source` as a whole Python identifier rather than as a
 /// substring of a longer one (`Widget` must not match inside `WidgetRequest`).
 pub(super) fn references_identifier(source: &str, name: &str) -> bool {
@@ -498,28 +514,54 @@ pub(super) fn references_identifier(source: &str, name: &str) -> bool {
     false
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_thirdparty_imports(
-    fixtures: &[&Fixture],
-    e2e_config: &E2eConfig,
-    config: &crate::core::config::ResolvedCrateConfig,
-    module: &str,
-    function_name: &str,
-    client_factory: Option<&str>,
-    options_type: &Option<String>,
-    options_via: &str,
-    from_json_module: Option<&str>,
+/// Read-only inputs to [`build_thirdparty_imports`], bundled because every field is invariant
+/// borrowed/`Copy` state that single call collects import candidates from -- only
+/// `thirdparty_from` (the output accumulator that function mutates) stays its own `&mut`
+/// parameter, matching the split `KwargRenderContext`/`ArgSink` draw in `typed_values.rs`.
+#[derive(Clone, Copy)]
+struct ThirdpartyImportContext<'a> {
+    fixtures: &'a [&'a Fixture],
+    e2e_config: &'a E2eConfig,
+    config: &'a crate::core::config::ResolvedCrateConfig,
+    module: &'a str,
+    function_name: &'a str,
+    client_factory: Option<&'a str>,
+    options_type: &'a Option<String>,
+    options_via: &'a str,
+    from_json_module: Option<&'a str>,
     needs_options_type: bool,
-    enum_fields: &std::collections::HashMap<String, String>,
-    handle_nested_types: &std::collections::HashMap<String, String>,
-    handle_dict_types: &std::collections::HashSet<String>,
-    used_enum_types: &BTreeSet<String>,
-    used_config_types: &BTreeSet<String>,
-    type_defs: &[crate::core::ir::TypeDef],
-    convertible_types: &ahash::AHashSet<String>,
+    enum_fields: &'a std::collections::HashMap<String, String>,
+    handle_nested_types: &'a std::collections::HashMap<String, String>,
+    handle_dict_types: &'a std::collections::HashSet<String>,
+    used_enum_types: &'a BTreeSet<String>,
+    used_config_types: &'a BTreeSet<String>,
+    type_defs: &'a [crate::core::ir::TypeDef],
+    convertible_types: &'a ahash::AHashSet<String>,
     crate_has_serde: bool,
-    thirdparty_from: &mut Vec<String>,
-) {
+}
+
+fn build_thirdparty_imports(context: ThirdpartyImportContext<'_>, thirdparty_from: &mut Vec<String>) {
+    let ThirdpartyImportContext {
+        fixtures,
+        e2e_config,
+        config,
+        module,
+        function_name,
+        client_factory,
+        options_type,
+        options_via,
+        from_json_module,
+        needs_options_type,
+        enum_fields,
+        handle_nested_types,
+        handle_dict_types,
+        used_enum_types,
+        used_config_types,
+        type_defs,
+        convertible_types,
+        crate_has_serde,
+    } = context;
+
     let handle_constructors: Vec<String> = e2e_config
         .call
         .args
@@ -807,27 +849,27 @@ mod tests {
         let used_config_types: BTreeSet<String> = ["WidgetRequest".to_string()].into_iter().collect();
         let mut thirdparty_from: Vec<String> = Vec::new();
 
-        build_thirdparty_imports(
-            &fixtures,
-            &e2e_config,
-            &config,
-            "my_lib",
-            "create_widget",
-            Some("create_client"),
-            &options_type,
-            "from_json",
-            Some("my_lib._internal_bindings"),
-            true,
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            &std::collections::HashSet::new(),
-            &BTreeSet::new(),
-            &used_config_types,
-            &[],
-            &ahash::AHashSet::new(),
-            false,
-            &mut thirdparty_from,
-        );
+        let thirdparty_import_context = ThirdpartyImportContext {
+            fixtures: &fixtures,
+            e2e_config: &e2e_config,
+            config: &config,
+            module: "my_lib",
+            function_name: "create_widget",
+            client_factory: Some("create_client"),
+            options_type: &options_type,
+            options_via: "from_json",
+            from_json_module: Some("my_lib._internal_bindings"),
+            needs_options_type: true,
+            enum_fields: &std::collections::HashMap::new(),
+            handle_nested_types: &std::collections::HashMap::new(),
+            handle_dict_types: &std::collections::HashSet::new(),
+            used_enum_types: &BTreeSet::new(),
+            used_config_types: &used_config_types,
+            type_defs: &[],
+            convertible_types: &ahash::AHashSet::new(),
+            crate_has_serde: false,
+        };
+        build_thirdparty_imports(thirdparty_import_context, &mut thirdparty_from);
 
         let import_lines_with_type: Vec<&String> = thirdparty_from
             .iter()

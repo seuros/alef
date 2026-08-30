@@ -11,10 +11,17 @@ use super::super::json::json_to_python_literal;
 
 /// Read-only rendering environment shared, unchanged, across every level of the
 /// `render_kwarg_field_value` recursion (through `render_struct_constructor` and the
-/// nested-container helpers) and reused by the `json_object` arg emitters below. All four
-/// fields are borrows the whole call tree reads but never writes, so the struct derives `Copy`
-/// -- passing it down the recursion is a pointer-width copy, not a clone of `type_defs`/
-/// `enums`/`docs_files` themselves.
+/// uniform `render_value_for_type_ref` core) and reused by the `json_object` arg emitters below.
+/// All five fields are borrows or a `Copy` enum the whole call tree reads but never writes, so
+/// the struct derives `Copy` -- passing it down the recursion is a pointer-width copy, not a
+/// clone of `type_defs`/`enums`/`docs_files` themselves.
+///
+/// `leaf_source` decides how a leaf (non-container, non-nested-struct) field renders: the
+/// common `Literal` case embeds the field's JSON value directly, while the `$mock_url` case
+/// (see `emit_json_object_arg_with_mock_url`) needs every leaf to instead index into a runtime
+/// dict already holding the placeholder-substituted values. It is itself read-only, invariant
+/// for the whole recursion, so it belongs here rather than as a parallel argument threaded
+/// through every function in the call tree.
 ///
 /// `used_struct_types` is deliberately NOT a field here: it is a per-call *output* accumulator
 /// that every level mutates, not read-only shared state, so it stays its own `&mut` argument at
@@ -27,6 +34,20 @@ pub(in crate::e2e::codegen::python) struct KwargRenderContext<'a> {
     pub enums: &'a [crate::core::ir::EnumDef],
     pub enum_fields: &'a HashMap<String, String>,
     pub docs_files: &'a [FixtureDocsFileInput],
+    pub leaf_source: LeafSource<'a>,
+}
+
+/// Where a leaf field value's Python expression comes from -- see the `leaf_source` doc on
+/// [`KwargRenderContext`] for why this lives there rather than as its own argument.
+#[derive(Clone, Copy)]
+pub(in crate::e2e::codegen::python) enum LeafSource<'a> {
+    /// The value is known at codegen time; render its JSON literal directly.
+    Literal,
+    /// The value must be read at runtime from `holder`, a dict already holding the
+    /// `$mock_url`-substituted data (`json.loads` of the placeholder-replaced JSON string) --
+    /// render a chain of Python subscripts on `holder` derived from the field's JSON pointer
+    /// instead of embedding the (still placeholder-laden) literal.
+    RuntimeDict { holder: &'a str },
 }
 
 /// Output accumulator for one fixture argument's emission: the setup lines it needs
@@ -90,92 +111,6 @@ pub(in crate::e2e::codegen::python) fn resolve_field_enum_type(
     }
 }
 
-/// Resolve the nested-struct type for a field if that field's type (after unwrapping
-/// `Optional`) names another type known to `type_defs` -- i.e. a type this backend also
-/// generates a pyclass constructor for. A field in that shape must be constructed with its own
-/// class rather than passed through as a plain dict: pyo3 does not accept a dict where a native
-/// class instance is required.
-pub(in crate::e2e::codegen::python) fn resolve_field_struct_type<'a>(
-    field_name: &str,
-    options_type: Option<&str>,
-    type_defs: &'a [crate::core::ir::TypeDef],
-) -> Option<&'a crate::core::ir::TypeDef> {
-    use crate::core::ir::TypeRef;
-
-    let opts_type = options_type?;
-    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
-    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
-
-    let inner_name = match &field.ty {
-        TypeRef::Named(n) => Some(n.as_str()),
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(n) => Some(n.as_str()),
-            _ => None,
-        },
-        _ => None,
-    }?;
-
-    type_defs.iter().find(|t| t.name == inner_name)
-}
-
-/// Resolve the nested-struct element type for a field typed `Vec<Struct>` (optionally wrapped in
-/// `Optional`) -- the shape a "batch" item's own nested list field takes.
-pub(in crate::e2e::codegen::python) fn resolve_field_element_struct_type<'a>(
-    field_name: &str,
-    options_type: Option<&str>,
-    type_defs: &'a [crate::core::ir::TypeDef],
-) -> Option<&'a crate::core::ir::TypeDef> {
-    use crate::core::ir::TypeRef;
-
-    let opts_type = options_type?;
-    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
-    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
-
-    let vec_inner = match &field.ty {
-        TypeRef::Vec(inner) => Some(inner.as_ref()),
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Vec(vec_inner) => Some(vec_inner.as_ref()),
-            _ => None,
-        },
-        _ => None,
-    }?;
-
-    match vec_inner {
-        TypeRef::Named(name) => type_defs.iter().find(|t| &t.name == name),
-        _ => None,
-    }
-}
-
-/// Resolve the nested-struct value type for a field typed `Map<K, Struct>` (optionally wrapped
-/// in `Optional`) -- a map field whose values are themselves a generated pyclass (e.g.
-/// `Map<String, NestedConfig>`) must construct each value with that class rather than emit the
-/// map as a raw dict of dicts.
-pub(in crate::e2e::codegen::python) fn resolve_field_map_value_struct_type<'a>(
-    field_name: &str,
-    options_type: Option<&str>,
-    type_defs: &'a [crate::core::ir::TypeDef],
-) -> Option<&'a crate::core::ir::TypeDef> {
-    use crate::core::ir::TypeRef;
-
-    let opts_type = options_type?;
-    let type_def = type_defs.iter().find(|t| t.name == opts_type)?;
-    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
-
-    let map_value = match &field.ty {
-        TypeRef::Map(_, value) => Some(value.as_ref()),
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Map(_, value) => Some(value.as_ref()),
-            _ => None,
-        },
-        _ => None,
-    }?;
-
-    match map_value {
-        TypeRef::Named(name) => type_defs.iter().find(|t| &t.name == name),
-        _ => None,
-    }
-}
-
 /// Render one field's JSON value as a Python expression for a `kwargs`-mode constructor call,
 /// recursing into nested config/struct fields so a field whose type is itself a generated
 /// pyclass (e.g. `nested: NestedConfig` inside `ExtractionConfig`) is constructed with
@@ -198,21 +133,46 @@ pub(in crate::e2e::codegen::python) fn render_kwarg_field_value(
         return rendered;
     }
     if let Some(rendered) =
-        render_nested_container_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
+        render_typed_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
     {
         return rendered;
     }
 
-    json_to_python_literal(value)
+    render_leaf_value(value, pointer, context.leaf_source)
 }
 
-/// Tries each nested-container shape in turn -- single struct, array-of-structs, then
-/// map-of-structs. The three share an identical signature: each resolves `field_name`'s declared
-/// type against `context.type_defs` and, on a match, recurses through [`render_struct_constructor`].
-/// Split out of [`render_kwarg_field_value`] to keep that function under the file's per-function
-/// line limit; grouping the three container shapes here (rather than inlining each) is what keeps
-/// the split effective.
-fn render_nested_container_field_value(
+/// Render a leaf (non-container, non-nested-struct) field value per [`LeafSource`]: the
+/// codegen-time JSON literal in the common case, or a runtime subscript chain into a
+/// `$mock_url`-substituted dict.
+fn render_leaf_value(value: &serde_json::Value, pointer: &str, leaf_source: LeafSource<'_>) -> String {
+    match leaf_source {
+        LeafSource::Literal => json_to_python_literal(value),
+        LeafSource::RuntimeDict { holder } => runtime_dict_index_expression(holder, pointer),
+    }
+}
+
+/// Convert a JSON-pointer-style path built by the recursion below (e.g.
+/// `/profiles/first/model`) into a chain of Python subscript expressions on `holder` (e.g.
+/// `holder["profiles"]["first"]["model"]`). An all-digit segment renders as a bare integer
+/// subscript rather than a quoted string key, since `json.loads` turns a JSON array into a
+/// Python list, not a dict.
+fn runtime_dict_index_expression(holder: &str, pointer: &str) -> String {
+    let mut expression = holder.to_string();
+    for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+        let unescaped = segment.replace("~1", "/").replace("~0", "~");
+        if !unescaped.is_empty() && unescaped.bytes().all(|byte| byte.is_ascii_digit()) {
+            expression.push_str(&format!("[{unescaped}]"));
+        } else {
+            expression.push_str(&format!("[\"{}\"]", escape_python(&unescaped)));
+        }
+    }
+    expression
+}
+
+/// Resolve `field_name`'s declared `TypeRef` on `containing_type` and render `value` against it
+/// via the uniform recursive core [`render_value_for_type_ref`]. Returns `None` when the field
+/// isn't declared in IR, so the caller falls through to [`render_leaf_value`].
+fn render_typed_field_value(
     field_name: &str,
     value: &serde_json::Value,
     containing_type: Option<&str>,
@@ -220,17 +180,77 @@ fn render_nested_container_field_value(
     context: KwargRenderContext<'_>,
     used_struct_types: &mut BTreeSet<String>,
 ) -> Option<String> {
-    if let Some(rendered) =
-        render_nested_struct_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
-    {
-        return Some(rendered);
+    let opts_type = containing_type?;
+    let type_def = context.type_defs.iter().find(|t| t.name == opts_type)?;
+    let field = type_def.fields.iter().find(|f| f.name == field_name)?;
+    render_value_for_type_ref(&field.ty, value, pointer, context, used_struct_types)
+}
+
+/// Uniform recursive core replacing the former shape-by-shape dispatch (one arm each for a
+/// direct struct field, `Vec<Struct>`, and `Map<K, Struct>`): unwraps `Optional`/`Vec`/`Map`
+/// around a `Named` type at any depth and combination, so `Map<String, Optional<Named>>`,
+/// `Map<String, Vec<Named>>`, `Vec<Optional<Named>>`, and nestings none of the former arms
+/// enumerated all resolve through the same three arms below, with no per-combination code.
+///
+/// A `null` value under an `Optional` wrapper always renders as Python `None`, independent of
+/// nesting depth -- e.g. one entry of a `Map<String, Optional<Named>>` may be null while a
+/// sibling entry is an object; each entry resolves on its own rather than one null entry
+/// reverting the whole map to a raw-dict fallback.
+///
+/// Returns `None` when `type_ref` doesn't bottom out on a `Named` type known to
+/// `context.type_defs` (a plain scalar, or a container of one), or the JSON shape doesn't match
+/// the declared type (e.g. a non-object where a struct is expected) -- both fall through to the
+/// caller's plain leaf rendering. ~keep
+fn render_value_for_type_ref(
+    type_ref: &crate::core::ir::TypeRef,
+    value: &serde_json::Value,
+    pointer: &str,
+    context: KwargRenderContext<'_>,
+    used_struct_types: &mut BTreeSet<String>,
+) -> Option<String> {
+    use crate::core::ir::TypeRef;
+
+    match type_ref {
+        TypeRef::Named(name) => {
+            let type_def = context.type_defs.iter().find(|t| &t.name == name)?;
+            let obj = value.as_object()?;
+            Some(render_struct_constructor(
+                type_def,
+                obj,
+                pointer,
+                context,
+                used_struct_types,
+            ))
+        }
+        TypeRef::Optional(_) if value.is_null() => Some("None".to_string()),
+        TypeRef::Optional(inner) => render_value_for_type_ref(inner, value, pointer, context, used_struct_types),
+        TypeRef::Vec(inner) => {
+            let items = value
+                .as_array()?
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let item_pointer = format!("{pointer}/{index}");
+                    render_value_for_type_ref(inner, item, &item_pointer, context, used_struct_types)
+                })
+                .collect::<Option<Vec<String>>>()?;
+            Some(format!("[{}]", items.join(", ")))
+        }
+        TypeRef::Map(_, value_ty) => {
+            let items = value
+                .as_object()?
+                .iter()
+                .map(|(key, entry)| {
+                    let entry_pointer = format!("{pointer}/{}", escape_json_pointer(key));
+                    let rendered =
+                        render_value_for_type_ref(value_ty, entry, &entry_pointer, context, used_struct_types)?;
+                    Some(format!("\"{}\": {rendered}", escape_python(key)))
+                })
+                .collect::<Option<Vec<String>>>()?;
+            Some(format!("{{{}}}", items.join(", ")))
+        }
+        _ => None,
     }
-    if let Some(rendered) =
-        render_nested_array_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
-    {
-        return Some(rendered);
-    }
-    render_nested_map_field_value(field_name, value, containing_type, pointer, context, used_struct_types)
 }
 
 /// Enum branch of [`render_kwarg_field_value`]: an explicitly configured `enum_fields` entry, or
@@ -263,79 +283,6 @@ fn render_docs_file_field_value(pointer: &str, docs_files: &[FixtureDocsFileInpu
         .iter()
         .find(|file| file.field == pointer)
         .map(|file| docs_file_expression(&file.path))
-}
-
-/// Nested-struct branch of [`render_kwarg_field_value`]: a field typed as another generated
-/// pyclass (optionally `Optional`) renders as that class's constructor call.
-fn render_nested_struct_field_value(
-    field_name: &str,
-    value: &serde_json::Value,
-    containing_type: Option<&str>,
-    pointer: &str,
-    context: KwargRenderContext<'_>,
-    used_struct_types: &mut BTreeSet<String>,
-) -> Option<String> {
-    let nested = resolve_field_struct_type(field_name, containing_type, context.type_defs)?;
-    let obj = value.as_object()?;
-    Some(render_struct_constructor(nested, obj, pointer, context, used_struct_types))
-}
-
-/// Nested-array branch of [`render_kwarg_field_value`]: a field typed `Vec<Struct>` (optionally
-/// `Optional`) renders as a Python list of that class's constructor calls.
-fn render_nested_array_field_value(
-    field_name: &str,
-    value: &serde_json::Value,
-    containing_type: Option<&str>,
-    pointer: &str,
-    context: KwargRenderContext<'_>,
-    used_struct_types: &mut BTreeSet<String>,
-) -> Option<String> {
-    let elem = resolve_field_element_struct_type(field_name, containing_type, context.type_defs)?;
-    let arr = value.as_array()?;
-    if !arr.iter().all(|item| item.is_object()) {
-        return None;
-    }
-    let items: Vec<String> = arr
-        .iter()
-        .filter_map(|item| item.as_object())
-        .enumerate()
-        .map(|(index, obj)| {
-            let item_pointer = format!("{pointer}/{index}");
-            render_struct_constructor(elem, obj, &item_pointer, context, used_struct_types)
-        })
-        .collect();
-    Some(format!("[{}]", items.join(", ")))
-}
-
-/// Nested-map branch of [`render_kwarg_field_value`]: a field typed `Map<K, Struct>` (optionally
-/// `Optional`) renders as a Python dict literal whose values are constructed with their own
-/// class. The map's keys pass through as plain Python string literals -- alef's `Map<K, V>`
-/// fields are always string-keyed JSON objects on the wire, so only the value side needs a
-/// constructor. Falls through (returns `None`) when any entry's value is not itself an object,
-/// so a malformed fixture still reaches the `json_to_python_literal` fallback instead of panicking.
-fn render_nested_map_field_value(
-    field_name: &str,
-    value: &serde_json::Value,
-    containing_type: Option<&str>,
-    pointer: &str,
-    context: KwargRenderContext<'_>,
-    used_struct_types: &mut BTreeSet<String>,
-) -> Option<String> {
-    let elem = resolve_field_map_value_struct_type(field_name, containing_type, context.type_defs)?;
-    let map_obj = value.as_object()?;
-    if map_obj.values().any(|entry| !entry.is_object()) {
-        return None;
-    }
-    let items: Vec<String> = map_obj
-        .iter()
-        .map(|(key, entry)| {
-            let entry_obj = entry.as_object().expect("checked above: every entry is an object");
-            let entry_pointer = format!("{pointer}/{}", escape_json_pointer(key));
-            let ctor = render_struct_constructor(elem, entry_obj, &entry_pointer, context, used_struct_types);
-            format!("\"{}\": {ctor}", escape_python(key))
-        })
-        .collect();
-    Some(format!("{{{}}}", items.join(", ")))
 }
 
 /// Build a `TypeName(field=value, ...)` constructor call for `type_def`, recursing through
@@ -378,7 +325,7 @@ pub(super) fn emit_json_object_arg(
     context: KwargRenderContext<'_>,
 ) -> bool {
     if crate::e2e::codegen::value_contains_mock_url_placeholder(value) {
-        return emit_json_object_arg_with_mock_url(sink, value, var_name, spec, mock);
+        return emit_json_object_arg_with_mock_url(sink, value, var_name, spec, mock, context);
     }
 
     match spec.options_via {
@@ -412,7 +359,11 @@ fn emit_json_object_arg_dict_mode(
         return true;
     }
     let literal = json_to_python_literal(value);
-    let noqa = if literal.contains("/tmp/") { "  # noqa: S108" } else { "" };
+    let noqa = if literal.contains("/tmp/") {
+        "  # noqa: S108"
+    } else {
+        ""
+    };
     sink.bindings.push(format!("    {var_name} = {literal}{noqa}"));
     sink.kwarg_exprs.push(var_name.to_string());
     true
@@ -422,7 +373,8 @@ fn emit_json_object_arg_dict_mode(
 fn emit_json_object_arg_json_mode(sink: &mut ArgSink<'_>, value: &serde_json::Value, var_name: &str) -> bool {
     let json_str = serde_json::to_string(value).unwrap_or_default();
     let escaped = escape_python(&json_str);
-    sink.bindings.push(format!("    {var_name} = json.loads(\"{escaped}\")"));
+    sink.bindings
+        .push(format!("    {var_name} = json.loads(\"{escaped}\")"));
     sink.kwarg_exprs.push(var_name.to_string());
     true
 }
@@ -497,18 +449,17 @@ fn emit_json_object_arg_typed_array(
     true
 }
 
-/// Single-object sub-branch of the default mode: a "kwargs"-mode constructor call, recursing
-/// through [`render_kwarg_field_value`] for every field.
-fn emit_json_object_arg_typed_kwargs(
-    sink: &mut ArgSink<'_>,
+/// Build a `TypeName(field=value, ...)` constructor call for a "kwargs"-mode `json_object` arg,
+/// recursing through [`render_kwarg_field_value`] for every field. Shared by the plain
+/// kwargs-mode emitter and the `$mock_url` emitter below, which differ only in `context`'s
+/// `leaf_source` -- codegen-time literals for the former, runtime-dict subscripts for the
+/// latter -- so this is the one place that walks `obj`'s fields.
+fn build_typed_kwargs_constructor(
     value: &serde_json::Value,
-    var_name: &str,
-    options_type: Option<&str>,
+    opts_type: &str,
     context: KwargRenderContext<'_>,
-) -> bool {
-    let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) else {
-        return false;
-    };
+) -> Option<String> {
+    let obj = value.as_object()?;
     let mut used_struct_types = BTreeSet::new();
     let kwargs: Vec<String> = obj
         .iter()
@@ -520,7 +471,23 @@ fn emit_json_object_arg_typed_kwargs(
             format!("{snake_key}={py_val}")
         })
         .collect();
-    let constructor = format!("{opts_type}({})", kwargs.join(", "));
+    Some(format!("{opts_type}({})", kwargs.join(", ")))
+}
+
+/// Single-object sub-branch of the default mode: a "kwargs"-mode constructor call.
+fn emit_json_object_arg_typed_kwargs(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    options_type: Option<&str>,
+    context: KwargRenderContext<'_>,
+) -> bool {
+    let Some(opts_type) = options_type else {
+        return false;
+    };
+    let Some(constructor) = build_typed_kwargs_constructor(value, opts_type, context) else {
+        return false;
+    };
     sink.bindings.push(format!("    {var_name} = {constructor}"));
     sink.kwarg_exprs.push(var_name.to_string());
     true
@@ -532,20 +499,19 @@ fn emit_json_object_arg_with_mock_url(
     var_name: &str,
     spec: &ConstructorSpec<'_>,
     mock: &MockUrlInfo<'_>,
+    context: KwargRenderContext<'_>,
 ) -> bool {
     let json_str = serde_json::to_string(value).unwrap_or_default();
     let escaped = escape_python(&json_str);
     let env_key = crate::e2e::codegen::mock_url_env_key(mock.fixture_id);
-    let fallback = format!(
-        "os.environ['MOCK_SERVER_URL'] + '/fixtures/{}'",
-        mock.fixture_id
-    );
+    let fallback = format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{}'", mock.fixture_id);
     let base_expr = if mock.has_host_root_route {
         format!("os.environ.get('{env_key}') or {fallback}")
     } else {
         fallback
     };
-    sink.bindings.push(format!("    {var_name}_mock_base_url = {base_expr}"));
+    sink.bindings
+        .push(format!("    {var_name}_mock_base_url = {base_expr}"));
     sink.bindings.push(format!(
         "    {var_name}_json = \"{escaped}\".replace(\"{}\", {var_name}_mock_base_url)",
         crate::e2e::codegen::MOCK_URL_PLACEHOLDER
@@ -557,15 +523,42 @@ fn emit_json_object_arg_with_mock_url(
                 .push(format!("    {var_name} = {opts_type}.from_json({var_name}_json)"));
         }
         ("dict", _) | (_, None) | ("json", _) => {
-            sink.bindings.push(format!("    {var_name} = json.loads({var_name}_json)"));
+            sink.bindings
+                .push(format!("    {var_name} = json.loads({var_name}_json)"));
         }
         (_, Some(opts_type)) => {
-            sink.bindings
-                .push(format!("    {var_name} = {opts_type}(**json.loads({var_name}_json))"));
+            emit_mock_url_typed_kwargs(sink, value, var_name, opts_type, context);
         }
     }
     sink.kwarg_exprs.push(var_name.to_string());
     true
+}
+
+/// `$mock_url` counterpart of [`emit_json_object_arg_typed_kwargs`]: the runtime-substituted
+/// JSON string (`{var_name}_json`, already built by the caller) is parsed into a runtime dict
+/// (`{var_name}_data`), then [`build_typed_kwargs_constructor`] builds the same typed
+/// constructor call the non-mock-url path would, with every leaf indexing into that dict
+/// instead of embedding its (still placeholder-laden) literal -- so a nested struct or map
+/// field survives placeholder substitution instead of reverting to a raw dict. Falls back to
+/// unpacking the runtime dict directly (the pre-fix behavior) when `opts_type` or the JSON
+/// shape doesn't resolve to a constructor -- e.g. `value` isn't an object.
+fn emit_mock_url_typed_kwargs(
+    sink: &mut ArgSink<'_>,
+    value: &serde_json::Value,
+    var_name: &str,
+    opts_type: &str,
+    context: KwargRenderContext<'_>,
+) {
+    sink.bindings
+        .push(format!("    {var_name}_data = json.loads({var_name}_json)"));
+    let holder = format!("{var_name}_data");
+    let runtime_context = KwargRenderContext {
+        leaf_source: LeafSource::RuntimeDict { holder: &holder },
+        ..context
+    };
+    let constructor = build_typed_kwargs_constructor(value, opts_type, runtime_context)
+        .unwrap_or_else(|| format!("{opts_type}(**{holder})"));
+    sink.bindings.push(format!("    {var_name} = {constructor}"));
 }
 
 pub(super) fn emit_bytes_arg(
