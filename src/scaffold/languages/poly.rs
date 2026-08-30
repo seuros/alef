@@ -432,6 +432,21 @@ fn workspace_hook(name: &str, dir: &str, run: &str, files_glob: &str) -> String 
     )
 }
 
+fn dart_e2e_dir(config: &ResolvedCrateConfig, dart_scaffolded: bool) -> Option<String> {
+    let e2e = config.e2e.as_ref()?;
+    let dart_enabled = if e2e.languages.is_empty() {
+        dart_scaffolded
+    } else {
+        e2e.languages.iter().any(|language| language == "dart")
+    };
+    dart_enabled.then(|| {
+        PathBuf::from(e2e.effective_output())
+            .join("dart")
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
 /// Generate the repo-root `poly.toml` from the configured language set.
 pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[Language]) -> Vec<GeneratedFile> {
     let has = |lang: Language| languages.contains(&lang);
@@ -628,6 +643,9 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
         let dir = config.package_dir(Language::Dart);
         out.push_str(&workspace_hook("dart-analyze", &dir, "dart analyze", "**/*.dart"));
     }
+    if let Some(dir) = dart_e2e_dir(config, has(Language::Dart)) {
+        out.push_str(&workspace_hook("dart-e2e-analyze", &dir, "dart analyze", "**/*.dart"));
+    }
     if has(Language::Elixir) {
         let dir = config.package_dir(Language::Elixir);
         // `mix deps.get` first: poly runs hooks from a staged snapshot outside the repo,
@@ -685,7 +703,8 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::config::e2e::DependencyMode;
+    use crate::core::config::{E2eConfig, ResolvedCrateConfig};
 
     fn poly_toml() -> String {
         scaffold_poly_config(&ResolvedCrateConfig::default(), &[Language::Rust])
@@ -693,6 +712,110 @@ mod tests {
             .find(|file| file.path == std::path::Path::new("poly.toml"))
             .expect("scaffold emits poly.toml")
             .content
+    }
+
+    fn poly_toml_for(config: &ResolvedCrateConfig, languages: &[Language]) -> toml::Value {
+        let content = scaffold_poly_config(config, languages)
+            .into_iter()
+            .find(|file| file.path == std::path::Path::new("poly.toml"))
+            .expect("scaffold emits poly.toml")
+            .content;
+        toml::from_str(&content).expect("generated poly.toml is valid")
+    }
+
+    fn dart_e2e_config(output: &str, languages: &[&str]) -> ResolvedCrateConfig {
+        let mut config = ResolvedCrateConfig::default();
+        let mut e2e = E2eConfig {
+            output: output.to_string(),
+            ..E2eConfig::default()
+        };
+        e2e.languages = languages.iter().map(|language| (*language).to_string()).collect();
+        config.e2e = Some(e2e);
+        config
+    }
+
+    #[test]
+    fn dart_package_and_explicit_e2e_targets_emit_distinct_analyzer_hooks() {
+        let config = dart_e2e_config("generated/consumer-tests", &["dart"]);
+        let document = poly_toml_for(&config, &[Language::Dart]);
+        let commands = &document["hooks"]["pre-commit"]["commands"];
+
+        assert_eq!(commands["dart-analyze"]["root"].as_str(), Some("packages/dart"));
+        assert_eq!(
+            commands["dart-analyze"]["files"].as_str(),
+            Some("packages/dart/**/*.dart")
+        );
+        assert_eq!(
+            commands["dart-e2e-analyze"]["root"].as_str(),
+            Some("generated/consumer-tests/dart")
+        );
+        assert_eq!(
+            commands["dart-e2e-analyze"]["files"].as_str(),
+            Some("generated/consumer-tests/dart/**/*.dart")
+        );
+    }
+
+    #[test]
+    fn dart_e2e_analyzer_hook_requires_an_effective_dart_target() {
+        let no_e2e = poly_toml_for(&ResolvedCrateConfig::default(), &[Language::Dart]);
+        assert!(
+            no_e2e["hooks"]["pre-commit"]["commands"]
+                .get("dart-e2e-analyze")
+                .is_none()
+        );
+
+        let omitted = dart_e2e_config("e2e", &["python"]);
+        let explicit_without_dart = poly_toml_for(&omitted, &[Language::Dart]);
+        assert!(
+            explicit_without_dart["hooks"]["pre-commit"]["commands"]
+                .get("dart-e2e-analyze")
+                .is_none()
+        );
+
+        let inherited_without_dart = dart_e2e_config("e2e", &[]);
+        let no_top_level_dart = poly_toml_for(&inherited_without_dart, &[Language::Python]);
+        assert!(
+            no_top_level_dart["hooks"]["pre-commit"]["commands"]
+                .get("dart-e2e-analyze")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_dart_e2e_target_does_not_require_a_top_level_dart_package() {
+        let config = dart_e2e_config("generated/consumer-tests", &["dart"]);
+        let document = poly_toml_for(&config, &[Language::Python]);
+        let commands = &document["hooks"]["pre-commit"]["commands"];
+        let hook = &commands["dart-e2e-analyze"];
+
+        assert!(commands.get("dart-analyze").is_none());
+        assert_eq!(hook["root"].as_str(), Some("generated/consumer-tests/dart"));
+        assert_eq!(hook["files"].as_str(), Some("generated/consumer-tests/dart/**/*.dart"));
+    }
+
+    #[test]
+    fn empty_e2e_languages_inherit_the_top_level_dart_target() {
+        let config = dart_e2e_config("e2e", &[]);
+        let document = poly_toml_for(&config, &[Language::Dart]);
+        let hook = &document["hooks"]["pre-commit"]["commands"]["dart-e2e-analyze"];
+
+        assert_eq!(hook["root"].as_str(), Some("e2e/dart"));
+        assert_eq!(hook["files"].as_str(), Some("e2e/dart/**/*.dart"));
+        assert_eq!(hook["run"].as_str(), Some("dart analyze"));
+        assert_eq!(hook["workspace"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn dart_e2e_analyzer_hook_uses_the_registry_output_when_active() {
+        let mut config = dart_e2e_config("local-tests", &["dart"]);
+        let e2e = config.e2e.as_mut().expect("e2e configured");
+        e2e.dep_mode = DependencyMode::Registry;
+        e2e.registry.output = "published-tests".to_string();
+        let document = poly_toml_for(&config, &[Language::Dart]);
+        let hook = &document["hooks"]["pre-commit"]["commands"]["dart-e2e-analyze"];
+
+        assert_eq!(hook["root"].as_str(), Some("published-tests/dart"));
+        assert_eq!(hook["files"].as_str(), Some("published-tests/dart/**/*.dart"));
     }
 
     fn disable_list(content: &str, table: &str) -> String {
