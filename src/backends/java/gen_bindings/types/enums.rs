@@ -1,6 +1,6 @@
 use crate::backends::java::type_map::{java_boxed_type, java_type};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{EnumDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 use heck::ToLowerCamelCase;
 
 use super::serializers::{DEFAULT_TAG_FIELD, gen_sealed_union_deserializer, gen_sealed_union_serializer};
@@ -9,7 +9,7 @@ use crate::backends::java::gen_bindings::helpers::{
     qualify_shadowed_type, safe_java_field_name,
 };
 use crate::codegen::naming::wire_field_name;
-use crate::codegen::serde_enum_repr::serde_enum_repr;
+use crate::codegen::serde_enum_repr::{SerdeEnumRepr, serde_enum_repr};
 
 /// True when the Java binding backend emits `enum_def` as a plain `enum` with a `getValue()`
 /// accessor (`simple_enum_class.jinja`), rather than a tagged- or untagged-union wrapper class
@@ -131,7 +131,53 @@ fn gen_java_untagged_wrapper(package: &str, enum_def: &EnumDef, main_class: &str
 pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String {
     let repr = serde_enum_repr(enum_def);
     let tag_field = repr.tag().unwrap_or(DEFAULT_TAG_FIELD);
+    let flags = tagged_union_flags(enum_def, &repr);
 
+    let imports = tagged_union_imports(&flags);
+    let header = hash::header(CommentStyle::DoubleSlash);
+    let mut out = crate::backends::java::template_env::render(
+        "java_file_header.jinja",
+        minijinja::context! { header => header, package => package, imports => &imports },
+    );
+    out.push('\n');
+
+    push_tagged_union_class_annotations(&mut out, enum_def, tag_field, flags.needs_unwrapped);
+
+    for variant in &enum_def.variants {
+        out.push('\n');
+        push_tagged_union_variant(&mut out, variant, enum_def, package, &flags);
+    }
+
+    if flags.has_data_variants {
+        push_tagged_union_accessor_methods(&mut out, enum_def, package, &flags.variant_names);
+    }
+
+    out.push_str("}\n");
+
+    if flags.needs_unwrapped {
+        out.push('\n');
+        gen_sealed_union_deserializer(&mut out, package, enum_def);
+        out.push('\n');
+        gen_sealed_union_serializer(&mut out, package, enum_def);
+    }
+
+    out
+}
+
+/// Flags and lookups shared across `gen_java_tagged_union`'s emission stages, computed once from
+/// the enum's shape so every stage dispatches on the same answer. ~keep
+struct TaggedUnionFlags<'a> {
+    variant_names: std::collections::HashSet<&'a str>,
+    optional_type: &'static str,
+    needs_json_property: bool,
+    has_data_variants: bool,
+    needs_list: bool,
+    needs_map: bool,
+    needs_optional: bool,
+    needs_unwrapped: bool,
+}
+
+fn tagged_union_flags<'a>(enum_def: &'a EnumDef, repr: &SerdeEnumRepr) -> TaggedUnionFlags<'a> {
     let variant_names: std::collections::HashSet<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
     let optional_type = if variant_names.contains("Optional") {
         "java.util.Optional"
@@ -170,24 +216,37 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
             .iter()
             .any(|v| v.fields.len() == 1 && is_tuple_field_name(&v.fields[0].name));
 
+    TaggedUnionFlags {
+        variant_names,
+        optional_type,
+        needs_json_property,
+        has_data_variants,
+        needs_list,
+        needs_map,
+        needs_optional,
+        needs_unwrapped,
+    }
+}
+
+fn tagged_union_imports(flags: &TaggedUnionFlags) -> Vec<&'static str> {
     let mut imports: Vec<&str> = vec![];
-    if needs_json_property {
+    if flags.needs_json_property {
         imports.push("com.fasterxml.jackson.annotation.JsonProperty");
     }
-    if !needs_unwrapped {
+    if !flags.needs_unwrapped {
         imports.push("com.fasterxml.jackson.annotation.JsonSubTypes");
         imports.push("com.fasterxml.jackson.annotation.JsonTypeInfo");
     }
-    if needs_list {
+    if flags.needs_list {
         imports.push("java.util.List");
     }
-    if needs_map {
+    if flags.needs_map {
         imports.push("java.util.Map");
     }
-    if needs_optional {
+    if flags.needs_optional {
         imports.push("java.util.Optional");
     }
-    if needs_unwrapped {
+    if flags.needs_unwrapped {
         imports.push("com.fasterxml.jackson.databind.deser.std.StdDeserializer");
         imports.push("com.fasterxml.jackson.databind.ser.std.StdSerializer");
         imports.push("com.fasterxml.jackson.core.JsonParser");
@@ -198,22 +257,19 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
         imports.push("com.fasterxml.jackson.databind.annotation.JsonDeserialize");
         imports.push("com.fasterxml.jackson.databind.annotation.JsonSerialize");
     }
-    if has_data_variants {
+    if flags.has_data_variants {
         imports.push("org.jspecify.annotations.Nullable");
     }
-    let header = hash::header(CommentStyle::DoubleSlash);
-    let mut out = crate::backends::java::template_env::render(
-        "java_file_header.jinja",
-        minijinja::context! { header => header, package => package, imports => &imports },
-    );
-    out.push('\n');
+    imports
+}
 
+fn push_tagged_union_class_annotations(out: &mut String, enum_def: &EnumDef, tag_field: &str, needs_unwrapped: bool) {
     let tagged_union_doc = if enum_def.doc.is_empty() {
         format!("Auto-generated by alef from Rust type {}.", enum_def.name)
     } else {
         enum_def.doc.clone()
     };
-    emit_javadoc(&mut out, &tagged_union_doc, "");
+    emit_javadoc(out, &tagged_union_doc, "");
     if !needs_unwrapped {
         out.push_str("@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = \"");
         out.push_str(tag_field);
@@ -249,145 +305,175 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
     out.push_str("public sealed interface ");
     out.push_str(&enum_def.name);
     out.push_str(" {\n");
+}
 
-    for variant in &enum_def.variants {
-        out.push('\n');
-        let is_unit_tuple = variant.fields.len() == 1
-            && is_tuple_field_name(&variant.fields[0].name)
-            && matches!(&variant.fields[0].ty, TypeRef::Unit);
-        if variant.fields.is_empty() || is_unit_tuple {
-            emit_javadoc(&mut out, &variant.doc, "    ");
-            out.push_str("    record ");
-            out.push_str(&variant.name);
-            out.push_str("() implements ");
-            out.push_str(&enum_def.name);
-            out.push_str(" {\n");
-            out.push_str("    }\n");
-        } else {
-            let field_parts: Vec<String> = variant
-                .fields
-                .iter()
-                .map(|f| {
-                    let ftype = if f.optional {
-                        let inner = java_boxed_type(&f.ty);
-                        let inner_str = inner.as_ref();
-                        let mut inner_qualified = inner_str.to_string();
-                        if variant_names.contains("List") {
-                            inner_qualified = inner_qualified.replace("List<", "java.util.List<");
-                        }
-                        if variant_names.contains("Map") {
-                            inner_qualified = inner_qualified.replace("Map<", "java.util.Map<");
-                        }
-                        format!(
-                            "{optional_type}<{}>",
-                            qualify_shadowed_type(&inner_qualified, package, &variant_names)
-                        )
-                    } else {
-                        let t = java_type(&f.ty);
-                        let mut t_str = t.into_owned();
-                        if variant_names.contains("List") {
-                            t_str = t_str.replace("List<", "java.util.List<");
-                        }
-                        if variant_names.contains("Map") {
-                            t_str = t_str.replace("Map<", "java.util.Map<");
-                        }
-                        qualify_shadowed_type(&t_str, package, &variant_names)
-                    };
-                    if is_tuple_field_name(&f.name) {
-                        format!("{ftype} value")
-                    } else {
-                        let raw_field_name = f.name.trim_start_matches('_');
-                        let jname = safe_java_field_name(raw_field_name);
-                        // A struct-shaped variant's field names are a separate serde namespace
-                        // from the enum's own variant names: `serde_rename_all` cases variant
-                        // names, `rename_all_fields` cases these struct-variant field names, and
-                        // a field's own `serde_rename` wins over both. ~keep
-                        let json_name = wire_field_name(
-                            raw_field_name,
-                            f.serde_rename.as_deref(),
-                            enum_def.rename_all_fields.as_deref(),
-                        );
-                        format!("@JsonProperty(\"{json_name}\") {ftype} {jname}")
-                    }
-                })
-                .collect();
-
-            let fields_joined: String = field_parts.join(", ");
-            let single_len = "    record ".len()
-                + variant.name.len()
-                + 1
-                + fields_joined.len()
-                + ") implements ".len()
-                + enum_def.name.len()
-                + " { }".len();
-
-            emit_javadoc(&mut out, &variant.doc, "    ");
-            if single_len > RECORD_LINE_WRAP_THRESHOLD && field_parts.len() > 1 {
-                out.push_str("    record ");
-                out.push_str(&variant.name);
-                out.push_str("(\n");
-                for (i, fp) in field_parts.iter().enumerate() {
-                    let comma = if i < field_parts.len() - 1 { "," } else { "" };
-                    out.push_str("        ");
-                    out.push_str(fp);
-                    out.push_str(comma);
-                    out.push('\n');
-                }
-                out.push_str("    ) implements ");
-                out.push_str(&enum_def.name);
-                out.push_str(" {\n");
-                out.push_str("    }\n");
-            } else {
-                out.push_str("    record ");
-                out.push_str(&variant.name);
-                out.push('(');
-                out.push_str(&fields_joined);
-                out.push_str(") implements ");
-                out.push_str(&enum_def.name);
-                out.push_str(" { }\n");
-            }
-        }
+/// Emit one variant's record declaration: dispatches on the same unit-vs-data-payload shape
+/// `gen_java_tagged_union`'s loop already dispatched on before this split. ~keep
+fn push_tagged_union_variant(
+    out: &mut String,
+    variant: &EnumVariant,
+    enum_def: &EnumDef,
+    package: &str,
+    flags: &TaggedUnionFlags,
+) {
+    let is_unit_tuple = variant.fields.len() == 1
+        && is_tuple_field_name(&variant.fields[0].name)
+        && matches!(&variant.fields[0].ty, TypeRef::Unit);
+    if variant.fields.is_empty() || is_unit_tuple {
+        push_tagged_union_unit_record(out, variant, enum_def);
+    } else {
+        let field_parts = tagged_union_variant_field_parts(variant, enum_def, package, flags);
+        push_tagged_union_record_body(out, variant, enum_def, &field_parts);
     }
+}
 
-    if has_data_variants {
-        out.push('\n');
-        for variant in &enum_def.variants {
-            if variant.fields.is_empty() || !is_tuple_field_name(&variant.fields[0].name) {
-                continue;
+fn push_tagged_union_unit_record(out: &mut String, variant: &EnumVariant, enum_def: &EnumDef) {
+    emit_javadoc(out, &variant.doc, "    ");
+    out.push_str("    record ");
+    out.push_str(&variant.name);
+    out.push_str("() implements ");
+    out.push_str(&enum_def.name);
+    out.push_str(" {\n");
+    out.push_str("    }\n");
+}
+
+/// The record component's Java type: dispatches on the same `f.optional` boxed-vs-unboxed shape
+/// the field-parts map already dispatched on before this split. ~keep
+fn tagged_union_field_ty(
+    f: &FieldDef,
+    package: &str,
+    variant_names: &std::collections::HashSet<&str>,
+    optional_type: &str,
+) -> String {
+    if f.optional {
+        let inner = java_boxed_type(&f.ty);
+        let inner_str = inner.as_ref();
+        let mut inner_qualified = inner_str.to_string();
+        if variant_names.contains("List") {
+            inner_qualified = inner_qualified.replace("List<", "java.util.List<");
+        }
+        if variant_names.contains("Map") {
+            inner_qualified = inner_qualified.replace("Map<", "java.util.Map<");
+        }
+        format!(
+            "{optional_type}<{}>",
+            qualify_shadowed_type(&inner_qualified, package, variant_names)
+        )
+    } else {
+        let t = java_type(&f.ty);
+        let mut t_str = t.into_owned();
+        if variant_names.contains("List") {
+            t_str = t_str.replace("List<", "java.util.List<");
+        }
+        if variant_names.contains("Map") {
+            t_str = t_str.replace("Map<", "java.util.Map<");
+        }
+        qualify_shadowed_type(&t_str, package, variant_names)
+    }
+}
+
+fn tagged_union_variant_field_parts(
+    variant: &EnumVariant,
+    enum_def: &EnumDef,
+    package: &str,
+    flags: &TaggedUnionFlags,
+) -> Vec<String> {
+    let variant_names = &flags.variant_names;
+    let optional_type = flags.optional_type;
+    variant
+        .fields
+        .iter()
+        .map(|f| {
+            let ftype = tagged_union_field_ty(f, package, variant_names, optional_type);
+            if is_tuple_field_name(&f.name) {
+                format!("{ftype} value")
+            } else {
+                let raw_field_name = f.name.trim_start_matches('_');
+                let jname = safe_java_field_name(raw_field_name);
+                // A struct-shaped variant's field names are a separate serde namespace
+                // from the enum's own variant names: `serde_rename_all` cases variant
+                // names, `rename_all_fields` cases these struct-variant field names, and
+                // a field's own `serde_rename` wins over both. ~keep
+                let json_name = wire_field_name(
+                    raw_field_name,
+                    f.serde_rename.as_deref(),
+                    enum_def.rename_all_fields.as_deref(),
+                );
+                format!("@JsonProperty(\"{json_name}\") {ftype} {jname}")
             }
-            if matches!(&variant.fields[0].ty, TypeRef::Unit) {
-                continue;
-            }
-            let method_name = variant.name.to_lower_camel_case();
-            let boxed_return_type = java_boxed_type(&variant.fields[0].ty);
-            let return_type = qualify_shadowed_type(&boxed_return_type, package, &variant_names);
-            let variant_name = &variant.name;
-            out.push_str("    /** Returns the ");
-            out.push_str(variant_name);
-            out.push_str(" data if this is a ");
-            out.push_str(variant_name);
-            out.push_str(" variant, otherwise null. */\n");
-            out.push_str("    default @Nullable ");
-            out.push_str(&return_type);
-            out.push(' ');
-            out.push_str(&method_name);
-            out.push_str("() {\n");
-            out.push_str("        return this instanceof ");
-            out.push_str(variant_name);
-            out.push_str(" variant ? variant.value() : null;\n");
-            out.push_str("    }\n");
+        })
+        .collect()
+}
+
+fn push_tagged_union_record_body(out: &mut String, variant: &EnumVariant, enum_def: &EnumDef, field_parts: &[String]) {
+    let fields_joined: String = field_parts.join(", ");
+    let single_len = "    record ".len()
+        + variant.name.len()
+        + 1
+        + fields_joined.len()
+        + ") implements ".len()
+        + enum_def.name.len()
+        + " { }".len();
+
+    emit_javadoc(out, &variant.doc, "    ");
+    if single_len > RECORD_LINE_WRAP_THRESHOLD && field_parts.len() > 1 {
+        out.push_str("    record ");
+        out.push_str(&variant.name);
+        out.push_str("(\n");
+        for (i, fp) in field_parts.iter().enumerate() {
+            let comma = if i < field_parts.len() - 1 { "," } else { "" };
+            out.push_str("        ");
+            out.push_str(fp);
+            out.push_str(comma);
             out.push('\n');
         }
+        out.push_str("    ) implements ");
+        out.push_str(&enum_def.name);
+        out.push_str(" {\n");
+        out.push_str("    }\n");
+    } else {
+        out.push_str("    record ");
+        out.push_str(&variant.name);
+        out.push('(');
+        out.push_str(&fields_joined);
+        out.push_str(") implements ");
+        out.push_str(&enum_def.name);
+        out.push_str(" { }\n");
     }
+}
 
-    out.push_str("}\n");
-
-    if needs_unwrapped {
+fn push_tagged_union_accessor_methods(
+    out: &mut String,
+    enum_def: &EnumDef,
+    package: &str,
+    variant_names: &std::collections::HashSet<&str>,
+) {
+    out.push('\n');
+    for variant in &enum_def.variants {
+        if variant.fields.is_empty() || !is_tuple_field_name(&variant.fields[0].name) {
+            continue;
+        }
+        if matches!(&variant.fields[0].ty, TypeRef::Unit) {
+            continue;
+        }
+        let method_name = variant.name.to_lower_camel_case();
+        let boxed_return_type = java_boxed_type(&variant.fields[0].ty);
+        let return_type = qualify_shadowed_type(&boxed_return_type, package, variant_names);
+        let variant_name = &variant.name;
+        out.push_str("    /** Returns the ");
+        out.push_str(variant_name);
+        out.push_str(" data if this is a ");
+        out.push_str(variant_name);
+        out.push_str(" variant, otherwise null. */\n");
+        out.push_str("    default @Nullable ");
+        out.push_str(&return_type);
+        out.push(' ');
+        out.push_str(&method_name);
+        out.push_str("() {\n");
+        out.push_str("        return this instanceof ");
+        out.push_str(variant_name);
+        out.push_str(" variant ? variant.value() : null;\n");
+        out.push_str("    }\n");
         out.push('\n');
-        gen_sealed_union_deserializer(&mut out, package, enum_def);
-        out.push('\n');
-        gen_sealed_union_serializer(&mut out, package, enum_def);
     }
-
-    out
 }
