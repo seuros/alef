@@ -9,6 +9,12 @@
    Declared methods are CALLED, not merely read: a mapping resolves `getattr(ctx, "items")` to
    its own `dict.items` and would pass a read-only probe while the declared method is absent.
 
+   Calling is still not enough on its own. A dict answers `getattr(ctx, "items")()` too, so a
+   context type whose declared names happen to be dict API names (`keys`, `items`, `values`)
+   clears every name-based probe while being the wrong shape entirely. The name probes are
+   therefore preceded by a name-independent shape check -- see
+   `_record_dict_shaped_context`. ~keep
+
    The blank line that separates each helper is emitted at the END of the loop body rather than
    the start, so the file needs no second trailing newline to space the last helper off from the
    visitor methods that follow it. `keep_trailing_newline` is on, so a template's final newline
@@ -21,8 +27,26 @@
             self.context_errors: list[str] = []
             self.context_reads = 0
 
+        def _record_dict_shaped_context(self, label, ctx) -> bool:  # noqa: ANN001
+            # The bridge's fallback arm builds a real PyDict, which answers mapping access
+            # (MAP), iterates to its own keys (LIST) and is subscriptable (INDEX). The generated
+            # #[pyclass] the stub declares does none of the three. Checking the shape rather than
+            # a name is what catches a dict whose keys collide with the declared surface.
+            if not isinstance(ctx, dict):
+                return False
+            keys = sorted(ctx)
+            indexed = ctx[keys[0]] if keys else None
+            self.context_errors.append(
+                f"{label}: context is dict-shaped, not the class the binding declares "
+                f"(iterates to {keys!r}, subscript {keys[:1]!r} -> {indexed!r})"
+            )
+            return True
+
 {% for probe in probes %}
         def {{ probe.probe_method }}(self, ctx) -> None:  # noqa: ANN001
+            self.context_reads += 1
+            if self._record_dict_shaped_context("{{ probe.probe_method }}", ctx):
+                return
 {% if probe.attributes %}
             for name in (
 {% for name in probe.attributes %}
@@ -45,6 +69,5 @@
                 except AttributeError as exc:
                     self.context_errors.append(f"{name}: {exc}")
 {% endif %}
-            self.context_reads += 1
 
 {% endfor %}

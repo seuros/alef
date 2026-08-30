@@ -222,6 +222,41 @@ mod tests {
         assert_eq!(out, "");
     }
 
+    /// Calling a declared method is still not enough. When the declared names are `dict` API
+    /// names, `getattr(ctx, "values")` and `getattr(ctx, "items")()` both succeed on the
+    /// bridge's fallback dict, so every name probe passes on the wrong shape. The
+    /// name-independent shape check has to run first, and it has to run on every probe. ~keep
+    #[test]
+    fn emit_python_visitor_context_probes_checks_the_shape_before_any_name() {
+        let first = probe("_probe_node_context", &["values"], &["items"]);
+        let second = probe("_probe_frame_context", &["frame_id"], &[]);
+        let mut out = String::new();
+        emit_python_visitor_context_probes(&mut out, &[&first, &second]);
+
+        assert_eq!(
+            out.matches("def _record_dict_shaped_context").count(),
+            1,
+            "one shape check shared by every probe: {out}"
+        );
+        assert_eq!(
+            out.matches("if self._record_dict_shaped_context(").count(),
+            2,
+            "every probe must run the shape check, not just the first: {out}"
+        );
+        assert!(out.contains("if not isinstance(ctx, dict):"), "got: {out}");
+
+        let shape_check = out
+            .find(r#"self._record_dict_shaped_context("_probe_node_context", ctx)"#)
+            .expect("the first probe must run the shape check");
+        let first_name = out
+            .find(r#""values","#)
+            .expect("the first probe must read its declared field");
+        assert!(
+            shape_check < first_name,
+            "the shape check must precede the name probes, or a colliding dict passes them first: {out}"
+        );
+    }
+
     /// The recorded failures have to be asserted in the test body: the bridge swallows callback
     /// exceptions, so an assertion inside the callback can never fail a test. ~keep
     #[test]
