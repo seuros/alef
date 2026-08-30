@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`records[].kind` reached through a `result_fields` prefix) the owner walk previously used the
   raw fixture spelling, found no traversal edge, and fell back to attribute access — leaving the
   element-anchored classification inert on exactly the projected shapes it was added for.
+- Assert on the captured error in generated Zig e2e tests whose fixture names an error variant the
+  Zig binding cannot substantiate. The arm previously discarded the error (`_ = _err;`), so it ran
+  on any failure and asserted nothing; it now binds both ABI failure channels and requires the
+  failure to have carried a message or a non-catch-all error-set member.
 - Generate Node fixture and snippet values for unit variants of tagged data enums as typed object
   literals, matching N-API's TypeScript union surface instead of referencing nonexistent runtime
   enum members.

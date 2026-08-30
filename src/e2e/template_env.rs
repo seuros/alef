@@ -595,6 +595,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/zig/snippet_body.jinja"),
     ),
     (
+        "zig/declared_error_branch.jinja",
+        include_str!("templates/zig/declared_error_branch.jinja"),
+    ),
+    (
         "zig/guarded_set_cwd.zig.jinja",
         include_str!("templates/zig/guarded_set_cwd.zig.jinja"),
     ),

@@ -131,12 +131,42 @@ fn an_uncoded_known_variant_renders_the_skip() {
         "{rendered}"
     );
     assert!(
-        !rendered.contains("@errorName"),
-        "must not compare @errorName, got:\n{rendered}"
+        !rendered.contains("\"Authentication\""),
+        "must not compare anything against the unsubstantiable variant name, got:\n{rendered}"
+    );
+}
+
+/// The second half of the same arm: refusing the variant comparison is not a licence to discard
+/// the captured error. `_ = _err;` left a block that ran on ANY failure and asserted nothing, so
+/// a binding that lost the FFI message and collapsed the code to the catch-all member still went
+/// green. The arm must bind both channels and require at least one of them to carry a signal.
+#[test]
+fn an_uncoded_known_variant_still_asserts_on_the_captured_error_and_its_message() {
+    let rendered = render_with_errors(
+        vec![assertion("error", None, Some("Authentication"))],
+        &error_def_with("Authentication", None),
+    );
+
+    assert!(
+        rendered.contains("} else |_err| {"),
+        "the error must still be captured: {rendered}"
     );
     assert!(
-        !rendered.contains("_last_error() orelse"),
-        "must not bind the FFI message, got:\n{rendered}"
+        !rendered.contains("_ = _err;"),
+        "the captured error must not be discarded: {rendered}"
+    );
+    assert!(
+        rendered.contains("const _err_name = @errorName(_err);"),
+        "the error-set member name must be bound: {rendered}"
+    );
+    assert!(
+        rendered.contains("const _err_message: []const u8 = sample._last_error() orelse \"\";"),
+        "the FFI message must be bound: {rendered}"
+    );
+    assert!(
+        rendered
+            .contains("try testing.expect(_err_message.len > 0 or !std.mem.eql(u8, _err_name, \"UnknownFfiError\"));"),
+        "the arm must assert the failure carried a diagnosable identity: {rendered}"
     );
 }
 

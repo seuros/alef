@@ -18,6 +18,12 @@ use crate::core::hash::{self, CommentStyle};
 /// `error.UnknownFfiError`, which `@errorName` can never match against a real variant's name.
 /// Before this, the declared value was discarded and every valued `error` assertion was
 /// weakened to a bare "the call failed" check that could not tell one failure from another.
+///
+/// ~keep The unsubstantiable arm still captures the error, and captures rather than discards it:
+/// the variant's *identity* is out of reach, but the ABI's two failure-reporting channels are
+/// not. `set_last_error(alef_ffi_error_code(&e), &e.to_string())` fills both on every failure
+/// path, so a binding that reports neither — empty message AND the catch-all error-set member —
+/// is a real regression this arm now fails on. `_ = _err;` made it pass unconditionally.
 fn emit_declared_error_value_assertion(
     out: &mut String,
     fixture: &Fixture,
@@ -30,36 +36,46 @@ fn emit_declared_error_value_assertion(
     // snippet emitter rewrites the literal `else |_| {}` arm into a printing one. Snippet output
     // therefore stays byte-identical to before this change.
     if for_docs {
-        let _ = writeln!(out, "    }} else |_| {{}}");
+        out.push_str(&render_declared_error_branch("bare", module_name, "", ""));
         return;
     }
     use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
     match classify("zig", fixture, errors) {
         DeclaredErrorAssertion::Undeclared => {
-            let _ = writeln!(out, "    }} else |_| {{}}");
+            out.push_str(&render_declared_error_branch("bare", module_name, "", ""));
         }
         DeclaredErrorAssertion::Assert(declared) => {
-            let expected = escape_zig(declared);
-            let _ = writeln!(out, "    }} else |_err| {{");
-            let _ = writeln!(out, "        const _err_name = @errorName(_err);");
-            let _ = writeln!(
-                out,
-                "        const _err_message: []const u8 = {module_name}._last_error() orelse \"\";"
-            );
-            let _ = writeln!(
-                out,
-                "        try testing.expect(std.mem.indexOf(u8, _err_message, \"{expected}\") != null or \
-                 std.mem.indexOf(u8, _err_name, \"{expected}\") != null);"
-            );
-            let _ = writeln!(out, "    }}");
+            out.push_str(&render_declared_error_branch(
+                "assert",
+                module_name,
+                &escape_zig(declared),
+                "",
+            ));
         }
         DeclaredErrorAssertion::Unsubstantiable(variant) => {
-            let _ = writeln!(out, "    }} else |_err| {{");
-            let _ = writeln!(out, "        _ = _err;");
-            let _ = writeln!(out, "{}", skip_line("        ", "//", variant, &fixture.id, "zig"));
-            let _ = writeln!(out, "    }}");
+            let skip = skip_line("        ", "//", variant, &fixture.id, "zig");
+            out.push_str(&render_declared_error_branch("unsubstantiable", module_name, "", &skip));
         }
     }
+}
+
+/// The error-set member `backends::zig::gen_bindings::helpers::gen_last_error_helpers` collapses
+/// every uncoded variant — and every code matching no declared variant — onto. Named here rather
+/// than spelled inline so the generated assertion and the generator that produces the value it
+/// tests against move together. ~keep
+const ZIG_UNKNOWN_ERROR_NAME: &str = "UnknownFfiError";
+
+fn render_declared_error_branch(kind: &str, module_name: &str, expected: &str, skip_line: &str) -> String {
+    crate::e2e::template_env::render(
+        "zig/declared_error_branch.jinja",
+        minijinja::context! {
+            kind => kind,
+            module_name => module_name,
+            expected => expected,
+            skip_line => skip_line,
+            unknown_error_name => ZIG_UNKNOWN_ERROR_NAME,
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
