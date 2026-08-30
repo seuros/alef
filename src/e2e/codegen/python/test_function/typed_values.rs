@@ -716,3 +716,10 @@ fn escape_json_pointer(field: &str) -> String {
 #[cfg(test)]
 #[path = "typed_values_tests.rs"]
 mod tests;
+
+// Sibling of `typed_values_tests.rs` rather than more cases inside it: that file is already
+// close to the file-size cap, and this group has its own concern -- how the runtime-dict
+// lowering picks list indices apart from map keys. ~keep
+#[cfg(test)]
+#[path = "mock_url_index_tests.rs"]
+mod mock_url_index_tests;
