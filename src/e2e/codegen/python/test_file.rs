@@ -18,6 +18,12 @@ mod test_file_misc_tests;
 #[cfg(test)]
 #[path = "dead_helper_tests.rs"]
 mod dead_helper_tests;
+// Declared here for the same `python/mod.rs` size reason as the modules above. It needs
+// `render_test_file` (to prove the class body it executes is the one that ships) and reaches the
+// visitor generators through `super::super`. ~keep
+#[cfg(test)]
+#[path = "visitor_context_runtime_tests.rs"]
+mod visitor_context_runtime_tests;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as FmtWrite;

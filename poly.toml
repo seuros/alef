@@ -107,6 +107,9 @@ pylint_max_returns = 10
   "S",
   "T201",
 ]
+# Standalone driver scripts a Rust test executes with `python3 <path>`; they are deliberately
+# not importable package modules, so the implicit-namespace-package rule does not apply.
+"src/e2e/codegen/**/*.py" = ["INP001"]
 "e2e/**" = ["comment", "doc-comment"]
 "**/e2e/**" = ["comment", "doc-comment"]
 "test_apps/**" = ["comment", "doc-comment"]
