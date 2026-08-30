@@ -586,7 +586,10 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                 continue;
             }
             let resolved = field_resolver.resolve(f);
-            if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
+            let is_optional = field_resolver
+                .target_field_is_optional(resolved)
+                .unwrap_or_else(|| field_resolver.is_optional(resolved));
+            if is_optional && !optional_locals.contains_key(f.as_str()) {
                 let is_string_field = assertion.value.as_ref().is_some_and(|v| v.is_string());
                 let is_array_field = field_resolver.is_array(resolved);
                 // Both plain-string and display_as_text optional fields only need a

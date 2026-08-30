@@ -899,6 +899,70 @@ fn test_go_plain_optional_string_uses_string_deref_not_text_accessor() {
     );
 }
 
+#[test]
+fn optional_vec_assertions_follow_go_slice_shape_over_global_optionality() {
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "collect".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        fields_optional: std::collections::HashSet::from(["items".to_string()]),
+        fields_array: std::collections::HashSet::from(["items".to_string()]),
+        ..E2eConfig::default()
+    };
+    let mut fixture = make_fixture("optional_vec_shape");
+    fixture.assertions = vec![Assertion {
+        assertion_type: "min_length".to_string(),
+        field: Some("items".to_string()),
+        value: Some(serde_json::json!(1)),
+        ..Assertion::default()
+    }];
+    let type_defs = vec![crate::core::ir::TypeDef {
+        name: "Envelope".to_string(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "items".to_string(),
+            ty: crate::core::ir::TypeRef::Vec(Box::new(crate::core::ir::TypeRef::String)),
+            optional: true,
+            ..crate::core::ir::FieldDef::default()
+        }],
+        ..crate::core::ir::TypeDef::default()
+    }];
+    let functions = vec![crate::core::ir::FunctionDef {
+        name: "collect".to_string(),
+        return_type: crate::core::ir::TypeRef::Named("Envelope".to_string()),
+        ..crate::core::ir::FunctionDef::default()
+    }];
+    let mut out = String::new();
+
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "pkg",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &crate::core::config::ResolvedCrateConfig::default(),
+            type_defs: &type_defs,
+            enums: &[],
+            errors: &[],
+            functions: &functions,
+        },
+    );
+
+    assert!(
+        out.contains("len(result.Items)"),
+        "expected slice length assertion, got:\n{out}"
+    );
+    assert!(
+        !out.contains("len(*result.Items)"),
+        "must not dereference a Go slice, got:\n{out}"
+    );
+}
+
 /// A `display_as_text` field (e.g. `Option<AssistantContent>`) should emit
 /// `field_expr.Text()` instead of `string(*field_expr)` for Go optional locals.
 #[test]

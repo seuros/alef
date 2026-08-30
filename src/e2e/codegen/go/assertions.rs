@@ -398,7 +398,10 @@ pub(super) fn render_assertion(
                 .or_else(|| resolved.strip_suffix(".count"))
                 .or_else(|| resolved.strip_suffix(".size"))
                 .unwrap_or(resolved);
-            field_resolver.is_optional(check_path) && !optional_locals.contains_key(f.as_str())
+            field_resolver
+                .target_field_is_optional(check_path)
+                .unwrap_or_else(|| field_resolver.is_optional(check_path))
+                && !optional_locals.contains_key(f.as_str())
         })
         .unwrap_or(false);
 

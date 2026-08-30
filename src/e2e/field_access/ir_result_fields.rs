@@ -47,6 +47,9 @@ pub(crate) enum OptionalityRule {
     /// The NAPI rule, per `backends::napi::gen_bindings::types::napi_field_is_optional`: the
     /// field's own type, OR its owner implementing `Default`.
     Napi,
+    /// The Go binding's emitted pointer shape. Optional slices, maps, and bytes stay reference
+    /// values, while optional scalars and DTOs become pointers.
+    Go,
 }
 
 impl OptionalityRule {
@@ -54,14 +57,20 @@ impl OptionalityRule {
     pub(crate) fn for_language(language: &str) -> Self {
         match language {
             "node" | "typescript" => Self::Napi,
+            "go" => Self::Go,
             _ => Self::DeclaredType,
         }
     }
 
-    fn applies_to(self, field: &FieldDef, owner: &TypeDef) -> bool {
+    fn applies_to(self, field: &FieldDef, owner: &TypeDef, struct_names: &HashSet<&str>) -> bool {
         match self {
             Self::DeclaredType => field.optional,
             Self::Napi => crate::backends::napi::napi_field_is_optional(field, owner),
+            Self::Go => {
+                let uses_optional_mapping =
+                    field.optional || crate::backends::go::needs_omitempty_pointer(owner, field, struct_names);
+                uses_optional_mapping && crate::backends::go::type_map::go_optional_field_type(field).starts_with('*')
+            }
         }
     }
 }
@@ -87,7 +96,7 @@ pub(super) fn build_ir_result_field_map(type_defs: &[TypeDef], rule: Optionality
                 .entry(type_def.name.clone())
                 .or_default()
                 .insert(field.name.clone());
-            if rule.applies_to(field, type_def) {
+            if rule.applies_to(field, type_def, &struct_names) {
                 optional_fields
                     .entry(type_def.name.clone())
                     .or_default()
@@ -155,10 +164,19 @@ pub(super) fn type_ref_is_display_safe(ty: &TypeRef) -> bool {
 /// positively confirms the leaf is optional on the type the path reaches. Mirrors
 /// `ir_collection::is_collection_path`.
 pub(super) fn is_optional_path(map: &IrResultFieldMap, path: &str) -> bool {
-    let Some(root) = map.root_type.as_deref() else {
-        return false;
-    };
-    is_optional_path_from(map, root, path)
+    optionality_at_path(map, path).unwrap_or(false)
+}
+
+/// Return the binding's authoritative optionality when `path` resolves from the anchored root.
+/// `None` means the IR cannot answer and callers may fall back to authored configuration.
+pub(super) fn optionality_at_path(map: &IrResultFieldMap, path: &str) -> Option<bool> {
+    let root = map.root_type.as_deref()?;
+    let (owner, leaf) = walk_to_owner_from(map, root, path)?;
+    Some(
+        map.optional_fields
+            .get(owner)
+            .is_some_and(|fields| fields.contains(&leaf)),
+    )
 }
 
 /// Walk `path` from a known IR owner instead of the call result root. Tagged-union renderers use

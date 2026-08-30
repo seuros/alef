@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   activates its test-document path setup when required.
 - Generate Java empty and non-empty assertions for record fields as nullability checks instead
   of calling collection-only `isEmpty()` methods.
+- Generate Go assertions from the binding's emitted pointer/value field shape, avoiding invalid
+  dereferences when Rust optional vectors lower to Go slices.
 
 ## [0.79.2] - 2026-08-30
 

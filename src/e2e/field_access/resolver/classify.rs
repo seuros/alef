@@ -180,6 +180,13 @@ impl FieldResolver {
         false
     }
 
+    /// The target binding's anchored optionality for this exact field, when the IR can resolve
+    /// it. Unlike [`Self::is_optional`], `Some(false)` can override a language-agnostic config
+    /// entry whose Rust optionality lowers to a non-pointer target type.
+    pub fn target_field_is_optional(&self, field: &str) -> Option<bool> {
+        super::super::ir_result_fields::optionality_at_path(&self.ir_result_field_map, self.resolve(field))
+    }
+
     /// Check whether `field`'s resolved leaf type is one alef cannot vouch for as implementing
     /// `Display` — a struct/enum from the crate's own IR, per
     /// [`ir_result_fields::leaf_is_named_type`](super::super::ir_result_fields::leaf_is_named_type).
