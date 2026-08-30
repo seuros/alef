@@ -78,7 +78,7 @@ impl Default for RegistryConfig {
 /// [[crates.e2e.registry.packages.homebrew.cli_tests]]
 /// name = "version"
 /// command = "$CLI_FORMULA --version"
-/// expect_contains = "$VERSION"
+/// expect_contains = "1.2.3"
 ///
 /// [[crates.e2e.registry.packages.homebrew.cli_tests]]
 /// name = "convert-h1"
@@ -94,6 +94,7 @@ pub struct HomebrewCliTest {
     /// `$TAP`, and `$SCRIPT_DIR` are in scope.
     pub command: String,
     /// Substring that must appear in the combined stdout+stderr output.
+    /// Treated as literal data; shell variables and substitutions are not expanded.
     /// When `None` a zero exit code is sufficient.
     #[serde(default)]
     pub expect_contains: Option<String>,
@@ -149,7 +150,7 @@ pub struct PackageRef {
     /// CLI test steps for the Homebrew test_app generator.
     ///
     /// When empty (the default) a single default `--version` check is emitted
-    /// that asserts `$VERSION` appears in the output.  Provide explicit entries
+    /// that asserts the resolved package version appears in the output. Provide explicit entries
     /// to replace the default entirely.
     ///
     /// Used by the `homebrew` test_app generator.

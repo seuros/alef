@@ -28,7 +28,7 @@
 //! [[crates.e2e.registry.packages.homebrew.cli_tests]]
 //! name = "version"
 //! command = "$CLI_FORMULA --version"
-//! expect_contains = "$VERSION"
+//! expect_contains = "1.2.3"
 //! ```
 
 use crate::core::backend::GeneratedFile;
@@ -90,7 +90,7 @@ impl E2eCodegen for HomebrewCodegen {
         // CLI tests: use explicit config; when empty emit a single --version default.
         let cli_tests: Vec<HomebrewCliTest> = match pkg {
             Some(p) if !p.cli_tests.is_empty() => p.cli_tests.clone(),
-            _ => default_cli_tests(),
+            _ => default_cli_tests(&version),
         };
 
         let mut files = vec![
@@ -158,11 +158,11 @@ impl E2eCodegen for HomebrewCodegen {
 }
 
 /// Default CLI tests when none are configured: a single `--version` check.
-fn default_cli_tests() -> Vec<HomebrewCliTest> {
+fn default_cli_tests(version: &str) -> Vec<HomebrewCliTest> {
     vec![HomebrewCliTest {
         name: "version".to_string(),
         command: "$CLI_FORMULA --version".to_string(),
-        expect_contains: Some("$VERSION".to_string()),
+        expect_contains: Some(version.to_string()),
     }]
 }
 
@@ -472,11 +472,11 @@ mod tests {
 
     #[test]
     fn default_cli_tests_emits_version_check() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.2.3");
         assert_eq!(tests.len(), 1);
         assert_eq!(tests[0].name, "version");
         assert_eq!(tests[0].command, "$CLI_FORMULA --version");
-        assert_eq!(tests[0].expect_contains.as_deref(), Some("$VERSION"));
+        assert_eq!(tests[0].expect_contains.as_deref(), Some("1.2.3"));
     }
 
     // --- sanitize_var_name ---
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn render_run_tests_no_ffi_omits_ffi_section() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.0.0");
         let out = render_run_tests("myorg/tap", "mytool", None, "1.0.0", "mytool", &tests);
         assert!(
             !out.contains("FFI_FORMULA"),
@@ -527,19 +527,18 @@ mod tests {
 
     #[test]
     fn render_run_tests_no_ffi_includes_cli_version_check() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.2.3");
         let out = render_run_tests("myorg/tap", "mytool", None, "1.2.3", "mytool", &tests);
         assert!(out.contains("VERSION='1.2.3'"));
         assert!(out.contains("CLI_FORMULA='mytool'"));
-        // default --version check uses $VERSION as expected substring
-        assert!(out.contains("$VERSION"));
+        assert!(out.contains("_expected_version='1.2.3'"));
     }
 
     // --- render_run_tests with FFI ---
 
     #[test]
     fn render_run_tests_with_ffi_includes_ffi_section() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.0.0");
         let out = render_run_tests("myorg/tap", "mytool", Some("libmytool"), "1.0.0", "mytool", &tests);
         assert!(out.contains("FFI_FORMULA='libmytool'"));
         assert!(out.contains("ffi_smoke"));
@@ -583,7 +582,7 @@ mod tests {
 
     #[test]
     fn render_readme_without_ffi_omits_ffi_row() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.0.0");
         let out = render_readme("myorg/tap", "mytool", None, "1.0.0", &tests);
         assert!(out.contains("mytool"));
         assert!(!out.contains("Shared library"), "FFI row must be absent");
@@ -591,7 +590,7 @@ mod tests {
 
     #[test]
     fn render_readme_with_ffi_includes_ffi_row() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.0.0");
         let out = render_readme("myorg/tap", "mytool", Some("libmytool"), "1.0.0", &tests);
         assert!(out.contains("libmytool"));
         assert!(out.contains("Shared library"));
@@ -618,17 +617,16 @@ mod tests {
 
     #[test]
     fn render_run_tests_parameterizes_version_correctly() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("1.9.0-rc.25");
         let out = render_run_tests("myorg/tap", "mytool", None, "1.9.0-rc.25", "mytool", &tests);
         // Version must be parameterized into the script.
         assert!(
             out.contains("VERSION='1.9.0-rc.25'"),
             "must set VERSION variable to the provided version"
         );
-        // The $VERSION variable must be used in the test expectation.
         assert!(
-            out.contains("_expected_version='$VERSION'"),
-            "must reference $VERSION in the version test expectation"
+            out.contains("_expected_version='1.9.0-rc.25'"),
+            "must render the resolved version as inert expectation data"
         );
         // The $CLI_FORMULA variable must be used to call the binary.
         assert!(
@@ -639,11 +637,58 @@ mod tests {
 
     #[test]
     fn render_run_tests_version_used_in_default_test() {
-        let tests = default_cli_tests();
+        let tests = default_cli_tests("2.0.0");
         let out = render_run_tests("myorg/tap", "mytool", None, "2.0.0", "mytool", &tests);
         // The default --version test should check for the parameterized VERSION.
         assert!(out.contains("VERSION='2.0.0'"));
         assert!(out.contains("if [[ \"$_output_version\" == *\"$_expected_version\"* ]]"));
+    }
+
+    #[test]
+    fn default_version_expectation_matches_the_rendered_version_value() {
+        let tests = default_cli_tests("1.9.0-rc.25");
+        let out = render_run_tests("myorg/tap", "mytool", None, "1.9.0-rc.25", "mytool", &tests);
+        let version = out.lines().find(|line| line.starts_with("VERSION=")).unwrap();
+        let expected = out.lines().find(|line| line.starts_with("_expected_version=")).unwrap();
+        let comparison = out
+            .lines()
+            .find(|line| line.starts_with("if [[ \"$_output_version\""))
+            .and_then(|line| line.strip_suffix("; then"))
+            .and_then(|line| line.strip_prefix("if "))
+            .unwrap();
+        let script = format!("{version}\n{expected}\n_output_version='mytool 1.9.0-rc.25'\n{comparison}");
+        let status = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "rendered default version comparison failed:\n{script}"
+        );
+    }
+
+    #[test]
+    fn custom_expected_text_remains_inert_during_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("expected-injection");
+        let malicious = format!("$(touch {})", marker.display());
+        let tests = vec![cli_test("hostile", "printf harmless", Some(&malicious))];
+        let out = render_run_tests("myorg/tap", "mytool", None, "1.0.0", "mytool", &tests);
+        let expected = out.lines().find(|line| line.starts_with("_expected_hostile=")).unwrap();
+        let comparison = out
+            .lines()
+            .find(|line| line.starts_with("if [[ \"$_output_hostile\""))
+            .and_then(|line| line.strip_suffix("; then"))
+            .and_then(|line| line.strip_prefix("if "))
+            .unwrap();
+        let output = crate::core::config::shell::quote_word(&malicious);
+        let script = format!("{expected}\n_output_hostile={output}\n{comparison}");
+        let status = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .status()
+            .unwrap();
+        assert!(status.success(), "literal expected text did not match:\n{script}");
+        assert!(!marker.exists(), "custom expected text executed as shell syntax");
     }
 
     #[test]

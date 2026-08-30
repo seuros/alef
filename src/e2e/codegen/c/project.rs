@@ -1,7 +1,39 @@
 //! C e2e project bootstrap file rendering.
 
 use crate::core::hash::{self, CommentStyle};
+use anyhow::{Result, bail};
 use std::fmt::Write as FmtWrite;
+
+fn validate_make_fragment(label: &str, value: &str, allow_slash: bool, require_name_start: bool) -> Result<()> {
+    let valid = !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-' | '+')
+                || (allow_slash && character == '/')
+        });
+    if !valid {
+        bail!(
+            "invalid C e2e {label} {value:?}: generated Makefile values must contain only ASCII letters, digits, \
+             `.`, `_`, `-`, `+`{}",
+            if allow_slash { ", or `/`" } else { "" }
+        );
+    }
+    if require_name_start
+        && !value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        bail!("invalid C e2e {label} {value:?}: library names must start with an ASCII letter, digit, or `_`");
+    }
+    Ok(())
+}
+
+fn validate_makefile_inputs(header_name: &str, ffi_crate_path: &str, lib_name: &str) -> Result<()> {
+    validate_make_fragment("header name", header_name, true, false)?;
+    validate_make_fragment("FFI crate path", ffi_crate_path, true, false)?;
+    validate_make_fragment("library name", lib_name, false, true)
+}
 
 pub(super) fn render_makefile(
     categories: &[String],
@@ -9,7 +41,8 @@ pub(super) fn render_makefile(
     ffi_crate_path: &str,
     lib_name: &str,
     needs_mock_server: bool,
-) -> String {
+) -> Result<String> {
+    validate_makefile_inputs(header_name, ffi_crate_path, lib_name)?;
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Hash));
     let _ = writeln!(out, "CC = gcc");
@@ -114,7 +147,7 @@ pub(super) fn render_makefile(
         let _ = writeln!(out);
         let _ = writeln!(out, "clean:");
         let _ = writeln!(out, "\trm -f $(TARGET)");
-        return out;
+        return Ok(out);
     }
 
     // The mock-server orchestration is parameterized via a `define`/`endef` macro
@@ -211,7 +244,7 @@ pub(super) fn render_makefile(
     let _ = writeln!(out);
     let _ = writeln!(out, "clean:");
     let _ = writeln!(out, "\trm -f $(TARGET) mock_server.stdout mock_server.stdin");
-    out
+    Ok(out)
 }
 
 /// Render `.gitignore` for the `e2e/c/` directory.
@@ -429,6 +462,7 @@ mod tests {
             "example-pack-core-ffi",
             needs_mock_server,
         )
+        .unwrap()
     }
 
     /// Regression: tslp v1.9.0-rc.48 test_apps run failed because the old
@@ -579,5 +613,57 @@ mod tests {
             .status()
             .expect("bash should parse generated script");
         assert!(status.success());
+    }
+
+    #[test]
+    fn makefile_rejects_fragment_that_gnu_make_would_execute() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("make-injection");
+        let header = format!("$(shell touch {})", marker.display());
+        let result = render_makefile(&[], &header, "../../crates/example-ffi", "example_ffi", false);
+        assert!(
+            result.is_err(),
+            "hostile header must be rejected before Makefile emission"
+        );
+        assert!(!marker.exists(), "configured header executed as GNU Make syntax");
+
+        let control = format!("PROBE := {header}\nall:\n\t@true\n");
+        std::fs::write(dir.path().join("Makefile"), control).unwrap();
+        let status = std::process::Command::new("make")
+            .args(["-n", "-f", "Makefile"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(marker.exists(), "GNU Make control did not exercise shell expansion");
+    }
+
+    #[test]
+    fn makefile_rejects_make_syntax_in_every_configured_fragment() {
+        let cases = [
+            (
+                "$(shell false)",
+                "../../crates/example-ffi",
+                "example_ffi",
+                "header name",
+            ),
+            ("example.h", "../../$(shell false)", "example_ffi", "FFI crate path"),
+            (
+                "example.h",
+                "../../crates/example-ffi",
+                "$(shell false)",
+                "library name",
+            ),
+            (
+                "example.h",
+                "../../crates/example-ffi",
+                "-injected-option",
+                "library name",
+            ),
+        ];
+        for (header, path, lib, label) in cases {
+            let error = render_makefile(&[], header, path, lib, false).unwrap_err();
+            assert!(error.to_string().contains(label), "got: {error}");
+        }
     }
 }

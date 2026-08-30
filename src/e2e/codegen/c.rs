@@ -273,7 +273,7 @@ impl E2eCodegen for CCodegen {
             .any(|f| f.needs_mock_server());
         files.push(GeneratedFile {
             path: output_base.join("Makefile"),
-            content: render_makefile(&category_names, &header, &ffi_crate_path, &lib_name, needs_mock_server),
+            content: render_makefile(&category_names, &header, &ffi_crate_path, &lib_name, needs_mock_server)?,
             generated_header: true,
         });
 

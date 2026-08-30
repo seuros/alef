@@ -547,7 +547,7 @@ function = "f"
 [[registry.packages.homebrew.cli_tests]]
 name = "version"
 command = "$CLI_FORMULA --version"
-expect_contains = "$VERSION"
+expect_contains = "1.2.3"
 
 [[registry.packages.homebrew.cli_tests]]
 name = "help"
@@ -558,7 +558,7 @@ command = "$CLI_FORMULA --help"
     assert_eq!(tests.len(), 2);
     assert_eq!(tests[0].name, "version");
     assert_eq!(tests[0].command, "$CLI_FORMULA --version");
-    assert_eq!(tests[0].expect_contains.as_deref(), Some("$VERSION"));
+    assert_eq!(tests[0].expect_contains.as_deref(), Some("1.2.3"));
     assert_eq!(tests[1].name, "help");
     assert_eq!(tests[1].command, "$CLI_FORMULA --help");
     assert!(tests[1].expect_contains.is_none());
