@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.1] - 2026-08-30
+
+### Fixed
+
+- Generate Dart tuple-payload assertions with Flutter Rust Bridge's `fieldN` accessors so emitted
+  e2e suites pass static analysis.
+- Isolate generated Ruby development gems by project and Ruby ABI, and run Bundler, its tools, and
+  gem packaging through the active Ruby interpreter.
+
 ## [0.79.0] - 2026-08-30
 
 ### Fixed
