@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload value itself when a fixture path names only the variant (e.g. `outcome.found` for
   `Found(Vec<Item>)`), instead of silently dropping the assertion; unsubstantiable shapes now
   render an explicit registered skip rather than nothing at all.
+- Select the Node/TypeScript `not_error` assertion's sync-vs-async wrapper from the call's real
+  async signature instead of unconditionally forcing it async for any call taking a trait-bridge
+  argument, avoiding a `.resolves` type error under strict TypeScript for synchronous trait
+  methods.
 
 ## [0.79.2] - 2026-08-30
 

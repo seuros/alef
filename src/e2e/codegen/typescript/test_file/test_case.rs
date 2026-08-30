@@ -181,13 +181,22 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     let void_not_error = call_config.returns_void && fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
     let test_is_async =
         call_is_async || has_bytes_file_reads(&fixture.input, args) || has_trait_bridge || void_not_error;
-    // Also force call to be treated as async for trait bridge tests so we await the calls
-    let call_is_async = call_is_async || has_trait_bridge;
+    // `await_kw` may still force `await` for trait bridge calls: `await` on a non-Promise value
+    // is a legal no-op in JS/TS, so this cannot introduce a compile or runtime error even when
+    // the underlying call is synchronous. `call_is_async` itself must NOT be forced this way: the
+    // `void_not_error` branch of `test_function.jinja` uses it to pick between
+    // `expect(...).resolves.not.toThrow()` (needs a real Promise) and `expect(() =>
+    // ...).not.toThrow()` (works on any callable). Forcing it to `true` for every trait-bridge
+    // call made a *synchronous* trait method emit `.resolves` on a non-Promise, which is a hard
+    // TypeError at runtime and a type error under strict TypeScript. The IR/config-derived
+    // `call_is_async` computed above is the single authority for that decision; only the local
+    // `await_kw` gets the trait-bridge forcing. ~keep
+    let await_kw_is_async = call_is_async || has_trait_bridge;
 
     let test_name = sanitize_ident(&fixture.id);
     let description = fixture.description.replace('\\', "\\\\").replace('"', "\\\"");
     let async_kw = if test_is_async { "async " } else { "" };
-    let await_kw = if call_is_async { "await " } else { "" };
+    let await_kw = if await_kw_is_async { "await " } else { "" };
 
     let handle_config_type = per_call_override.and_then(|o| o.handle_config_type.clone());
 
