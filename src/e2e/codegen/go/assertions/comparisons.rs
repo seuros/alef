@@ -24,7 +24,7 @@ pub(super) fn render_greater_than(out_ref: &mut String, assertion: &Assertion, t
             .unwrap_or_else(|| ("<=", go_val.clone()));
         if render_guarded_scalar_comparison(
             out_ref,
-            nil_guard_expr.as_deref(),
+            nil_guard_expr,
             &field_expr,
             operator,
             &comparison,
@@ -67,7 +67,7 @@ pub(super) fn render_less_than(out_ref: &mut String, assertion: &Assertion, targ
         let go_val = json_to_go(val);
         if render_guarded_scalar_comparison(
             out_ref,
-            nil_guard_expr.as_deref(),
+            nil_guard_expr,
             &field_expr,
             ">=",
             &go_val,
@@ -104,7 +104,7 @@ pub(super) fn render_greater_than_or_equal(
         let go_val = json_to_go(val);
         if render_guarded_scalar_comparison(
             out_ref,
-            nil_guard_expr.as_deref(),
+            nil_guard_expr,
             &field_expr,
             "<",
             &go_val,
@@ -137,7 +137,7 @@ pub(super) fn render_less_than_or_equal(out_ref: &mut String, assertion: &Assert
         let go_val = json_to_go(val);
         if render_guarded_scalar_comparison(
             out_ref,
-            nil_guard_expr.as_deref(),
+            nil_guard_expr,
             &field_expr,
             ">",
             &go_val,

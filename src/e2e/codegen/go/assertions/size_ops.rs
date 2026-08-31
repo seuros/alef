@@ -16,14 +16,7 @@ pub(super) fn render_count_min(out_ref: &mut String, assertion: &Assertion, targ
     if let Some(val) = &assertion.value
         && let Some(n) = val.as_u64()
     {
-        render_count_assertion(
-            out_ref,
-            &field_expr,
-            n,
-            nullable_guard_expr.as_deref(),
-            field_is_slice,
-            false,
-        );
+        render_count_assertion(out_ref, &field_expr, n, nullable_guard_expr, field_is_slice, false);
     }
 }
 
@@ -35,14 +28,7 @@ pub(super) fn render_count_equals(out_ref: &mut String, assertion: &Assertion, t
     if let Some(val) = &assertion.value
         && let Some(n) = val.as_u64()
     {
-        render_count_assertion(
-            out_ref,
-            &field_expr,
-            n,
-            nullable_guard_expr.as_deref(),
-            field_is_slice,
-            true,
-        );
+        render_count_assertion(out_ref, &field_expr, n, nullable_guard_expr, field_is_slice, true);
     }
 }
 
@@ -54,14 +40,7 @@ pub(super) fn render_min_length(out_ref: &mut String, assertion: &Assertion, tar
     if let Some(val) = &assertion.value
         && let Some(n) = val.as_u64()
     {
-        render_length_assertion(
-            out_ref,
-            &field_expr,
-            n,
-            nullable_guard_expr.as_deref(),
-            field_is_pointer,
-            true,
-        );
+        render_length_assertion(out_ref, &field_expr, n, nullable_guard_expr, field_is_pointer, true);
     }
 }
 
@@ -73,13 +52,6 @@ pub(super) fn render_max_length(out_ref: &mut String, assertion: &Assertion, tar
     if let Some(val) = &assertion.value
         && let Some(n) = val.as_u64()
     {
-        render_length_assertion(
-            out_ref,
-            &field_expr,
-            n,
-            nullable_guard_expr.as_deref(),
-            field_is_pointer,
-            false,
-        );
+        render_length_assertion(out_ref, &field_expr, n, nullable_guard_expr, field_is_pointer, false);
     }
 }
