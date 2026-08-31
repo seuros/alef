@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Escape serde wire values before emitting TypeScript/WASM assertions, preventing malformed or
+  meaning-changing string literals. Wildcard and collection assertions now preserve numeric and
+  non-string scalar semantics instead of coercing them through text comparisons.
 - Validate consumer-configured C ABI identifiers, paths, header names, Cargo metadata, cfg
   expressions, and generated registry, E2E, and package inputs through their canonical per-field
   grammars. Revalidate the packaged canonical header before publication, so invalid configuration
