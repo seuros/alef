@@ -152,6 +152,45 @@ mod tests {
     use crate::core::ir::ApiSurface;
     use ahash::AHashSet;
 
+    /// The neutral fixture's context type is `TypeDef::default()`-shaped, so `is_clone` is
+    /// false and `context_binding_class` already resolves it to the dict fallback -- the very
+    /// shape the *excluded* half of the test below is about. A fixture that is on the dict path
+    /// before anything is excluded cannot serve as the control for excluding it.
+    ///
+    /// `is_clone` is the only condition it was missing: the fixture is already convertible,
+    /// because every field is a primitive, a `String`, an `Optional<String>`, or the
+    /// `TraversalKind` enum, and `can_generate_enum_conversion_from_core` admits any non-empty
+    /// enum. The assertion in the test pins both halves so this cannot rot back. ~keep
+    fn class_path_fixture() -> (ApiSurface, TraitBridgeConfig) {
+        let (mut api, _, bridge) = neutral_visitor_fixture();
+        api.types
+            .iter_mut()
+            .find(|type_def| type_def.name == "TraversalState")
+            .expect("neutral visitor fixture should include its context type")
+            .is_clone = true;
+        (api, bridge)
+    }
+
+    /// Fails when the fixture is not on the `#[pyclass]` side of `context_binding_class`.
+    fn assert_on_the_class_path(api: &ApiSurface) {
+        let context = api
+            .types
+            .iter()
+            .find(|type_def| type_def.name == "TraversalState")
+            .expect("context type stays in the surface");
+        let convertible = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+        assert!(
+            context.is_clone,
+            "fixture must be Clone: the generated From takes the core value by value while the \
+             bridge holds only &core::T"
+        );
+        assert!(
+            crate::codegen::conversions::core_to_binding_from_impl_emitted(context, &convertible),
+            "fixture must have an emitted core-to-binding From impl, or the control below asserts \
+             the dict fallback against a context that was already on the dict path"
+        );
+    }
+
     fn render(api: &ApiSurface, bridge: &TraitBridgeConfig, pyclass_absent_types: &AHashSet<String>) -> String {
         super::gen_visitor_protocol_stub(
             bridge,
@@ -172,7 +211,8 @@ mod tests {
     /// would satisfy the exclusion half alone, so the unexcluded run must still name the class. ~keep
     #[test]
     fn an_excluded_visitor_context_is_annotated_as_a_dict_and_an_unexcluded_one_keeps_its_class() {
-        let (api, _, bridge) = neutral_visitor_fixture();
+        let (api, bridge) = class_path_fixture();
+        assert_on_the_class_path(&api);
 
         let included = render(&api, &bridge, &AHashSet::new());
         assert!(
