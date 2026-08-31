@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.4] - 2026-08-31
+
+### Fixed
+
+- **PHP:** emit the *binding* element type, not the core one, when a constructor decodes a
+  `Vec<Named>` parameter from a `ZendHashTable`. `php_vec_named_struct_let_binding.jinja` is shared
+  with the function-argument path, which hands its decoded vector straight to a core API call and
+  so must collect `Vec<{core_import}::T>` via `parsed.clone().into()`. A constructor is the
+  opposite direction -- it initializes a `#[php_class]` field whose declared type is the binding
+  `T` -- so collecting the core type produced `expected T, found {core_import}::T` for every such
+  field, and `cannot find type` for a binding-only element type with no core counterpart. The
+  template now takes a `to_core` flag set per call site: `false` at the two constructor sites in
+  `types/structs.rs`, `true` at the function-argument sites in `functions/params.rs` and
+  `helpers/params.rs`. Generated PHP bindings for a real 15-backend consumer went from 93 compile
+  errors to 0.
+
 ## [0.79.3] - 2026-08-31
 
 ### Security
