@@ -107,9 +107,11 @@ pylint_max_returns = 10
   "S",
   "T201",
 ]
-# Standalone driver scripts a Rust test executes with `python3 <path>`; they are deliberately
-# not importable package modules, so the implicit-namespace-package rule does not apply.
-"src/e2e/codegen/**/*.py" = ["INP001"]
+# A standalone driver a Rust test executes with `python3 <path>`; it is deliberately not an
+# importable package module, so the implicit-namespace-package rule does not apply. Named
+# exactly rather than globbed: a glob over the tree would silently exempt every future Python
+# file added under it.
+"src/e2e/codegen/python/visitor_context_runtime_driver.py" = ["INP001"]
 "e2e/**" = ["comment", "doc-comment"]
 "**/e2e/**" = ["comment", "doc-comment"]
 "test_apps/**" = ["comment", "doc-comment"]
