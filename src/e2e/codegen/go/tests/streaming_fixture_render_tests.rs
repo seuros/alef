@@ -148,7 +148,6 @@ fn test_streaming_with_client_factory_and_json_arg() {
         },
     );
 
-    eprintln!("generated:\n{out}");
     assert!(out.contains("stream, err :="), "should use stream binding, got:\n{out}");
     assert!(
         out.contains("for chunk := range stream"),

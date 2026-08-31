@@ -92,8 +92,6 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
         },
     );
 
-    eprintln!("generated:\n{out}");
-
     // Must guard on the slice itself — not on the element. Either the nil check on the
     // optional slice or the non-empty precondition is valid Go here; `len(...) > 0` is
     // not, because it would swallow the assertion instead of failing the test.
