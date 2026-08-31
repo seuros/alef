@@ -132,8 +132,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bound nested file-input detection on flattened and cyclic type graphs by memoizing each JSON
   value/type pair, and reuse the struct/enum name index across a generator's fixtures.
+- **Breaking (PHP):** a struct field whose type is a plain nested `#[php_class]` struct (not an
+  enum, not opaque, not an untagged data enum) is now accepted as a `#[php(constructor)]`
+  parameter, taken by reference and cloned into the field, instead of being silently defaulted to
+  `Default::default()` or refused generation outright. The PHPStan stub's constructor-param filter
+  shares this predicate, so its declared signature widens identically. This changes the positional
+  and named-argument shape of any affected constructor: for example, a struct with `path: String`,
+  `mime_type: String`, `result: NestedStruct` previously generated `new(path, mimeType)` (silently
+  dropping `result`); it now generates `new(path, mimeType, result)`. Regenerate PHP bindings
+  (`alef generate --lang php --clean`) and update any code constructing such types positionally.
+  Two follow-on widenings to the SAME predicate, part of this same unreleased change:
+  - `Vec<Named>` of a plain (non-opaque, non-enum) struct element is now accepted too, decoded
+    element-by-element from a `&ext_php_rs::types::ZendHashTable` (the same mechanism
+    `gen_php_function_params` already used for every other Named-struct collection parameter).
+  - A bare `serde_json::Value` field is now accepted, taking a JSON `String` parameter and
+    decoding it with `serde_json::from_str` -- symmetric with how a Json field's getter already
+    returns a serialized JSON string, since `serde_json::Value` has no ext-php-rs `FromZval` impl.
+  - Both of these decodes are fallible (a bad array element, or malformed JSON), so any
+    constructor that gains one of these params now returns `PhpResult<Self>` instead of the
+    ordinarily-infallible bare `Self`, and refuses the array/string with a thrown `PhpException`
+    rather than silently substituting an empty collection or `Value::Null` on bad input -- this is
+    a second, independent breaking change beyond the parameter list itself: a constructor that
+    always returned `Self` before may now return early with an exception, wrapped in Rust source
+    as `PhpResult<Self>`, though PHP callers see this transparently (ext-php-rs turns a `PhpResult`
+    error into a normal thrown PHP exception either way).
 
 ### Fixed
+
+- Thread the widened `php_field_can_be_constructor_param` predicate's new
+  `untagged_data_enum_names` argument through every call site: the PHPStan stub's constructor-shape
+  and constructor-param-list helpers (`type_stubs.rs`) and `constructor_init.rs`'s field-initialiser
+  builder now all pass the crate's untagged-data-enum set, so an untagged data enum field stays
+  correctly excluded from the constructor in both the runtime binding and the stub.
+- Add the `{param}_core`/`{param}` initialiser arms `constructor_init.rs`'s `representable_field_init`
+  was missing for `Vec<Named>` of a plain struct and for bare `Json`, so the widened predicate's
+  "yes, representable" answer for those two shapes actually has somewhere to route: without these
+  arms the field fell through to the ordinary shorthand/named-parameter branch, referencing a
+  `&ZendHashTable`/`String` parameter directly where the field's real type is `Vec<T>`/`Value`,
+  which does not compile.
+- Read a `cfg`-gated struct-literal initializer in `impl Default` instead of refusing it. Every
+  initializer carrying *any* attribute was recorded as `Unresolved`, without the expression ever
+  being evaluated, so `unreadable_field_default` fired on the ordinary way to spell an
+  optional-feature config field -- `Self { #[cfg(feature = "pdf")] pdf_options: None, .. }` -- and
+  blocked generation for consumers whose only offence was gating a field behind a feature. The
+  refusal's stated ground was that the initializer is supplied only in some builds, but the field's
+  own declaration must carry the identical gate or the literal would leave it uninitialized in the
+  other build and fail to compile; wherever the field exists at all, this is the only initializer
+  that could have supplied it, so reading it is a reading rather than a guess. A lone `cfg`-gated
+  initializer now resolves exactly as its bare counterpart does, down to a call alef cannot fold
+  yielding `FunctionCall` rather than `Unresolved`. A non-`cfg` attribute (`cfg_attr`, an attribute
+  macro) keeps the wholesale refusal, since its effect on the initializer's presence is genuinely
+  unknowable from source. A `..base` rest expression also keeps it: the rest lets an *ungated*
+  field carry a `cfg`-gated initializer and take its value from a base this pass never read, which
+  is the one shape where the compile-or-gate argument does not hold.
+- Pick the native arm, deterministically, when one field has two mutually exclusive `cfg`
+  initializers (`#[cfg(target_arch = "wasm32")] psm: 6` beside `#[cfg(not(...))] psm: 3`). Both
+  arms were previously refused, and before that the value depended on hash-map insertion order.
+  Alef emits one binding per build rather than per target, and the wasm backend has its own
+  mechanism for wasm32-divergent fields, so every other backend now quotes the native value. A
+  duplicate that does not reduce to exactly that complementary pair stays `Unresolved` rather than
+  being guessed.
+- Read the value a `#[serde(default = "path")]` function returns, instead of recording the call
+  and hoping something downstream could reproduce it. `extract_field` recorded every such field as
+  `FunctionCall(path)` without ever looking at what `path` names, so the ordinary shape -- a
+  private, literal-returning helper beside the struct it defaults for, `fn default_page_number()
+  -> u32 { 1 }` -- left the value unreadable even though it sits in the same module. Recovery was
+  attempted only much later, by deserializing a JSON probe through the type's own `Deserialize`,
+  which needs a placeholder for every required sibling and therefore fails outright for a struct
+  with a required named-type field; consumers hit "cannot preserve N serde default function(s)"
+  for a value that was in plain sight. The named function's body is now constant-folded when it is
+  a single foldable expression, for a bare free function and a path-qualified associated function
+  alike. A body of more than one statement, one taking arguments, or an `async` one is refused
+  outright rather than guessed at, so a function whose value alef cannot prove keeps failing
+  generation exactly as before. Resolution also commits to the function the path actually names:
+  an unfoldable `Owner::method` no longer falls through to a same-named free function, which would
+  have substituted an unrelated value indistinguishable from one alef genuinely read.
+- Exclude the field being solved for from its own generated JSON probe in
+  `rust_default_via_source_deserialize`. The mechanism depends on that field's wire key being
+  *absent*, so serde fills it with the real source-computed value; instead the field fell through
+  to the same `has_own_default`/`is_optional` test as every other sibling, and neither holds for a
+  `FunctionCall` read from a manual `impl Default` call expression, whose `field.default` stays
+  `None`. It therefore looked like a genuinely required sibling and had a type-zero placeholder
+  (`0`, `""`, `false`) forced into its own key -- well-formed Rust that deserialized straight back
+  to the placeholder, so the generated binding shipped `0` as the documented default for a field
+  whose real default was not zero, with nothing to mark it as fabricated.
 
 - Pass registry test-app environment variables as exact values rather than PATH-style prepend
   values, so inherited variables are not appended.
