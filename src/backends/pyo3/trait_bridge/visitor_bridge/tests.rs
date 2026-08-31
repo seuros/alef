@@ -263,6 +263,19 @@ fn visitor_bridge_propagates_a_context_construction_error() {
         "the call site must log the error before falling back:\n{}",
         output.code
     );
+    // WARN, not ERROR: the bridge recovers by falling back to the configured default action and
+    // continues -- the repo's tracing contract reserves ERROR for unrecoverable failure or data
+    // loss, neither of which applies here. ~keep
+    assert!(
+        output.code.contains("tracing::warn!(wrapper ="),
+        "a recovered construction failure must log at WARN, not a higher level:\n{}",
+        output.code
+    );
+    assert!(
+        !output.code.contains("tracing::error!(wrapper ="),
+        "this call site continues after falling back, so it must not log at ERROR:\n{}",
+        output.code
+    );
     assert!(
         !output.code.contains("py.None()"),
         "a None stand-in must never reach the callback:\n{}",

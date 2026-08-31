@@ -14,7 +14,7 @@
         let {{ arg_name }} = match nodecontext_to_py_object(py, {{ borrow_expr }}) {
             Ok(value) => value,
             Err(e) => {
-                tracing::error!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "failed to build visitor context object; using default action");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "failed to build visitor context object; using default action");
                 return {{ default_result_expr }};
             }
         };
