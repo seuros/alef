@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
+
 //! Differential test: `javac` and `dotnet` are the authority for the Java and C# identifier
 //! grammars, invoked as subprocesses on every run.
 //!

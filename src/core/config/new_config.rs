@@ -423,7 +423,8 @@ fn validate_jvm_coordinates(resolved: &ResolvedCrateConfig, languages: &[Languag
         let package = resolved.java_package();
         validate_java_package(&package).map_err(|error| invalid("[crates.java].package", &package, error))?;
         let group = resolved.java_group_id();
-        validate_maven_coordinate("groupId", &group).map_err(|error| invalid("[crates.java].group_id", &group, error))?;
+        validate_maven_coordinate("groupId", &group)
+            .map_err(|error| invalid("[crates.java].group_id", &group, error))?;
         let artifact = resolved.java_artifact_id();
         validate_maven_coordinate("artifactId", &artifact)
             .map_err(|error| invalid("[crates.java].artifact_id", &artifact, error))?;
