@@ -132,6 +132,10 @@ fn generated_csharp_uses_formatter_stable_layout() {
     );
 
     if std::process::Command::new("dotnet").arg("--version").output().is_err() {
+        assert!(
+            std::env::var_os("ALEF_REQUIRE_DOTNET").is_none(),
+            "ALEF_REQUIRE_DOTNET is set but dotnet is unavailable"
+        );
         return;
     }
     let directory = tempfile::tempdir().unwrap();

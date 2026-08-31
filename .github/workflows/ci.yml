@@ -67,20 +67,21 @@ jobs:
         with:
           install-llvm-cov: "false"
           cache-key-prefix: ci-test
-      # Several `#[test]`s compile alef's own generated output with the real per-language
-      # toolchain rather than mocking it (that is the point of them), so those toolchains
-      # have to actually be on PATH here, not just in the `generated-output-gate` job.
-      # `poly` is deliberately not installed in this job: the tests that exercise it
-      # already tolerate its absence (see `e2e::format::format_language`'s non-`--strict`
-      # deferral, and `cli_all_format_gate_covers_every_write_phase`'s own
-      # `poly_is_available()` branch), so it is not required for this job to pass, only
-      # for the `generated-output-gate` job's lanes, which install it themselves.
+      # Several `#[test]`s compile alef's own generated output, or alef's own compiler-oracle
+      # probes, with the real per-language toolchain rather than mocking it (that is the point
+      # of them), so those toolchains have to actually be on PATH here, not just in the
+      # `generated-output-gate` job. `poly` is deliberately not installed in this job: the tests
+      # that exercise it already tolerate its absence (see `e2e::format::format_language`'s
+      # non-`--strict` deferral, and `cli_all_format_gate_covers_every_write_phase`'s own
+      # `poly_is_available()` branch), so it is not required for this job to pass, only for the
+      # `generated-output-gate` job's lanes, which install it themselves.
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           # Matches `template_versions::toolchain::JAVA_JVM_TARGET`: alef's generated Java
-          # service bindings use the `java.lang.foreign` FFM API, stable only from JDK 22.
+          # service bindings use the `java.lang.foreign` FFM API, stable only from JDK 22. This
+          # JDK is also `javac`, the oracle `ALEF_REQUIRE_JAVAC` below requires.
           java-version: "25"
       - uses: xberg-io/actions/setup-maven@v1
       - uses: xberg-io/actions/setup-zig@v1
@@ -93,11 +94,42 @@ jobs:
         run: uv tool install pyrefly==1.2.0
       - name: Install generated TypeScript compiler
         run: npm install --global typescript@5.9.2
+      # The C# identifier-grammar oracle (`ALEF_REQUIRE_DOTNET` below) needs a real `dotnet` on
+      # PATH; nothing else in this job installed one before this step existed.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      # The Kotlin identifier-grammar oracle (`ALEF_REQUIRE_KOTLINC` below) needs a real
+      # `kotlinc` on PATH; nothing else in this job installed one before this step existed.
+      # Pinned to the exact commit for `fwilhe2/setup-kotlin` tag v2.0 -- a third-party action,
+      # so SHA-pinned rather than trusting a floating tag, matching the `Goldziher/poly` pin in
+      # the `generated-output-gate` job below. `version:` pins the exact kotlinc release
+      # `codegen::identifier_grammar`'s docs say the Kotlin grammar was measured against, so a
+      # `fwilhe2/setup-kotlin` default-version bump can't silently change what CI verifies
+      # against. ~keep
+      - name: Install kotlinc
+        uses: fwilhe2/setup-kotlin@ee9692514da313706b193d808526812102a344e4 # v2.0
+        with:
+          version: "2.4.10"
       - name: Run tests
         env:
           ALEF_REQUIRE_ELIXIR: "1"
           ALEF_REQUIRE_PYREFLY: "1"
           ALEF_REQUIRE_TSC: "1"
+          # These four make the javac/dotnet/kotlinc identifier-grammar oracle tests
+          # (`tests/identifier_grammar_compiler_oracle.rs`) and the two dotnet-compile canaries
+          # scattered across the C# backend tests panic instead of silently skipping when their
+          # compiler is missing -- a missing toolchain must fail this job loudly, not let the
+          # gate pass unverified. See `required_javac_mode_fails_when_toolchain_is_unavailable`
+          # and its dotnet/kotlinc siblings for the proof this panic actually fires.
+          ALEF_REQUIRE_JAVAC: "1"
+          ALEF_REQUIRE_DOTNET: "1"
+          ALEF_REQUIRE_KOTLINC: "1"
+          # Go needs no dedicated setup step above (GitHub-hosted runner images preinstall a Go
+          # LTS toolchain), but the two `go test` compile canaries in
+          # `backends::go::gen_bindings::service_api::tests` silently skipped when `go` was
+          # missing just the same as the dotnet ones did -- see `required_go` there.
+          ALEF_REQUIRE_GO: "1"
         run: cargo test --workspace
       # Every Elixir escaping oracle is #[ignore]d, so the step above runs none of them and
       # still exits 0. They evaluate generated Elixir through the real interpreter -- the only

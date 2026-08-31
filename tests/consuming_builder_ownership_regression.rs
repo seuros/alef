@@ -115,6 +115,10 @@ fn file_containing<'a>(files: &'a [GeneratedFile], suffix: &str) -> &'a str {
 
 fn compile_csharp(files: &[GeneratedFile]) {
     let Some(target_framework) = dotnet_target_framework() else {
+        assert!(
+            std::env::var_os("ALEF_REQUIRE_DOTNET").is_none(),
+            "ALEF_REQUIRE_DOTNET is set but dotnet is unavailable"
+        );
         return;
     };
     let directory = tempfile::tempdir().expect("temporary C# directory must be created");

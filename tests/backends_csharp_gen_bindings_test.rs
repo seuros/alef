@@ -3748,6 +3748,10 @@ fn test_record_static_factory_named_param_emits_handle_marshaling() {
 #[test]
 fn test_bool_param_record_method_compiles_with_dotnet() {
     if std::process::Command::new("dotnet").arg("--version").output().is_err() {
+        assert!(
+            std::env::var_os("ALEF_REQUIRE_DOTNET").is_none(),
+            "ALEF_REQUIRE_DOTNET is set but dotnet is unavailable"
+        );
         eprintln!("dotnet not in PATH — skipping compile test");
         return;
     }

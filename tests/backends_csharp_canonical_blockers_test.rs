@@ -199,6 +199,18 @@ fn dotnet(directory: &Path, verb: &str) -> Output {
         .expect("dotnet command")
 }
 
+/// `false` when `dotnet` is not on `PATH`. Panics instead of returning `false` when
+/// `ALEF_REQUIRE_DOTNET` is set, so CI cannot silently skip the two real `dotnet run` compile
+/// checks below when the runner's toolchain setup regresses.
+fn dotnet_available() -> bool {
+    let available = Command::new("dotnet").arg("--version").output().is_ok();
+    assert!(
+        available || std::env::var_os("ALEF_REQUIRE_DOTNET").is_none(),
+        "ALEF_REQUIRE_DOTNET is set but dotnet is unavailable"
+    );
+    available
+}
+
 fn assert_failure_safe_transfer(source: &str, take_method: &str, unavailable: &str, rollback: &str) {
     let section = source.split(take_method).nth(1).expect("transfer method");
     let section = section.split("private void").next().expect("transfer body");
@@ -214,7 +226,7 @@ fn assert_failure_safe_transfer(source: &str, take_method: &str, unavailable: &s
 
 #[test]
 fn bridge_dispose_waits_for_native_release_and_active_callback() {
-    if Command::new("dotnet").arg("--version").output().is_err() {
+    if !dotnet_available() {
         return;
     }
     let (api, config) = trait_fixture();
@@ -281,7 +293,7 @@ fn transfer_construction_failure_does_not_strand_owner() {
 
 #[test]
 fn service_registration_accepts_only_func_string_string() {
-    if Command::new("dotnet").arg("--version").output().is_err() {
+    if !dotnet_available() {
         return;
     }
     let files = generate_with_services(&service_fixture(), &test_config());

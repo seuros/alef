@@ -74,6 +74,23 @@ fn tool_available(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Checks whether `tool` is on `PATH`. When `required` is `true` and it is not, panics naming
+/// `env_var_name` instead of letting the caller silently skip -- the exact failure mode this
+/// file exists to close: a CI job whose toolchain setup silently regressed, where the gate still
+/// exits 0 because every oracle test quietly skipped instead of running.
+///
+/// `required` is a plain parameter rather than this function reading `env_var_name` from the
+/// environment itself, so `required_javac_mode_fails_when_toolchain_is_unavailable` and its
+/// dotnet/kotlinc siblings below can prove the panic fires without depending on process-global
+/// environment state (`#[test]`s in this binary run in parallel by default).
+fn require_tool(tool: &str, env_var_name: &str, required: bool) -> bool {
+    let available = tool_available(tool);
+    if !available && required {
+        panic!("{env_var_name} is set but {tool} is unavailable");
+    }
+    available
+}
+
 /// Assert the compiler's verdicts are informative, then compare them against `validator`.
 fn compare(language: &str, rejected: &[bool], validator: impl Fn(&str) -> bool) {
     let segments = probe_segments();
@@ -121,7 +138,11 @@ fn write_probe_sources(dir: &Path, extension: &str, render: impl Fn(&str, &str) 
 
 #[test]
 fn javac_agrees_with_validate_java_package() {
-    if !tool_available("javac") {
+    if !require_tool(
+        "javac",
+        "ALEF_REQUIRE_JAVAC",
+        std::env::var_os("ALEF_REQUIRE_JAVAC").is_some(),
+    ) {
         eprintln!("SKIPPED: javac is not installed; the Java grammar was NOT verified on this machine");
         return;
     }
@@ -159,7 +180,8 @@ fn javac_agrees_with_validate_java_package() {
 
 #[test]
 fn dotnet_agrees_with_validate_csharp_namespace() {
-    if !tool_available("dotnet") {
+    let required = std::env::var_os("ALEF_REQUIRE_DOTNET").is_some();
+    if !require_tool("dotnet", "ALEF_REQUIRE_DOTNET", required) {
         eprintln!("SKIPPED: dotnet is not installed; the C# grammar was NOT verified on this machine");
         return;
     }
@@ -187,6 +209,10 @@ fn dotnet_agrees_with_validate_csharp_namespace() {
         String::from_utf8_lossy(&output.stderr)
     );
     if diagnostics.contains("NETSDK1045") || diagnostics.contains("was not found") {
+        assert!(
+            !required,
+            "ALEF_REQUIRE_DOTNET is set but the installed dotnet SDK cannot target net10.0:\n{diagnostics}"
+        );
         eprintln!("SKIPPED: this dotnet SDK cannot target net10.0; the C# grammar was NOT verified here");
         return;
     }
@@ -203,7 +229,11 @@ fn dotnet_agrees_with_validate_csharp_namespace() {
 
 #[test]
 fn kotlinc_agrees_with_validate_kotlin_package() {
-    if !tool_available("kotlinc") {
+    if !require_tool(
+        "kotlinc",
+        "ALEF_REQUIRE_KOTLINC",
+        std::env::var_os("ALEF_REQUIRE_KOTLINC").is_some(),
+    ) {
         eprintln!("SKIPPED: kotlinc is not installed; the Kotlin grammar was NOT verified on this machine");
         return;
     }
@@ -234,4 +264,68 @@ fn kotlinc_agrees_with_validate_kotlin_package() {
     compare("kotlin", &rejected, |segment| {
         validate_kotlin_package(&format!("probe.{segment}")).is_ok()
     });
+}
+
+/// Proves required-toolchain mode cannot turn a missing compiler into a green oracle run.
+/// `required_dotnet_mode_fails_when_toolchain_is_unavailable` and
+/// `required_kotlinc_mode_fails_when_toolchain_is_unavailable` are the C#/Kotlin siblings.
+#[test]
+fn required_javac_mode_fails_when_toolchain_is_unavailable() {
+    let result = std::panic::catch_unwind(|| require_tool("alef-javac-does-not-exist", "ALEF_REQUIRE_JAVAC", true));
+    let panic = result.expect_err("required mode must fail when javac is unavailable");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("ALEF_REQUIRE_JAVAC is set"), "got: {message}");
+}
+
+#[test]
+fn required_dotnet_mode_fails_when_toolchain_is_unavailable() {
+    let result = std::panic::catch_unwind(|| require_tool("alef-dotnet-does-not-exist", "ALEF_REQUIRE_DOTNET", true));
+    let panic = result.expect_err("required mode must fail when dotnet is unavailable");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("ALEF_REQUIRE_DOTNET is set"), "got: {message}");
+}
+
+#[test]
+fn required_kotlinc_mode_fails_when_toolchain_is_unavailable() {
+    let result = std::panic::catch_unwind(|| require_tool("alef-kotlinc-does-not-exist", "ALEF_REQUIRE_KOTLINC", true));
+    let panic = result.expect_err("required mode must fail when kotlinc is unavailable");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("ALEF_REQUIRE_KOTLINC is set"), "got: {message}");
+}
+
+/// Keeps required mode wired to a job that actually installs the compiler. Checking both
+/// needles prevents either half from drifting into a vacuous green runtime test, mirroring
+/// `e2e::codegen::elixir::streaming_pipe_precedence_tests::
+/// ci_installs_and_requires_elixir_for_runtime_regressions`. ~keep
+#[test]
+fn ci_installs_and_requires_javac_for_runtime_regressions() {
+    let workflow = include_str!("../.github/workflows/ci.yml");
+    assert!(workflow.contains("uses: actions/setup-java@v6"));
+    assert!(workflow.contains("ALEF_REQUIRE_JAVAC: \"1\""));
+}
+
+#[test]
+fn ci_installs_and_requires_dotnet_for_runtime_regressions() {
+    let workflow = include_str!("../.github/workflows/ci.yml");
+    assert!(workflow.contains("uses: actions/setup-dotnet@v5"));
+    assert!(workflow.contains("ALEF_REQUIRE_DOTNET: \"1\""));
+}
+
+#[test]
+fn ci_installs_and_requires_kotlinc_for_runtime_regressions() {
+    let workflow = include_str!("../.github/workflows/ci.yml");
+    assert!(workflow.contains("uses: fwilhe2/setup-kotlin@"));
+    assert!(workflow.contains("ALEF_REQUIRE_KOTLINC: \"1\""));
 }

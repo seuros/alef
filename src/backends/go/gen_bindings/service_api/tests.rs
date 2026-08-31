@@ -171,9 +171,30 @@ fn test_gen_service_go_produces_valid_go() {
     assert!(go.contains("owner C.uint64_t"));
 }
 
+/// Panics instead of returning `None` when `required` is `true` and `go` is unavailable -- the
+/// failure mode this exists to close: a runner whose Go setup silently regressed, where the two
+/// real `go test` compile checks below would otherwise just as silently skip.
+///
+/// `required` is a plain parameter, and `go` an already-resolved lookup, rather than this
+/// function reading `ALEF_REQUIRE_GO` or calling `which::which` itself, so
+/// `required_go_mode_fails_when_toolchain_is_unavailable` below can prove the panic fires with a
+/// fabricated "unavailable" input instead of needing to actually hide `go` from `PATH`.
+fn require_go_available(go: Option<std::path::PathBuf>, required: bool) -> Option<std::path::PathBuf> {
+    assert!(
+        go.is_some() || !required,
+        "ALEF_REQUIRE_GO is set but go is unavailable"
+    );
+    go
+}
+
+/// `go` on `PATH`, or `None` when it is not installed.
+fn required_go() -> Option<std::path::PathBuf> {
+    require_go_available(which::which("go").ok(), std::env::var_os("ALEF_REQUIRE_GO").is_some())
+}
+
 #[test]
 fn go_service_response_deallocator_compiles_and_runs_when_go_is_available() {
-    let Some(go) = which::which("go").ok() else {
+    let Some(go) = required_go() else {
         return;
     };
     let directory = tempfile::tempdir().expect("temporary Go allocator directory");
@@ -486,7 +507,7 @@ fn marshalled_dto_handle_uses_scalar_zero_sentinel() {
     assert!(setup.contains("if c_config == 0"), "{setup}");
     assert!(!setup.contains("if c_config == nil"), "{setup}");
 
-    let Some(go) = which::which("go").ok() else {
+    let Some(go) = required_go() else {
         return;
     };
     let directory = tempfile::tempdir().expect("temporary Go scalar-handle directory");
@@ -524,4 +545,29 @@ func use(config Config) error {{
         "generated Go scalar-handle setup failed to compile:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Proves required-toolchain mode cannot turn a missing `go` into a silently-passed compile
+/// check, mirroring `tests/identifier_grammar_compiler_oracle.rs`'s
+/// `required_javac_mode_fails_when_toolchain_is_unavailable` and siblings.
+#[test]
+fn required_go_mode_fails_when_toolchain_is_unavailable() {
+    let result = std::panic::catch_unwind(|| require_go_available(None, true));
+    let panic = result.expect_err("required mode must fail when go is unavailable");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("ALEF_REQUIRE_GO is set"), "got: {message}");
+}
+
+/// Keeps required mode wired to a job that actually has `go` on `PATH`. GitHub-hosted runner
+/// images preinstall a Go LTS toolchain (`actions/go-versions`), so unlike
+/// `ALEF_REQUIRE_JAVAC`/`ALEF_REQUIRE_DOTNET`/`ALEF_REQUIRE_KOTLINC` this needs no dedicated
+/// `uses:` setup step -- only the env var.
+#[test]
+fn ci_requires_go_for_runtime_regressions() {
+    let workflow = include_str!("../../../../../.github/workflows/ci.yml");
+    assert!(workflow.contains("ALEF_REQUIRE_GO: \"1\""));
 }
