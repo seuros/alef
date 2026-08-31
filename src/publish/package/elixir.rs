@@ -305,20 +305,29 @@ sources = ["src/lib.rs"]
     #[test]
     fn write_checksums_produces_exs_file() {
         let tmp = TempDir::new().unwrap();
-        let cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        let cfg: crate::core::config::NewAlefConfig = toml::from_str(
             r#"
 [workspace]
 languages = ["elixir"]
 [[crates]]
 name = "mylib"
 sources = ["src/lib.rs"]
-[crates.elixir]
-scaffold_output = "{pkg}"
 "#,
-            pkg = tmp.path().display().to_string().replace('\\', "/")
-        ))
+        )
         .unwrap();
-        let config = cfg.resolve().unwrap().remove(0);
+        let mut config = cfg.resolve().unwrap().remove(0);
+        // `elixir.scaffold_output` is set directly on the resolved config rather than through
+        // `[crates.elixir] scaffold_output` TOML: path-safety validation now rejects an
+        // absolute `scaffold_output` value at `resolve()` time (it would let a hostile config
+        // value write generated files outside the project root), but this test needs
+        // `package_dir()` to resolve to a real absolute tempdir so the checksum file it writes
+        // lands there instead of inside the real repo checkout (`package_dir_raw` reads
+        // `elixir.scaffold_output` directly for `Language::Elixir`; it does not consult
+        // `output_paths`). ~keep
+        config
+            .elixir
+            .get_or_insert_with(|| toml::from_str("").expect("an empty table deserializes to all-default ElixirConfig"))
+            .scaffold_output = Some(tmp.path().to_path_buf());
 
         let tarball = tmp
             .path()

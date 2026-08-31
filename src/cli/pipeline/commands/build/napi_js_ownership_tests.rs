@@ -34,23 +34,27 @@ fn napi_build_config() -> BuildConfig {
 /// Resolve a single-crate node config whose `[crates.output] node` points at `output_dir`, so
 /// the produced command's `--manifest-path`/`-o` arguments target a real, writable directory
 /// rather than the empty string a config with no explicit output override would produce.
+///
+/// `output_dir` is set directly on the resolved config rather than through `[crates.output]`
+/// TOML: path-safety validation now rejects any absolute `[crates.output]` value at `resolve()`
+/// time (it would let a hostile config value write generated files outside the project root),
+/// but these tests need a real absolute tempdir to run a real `napi build` against. Setting the
+/// resolved fields directly reproduces exactly what `resolve_output_paths` would have written
+/// for a (now-disallowed) absolute override. ~keep
 fn resolved_node_config(output_dir: &std::path::Path) -> crate::core::config::ResolvedCrateConfig {
-    let toml = format!(
-        r#"
+    let toml = r#"
 [workspace]
 languages = ["node"]
 
 [[crates]]
 name = "sample-lib"
 sources = ["src/lib.rs"]
-
-[crates.output]
-node = "{}"
-"#,
-        output_dir.display()
-    );
-    let alef_cfg: NewAlefConfig = toml::from_str(&toml).expect("fixture config must parse");
-    alef_cfg.resolve().expect("fixture config must resolve").remove(0)
+"#;
+    let alef_cfg: NewAlefConfig = toml::from_str(toml).expect("fixture config must parse");
+    let mut config = alef_cfg.resolve().expect("fixture config must resolve").remove(0);
+    config.explicit_output.node = Some(output_dir.to_path_buf());
+    config.output_paths.insert("node".to_string(), output_dir.to_path_buf());
+    config
 }
 
 /// Cheap guard on the command string itself: proves the flag is present, but -- per the shape

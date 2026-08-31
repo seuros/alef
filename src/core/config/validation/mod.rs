@@ -723,12 +723,21 @@ check = "custom-linter src/"
     // the resolved config.
     // -----------------------------------------------------------------------------------------
 
+    /// This used to exercise `validate_dart_library_name` below via the
+    /// `dart_library_name()` -> `dart_pubspec_name()` -> `self.name.replace('-', "_")`
+    /// fallback: an unconfigured crate whose `name` itself contained `/` reached this
+    /// check and was rejected here. `validate_crate_name_path_safety`
+    /// (`new_config::validate_crate_name_path_safety`) now runs unconditionally, for every
+    /// crate regardless of target language, before any per-language resolution -- so a `/` in
+    /// `name` is rejected by `resolve()` itself, and can no longer reach this function at all
+    /// via the "unconfigured" fallback path. `resolve_first` below fails outright, which is the
+    /// behavior this test now locks in; the still-live gap this check does close (an
+    /// unconfigured Dart-targeted crate with a hazardous `[crates.dart].pubspec_name`, which
+    /// `resolve()` does *not* validate unless Dart is targeted) is
+    /// `dart_library_name_is_not_checked_for_a_crate_that_does_not_target_dart` below, which
+    /// proves the opposite side of the same check with a value that still reaches it. ~keep
     #[test]
-    fn dart_library_name_rejects_a_crate_name_containing_a_path_separator_when_unconfigured() {
-        // `[crates.output].dart` is set explicitly so this crate's only targeted language
-        // bypasses `resolve_output_paths`'s own crate-name check entirely -- the scenario this
-        // check exists to close: no `[dart] lib_name`/`pubspec_name`, and nothing else in
-        // `resolve_one` would have caught this crate name.
+    fn crate_name_with_a_path_separator_is_rejected_before_the_dart_check_can_run() {
         let toml_str = r#"
 [workspace]
 languages = ["dart"]
@@ -740,16 +749,18 @@ sources = ["src/lib.rs"]
 [crates.output]
 dart = "packages/dart/lib/src"
 "#;
-        let config = resolve_first(toml_str);
-        let err = validate_resolved(&config).expect_err("a `/` in the derived Dart library name must be rejected");
+        let cfg: NewAlefConfig = toml::from_str(toml_str).expect("config should parse");
+        let err = cfg
+            .resolve()
+            .expect_err("a `/` in the crate name must be rejected at resolve time");
         let message = err.to_string();
         assert!(
             message.contains("sample/evil"),
             "error should name the crate: {message}"
         );
         assert!(
-            message.contains("dart.lib_name"),
-            "error should point at the Dart library name: {message}"
+            message.contains("invalid name"),
+            "error should point at the crate `name` field, not a Dart-specific one: {message}"
         );
         assert!(
             message.contains("path separators are not allowed"),
@@ -773,23 +784,36 @@ sources = ["src/lib.rs"]
 
     #[test]
     fn dart_library_name_is_not_checked_for_a_crate_that_does_not_target_dart() {
-        // Same hazardous crate-name shape as the rejection test above, but for a crate that
-        // never targets Dart -- `dart_library_name()` is irrelevant to it and must not be
-        // evaluated. `[crates.output].python` is set explicitly so the crate name still bypasses
-        // `resolve_output_paths`'s own check for its one targeted language, isolating this test
-        // to `validate_dart_library_name` alone rather than a different, unrelated panic.
+        // The crate `name` itself is ordinary ("sample-core"): `validate_crate_name_path_safety`
+        // now runs unconditionally regardless of target language (see the sibling test above),
+        // so a hazardous *name* can no longer reach `resolve_first` at all here, let alone this
+        // check. The hazard instead lives in `[crates.dart].pubspec_name` -- `resolve()` only
+        // validates that field via `validate_dart_coordinates` when Dart is a targeted language
+        // (see `new_config::validate_dart_coordinates`), so with `languages = ["python"]` it
+        // sails through `resolve_first` unvalidated, and `dart_library_name()` returns it
+        // verbatim. This still proves the behavior the test name claims: `validate_dart_library_name`
+        // must skip a demonstrably hazardous value because the crate does not target Dart, not
+        // because the value happened to be safe.
         let toml_str = r#"
 [workspace]
 languages = ["python"]
 
 [[crates]]
-name = "sample/evil"
+name = "sample-core"
 sources = ["src/lib.rs"]
+
+[crates.dart]
+pubspec_name = "sample/evil"
 
 [crates.output]
 python = "packages/python"
 "#;
         let config = resolve_first(toml_str);
+        assert_eq!(
+            config.dart_library_name(),
+            "sample/evil",
+            "fixture must carry the hazard through unvalidated"
+        );
         validate_resolved(&config).expect("a crate not targeting dart must not be checked");
     }
 }

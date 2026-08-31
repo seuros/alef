@@ -372,6 +372,10 @@ ffi = "crates/sample-markdown-ffi/src/"
 
     #[test]
     fn ffi_lib_name_ignores_output_component_that_is_not_an_artifact_name() {
+        // `.generated` (relative, not absolute -- path-safety validation now rejects an
+        // absolute `[crates.output]` value outright) still fails
+        // `abi_grammar::validate_native_artifact_basename` because it starts with `.`, which is
+        // the shape this test exists to prove `ffi_lib_name` falls back past. ~keep
         let r = resolved_one(
             r#"
 [workspace]
@@ -382,7 +386,7 @@ name = "my-lib"
 sources = ["src/lib.rs"]
 
 [crates.output]
-ffi = "/tmp/.generated/src/"
+ffi = ".generated/src/"
 "#,
         );
         assert_eq!(r.ffi_lib_name(), "my_lib_ffi");

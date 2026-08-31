@@ -12,16 +12,25 @@ fn write_module_file(src_dir: &std::path::Path, module: &str) {
     std::fs::write(src_dir.join(format!("{module}.rs")), "// hand-written FFI module\n").expect("write module file");
 }
 
-/// The output path is interpolated as a TOML *literal* string (single quotes). A Windows
-/// tempdir is `C:\Users\RUNNER~1\...`, and inside a TOML basic string `\U` starts a unicode
-/// escape -- the config failed to parse at all rather than exercising custom modules. ~keep
+/// Resolve a crate targeting `ffi` with the given custom module list, then point its resolved
+/// FFI output directory at `src_dir` directly on the returned config rather than through
+/// `[crates.output]` TOML.
+///
+/// Path-safety validation (`output::validate_output_path`, run from `resolve()`) now rejects any
+/// `[crates.output]` value that is absolute, since a hostile config value there could otherwise
+/// make a generated write escape the project root. These tests need a real absolute tempdir so
+/// the custom-module file-existence check below has real files to find -- a test-harness need
+/// the security check has nothing to do with -- so the fields `resolve_output_paths` would have
+/// populated from a (now-disallowed) absolute override are set directly here instead. The one
+/// test that exercises the TOML path itself is `a_windows_shaped_output_path_survives_the_toml_fixture`
+/// below, which expects `resolve()` to reject it. ~keep
 fn config_with_custom_modules(src_dir: &std::path::Path, modules: &[&str]) -> crate::core::config::ResolvedCrateConfig {
     let module_list = modules
         .iter()
         .map(|m| format!("\"{m}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    resolved_one(&format!(
+    let mut config = resolved_one(&format!(
         r#"
 [workspace]
 languages = ["ffi"]
@@ -30,14 +39,13 @@ languages = ["ffi"]
 name = "my-lib"
 sources = ["src/lib.rs"]
 
-[crates.output]
-ffi = '{src_dir}'
-
 [crates.custom_modules]
 ffi = [{module_list}]
 "#,
-        src_dir = src_dir.display(),
-    ))
+    ));
+    config.explicit_output.ffi = Some(src_dir.to_path_buf());
+    config.output_paths.insert("ffi".to_string(), src_dir.to_path_buf());
+    config
 }
 
 /// `sample_config()` carries no `[crates.custom_modules]` table at all. An
@@ -179,20 +187,50 @@ fn custom_module_missing_file_fails_generation_with_checked_paths() {
     );
 }
 
-/// The fixture builder must survive a Windows output path. `C:\\Users\\RUNNER~1\\...` inside a
-/// TOML *basic* string parses `\\U` as a unicode escape and fails the whole document ("too few
-/// unicode value digits"), which is how all four tests above died on the Windows runner while
-/// passing everywhere else. Asserting the path survives round-trip proves the literal-string
-/// quoting, not merely that some config parsed. ~keep
+/// The historical bug this guards: a Windows tempdir like `C:\Users\RUNNER~1\...` embedded in a
+/// TOML *basic* string parses `\U` as a unicode escape and fails the whole document ("too few
+/// unicode value digits") before path-safety validation ever gets a chance to run -- which is
+/// how the tests above died on the Windows CI runner while passing everywhere else. Every
+/// `[crates.output]` value in this file is interpolated as a TOML *literal* string (single
+/// quotes) precisely to avoid that.
+///
+/// Path-safety validation now rejects any absolute `[crates.output]` value outright (see
+/// `config_with_custom_modules` above), so resolving this fixture is expected to fail -- but it
+/// must fail with the containment error naming the path verbatim, not a TOML parse error. That
+/// the literal windows path survives into the error message is the proof the single-quote
+/// literal-string quoting survived parsing. ~keep
 #[test]
 fn a_windows_shaped_output_path_survives_the_toml_fixture() {
     let windows_path = std::path::Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpQr7Fqg");
+    let toml_str = format!(
+        r#"
+[workspace]
+languages = ["ffi"]
 
-    let config = config_with_custom_modules(windows_path, &["cancellation"]);
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
 
-    assert_eq!(
-        config.output_for("ffi").map(|p| p.to_string_lossy().into_owned()),
-        Some(windows_path.to_string_lossy().into_owned())
+[crates.output]
+ffi = '{path}'
+"#,
+        path = windows_path.display(),
+    );
+
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(&toml_str).expect("TOML literal string must parse");
+    let error = cfg
+        .resolve()
+        .expect_err("an absolute output path must be rejected by path-safety validation");
+    let message = error.to_string();
+
+    assert!(
+        message.contains(&windows_path.display().to_string()),
+        "error must preserve the literal backslash path, proving the TOML single-quote literal \
+         string survived parsing rather than failing as an invalid unicode escape: {message}"
+    );
+    assert!(
+        message.contains("is absolute and would escape the project root"),
+        "must fail via path-safety containment, not a TOML parse error: {message}"
     );
 }
 

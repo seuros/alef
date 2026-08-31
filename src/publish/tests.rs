@@ -137,6 +137,13 @@ fn default_vendor_mode_source_build_langs_use_registry() {
     assert_eq!(default_vendor_mode(Language::Zig), VendorMode::None);
 }
 
+/// `ruby.scaffold_output` is set directly on the resolved config rather than through
+/// `[crates.ruby] scaffold_output` TOML: path-safety validation now rejects an absolute
+/// `scaffold_output` value at `resolve()` time (it would let a hostile config value write
+/// generated files outside the project root), but these tests need `package_dir()` to resolve
+/// to a real absolute tempdir with real gemspec fixture files on disk
+/// (`ResolvedCrateConfig::package_dir_raw` reads `ruby.scaffold_output` directly for
+/// `Language::Ruby`; it does not consult `output_paths`). ~keep
 fn ruby_validate_config(package_dir: &Path, version_manifest: &Path) -> ResolvedCrateConfig {
     let cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
         r#"
@@ -147,15 +154,16 @@ languages = ["ruby"]
 name = "my-lib"
 sources = ["src/lib.rs"]
 version_from = {}
-
-[crates.ruby]
-scaffold_output = {}
 "#,
         toml_path(version_manifest),
-        toml_path(package_dir),
     ))
     .unwrap();
-    cfg.resolve().unwrap().remove(0)
+    let mut config = cfg.resolve().unwrap().remove(0);
+    config
+        .ruby
+        .get_or_insert_with(|| toml::from_str("").expect("an empty table deserializes to all-default RubyConfig"))
+        .scaffold_output = Some(package_dir.to_path_buf());
+    config
 }
 
 #[test]

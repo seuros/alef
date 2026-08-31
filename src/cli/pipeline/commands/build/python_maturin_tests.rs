@@ -39,6 +39,13 @@ fn maturin_build_config() -> BuildConfig {
 ///
 /// The path is passed through verbatim, so tests point it at a temporary directory to give the
 /// feature probe a real manifest to read without touching the process-wide current directory.
+///
+/// `output_path` is set directly on the resolved config rather than through `[crates.output]`
+/// TOML: path-safety validation now rejects any absolute `[crates.output]` value at `resolve()`
+/// time (it would let a hostile config value write generated files outside the project root),
+/// but these tests need a real absolute tempdir for the feature probe to read a real manifest
+/// from. Setting the resolved fields directly reproduces exactly what `resolve_output_paths`
+/// would have written for a (now-disallowed) absolute override. ~keep
 fn python_config(output_path: &str, package_manager: Option<&str>) -> crate::core::config::ResolvedCrateConfig {
     let tools_section = package_manager
         .map(|pm| format!("\n[workspace.tools]\npython_package_manager = \"{pm}\"\n"))
@@ -51,13 +58,14 @@ languages = ["python"]
 [[crates]]
 name = "sample-lib"
 sources = ["src/lib.rs"]
-
-[crates.output]
-python = '{output_path}'
 "#
     ))
     .unwrap();
-    alef_cfg.resolve().unwrap().remove(0)
+    let mut config = alef_cfg.resolve().unwrap().remove(0);
+    let output_path = std::path::PathBuf::from(output_path);
+    config.explicit_output.python = Some(output_path.clone());
+    config.output_paths.insert("python".to_string(), output_path);
+    config
 }
 
 /// Write a binding-crate manifest that declares the extension-module feature, exactly as

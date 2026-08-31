@@ -273,7 +273,7 @@ fn gradle_build_walks_up_to_settings_gradle_root_from_deep_namespace_dir() {
     assert!(!deep_source_dir.join("settings.gradle.kts").exists());
     assert!(!deep_source_dir.join("build.gradle.kts").exists());
 
-    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
         r#"
 [workspace]
 languages = ["kotlin_android"]
@@ -284,14 +284,18 @@ sources = ["src/lib.rs"]
 
 [crates.kotlin_android]
 package = "dev.alpha"
-
-[crates.output]
-kotlin_android = '{deep_source_dir}/'
 "#,
-        deep_source_dir = deep_source_dir.display(),
-    ))
+    )
     .unwrap();
-    let config = alef_cfg.resolve().unwrap().remove(0);
+    let mut config = alef_cfg.resolve().unwrap().remove(0);
+    // `[crates.output] kotlin_android` is set directly on the resolved config rather than
+    // through TOML: path-safety validation now rejects any absolute `[crates.output]` value at
+    // `resolve()` time (it would let a hostile config value write generated files outside the
+    // project root), but this test needs a real absolute tempdir with real gradle marker files
+    // on disk to exercise the walk-up logic against. ~keep
+    let explicit = std::path::PathBuf::from(format!("{}/", deep_source_dir.display()));
+    config.explicit_output.kotlin_android = Some(explicit.clone());
+    config.output_paths.insert("kotlin_android".to_string(), explicit);
     let build_config = BuildConfig {
         tool: "gradle",
         crate_suffix: "",
@@ -342,7 +346,7 @@ fn gradle_build_falls_back_to_source_dir_when_no_marker_found() {
         }
     }
 
-    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
         r#"
 [workspace]
 languages = ["kotlin_android"]
@@ -353,14 +357,18 @@ sources = ["src/lib.rs"]
 
 [crates.kotlin_android]
 package = "dev.alpha"
-
-[crates.output]
-kotlin_android = '{deep_source_dir}/'
 "#,
-        deep_source_dir = deep_source_dir.display(),
-    ))
+    )
     .unwrap();
-    let config = alef_cfg.resolve().unwrap().remove(0);
+    let mut config = alef_cfg.resolve().unwrap().remove(0);
+    // `[crates.output] kotlin_android` is set directly on the resolved config rather than
+    // through TOML: path-safety validation now rejects any absolute `[crates.output]` value at
+    // `resolve()` time (it would let a hostile config value write generated files outside the
+    // project root), but this test needs a real absolute tempdir on disk to exercise the
+    // marker-free fallback against. ~keep
+    let explicit = std::path::PathBuf::from(format!("{}/", deep_source_dir.display()));
+    config.explicit_output.kotlin_android = Some(explicit.clone());
+    config.output_paths.insert("kotlin_android".to_string(), explicit);
     let build_config = BuildConfig {
         tool: "gradle",
         crate_suffix: "",
@@ -512,7 +520,10 @@ java = {hostile:?}
         .output()
         .expect("shell should start");
 
-    assert!(!witness.exists(), "command substitution in the output path must not run: {command}");
+    assert!(
+        !witness.exists(),
+        "command substitution in the output path must not run: {command}"
+    );
 }
 
 #[cfg(unix)]
@@ -554,7 +565,10 @@ elixir = {hostile:?}
         .output()
         .expect("shell should start");
 
-    assert!(!witness.exists(), "command substitution in the output path must not run: {command}");
+    assert!(
+        !witness.exists(),
+        "command substitution in the output path must not run: {command}"
+    );
 }
 
 #[cfg(unix)]
@@ -597,7 +611,10 @@ ffi = {hostile:?}
         .output()
         .expect("shell should start");
 
-    assert!(!witness.exists(), "command substitution in the crate dir must not run: {command}");
+    assert!(
+        !witness.exists(),
+        "command substitution in the crate dir must not run: {command}"
+    );
 }
 
 fn wasm_config(extra: &str) -> ResolvedCrateConfig {
