@@ -9,9 +9,12 @@ use super::json::json_to_js;
 
 #[path = "assertions/streaming.rs"]
 mod streaming;
+#[path = "assertions/wasm_enum.rs"]
+mod wasm_enum;
 #[path = "assertions/wildcard.rs"]
 mod wildcard;
 
+use wasm_enum::render_wasm_enum_assertion;
 use wildcard::render_wildcard_assertion;
 
 /// Render a single assertion into the test body.
@@ -263,74 +266,6 @@ fn assertion_value_is_numeric(assertion: &Assertion) -> bool {
         }
         _ => false,
     }
-}
-
-/// Render an enum-typed result assertion for the wasm binding. Returns `true` when it rendered.
-///
-/// ~keep wasm hands JavaScript TWO different shapes for an enum-typed STRUCT FIELD, and which one
-/// depends on whether the enum carries variant data:
-///
-/// * An all-unit enum stays wrapper-backed and its getter returns `to_api_str()` — a `String`
-///   holding the serde WIRE value, honoring `#[serde(rename)]`/`rename_all`
-///   (`backends::wasm::gen_bindings::types`' `is_required_enum` branch, and the `to_api_str`
-///   emitter in that backend's `enums.rs`). Comparing it against a bare string is right, and
-///   stays.
-/// * A data-carrying enum's FIELD is declared `JsValue` and filled by
-///   `serde_wasm_bindgen::to_value(&core_value)`
-///   (`codegen::conversions::core_to_binding::fields`), so JavaScript receives serde's OWN wire
-///   form — not the flat discriminator struct `gen_tagged_enum_as_struct` emits, which is only
-///   reachable in return position. Under serde's default (external) representation that is the
-///   bare string `"Unit"` for a unit variant and the single-key object `{"Custom": payload}` for
-///   a data one, so `expect(result.kind).toBe("Custom")` compared an object against a string and
-///   could never pass. The variant name has to be read out of the object's only key.
-///   wasm-bindgen types a `JsValue` getter `any`, so tsc reports nothing: the failure is
-///   runtime-only.
-///
-/// The expected value is brought onto the wire surface in both shapes. A fixture may legitimately
-/// name a variant by its Rust identifier or by its serde wire value — the same latitude
-/// `codegen::serde_enum_repr::variant_name_for_wire` documents for the inverse direction — while
-/// serde only ever wrote the wire spelling, so a `#[serde(rename = "md")] Markdown` fixture
-/// written as `Markdown` used to fail against a binding that was working correctly.
-///
-/// `unwrap_or(false)` on the data-carrying question is the deliberate default, not laziness:
-/// `result_enum_fields` is hand-written config, so a field classified only there has no IR answer
-/// and must keep the scalar comparison it already had.
-///
-/// Residual, stated rather than hidden: a `#[serde(untagged)]` data enum writes the payload alone
-/// with no variant name anywhere on the wire, so no accessor can recover one. `IrEnumMap` records
-/// no untagged flag, so this cannot single that case out — it takes the data-carrying branch and
-/// fails, exactly as it failed before. It never passes falsely.
-fn render_wasm_enum_assertion(
-    out: &mut String,
-    assertion: &Assertion,
-    field_expr: &str,
-    field: &str,
-    field_resolver: &FieldResolver,
-) -> bool {
-    match assertion.assertion_type.as_str() {
-        "equals" => {
-            if let Some(serde_json::Value::String(s)) = &assertion.value {
-                let wire = field_resolver.enum_wire_value_for_variant(field, s).unwrap_or(s);
-                let is_data_carrying = field_resolver.ir_enum_is_data_carrying(field).unwrap_or(false);
-                let read = if is_data_carrying {
-                    format!(
-                        "(typeof {field_expr} === \"string\" ? {field_expr} : Object.keys({field_expr} ?? {{}})[0])"
-                    )
-                } else {
-                    field_expr.to_string()
-                };
-                let wire_literal = json_to_js(&serde_json::Value::String(wire.to_string()));
-                out.push_str(&format!("    expect({read}).toBe({wire_literal});\n"));
-                return true;
-            }
-        }
-        "not_empty" | "is_not_empty" => {
-            out.push_str(&format!("    expect({field_expr}).toBeDefined();\n"));
-            return true;
-        }
-        _ => {}
-    }
-    false
 }
 
 /// Try to render a synthetic/virtual field assertion. Returns `true` when the field was handled.

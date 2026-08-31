@@ -41,7 +41,6 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
 
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut collection_fields: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut non_string_scalar_element_fields: HashMap<String, HashSet<String>> = HashMap::new();
 
     for type_def in type_defs {
         for field in &type_def.fields {
@@ -50,12 +49,6 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone());
-                if has_non_string_scalar_elements(&field.ty) {
-                    non_string_scalar_element_fields
-                        .entry(type_def.name.clone())
-                        .or_default()
-                        .insert(field.name.clone());
-                }
             }
             let Some(named) = named_type(&field.ty) else {
                 continue;
@@ -72,7 +65,6 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
     IrCollectionMap {
         field_types,
         collection_fields,
-        non_string_scalar_element_fields,
         root_type: None,
     }
 }
@@ -191,7 +183,26 @@ pub(super) fn element_type_at_path(map: &IrCollectionMap, path: &str) -> Option<
 /// mirroring [`is_collection_path`] exactly — the same per-owner anchoring, and the same `false`
 /// (never "unknown") default whenever the root is unresolved or a segment is unrecognized. A
 /// caller must read `false` as "no positive evidence", never as "known to be textual". ~keep
-pub(super) fn has_non_string_scalar_elements_at_path(map: &IrCollectionMap, path: &str) -> bool {
+pub(super) fn build_non_string_scalar_element_fields(type_defs: &[TypeDef]) -> HashMap<String, HashSet<String>> {
+    let mut fields: HashMap<String, HashSet<String>> = HashMap::new();
+    for type_def in type_defs {
+        for field in &type_def.fields {
+            if has_non_string_scalar_elements(&field.ty) {
+                fields
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone());
+            }
+        }
+    }
+    fields
+}
+
+pub(super) fn has_non_string_scalar_elements_at_path(
+    map: &IrCollectionMap,
+    fields: &HashMap<String, HashSet<String>>,
+    path: &str,
+) -> bool {
     let Some(root) = map.root_type.as_deref() else {
         return false;
     };
@@ -214,9 +225,7 @@ pub(super) fn has_non_string_scalar_elements_at_path(map: &IrCollectionMap, path
     let Some(name) = segment_name(last) else {
         return false;
     };
-    map.non_string_scalar_element_fields
-        .get(owner)
-        .is_some_and(|fields| fields.contains(name))
+    fields.get(owner).is_some_and(|fields| fields.contains(name))
 }
 
 #[cfg(test)]
@@ -331,16 +340,36 @@ mod non_string_scalar_element_tests {
         map
     }
 
+    fn element_facts() -> HashMap<String, HashSet<String>> {
+        build_non_string_scalar_element_fields(&type_defs())
+    }
+
     #[test]
     fn a_numeric_collection_is_recognised_as_a_non_string_scalar_element() {
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "codes"));
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "ratios"));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "codes"
+        ));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "ratios"
+        ));
     }
 
     #[test]
     fn boolean_and_char_collections_are_recognised_too() {
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "flags"));
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "initials"));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "flags"
+        ));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "initials"
+        ));
     }
 
     /// `Option<Vec<T>>` must not hide the element's shape, matching `is_vec_type`'s own
@@ -349,6 +378,7 @@ mod non_string_scalar_element_tests {
     fn an_optional_numeric_collection_is_seen_through_its_option() {
         assert!(has_non_string_scalar_elements_at_path(
             &anchored_map(),
+            &element_facts(),
             "optional_codes"
         ));
     }
@@ -358,34 +388,55 @@ mod non_string_scalar_element_tests {
     /// struct-to-struct edge, and it must stay on the text surface. ~keep
     #[test]
     fn a_string_collection_is_not_a_non_string_scalar() {
-        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "warnings"));
+        assert!(!has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "warnings"
+        ));
         assert_eq!(element_type_at_path(&anchored_map(), "warnings"), None);
     }
 
     #[test]
     fn a_struct_collection_is_not_a_non_string_scalar() {
-        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "rows"));
+        assert!(!has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "rows"
+        ));
     }
 
     #[test]
     fn a_scalar_field_that_is_not_a_collection_is_not_one_either() {
-        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "title"));
+        assert!(!has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "title"
+        ));
     }
 
     /// Anchored per owner type, like every other oracle here: the answer is walked to the type
     /// that actually declares the leaf, not matched on the bare field name. ~keep
     #[test]
     fn a_nested_numeric_collection_is_resolved_through_its_owner() {
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "rows.scores"));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            &element_facts(),
+            "rows.scores"
+        ));
     }
 
     #[test]
     fn an_unknown_field_and_an_unanchored_map_both_answer_no() {
         assert!(!has_non_string_scalar_elements_at_path(
             &anchored_map(),
+            &element_facts(),
             "not_a_real_field"
         ));
         let unanchored = build_ir_collection_map(&type_defs());
-        assert!(!has_non_string_scalar_elements_at_path(&unanchored, "codes"));
+        assert!(!has_non_string_scalar_elements_at_path(
+            &unanchored,
+            &element_facts(),
+            "codes"
+        ));
     }
 }

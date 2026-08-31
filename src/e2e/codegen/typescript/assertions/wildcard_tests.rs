@@ -128,7 +128,8 @@ fn a_numeric_wildcard_containment_compares_numerically_not_as_a_substring() {
         &array_resolver("items"),
     );
     assert_eq!(
-        out, "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(true);\n",
+        out,
+        "    expect((result.items ?? []).some((e) => e.bar != null && (typeof e.bar === \"bigint\" ? e.bar === BigInt(\"42\") : Number.isSafeInteger(e.bar) && e.bar === Number(\"42\")))).toBe(true);\n",
         "got: {out}"
     );
     assert!(
@@ -183,9 +184,50 @@ fn a_numeric_wildcard_not_contains_uses_the_same_numeric_predicate() {
     };
     let out = render(&assertion, &array_resolver("items"));
     assert_eq!(
-        out, "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(false);\n",
+        out,
+        "    expect((result.items ?? []).some((e) => e.bar != null && (typeof e.bar === \"bigint\" ? e.bar === BigInt(\"42\") : Number.isSafeInteger(e.bar) && e.bar === Number(\"42\")))).toBe(false);\n",
         "got: {out}"
     );
+}
+
+#[test]
+fn an_integer_above_javascript_safe_range_is_compared_as_bigint_without_rounding() {
+    let out = render(
+        &contains_value_on("items[].id", serde_json::json!(9_007_199_254_740_993_u64)),
+        &array_resolver("items"),
+    );
+    assert_eq!(
+        out,
+        "    expect((result.items ?? []).some((e) => e.id != null && (typeof e.id === \"bigint\" ? e.id === BigInt(\"9007199254740993\") : Number.isSafeInteger(e.id) && e.id === Number(\"9007199254740993\")))).toBe(true);\n",
+        "got: {out}"
+    );
+    assert!(
+        !out.contains("=== 9007199254740993"),
+        "rounded JS literal survived: {out}"
+    );
+}
+
+#[test]
+fn the_large_integer_predicate_rejects_the_adjacent_bigint_under_node() {
+    let out = render(
+        &contains_value_on("items[].id", serde_json::json!(9_007_199_254_740_993_u64)),
+        &array_resolver("items"),
+    );
+    let predicate = out
+        .trim()
+        .strip_prefix("expect(")
+        .and_then(|line| line.strip_suffix(").toBe(true);"))
+        .expect("generated quantifier assertion");
+    let source = format!(
+        "const result = {{ items: [{{ id: 9007199254740992n }}] }};\nif ({predicate}) throw new Error('rounded match');\n"
+    );
+    let status = std::process::Command::new("node")
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(source)
+        .status()
+        .expect("node is required for the bigint regression oracle");
+    assert!(status.success(), "adjacent bigint was accepted as the expected value");
 }
 
 /// LOUD SKIP, not a quiet pass: an object expectation has no sound single-element comparison,

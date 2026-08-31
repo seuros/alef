@@ -66,6 +66,7 @@ fn resolver() -> FieldResolver {
         &HashSet::new(),
     )
     .with_ir_collection_map(FieldResolver::ir_collection_fields(&defs), Some("Report".to_string()))
+    .with_collection_element_metadata(&defs)
 }
 
 fn render(assertion: &Assertion) -> String {

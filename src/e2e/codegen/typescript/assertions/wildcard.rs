@@ -37,14 +37,18 @@ pub(super) fn render_wildcard_assertion(
             }
         }
         "not_empty" => {
-            out.push_str(&format!(
-                "    expect({guarded}.some((e) => String({elem_accessor}).length > 0)).toBe(true);\n"
-            ));
+            out.push_str(&render(minijinja::context! {
+                kind => "not_empty",
+                guarded => guarded,
+                element => elem_accessor,
+            }));
         }
         other => {
-            out.push_str(&format!(
-                "    // skipped: unsupported traversal assertion '{other}' on '{field}'\n"
-            ));
+            out.push_str(&render(minijinja::context! {
+                kind => "unsupported_assertion",
+                assertion_type => other,
+                field => field,
+            }));
         }
     }
 }
@@ -61,11 +65,19 @@ fn push_quantifier(
 ) {
     match element_predicate(elem_accessor, expected) {
         Some(predicate) => {
-            out.push_str(&format!(
-                "    expect({guarded}.some((e) => {predicate})).toBe({truth});\n"
-            ));
+            let truth_literal = if truth { "true" } else { "false" };
+            out.push_str(&render(minijinja::context! {
+                kind => "quantifier",
+                guarded => guarded,
+                predicate => predicate,
+                truth => truth_literal,
+            }));
         }
-        None => out.push_str(&unlowerable_value_skip_line(field, expected)),
+        None => out.push_str(&render(minijinja::context! {
+            kind => "unsupported_value",
+            value_kind => value_kind(expected),
+            field => field,
+        })),
     }
 }
 
@@ -90,8 +102,15 @@ fn push_quantifier(
 fn element_predicate(elem_accessor: &str, expected: &serde_json::Value) -> Option<String> {
     match expected {
         serde_json::Value::String(_) => Some(format!("String({elem_accessor}).includes({})", json_to_js(expected))),
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => {
+            let decimal = number.to_string();
+            let quoted_decimal = json_to_js(&serde_json::Value::String(decimal.clone()));
+            Some(format!(
+                "{elem_accessor} != null && (typeof {elem_accessor} === \"bigint\" ? {elem_accessor} === BigInt({quoted_decimal}) : Number.isSafeInteger({elem_accessor}) && {elem_accessor} === Number({quoted_decimal}))"
+            ))
+        }
         serde_json::Value::Number(_) => Some(format!(
-            "{elem_accessor} != null && Number({elem_accessor}) === {}",
+            "typeof {elem_accessor} === \"number\" && {elem_accessor} === {}",
             json_to_js(expected)
         )),
         serde_json::Value::Bool(_) => Some(format!("{elem_accessor} === {}", json_to_js(expected))),
@@ -104,12 +123,15 @@ fn element_predicate(elem_accessor: &str, expected: &serde_json::Value) -> Optio
 /// explicitly out of scope, and the sibling arm of the same `match` already spells its
 /// unsupported-assertion skip as plain prose. This stays in that one wording family rather than
 /// opening a second, parallel one.
-fn unlowerable_value_skip_line(field: &str, expected: &serde_json::Value) -> String {
-    let value_kind = match expected {
+fn value_kind(expected: &serde_json::Value) -> &'static str {
+    match expected {
         serde_json::Value::Null => "null",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
         serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_) => "value",
-    };
-    format!("    // skipped: unsupported traversal assertion {value_kind} value on '{field}'\n")
+    }
+}
+
+fn render(context: minijinja::Value) -> String {
+    crate::e2e::template_env::render("typescript/wildcard_assertion.jinja", context)
 }

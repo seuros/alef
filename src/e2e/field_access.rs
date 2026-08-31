@@ -17,6 +17,7 @@ mod resolver;
 mod types;
 
 pub use leaf_anchor::LeafAnchor;
+pub(crate) use types::WasmEnumRepresentation;
 pub use types::{
     DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, PythonTypedDictMap,
     StringyField, StringyFieldKind, SwiftFirstClassMap,

@@ -1,0 +1,9 @@
+{% if kind == "quantifier" %}
+    expect({{ guarded }}.some((e) => {{ predicate }})).toBe({{ truth }});
+{% elif kind == "not_empty" %}
+    expect({{ guarded }}.some((e) => String({{ element }}).length > 0)).toBe(true);
+{% elif kind == "unsupported_value" %}
+    // skipped: unsupported traversal assertion {{ value_kind }} value on '{{ field }}'
+{% elif kind == "unsupported_assertion" %}
+    // skipped: unsupported traversal assertion '{{ assertion_type }}' on '{{ field }}'
+{% endif %}

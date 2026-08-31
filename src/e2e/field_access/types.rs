@@ -90,6 +90,8 @@ pub struct FieldResolver {
     /// entirely to the hand-maintained `fields_enum` config. See [`IrEnumMap`] for why this
     /// is keyed by `(type, field)` rather than by bare field name.
     pub(super) ir_enum_map: IrEnumMap,
+    /// Enum names whose serde wire representation has no discriminator at all.
+    pub(super) wasm_untagged_enum_names: HashSet<String>,
     /// Names of IR enum types for which the Java binding backend does NOT emit a plain
     /// `enum` with a `getValue()` accessor — i.e. `!backends::java::gen_bindings::emits_get_value`
     /// (tagged- or untagged-union wrapper classes). Populated once per crate IR, from the exact
@@ -115,6 +117,9 @@ pub struct FieldResolver {
     /// see [`IrCollectionMap`] for why this is keyed by `(type, field)` rather than by bare
     /// field name.
     pub(super) ir_collection_map: IrCollectionMap,
+    /// Resolver-private element-shape facts. Kept out of public [`IrCollectionMap`] so existing
+    /// callers can continue constructing that map exhaustively. ~keep
+    pub(super) non_string_scalar_collection_fields: HashMap<String, HashSet<String>>,
     /// IR-derived field facts about the call's OWN declared result type, anchored at that type
     /// rather than keyed by bare field name. Populated via `with_ir_result_fields`; empty
     /// (`root_type: None`) whenever a codegen call site could not resolve the call's return
@@ -220,25 +225,20 @@ pub struct IrResultFieldMap {
 ///   traverses into, when that type is another struct the path can keep walking through.
 /// * `collection_fields[type_name]` — field names on `type_name` whose declared type (after
 ///   unwrapping `Option`) is `Vec<T>`.
-/// * `non_string_scalar_element_fields[type_name]` — the subset of `collection_fields` whose
-///   element type `T` is a NUMERIC, boolean or `char` primitive rather than a string or a struct.
 /// * `root_type` — the IR type name backing the call's result variable, resolved the same way
 ///   `IrEnumMap::root_type` is.
 #[derive(Debug, Clone, Default)]
 pub struct IrCollectionMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub collection_fields: HashMap<String, HashSet<String>>,
-    /// Element types that carry no text to search, keyed by owner type like every other map here.
-    ///
-    /// ~keep `field_types` only records an edge when the element type is another `TypeDef`, so
-    /// `element_type_at_path` answers `None` identically for `Vec<u32>`, for `Vec<String>` and for
-    /// "the IR has never heard of this field". A caller that must treat a numeric element
-    /// differently from a textual one cannot distinguish them from that answer — which is exactly
-    /// how a `contains: "42"` against a `Vec<u32>` reached the TypeScript text surface and
-    /// substring-matched `421`. This set is the missing distinction, and only the positive case:
-    /// absence still means "not known to be a non-string scalar", never "known to be a string".
-    pub non_string_scalar_element_fields: HashMap<String, HashSet<String>>,
     pub root_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WasmEnumRepresentation<'a> {
+    External,
+    Tagged { tag: &'a str },
+    Untagged,
 }
 
 /// IR-derived enum-field classification, keyed by owner type so a field named `kind` that is

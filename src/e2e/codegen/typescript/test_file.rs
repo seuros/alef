@@ -34,6 +34,8 @@ mod node_enum_import_tests;
 mod optional_segment_len_tests;
 mod render;
 #[cfg(test)]
+mod resolver_metadata_wiring_tests;
+#[cfg(test)]
 mod result_enum_import_invariant_tests;
 mod snippet;
 #[cfg(test)]

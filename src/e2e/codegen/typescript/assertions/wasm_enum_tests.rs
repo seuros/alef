@@ -85,6 +85,7 @@ fn resolver() -> FieldResolver {
         FieldResolver::ir_enum_fields(&defs, &enum_defs),
         Some("Report".to_string()),
     )
+    .with_wasm_enum_representations(&enum_defs)
 }
 
 /// The hand-written `result_enum_fields` config that admits a field to the wasm enum path at all.
@@ -130,6 +131,120 @@ fn a_data_carrying_enum_field_reads_the_variant_off_the_wire_objects_only_key() 
         out,
         "    expect((typeof result.kind === \"string\" ? result.kind : Object.keys(result.kind ?? {})[0])).toBe(\"Custom\");\n",
         "got: {out}"
+    );
+}
+
+fn render_representation(enum_def: EnumDef) -> String {
+    let defs = vec![TypeDef {
+        name: "Report".to_string(),
+        fields: vec![FieldDef {
+            name: "kind".to_string(),
+            ty: TypeRef::Named(enum_def.name.clone()),
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    }];
+    let result_fields = HashSet::from(["kind".to_string()]);
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_enum_map(
+        FieldResolver::ir_enum_fields(&defs, std::slice::from_ref(&enum_def)),
+        Some("Report".to_string()),
+    )
+    .with_wasm_enum_representations(std::slice::from_ref(&enum_def));
+    let assertion = Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("kind".to_string()),
+        value: Some(serde_json::Value::String("Custom".to_string())),
+        ..Default::default()
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        false,
+        &HashMap::from([("kind".to_string(), enum_def.name)]),
+        "wasm",
+        false,
+        false,
+        false,
+    );
+    out
+}
+
+#[test]
+fn an_internally_tagged_enum_reads_the_declared_discriminator() {
+    let out = render_representation(EnumDef {
+        name: "Payload".to_string(),
+        variants: vec![variant("Custom", vec![payload_field()], None)],
+        serde_tag: Some("kind-name".to_string()),
+        ..EnumDef::default()
+    });
+    assert_eq!(out, "    expect(result.kind?.[\"kind-name\"]).toBe(\"Custom\");\n");
+}
+
+#[test]
+fn an_adjacently_tagged_enum_reads_the_declared_discriminator() {
+    let out = render_representation(EnumDef {
+        name: "Payload".to_string(),
+        variants: vec![variant("Custom", vec![payload_field()], None)],
+        serde_tag: Some("tag".to_string()),
+        serde_content: Some("payload".to_string()),
+        ..EnumDef::default()
+    });
+    assert_eq!(out, "    expect(result.kind?.[\"tag\"]).toBe(\"Custom\");\n");
+}
+
+#[test]
+fn an_untagged_enum_emits_a_visible_skip_instead_of_inventing_a_variant_key() {
+    let out = render_representation(EnumDef {
+        name: "Payload".to_string(),
+        variants: vec![variant("Custom", vec![payload_field()], None)],
+        serde_untagged: true,
+        ..EnumDef::default()
+    });
+    assert_eq!(
+        out,
+        "    // skipped: wasm untagged enum field 'kind' has no variant discriminator on the wire\n"
+    );
+    assert!(
+        !out.contains("Object.keys"),
+        "untagged payload was misread as an external tag: {out}"
+    );
+}
+
+#[test]
+fn the_internal_tag_assertion_executes_and_the_external_key_strategy_does_not() {
+    let generated = render_representation(EnumDef {
+        name: "Payload".to_string(),
+        variants: vec![variant("Custom", vec![payload_field()], None)],
+        serde_tag: Some("kind".to_string()),
+        ..EnumDef::default()
+    });
+    let assertion = generated
+        .trim()
+        .replace("expect(", "assert.equal(")
+        .replace(").toBe(", ", ");
+    let source = format!(
+        "import assert from 'node:assert/strict';\nconst result = {{ kind: {{ kind: 'Custom', value: 'x' }} }};\n{assertion}\nassert.notEqual(Object.keys(result.kind)[0], 'Custom');\n"
+    );
+    let output = std::process::Command::new("node")
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(source)
+        .output()
+        .expect("node is required for the enum representation oracle");
+    assert!(
+        output.status.success(),
+        "node rejected the representation-aware assertion: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

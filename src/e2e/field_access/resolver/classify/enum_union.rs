@@ -16,8 +16,19 @@
 
 use super::super::super::ir_enum::{enum_type_at_path, is_enum_path};
 use super::super::super::types::FieldResolver;
+use super::super::super::types::WasmEnumRepresentation;
 
 impl FieldResolver {
+    pub(crate) fn wasm_enum_representation(&self, field: &str) -> Option<WasmEnumRepresentation<'_>> {
+        let enum_name = self.ir_enum_type_name(field)?;
+        if self.wasm_untagged_enum_names.contains(&enum_name) {
+            return Some(WasmEnumRepresentation::Untagged);
+        }
+        match self.ir_enum_map.tagged_enum_wire.get(&enum_name) {
+            Some(wire) => Some(WasmEnumRepresentation::Tagged { tag: &wire.tag }),
+            None => Some(WasmEnumRepresentation::External),
+        }
+    }
     /// Check whether `field` is enum-typed: an explicit `fields_enum` config entry (exact or
     /// alias-resolved) always wins, and — when the config is silent — the IR-derived
     /// classification (`with_ir_enum_map`) gets the final say. See `ir_enum` module docs for

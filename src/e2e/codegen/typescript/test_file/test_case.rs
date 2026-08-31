@@ -86,7 +86,10 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type.clone())
     // Anchored at the same declared return type, so a crossing this generator refuses can be
     // named against the IR's real union type rather than re-derived from the path's shape.
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
+    .with_wasm_enum_representations(enums)
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
+    .with_collection_element_metadata(type_defs)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
     // `with_ir_fields` only proves a BARE field name optional, by crate-wide unanimity — no
     // path context. The `_with_optionals` renderers key their per-segment `?.`/`?.[0]` check by

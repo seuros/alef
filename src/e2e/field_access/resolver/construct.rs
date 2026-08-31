@@ -1,4 +1,4 @@
-use super::super::ir_collection::build_ir_collection_map;
+use super::super::ir_collection::{build_ir_collection_map, build_non_string_scalar_element_fields};
 use super::super::ir_enum::build_ir_enum_map;
 use super::super::ir_result_fields::{OptionalityRule, build_ir_result_field_map, is_optional_path};
 use super::super::python_typeddict::{build_python_typeddict_facts, build_python_typeddict_map};
@@ -97,9 +97,11 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            wasm_untagged_enum_names: HashSet::new(),
             java_wrapper_enum_names: HashSet::new(),
             ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            non_string_scalar_collection_fields: HashMap::new(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
@@ -137,9 +139,11 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            wasm_untagged_enum_names: HashSet::new(),
             java_wrapper_enum_names: HashSet::new(),
             ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            non_string_scalar_collection_fields: HashMap::new(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
@@ -187,9 +191,11 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            wasm_untagged_enum_names: HashSet::new(),
             java_wrapper_enum_names: HashSet::new(),
             ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            non_string_scalar_collection_fields: HashMap::new(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
@@ -243,9 +249,11 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            wasm_untagged_enum_names: HashSet::new(),
             java_wrapper_enum_names: HashSet::new(),
             ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            non_string_scalar_collection_fields: HashMap::new(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
@@ -283,9 +291,11 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            wasm_untagged_enum_names: HashSet::new(),
             java_wrapper_enum_names: HashSet::new(),
             ruby_hash_serialized_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            non_string_scalar_collection_fields: HashMap::new(),
             ir_result_field_map: IrResultFieldMap::default(),
             result_is_byte_payload: false,
             python_typeddict_map: PythonTypedDictMap::default(),
@@ -340,6 +350,17 @@ impl FieldResolver {
         self
     }
 
+    /// Attach wasm-only serde representation facts without changing the public [`IrEnumMap`]
+    /// construction surface.
+    pub(crate) fn with_wasm_enum_representations(mut self, enums: &[crate::core::ir::EnumDef]) -> Self {
+        self.wasm_untagged_enum_names = enums
+            .iter()
+            .filter(|enum_def| enum_def.serde_untagged)
+            .map(|enum_def| enum_def.name.clone())
+            .collect();
+        self
+    }
+
     /// Attach the set of IR enum type names for which the Java binding backend does NOT emit a
     /// plain `enum` with a `getValue()` accessor (tagged/untagged-union wrapper classes
     /// instead). Java e2e codegen is the only caller; every other backend's resolver leaves
@@ -377,6 +398,12 @@ impl FieldResolver {
     pub fn with_ir_collection_map(mut self, mut map: IrCollectionMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_collection_map = map;
+        self
+    }
+
+    /// Attach TypeScript-only collection element facts outside public [`IrCollectionMap`].
+    pub(crate) fn with_collection_element_metadata(mut self, type_defs: &[crate::core::ir::TypeDef]) -> Self {
+        self.non_string_scalar_collection_fields = build_non_string_scalar_element_fields(type_defs);
         self
     }
 
@@ -644,7 +671,6 @@ impl FieldResolver {
     ) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
         let mut reachable = HashSet::new();
         let mut excluded = HashSet::new();
-        // Name -> (seen as Option<T> somewhere, seen as non-Option somewhere).
         let mut optionality: HashMap<String, (bool, bool)> = HashMap::new();
         for type_def in type_defs {
             for field in &type_def.fields {

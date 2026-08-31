@@ -71,6 +71,10 @@ impl FieldResolver {
     /// exactly the behaviour it had. ~keep
     pub fn collection_element_is_non_string_scalar(&self, field: &str) -> bool {
         let resolved = self.resolve(field);
-        has_non_string_scalar_elements_at_path(&self.ir_collection_map, resolved)
+        has_non_string_scalar_elements_at_path(
+            &self.ir_collection_map,
+            &self.non_string_scalar_collection_fields,
+            resolved,
+        )
     }
 }

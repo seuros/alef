@@ -1,0 +1,7 @@
+{% if kind == "equals" %}
+    expect({{ actual }}).toBe({{ expected }});
+{% elif kind == "untagged" %}
+    // skipped: wasm untagged enum field '{{ field }}' has no variant discriminator on the wire
+{% elif kind == "presence" %}
+    expect({{ actual }}).toBeDefined();
+{% endif %}

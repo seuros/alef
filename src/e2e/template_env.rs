@@ -459,6 +459,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/typescript/assertion.jinja"),
     ),
     (
+        "typescript/wildcard_assertion.jinja",
+        include_str!("templates/typescript/wildcard_assertion.jinja"),
+    ),
+    (
+        "typescript/wasm_enum_assertion.jinja",
+        include_str!("templates/typescript/wasm_enum_assertion.jinja"),
+    ),
+    (
         "typescript/synthetic_assertion.jinja",
         include_str!("templates/typescript/synthetic_assertion.jinja"),
     ),
