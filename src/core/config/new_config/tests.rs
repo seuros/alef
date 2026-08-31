@@ -614,6 +614,70 @@ python = "packages/python/shared/"
     assert!(matches!(err, ResolveError::OverlappingOutputPath { ref lang, .. } if lang == "python"));
 }
 
+/// Regression for the gap `validate_nuget_package_id`'s own doc comment names but that no
+/// per-crate check can close: `resolve_one` validates each crate's NuGet package ID in
+/// isolation, so two crates whose IDs differ only by case both pass individually and only
+/// collide once actually published to nuget.org (which folds case via
+/// `StringComparer.OrdinalIgnoreCase`).
+#[test]
+fn new_alef_config_resolve_rejects_case_insensitive_nuget_collisions() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["csharp"]
+
+[[crates]]
+name = "crate-a"
+sources = ["src/lib.rs"]
+
+[crates.csharp]
+package_id = "MyLib"
+
+[[crates]]
+name = "crate-b"
+sources = ["src/other.rs"]
+
+[crates.csharp]
+package_id = "mylib"
+"#,
+    )
+    .unwrap();
+    let err = cfg.resolve().unwrap_err();
+    let ResolveError::InvalidConfig(message) = err else {
+        panic!("expected InvalidConfig, got {err:?}");
+    };
+    assert!(message.contains("crate-a"), "got: {message}");
+    assert!(message.contains("crate-b"), "got: {message}");
+}
+
+/// A NuGet collision key is folded per package ID, not shared globally -- two crates with
+/// distinct package IDs must resolve cleanly even though both target `csharp`.
+#[test]
+fn new_alef_config_resolve_allows_distinct_nuget_package_ids() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["csharp"]
+
+[[crates]]
+name = "crate-a"
+sources = ["src/lib.rs"]
+
+[crates.csharp]
+package_id = "MyLib"
+
+[[crates]]
+name = "crate-b"
+sources = ["src/other.rs"]
+
+[crates.csharp]
+package_id = "OtherLib"
+"#,
+    )
+    .unwrap();
+    assert!(cfg.resolve().is_ok());
+}
+
 #[test]
 fn new_alef_config_resolve_per_crate_languages_overrides_workspace() {
     let cfg: NewAlefConfig = toml::from_str(
@@ -689,6 +753,56 @@ module_name = "crate_module"
             .and_then(|python| python.module_name.as_deref()),
         Some("crate_module")
     );
+}
+
+/// Regression: the plain `kotlin` backend (not `kotlin_android`) splices
+/// `[crates.java].package` verbatim into generated `.kt` source (see
+/// `new_config::java_package_is_consumed`'s doc comment), so a package segment that is a
+/// Kotlin hard keyword but not a Java one must be rejected once `kotlin` is enabled, even
+/// though the very same value passes the Java grammar on its own.
+#[test]
+fn resolve_rejects_java_package_that_is_a_kotlin_keyword_when_kotlin_is_enabled() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["kotlin"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[crates.java]
+package = "dev.fun"
+"#,
+    )
+    .unwrap();
+    let err = cfg.resolve().unwrap_err();
+    assert!(
+        matches!(&err, ResolveError::InvalidConfig(msg) if msg.contains("[crates.java].package") && msg.contains("dev.fun")),
+        "expected InvalidConfig naming the offending java package, got: {err:?}"
+    );
+}
+
+/// The same package segment is a legal Java identifier and must still resolve cleanly when
+/// only `java` (no `kotlin`) is enabled -- the Kotlin-grammar check must not leak into crates
+/// that never generate Kotlin source from this value.
+#[test]
+fn resolve_accepts_java_package_that_is_only_a_kotlin_keyword_when_kotlin_is_disabled() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["java"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[crates.java]
+package = "dev.fun"
+"#,
+    )
+    .unwrap();
+    assert!(cfg.resolve().is_ok());
 }
 
 #[test]

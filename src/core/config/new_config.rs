@@ -140,6 +140,8 @@ impl NewAlefConfig {
             }
         }
 
+        validate_no_nuget_package_id_collisions(&resolved)?;
+
         Ok(resolved)
     }
 
@@ -416,6 +418,42 @@ fn validate_package_coordinates(resolved: &ResolvedCrateConfig) -> Result<(), Re
     Ok(())
 }
 
+/// Reject two `[[crates]]` whose NuGet package IDs collide once case is folded the way NuGet.org
+/// itself folds it.
+///
+/// [`crate::codegen::coordinates::validate_nuget_package_id`]'s own doc comment promises this:
+/// "Callers must also check case-insensitive collisions across a workspace." `validate_dotnet_coordinates`
+/// (run per crate, inside `resolve_one`) cannot see sibling crates, so this runs once over every
+/// resolved crate, the same shape as the `OverlappingOutputPath` check directly above it in
+/// [`NewAlefConfig::resolve`] -- two crates publishing `MyLib` and `mylib` would collide on the
+/// real registry even though `resolve_one` validates each in isolation and sees no conflict.
+fn validate_no_nuget_package_id_collisions(resolved: &[ResolvedCrateConfig]) -> Result<(), ResolveError> {
+    use crate::codegen::coordinates::nuget_ordinal_fold;
+
+    let mut owners: HashMap<String, Vec<String>> = HashMap::new();
+    for cfg in resolved {
+        if !cfg.effective_languages().contains(&Language::Csharp) {
+            continue;
+        }
+        let package_id = cfg.nuget_package_id();
+        owners
+            .entry(nuget_ordinal_fold(&package_id))
+            .or_default()
+            .push(cfg.name.clone());
+    }
+    for (fold, crates) in owners {
+        if crates.len() > 1 {
+            return Err(ResolveError::InvalidConfig(format!(
+                "NuGet package ID collision (case-insensitive, fold key `{fold}`): crates {} would publish \
+                 indistinguishable package IDs on nuget.org — give each crate a distinct `[crates.csharp] \
+                 package_id`",
+                crates.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `[crates.java].package` is consumed by more than the `java` backend: the plain `kotlin`
 /// backend (target `jvm`/`multiplatform`, i.e. *not* `kotlin_android`) reads
 /// `config.java_package()` too, and splices it verbatim into emitted `.kt` source --
@@ -438,6 +476,14 @@ fn validate_jvm_coordinates(resolved: &ResolvedCrateConfig, languages: &[Languag
     if java_package_is_consumed(languages) {
         let package = resolved.java_package();
         validate_java_package(&package).map_err(|error| invalid("[crates.java].package", &package, error))?;
+        // The plain `kotlin` backend splices this same value into `.kt` source (see the
+        // `java_package_is_consumed` doc comment), so it must also satisfy the stricter Kotlin
+        // grammar whenever that backend is enabled -- Java accepts `dev.fun` (`fun` is not a
+        // Java keyword) but Kotlin does not, and `dev.fun` reaching `import dev.fun.Type` in
+        // generated Kotlin source fails to compile. ~keep
+        if languages.contains(&Language::Kotlin) {
+            validate_kotlin_package(&package).map_err(|error| invalid("[crates.java].package", &package, error))?;
+        }
     }
     if languages.contains(&Language::Java) || languages.contains(&Language::KotlinAndroid) {
         let group = resolved.java_group_id();
@@ -503,11 +549,7 @@ fn validate_dotnet_coordinates(resolved: &ResolvedCrateConfig, languages: &[Lang
     let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
     let namespace = resolved.csharp_namespace();
     validate_csharp_namespace(&namespace).map_err(|error| invalid("[crates.csharp].namespace", &namespace, error))?;
-    let package_id = resolved
-        .csharp
-        .as_ref()
-        .and_then(|config| config.package_id.clone())
-        .unwrap_or_else(|| namespace.clone());
+    let package_id = resolved.nuget_package_id();
     validate_nuget_package_id(&package_id).map_err(|error| invalid("[crates.csharp].package_id", &package_id, error))
 }
 
@@ -530,8 +572,16 @@ fn validate_swift_coordinates(resolved: &ResolvedCrateConfig, languages: &[Langu
         .map_err(|error| invalid("[crates.swift].package_name", &package_name, error))
 }
 
+/// `[crates.dart].pubspec_name` and `[crates.dart].lib_name` are two different grammars:
+/// `pubspec_name` is pub.dev's own *package* name, restricted to `lowercase_with_underscores`;
+/// `lib_name` is a single Dart import-URI path segment / file basename
+/// (`import 'package:{pubspec_name}/{lib_name}.dart'`) that `dart_bridge_class_name` already
+/// documents as accepting hyphens (e.g. `"sample-widget"` -> `"SampleWidgetBridge"`), so it gets
+/// the looser [`validate_dart_library_name`] rather than the package-name grammar. See that
+/// function's doc comment for why reusing the stricter check here would be a backward-
+/// incompatible regression, not a tightening.
 fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
-    use crate::codegen::coordinates::validate_dart_package_name;
+    use crate::codegen::coordinates::{validate_dart_library_name, validate_dart_package_name};
 
     if !languages.contains(&Language::Dart) {
         return Ok(());
@@ -541,7 +591,7 @@ fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Langua
     validate_dart_package_name(&pubspec_name)
         .map_err(|error| invalid("[crates.dart].pubspec_name", &pubspec_name, error))?;
     let library_name = resolved.dart_library_name();
-    validate_dart_package_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
+    validate_dart_library_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
 }
 
 /// Validate a single `crate_attributes` entry.

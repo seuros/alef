@@ -150,6 +150,20 @@ impl ResolvedCrateConfig {
                 self.name.to_pascal_case()
             })
     }
+
+    /// Get the NuGet package ID.
+    ///
+    /// Prefers the explicit `[csharp] package_id` override; otherwise falls back to
+    /// [`Self::csharp_namespace`] (most projects publish under `packageId ==
+    /// namespace`). The single source of truth for this coordinate, so
+    /// `validate_dotnet_coordinates` and the cross-crate NuGet collision check in
+    /// [`crate::core::config::new_config::NewAlefConfig::resolve`] can never disagree about it.
+    pub fn nuget_package_id(&self) -> String {
+        self.csharp
+            .as_ref()
+            .and_then(|config| config.package_id.clone())
+            .unwrap_or_else(|| self.csharp_namespace())
+    }
 }
 
 #[cfg(test)]
