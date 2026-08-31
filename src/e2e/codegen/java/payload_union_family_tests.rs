@@ -66,6 +66,7 @@ fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
 /// - `summary` — an OPTIONAL payload union, whose accessor is wrapped in `Optional.ofNullable`.
 /// - `payload` — a NON-OPTIONAL payload union, whose accessor stays bare.
 /// - `status` — a fieldless enum, the control that keeps `.getValue()`.
+/// - `stages` — a collection of structs each carrying a payload union, for the wildcard paths.
 /// - `title` / `attempts` / `tags` / `flag` — plain scalars and a collection, the per-family
 ///   controls that must keep emitting their normal assertion.
 ///
@@ -75,23 +76,38 @@ fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
 /// emits `result.size()` for it. A control built on that name exercises the length pseudo-path
 /// instead of the numeric one, which is a test of the fixture rather than of the generator.
 fn union_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
-    let type_defs = vec![TypeDef {
-        name: "UnionResult".to_string(),
-        fields: vec![
-            field(
-                "summary",
-                TypeRef::Optional(Box::new(TypeRef::Named("StageOutput".to_string()))),
-                true,
-            ),
-            field("payload", TypeRef::Named("StageOutput".to_string()), false),
-            field("status", TypeRef::Named("StageStatus".to_string()), false),
-            field("title", TypeRef::String, false),
-            field("attempts", TypeRef::Primitive(PrimitiveType::U32), false),
-            field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
-            field("flag", TypeRef::Primitive(PrimitiveType::Bool), false),
-        ],
-        ..TypeDef::default()
-    }];
+    let type_defs = vec![
+        TypeDef {
+            name: "UnionResult".to_string(),
+            fields: vec![
+                field(
+                    "summary",
+                    TypeRef::Optional(Box::new(TypeRef::Named("StageOutput".to_string()))),
+                    true,
+                ),
+                field("payload", TypeRef::Named("StageOutput".to_string()), false),
+                field("status", TypeRef::Named("StageStatus".to_string()), false),
+                field(
+                    "stages",
+                    TypeRef::Vec(Box::new(TypeRef::Named("Stage".to_string()))),
+                    false,
+                ),
+                field("title", TypeRef::String, false),
+                field("attempts", TypeRef::Primitive(PrimitiveType::U32), false),
+                field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
+                field("flag", TypeRef::Primitive(PrimitiveType::Bool), false),
+            ],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "Stage".to_string(),
+            fields: vec![
+                field("payload", TypeRef::Named("StageOutput".to_string()), false),
+                field("label", TypeRef::String, false),
+            ],
+            ..TypeDef::default()
+        },
+    ];
     let enums = vec![stage_output_enum(), stage_status_enum()];
     let functions = vec![FunctionDef {
         name: "read_union".to_string(),
@@ -345,11 +361,111 @@ fn presence_on_a_non_optional_payload_union_is_skipped() {
     assert_skipped(&out, "payload", "result.payload().isEmpty()");
 }
 
-/// A `fields_display_as_text` field keeps the string-shaped families: its optional lowering is
-/// `.map(v -> v.text()).orElse("")`, and `.text()` is a real accessor on the wrapper the binding
-/// emits for exactly the types that config names.
+// ---- fields_display_as_text: the exemption is narrowed to the string and length families ----
+//
+// ~keep `.text()` is real, but it yields a `String`, so only the families a `String` answers are
+// substantiated by it. Each pair below is one family from both sides against the SAME field and
+// the SAME config, so the only thing that can explain a difference is the family itself.
+
+/// String/equality family: `equals` with a string value is what the `.text()` surface is for,
+/// and an existing pinned test (`assertion_union_enum_field_classification_tests`) depends on it.
 #[test]
 fn a_display_as_text_union_field_still_emits_through_the_text_accessor() {
     let out = render(assertion("equals", "summary", text("ok")), &["summary"]);
     assert_emitted(&out, ".map(v -> v.text()).orElse(\"\")");
+}
+
+/// String family, containment half.
+#[test]
+fn string_containment_on_a_display_as_text_union_still_emits() {
+    let out = render(assertion("contains", "summary", text("ok")), &["summary"]);
+    assert_emitted(&out, ".map(v -> v.text()).orElse(\"\").contains(");
+}
+
+/// Length family: `String.length()` is real.
+#[test]
+fn length_on_a_display_as_text_union_still_emits() {
+    let out = render(assertion("min_length", "summary", number(3)), &["summary"]);
+    assert_emitted(&out, ".map(v -> v.text()).orElse(\"\").length() >= 3");
+}
+
+/// Numeric family: renders `{String} > 1`, which does not compile. javac rejects it.
+#[test]
+fn numeric_comparison_on_a_display_as_text_union_is_skipped() {
+    let out = render(assertion("greater_than", "summary", number(1)), &["summary"]);
+    assert_skipped(&out, "summary", ".orElse(\"\") > 1");
+}
+
+/// Count family: renders `{String}.size()`, which does not compile.
+#[test]
+fn count_on_a_display_as_text_union_is_skipped() {
+    let out = render(assertion("count_min", "summary", number(1)), &["summary"]);
+    assert_skipped(&out, "summary", ".size()");
+}
+
+/// Regex family. Unlike the two above this one COMPILES (`String.matches` exists), so it is
+/// refused on soundness: a regex fixture is written against the union's wire form, while
+/// `.text()` is a lossy display projection. Nothing but this gate would ever catch it.
+#[test]
+fn regex_on_a_display_as_text_union_is_skipped() {
+    let out = render(assertion("matches_regex", "summary", text("^ok$")), &["summary"]);
+    assert_skipped(&out, "summary", ".matches(");
+}
+
+/// A numeric-valued `equals` is NOT the string family: the template routes it through
+/// `.map(Number::longValue)`, which does not compile on the `String` `.text()` returns.
+#[test]
+fn numeric_valued_equality_on_a_display_as_text_union_is_skipped() {
+    let out = render(assertion("equals", "summary", number(1)), &["summary"]);
+    assert_skipped(&out, "summary", "assertEquals");
+}
+
+/// Boolean stays substantiated on a display-as-text field, but through the PRESENCE rule, not
+/// the text surface — `render_assertion`'s display-as-text branch returns the raw `Optional` for
+/// `is_true`/`is_false`, so `.text()` never enters the expression. Narrowing the text exemption
+/// must not regress this.
+#[test]
+fn boolean_on_a_display_as_text_union_still_emits_a_presence_check() {
+    let out = render(assertion("is_true", "summary", None), &["summary"]);
+    assert_emitted(&out, "java.util.Optional.ofNullable(result.summary()).isPresent()");
+}
+
+// ---- bracket-wildcard leaves: gated BEFORE `render_wildcard_assertion` lowers them ----
+//
+// ~keep The wildcard renderer stringifies each element with `String.valueOf({elem})`. On a
+// wrapper leaf that is Jackson's JSON rendering — quotes and object keys included — so its
+// `contains` arms match the diagnostic form rather than the value, and its `not_empty` arm
+// cannot fail at all, since `String.valueOf` of an absent payload is the four-character "null".
+// Both COMPILE, so only this gate can catch them.
+
+#[test]
+fn wildcard_containment_on_a_payload_union_leaf_is_skipped() {
+    let out = render(assertion("contains", "stages[].payload", text("ok")), &[]);
+    assert_skipped(&out, "stages[].payload", "anyMatch");
+}
+
+/// The vacuous one: `!String.valueOf(wrapper).isEmpty()` is true even for an absent payload.
+#[test]
+fn wildcard_presence_on_a_payload_union_leaf_is_skipped() {
+    let out = render(assertion("not_empty", "stages[].payload", None), &[]);
+    assert_skipped(&out, "stages[].payload", "anyMatch");
+}
+
+/// Opposite control, and the one that proves the gate did not simply disable wildcard lowering:
+/// a `String` leaf on the SAME container must still expand to the element-relative `anyMatch`.
+#[test]
+fn wildcard_containment_on_a_string_leaf_still_emits() {
+    let out = render(assertion("contains", "stages[].label", text("ok")), &[]);
+    assert_emitted(&out, "result.stages().stream().anyMatch(");
+    assert!(
+        out.contains(".label()).contains("),
+        "the lambda body must address the element's own field, got:\n{out}"
+    );
+}
+
+/// Same control for the presence family.
+#[test]
+fn wildcard_presence_on_a_string_leaf_still_emits() {
+    let out = render(assertion("not_empty", "stages[].label", None), &[]);
+    assert_emitted(&out, "result.stages().stream().anyMatch(");
 }

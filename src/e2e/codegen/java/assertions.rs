@@ -419,6 +419,22 @@ pub(super) fn render_assertion(
         return;
     }
 
+    let EnumLowering {
+        sealed_display_type,
+        is_sealed_display_field,
+        field_is_enum,
+    } = classify_enum_lowering(assertion.field.as_deref(), field_resolver, enum_fields, assert_enum_types);
+
+    // Runs BEFORE the wildcard lowering below, not after: `render_wildcard_assertion` returns
+    // without consulting anything downstream, so a gate placed after it decides nothing for a
+    // wildcard path. See `payload_union_gate`'s module doc for the family-by-family reasoning. ~keep
+    if !result_is_simple
+        && !is_sealed_display_field
+        && super::payload_union_gate::try_skip_unsupported_family(out, assertion, field_resolver)
+    {
+        return;
+    }
+
     // Bracket-wildcard traversal (`links[].linkType`) means "every element". This must run
     // before `field_expr` is built below, since that path lowers the wildcard to index 0 and
     // would assert on a single element while reading as whole-array coverage. ~keep
@@ -427,22 +443,6 @@ pub(super) fn render_assertion(
         && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
     {
         render_wildcard_assertion(out, assertion, result_var, field_resolver, f, &array_part, &elem_part);
-        return;
-    }
-
-    let EnumLowering {
-        sealed_display_type,
-        is_sealed_display_field,
-        field_is_enum,
-    } = classify_enum_lowering(assertion.field.as_deref(), field_resolver, enum_fields, assert_enum_types);
-
-    // Deliberately after the wildcard gate above: a path that merely *crosses* a union has its
-    // own correct lowering there, and only a path whose own leaf IS the union reaches here. See
-    // `payload_union_gate`'s module doc for the family-by-family reasoning. ~keep
-    if !result_is_simple
-        && !is_sealed_display_field
-        && super::payload_union_gate::try_skip_unsupported_family(out, assertion, field_resolver)
-    {
         return;
     }
 
