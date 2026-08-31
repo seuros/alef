@@ -5,8 +5,18 @@ use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::ApiSurface;
 
 /// What `nodecontext_to_py_object`'s fallback arm actually builds: a `PyDict` keyed by the
-/// context's public field names, whose values span every field shape the helper can lower. ~keep
-const VISITOR_CONTEXT_DICT_ANNOTATION: &str = "dict[str, Any]";
+/// context's public field names, whose values span every field shape the helper can lower --
+/// `str`, `str | None`, `bool`, an integer, the `{:?}` rendering of an enum, `dict[str, str]`, or
+/// `list[str]` (see `codegen::visitor_context::pyo3_field_line`).
+///
+/// The value type is `object`, not `Any`. `Any` switches the checker off at the parameter a
+/// consumer's visitor callback is written against, so `ctx["depth"] + 1` and `ctx.depth` both
+/// type-check against a shape that has neither. `object` still admits every value the fallback
+/// can insert while forcing the consumer to narrow before use, which is the whole point of
+/// annotating the degraded arm at all. It is also a builtin, so unlike `Any` it pulls no
+/// `from typing import ...` line that `contains_word` would then have to keep in sync -- the
+/// same hazard `gen_bindings::types.rs` records for Json-typed fields. ~keep
+const VISITOR_CONTEXT_DICT_ANNOTATION: &str = "dict[str, object]";
 
 /// Generate a `class TraitName(Protocol):` stub for an `OptionsField` trait bridge.
 ///
@@ -221,14 +231,14 @@ mod tests {
              assertion below proves nothing:\n{included}"
         );
         assert!(
-            !included.contains("dict[str, Any]"),
+            !included.contains("dict[str, object]"),
             "control: an unexcluded context must not be annotated as a dict:\n{included}"
         );
 
         let excluded_names: AHashSet<String> = ["TraversalState".to_string()].into_iter().collect();
         let excluded = render(&api, &bridge, &excluded_names);
         assert!(
-            excluded.contains("state: dict[str, Any]"),
+            excluded.contains("state: dict[str, object]"),
             "a context whose #[pyclass] the config removed must be annotated as the dict the \
              bridge actually passes:\n{excluded}"
         );
@@ -258,7 +268,7 @@ mod tests {
         let stub = render(&api, &bridge, &excluded_names);
 
         assert!(
-            !stub.contains("dict[str, Any]"),
+            !stub.contains("dict[str, object]"),
             "a plugin bridge has no visitor context fallback to describe:\n{stub}"
         );
     }
