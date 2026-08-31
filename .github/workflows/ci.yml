@@ -96,7 +96,7 @@ jobs:
         run: npm install --global typescript@5.9.2
       # The C# identifier-grammar oracle (`ALEF_REQUIRE_DOTNET` below) needs a real `dotnet` on
       # PATH; nothing else in this job installed one before this step existed.
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
       # The Kotlin identifier-grammar oracle (`ALEF_REQUIRE_KOTLINC` below) needs a real
