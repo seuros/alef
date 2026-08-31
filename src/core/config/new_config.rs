@@ -642,6 +642,8 @@ fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Langua
         .map_err(|error| invalid("[crates.dart].pubspec_name", &pubspec_name, error))?;
     let library_name = resolved.dart_library_name();
     validate_dart_library_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
+}
+
 /// Validate that a crate's own `name` cannot itself carry a path-traversal or absolute-path
 /// takeover, called once per crate from [`NewAlefConfig::resolve`] before any per-crate,
 /// per-language resolution runs.

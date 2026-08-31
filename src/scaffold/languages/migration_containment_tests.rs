@@ -30,10 +30,10 @@
 #![cfg(unix)]
 
 use super::{
-    migrate_dart_placeholder_test, migrate_kotlin_build_gradle, migrate_poly_toml_drop_snippet_hook,
-    migrate_swift_placeholder_test,
+    STALE_WASM_CARGO_CONFIG, migrate_dart_placeholder_test, migrate_kotlin_build_gradle,
+    migrate_poly_toml_drop_snippet_hook, migrate_swift_placeholder_test,
+    migrate_wasm_cargo_config_allow_multiple_definition,
 };
-use crate::scaffold::{STALE_WASM_CARGO_CONFIG, migrate_wasm_cargo_config_allow_multiple_definition};
 use std::path::Path;
 
 const SWIFT_RELATIVE: &str = "packages/swift/Tests/EvilTests/EvilTests.swift";

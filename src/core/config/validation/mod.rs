@@ -20,7 +20,6 @@ mod preconditions;
 use super::extras::Language;
 use super::output::validate_output_segment;
 use super::resolved::ResolvedCrateConfig;
-use crate::core::config::extras::Language;
 use crate::core::error::AlefError;
 use preconditions::{
     build_main_fields, clean_main_fields, lint_main_fields, setup_main_fields, test_main_fields, update_main_fields,

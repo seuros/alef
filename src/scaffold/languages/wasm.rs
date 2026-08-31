@@ -523,7 +523,10 @@ pub(crate) const STALE_WASM_CARGO_CONFIG: &str = "[build]\nincremental = true\n\
 /// configured, so nothing here is templated), so exact-match is both sufficient and maximally
 /// conservative -- any consumer edit at all leaves the file completely untouched. ~keep
 pub(crate) fn migrate_wasm_cargo_config_allow_multiple_definition(base_dir: &std::path::Path) -> anyhow::Result<bool> {
-    let path = base_dir.join(".cargo/config.toml");
+    let path = crate::cli::pipeline::generate::write::contained_output_path(
+        base_dir,
+        std::path::Path::new(".cargo/config.toml"),
+    )?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };

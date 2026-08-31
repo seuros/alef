@@ -56,8 +56,15 @@ pub(super) fn ensure_no_symlink_escape(base_dir: &Path, emitted_path: &Path) -> 
         // `symlink_metadata` rather than `exists`: a dangling symlink is a component that
         // exists for the purposes of this walk (the writers would follow it) while `exists`
         // reports it missing, which would end the walk one component early. ~keep
-        if std::fs::symlink_metadata(&candidate).is_err() {
-            return Ok(());
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect existing output path `{}`: {error}",
+                    candidate.display()
+                ));
+            }
         }
         let real = candidate.canonicalize().map_err(|error| {
             format!(

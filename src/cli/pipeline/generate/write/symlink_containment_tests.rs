@@ -20,6 +20,7 @@
 use super::write_files_report;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::Language;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 const EMITTED: &str = "packages/node/index.ts";
@@ -129,4 +130,22 @@ fn base_directory_reached_through_a_symlink_is_not_an_escape() {
 
     let written = std::fs::read_to_string(real_root.join("base").join(EMITTED)).expect("generated file");
     assert!(written.contains("export const generated = true;"), "{written}");
+}
+
+#[test]
+fn inaccessible_existing_ancestor_fails_closed() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let base = temporary.path().join("base");
+    let blocked = base.join("blocked");
+    std::fs::create_dir_all(&blocked).expect("blocked directory");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("remove permissions");
+
+    let result = super::contained_output_path(&base, Path::new("blocked/leaf.txt"));
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("restore permissions");
+    let error = result.expect_err("an unreadable ancestor must not be treated as absent");
+    assert!(
+        error.to_string().contains("failed to inspect existing output path"),
+        "{error}"
+    );
 }
