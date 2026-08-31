@@ -1,5 +1,7 @@
-//! Exact Java, C#, and Kotlin identifier character classes, resolved from a pinned Unicode
-//! table.
+//! Exact Java, C#, Kotlin, and Swift identifier character classes, resolved from a pinned
+//! Unicode table (Java, C#, Kotlin) or the Swift language grammar's own scalar-range list
+//! (Swift, which defines its identifier grammar directly in terms of code-point ranges rather
+//! than general categories).
 //!
 //! Java, C#, and Kotlin each define "identifier" in terms of Unicode general categories, but no
 //! two of them define it the *same* way, and none matches Rust's `char::is_alphabetic` /
@@ -185,6 +187,96 @@ pub fn is_kotlin_identifier_part(character: char) -> bool {
     is_kotlin_identifier_start(character) || get_general_category(character) == GeneralCategory::DecimalNumber
 }
 
+/// The Swift Language Reference's `identifier-head` scalar ranges (swift.org/documentation,
+/// "Lexical Structure > Identifiers"), minus the leading `A`-`Z`/`a`-`z`/`_` cases (handled
+/// separately in [`is_swift_identifier_start`]). Unlike Java, C#, and Kotlin, Swift's own
+/// grammar is defined directly as a list of Unicode scalar ranges rather than in terms of
+/// general categories, so this table transcribes those ranges rather than deriving them from
+/// `unicode_general_category`.
+///
+/// Spot-checked against `swiftc` 6.3.1: U+00A8 (diaeresis) and U+2103 (degree Celsius, inside
+/// U+2100–U+218F) both start a valid identifier; U+2603 (snowman) and U+2049 (exclamation
+/// question mark) -- both outside every range here -- are rejected with "expected pattern".
+/// U+1F600 and U+1F389 (emoji in the U+10000–U+1FFFD range) both start a valid identifier,
+/// which is why the previous `char::is_alphabetic` approximation was wrong: neither is
+/// Unicode-Alphabetic, so it rejected them, but `swiftc` accepts them. ~keep
+const SWIFT_IDENTIFIER_HEAD_RANGES: &[(u32, u32)] = &[
+    (0x00A8, 0x00A8),
+    (0x00AA, 0x00AA),
+    (0x00AD, 0x00AD),
+    (0x00AF, 0x00AF),
+    (0x00B2, 0x00B5),
+    (0x00B7, 0x00BA),
+    (0x00BC, 0x00BE),
+    (0x00C0, 0x00D6),
+    (0x00D8, 0x00F6),
+    (0x00F8, 0x00FF),
+    (0x0100, 0x02FF),
+    (0x0370, 0x167F),
+    (0x1681, 0x180D),
+    (0x180F, 0x1DBF),
+    (0x1E00, 0x1FFF),
+    (0x200B, 0x200D),
+    (0x202A, 0x202E),
+    (0x203F, 0x2040),
+    (0x2054, 0x2054),
+    (0x2060, 0x206F),
+    (0x2070, 0x20CF),
+    (0x2100, 0x218F),
+    (0x2460, 0x24FF),
+    (0x2776, 0x2793),
+    (0x2C00, 0x2DFF),
+    (0x2E80, 0x2FFF),
+    (0x3004, 0x3007),
+    (0x3021, 0x302F),
+    (0x3031, 0x303F),
+    (0x3040, 0xD7FF),
+    (0xF900, 0xFD3D),
+    (0xFD40, 0xFDCF),
+    (0xFDF0, 0xFE1F),
+    (0xFE30, 0xFE44),
+    (0xFE47, 0xFFFD),
+    (0x10000, 0x1FFFD),
+    (0x20000, 0x2FFFD),
+    (0x30000, 0x3FFFD),
+    (0x40000, 0x4FFFD),
+    (0x50000, 0x5FFFD),
+    (0x60000, 0x6FFFD),
+    (0x70000, 0x7FFFD),
+    (0x80000, 0x8FFFD),
+    (0x90000, 0x9FFFD),
+    (0xA0000, 0xAFFFD),
+    (0xB0000, 0xBFFFD),
+    (0xC0000, 0xCFFFD),
+    (0xD0000, 0xDFFFD),
+    (0xE0000, 0xEFFFD),
+];
+
+/// The additional scalar ranges the Swift grammar's `identifier-character` production admits on
+/// top of `identifier-head` (combining marks that may continue, but not start, an identifier).
+/// ASCII digits `0`-`9` are handled separately in [`is_swift_identifier_part`].
+const SWIFT_IDENTIFIER_CONTINUATION_ONLY_RANGES: &[(u32, u32)] =
+    &[(0x0300, 0x036F), (0x1DC0, 0x1DFF), (0x20D0, 0x20FF), (0xFE20, 0xFE2F)];
+
+fn in_ranges(character: char, ranges: &[(u32, u32)]) -> bool {
+    let scalar = character as u32;
+    ranges.iter().any(|&(start, end)| scalar >= start && scalar <= end)
+}
+
+/// Swift `identifier-head`: `A`-`Z`, `a`-`z`, `_`, or one of the scalar ranges in
+/// [`SWIFT_IDENTIFIER_HEAD_RANGES`]. An identifier cannot begin with a digit.
+pub fn is_swift_identifier_start(character: char) -> bool {
+    character.is_ascii_alphabetic() || character == '_' || in_ranges(character, SWIFT_IDENTIFIER_HEAD_RANGES)
+}
+
+/// Swift `identifier-character`: every `identifier-head` character, plus ASCII digits and the
+/// combining-mark ranges in [`SWIFT_IDENTIFIER_CONTINUATION_ONLY_RANGES`].
+pub fn is_swift_identifier_part(character: char) -> bool {
+    is_swift_identifier_start(character)
+        || character.is_ascii_digit()
+        || in_ranges(character, SWIFT_IDENTIFIER_CONTINUATION_ONLY_RANGES)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +421,57 @@ mod tests {
     fn kotlin_accepts_the_literal_underscore_as_start_and_part() {
         assert!(is_kotlin_identifier_start('_'));
         assert!(is_kotlin_identifier_part('_'));
+    }
+
+    /// Verified against `swiftc` 6.3.1 directly (see the module docs on
+    /// [`SWIFT_IDENTIFIER_HEAD_RANGES`]): `let 😀z = 1` and `let 🎉z = 1` both compile. Neither
+    /// scalar is Unicode-Alphabetic, which is exactly the bug the previous
+    /// `char::is_alphabetic()` approximation had -- it rejected both.
+    #[test]
+    fn swift_accepts_emoji_that_rust_alphabetic_rejects() {
+        for character in ['\u{1F600}', '\u{1F389}'] {
+            let label = format!("U+{:04X}", character as u32);
+            assert!(!character.is_alphabetic(), "{label} is not Rust-alphabetic");
+            assert!(is_swift_identifier_start(character), "swift {label} start");
+            assert!(is_swift_identifier_part(character), "swift {label} part");
+        }
+    }
+
+    /// Verified against `swiftc` 6.3.1: `let ☃z = 1` and `let ⁉z = 1` both fail with "expected
+    /// pattern" -- neither U+2603 nor U+2049 falls inside any `identifier-head` range.
+    #[test]
+    fn swift_rejects_symbols_outside_every_identifier_head_range() {
+        for character in ['\u{2603}', '\u{2049}'] {
+            let label = format!("U+{:04X}", character as u32);
+            assert!(!is_swift_identifier_start(character), "swift {label} start");
+            assert!(!is_swift_identifier_part(character), "swift {label} part");
+        }
+    }
+
+    /// Verified against `swiftc` 6.3.1: U+00A8 (diaeresis) and U+2103 (degree Celsius, inside
+    /// U+2100–U+218F) both start a valid identifier.
+    #[test]
+    fn swift_accepts_documented_head_range_boundaries() {
+        assert!(is_swift_identifier_start('\u{00A8}'));
+        assert!(is_swift_identifier_start('\u{2103}'));
+    }
+
+    #[test]
+    fn swift_rejects_a_leading_digit_but_accepts_a_continuation_digit() {
+        assert!(!is_swift_identifier_start('0'));
+        assert!(is_swift_identifier_part('0'));
+    }
+
+    #[test]
+    fn swift_accepts_the_literal_underscore_as_start_and_part() {
+        assert!(is_swift_identifier_start('_'));
+        assert!(is_swift_identifier_part('_'));
+    }
+
+    #[test]
+    fn swift_continuation_only_ranges_are_rejected_as_a_start() {
+        // U+0301 (combining acute) may continue a Swift identifier but never start one.
+        assert!(!is_swift_identifier_start('\u{0301}'));
+        assert!(is_swift_identifier_part('\u{0301}'));
     }
 }
