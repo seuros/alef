@@ -111,7 +111,7 @@ pylint_max_returns = 10
 # importable package module, so the implicit-namespace-package rule does not apply. Named
 # exactly rather than globbed: a glob over the tree would silently exempt every future Python
 # file added under it.
-"src/e2e/codegen/python/visitor_context_runtime_driver.py" = ["INP001"]
+"src/e2e/codegen/python/visitor_context_runtime_driver.py" = ["CPY001", "INP001"]
 "e2e/**" = ["comment", "doc-comment"]
 "**/e2e/**" = ["comment", "doc-comment"]
 "test_apps/**" = ["comment", "doc-comment"]
