@@ -32,7 +32,7 @@
 //! `Unresolved` on an exotic body; admitting costs silent wrong output in every build where
 //! the cfg went the other way. ~keep
 
-use super::{DefaultValue, EvalScope, carries_value, expr_to_default_value, struct_expr_defaults};
+use super::{DefaultValue, EvalScope, TypeRef, carries_value, expr_to_default_value, struct_expr_defaults};
 use ahash::AHashMap;
 use quote::ToTokens;
 
@@ -84,60 +84,88 @@ pub(super) fn struct_body_defaults(body: &StructBody<'_>, scope: &EvalScope<'_>)
     let mut defaults = struct_expr_defaults(body.struct_expr, scope);
     for mutation in &body.mutations {
         let field_ty = scope.field_types.get(&mutation.field);
-        let updated = match &mutation.kind {
-            MutationKind::Assign(value) => expr_to_default_value(value, scope, field_ty),
+        match &mutation.kind {
+            MutationKind::Assign(value) => {
+                defaults.insert(mutation.field.clone(), expr_to_default_value(value, scope, field_ty));
+            }
             MutationKind::Push(value) => {
-                let element = expr_to_default_value(value, scope, field_ty);
-                pushed(defaults.get(&mutation.field), element, &mutation.source)
+                let current = defaults
+                    .entry(mutation.field.clone())
+                    .or_insert_with(|| DefaultValue::Unresolved(mutation.source.clone()));
+                push(current, value, scope, field_ty, &mutation.source);
             }
             MutationKind::Extend(value) => {
-                let addition = expr_to_default_value(value, scope, field_ty);
-                extended(defaults.get(&mutation.field), addition, &mutation.source)
+                let current = defaults
+                    .entry(mutation.field.clone())
+                    .or_insert_with(|| DefaultValue::Unresolved(mutation.source.clone()));
+                extend(current, value, scope, field_ty, &mutation.source);
             }
-            MutationKind::Opaque => DefaultValue::Unresolved(mutation.source.clone()),
-        };
-        defaults.insert(mutation.field.clone(), updated);
+            MutationKind::Opaque => {
+                defaults.insert(
+                    mutation.field.clone(),
+                    DefaultValue::Unresolved(mutation.source.clone()),
+                );
+            }
+        }
     }
     defaults
 }
 
 /// A `push` is readable only when both halves are: the element folds to a real value, and the
-/// field's value so far is a collection this pass actually read. Anything else — a computed
-/// element, a field that was already unresolved, a scalar — leaves the field unresolved rather
-/// than inventing a one-element list. ~keep
-fn pushed(current: Option<&DefaultValue>, element: DefaultValue, source: &str) -> DefaultValue {
+/// field is declared as a `Vec`, and its value so far is a collection this pass actually read.
+/// A custom type may expose a method named `push` with unrelated semantics, so method spelling
+/// alone is not evidence of a list mutation. ~keep
+fn push(
+    current: &mut DefaultValue,
+    value: &syn::Expr,
+    scope: &EvalScope<'_>,
+    field_ty: Option<&TypeRef>,
+    source: &str,
+) {
+    let Some(TypeRef::Vec(element_ty)) = field_ty else {
+        *current = DefaultValue::Unresolved(source.to_string());
+        return;
+    };
+    let element = expr_to_default_value(value, scope, Some(element_ty));
     if !carries_value(&element) {
-        return DefaultValue::Unresolved(source.to_string());
+        *current = DefaultValue::Unresolved(source.to_string());
+        return;
     }
     match current {
-        Some(DefaultValue::Empty) => DefaultValue::ListLiteral(vec![element]),
-        Some(DefaultValue::ListLiteral(existing)) => {
-            let mut elements = existing.clone();
-            elements.push(element);
-            DefaultValue::ListLiteral(elements)
-        }
-        _ => DefaultValue::Unresolved(source.to_string()),
+        DefaultValue::Empty => *current = DefaultValue::ListLiteral(vec![element]),
+        DefaultValue::ListLiteral(elements) => elements.push(element),
+        _ => *current = DefaultValue::Unresolved(source.to_string()),
     }
 }
 
 /// `extend` is `push` over a folded list. An argument that folds to `Empty` adds nothing, so
 /// the field keeps whatever the literal gave it; an argument alef could not read (an iterator
 /// chain, a call) makes the result unknown. ~keep
-fn extended(current: Option<&DefaultValue>, addition: DefaultValue, source: &str) -> DefaultValue {
+fn extend(
+    current: &mut DefaultValue,
+    value: &syn::Expr,
+    scope: &EvalScope<'_>,
+    field_ty: Option<&TypeRef>,
+    source: &str,
+) {
+    let Some(TypeRef::Vec(element_ty)) = field_ty else {
+        *current = DefaultValue::Unresolved(source.to_string());
+        return;
+    };
+    let addition = expr_to_default_value(value, scope, Some(element_ty));
     let additions = match addition {
         DefaultValue::Empty => Vec::new(),
         DefaultValue::ListLiteral(elements) => elements,
-        _ => return DefaultValue::Unresolved(source.to_string()),
+        _ => {
+            *current = DefaultValue::Unresolved(source.to_string());
+            return;
+        }
     };
     match current {
-        Some(DefaultValue::Empty) if additions.is_empty() => DefaultValue::Empty,
-        Some(DefaultValue::Empty) => DefaultValue::ListLiteral(additions),
-        Some(DefaultValue::ListLiteral(existing)) => {
-            let mut elements = existing.clone();
-            elements.extend(additions);
-            DefaultValue::ListLiteral(elements)
-        }
-        _ => DefaultValue::Unresolved(source.to_string()),
+        DefaultValue::Empty if additions.is_empty() => {}
+        DefaultValue::Empty => *current = DefaultValue::ListLiteral(additions),
+        DefaultValue::ListLiteral(elements) => elements.extend(additions),
+        _ => *current = DefaultValue::Unresolved(source.to_string()),
     }
 }
 

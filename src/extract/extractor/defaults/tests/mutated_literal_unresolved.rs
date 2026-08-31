@@ -78,6 +78,47 @@ fn set_insert_is_unresolved_for_the_same_reason_as_map_insert() {
     assert_every_field_unresolved(&resolved, "a populated set has no IR representation");
 }
 
+/// Method names alone do not prove collection semantics: a user-defined type may expose
+/// `push` and `extend` while preserving invariants or applying transformations Alef cannot see. ~keep
+#[test]
+fn custom_named_push_and_extend_are_unresolved() {
+    let resolved = defaults_for_typed(
+        r#"
+                #[derive(Default)]
+                pub struct Bag(Vec<String>);
+
+                impl Bag {
+                    fn push(&mut self, value: String) { self.0.push(value); }
+                    fn extend(&mut self, values: Vec<String>) { self.0.extend(values); }
+                }
+
+                pub struct Prefs { pub pushed: Bag, pub extended: Bag }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self {
+                            pushed: Bag::default(),
+                            extended: Bag::default(),
+                        };
+                        prefs.pushed.push("alpha".to_string());
+                        prefs.extended.extend(vec!["beta".to_string()]);
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &[
+            ("pushed", TypeRef::Named("Bag".to_string())),
+            ("extended", TypeRef::Named("Bag".to_string())),
+        ],
+    );
+
+    assert_every_field_unresolved(
+        &resolved,
+        "a custom named type's methods do not prove Vec mutation semantics",
+    );
+}
+
 /// The binding is handed to a helper by mutable reference. Whatever that helper does is
 /// invisible to this pass, so nothing about the returned value is known any more.
 #[test]
