@@ -16,6 +16,20 @@
 //! matters and therefore CONTAINS the string `--ignored`, so a `block.contains("--ignored")` would
 //! keep passing after the flag was deleted from the real command. Matching the comment instead of
 //! the command is precisely the vacuous shape these gates exist to prevent. ~keep
+//!
+//! # Porting this gate to another suite
+//!
+//! [`ignored_elixir_oracle_lanes_are_selected_and_nonzero`] is deliberately generic: it asks the
+//! RUNNING test binary to `--list` what a filter resolves to, so it catches the one failure a
+//! command-text check cannot see -- a filter that matches nothing. `cargo test --lib
+//! definitely_no_such_test -- --ignored` runs zero tests and exits 0, and a wiring check that
+//! only reads the `run:` line calls that green. This does not.
+//!
+//! To port it, copy this file and change the four constants below and nothing else:
+//! [`ORACLE_FILTER`] (the substring the CI step passes), [`EXPECTED_IGNORED_LANES`] (how many
+//! `#[ignore]`d tests that filter must resolve to), [`TEST_JOB`] and [`ORACLE_STEP`] (the job and
+//! step names in `.github/workflows/ci.yml`). The two helpers at the bottom and their own
+//! `the_workflow_readers_narrow_to_what_they_name` test travel unchanged. ~keep
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -25,7 +39,7 @@ const ORACLE_FILTER: &str = "elixir_oracle";
 
 /// How many `#[ignore]`d lanes the parent module defines. Pinned rather than merely checked for
 /// "more than zero" so that deleting three of the four is a failure, not a silent halving.
-const EXPECTED_IGNORED_LANES: usize = 4;
+const EXPECTED_IGNORED_LANES: usize = 5;
 
 const CI_WORKFLOW: &str = ".github/workflows/ci.yml";
 

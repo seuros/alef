@@ -22,6 +22,7 @@
 //! holds the other half — that something still selects them.
 
 use super::conversions::gen_elixir_enum_module;
+use crate::backends::rustler::elixir_escape::{elixir_atom_body, escape_elixir_string_literal};
 use crate::backends::rustler::gen_bindings::public_api_args::emit_tagged_enum_encoder;
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeRef};
 use std::io::ErrorKind;
@@ -32,6 +33,17 @@ mod gate;
 
 /// Elixir module prefix for the generated enum module under test.
 const APP_MODULE: &str = "AlefOracle";
+
+/// Payload for the escape round-trip lane: an interpolation opener plus the other two characters
+/// that need escaping. Fed straight to the escaping primitives, not through any emitter -- this
+/// lane is about the primitives themselves.
+const ESCAPE_PROBE_PAYLOAD: &str = "lit#{1 + 1}era\"l\\end";
+
+/// The in-lane negative control, embedded with NO escaping at all. Deliberately carries no `"`
+/// or `\` so the unescaped form still PARSES: the only thing separating it from the escaped
+/// payload is that Elixir evaluates its interpolation, which is exactly the distinction the lane
+/// has to be able to draw. Without it the lane could pass while evaluating nothing. ~keep
+const ESCAPE_PROBE_CONTROL: &str = "ctl#{1 + 1}end";
 
 /// Every `ALEF|<key>|<verdict>` line [`PROBE_SCRIPT`] emits. Asserted as a count so a probe that
 /// silently checked less than it claims fails instead of passing on the lines it did print. ~keep
@@ -45,6 +57,9 @@ const PROBE_KEYS: &[&str] = &[
     "tag",
     "enc_wire",
     "enc_field_key",
+    "escaped_string",
+    "escaped_atom",
+    "unescaped_control",
     "canary",
 ];
 
@@ -70,6 +85,7 @@ end
 
 Code.compile_file("enum_module.ex")
 Code.compile_file("encoder.ex")
+Code.compile_file("escape_probe.ex")
 
 marker = AlefOracle.Marker
 Probe.check("plain", marker.wire_value(marker.plain()))
@@ -87,6 +103,18 @@ Probe.check("enc_wire", tag_value)
 data = AlefOracleEncoder.encode_action({:data_variant, %{full_page: true}})
 [field_key] = data |> Map.keys() |> Enum.reject(fn key -> key == tag_key end)
 Probe.check("enc_field_key", field_key)
+
+Probe.check("escaped_string", AlefEscapeProbe.escaped_string())
+Probe.check("escaped_atom", Atom.to_string(AlefEscapeProbe.escaped_atom()))
+
+IO.puts(
+  "ALEF|unescaped_control|" <>
+    if AlefEscapeProbe.unescaped_string() == Probe.read("unescaped_control") do
+      "LITERAL"
+    else
+      "EVALUATED"
+    end
+)
 
 canary = String.trim(Probe.read("canary_path"))
 IO.puts("ALEF|canary|" <> if(File.exists?(canary), do: "EXISTS", else: "ABSENT"))
@@ -196,6 +224,19 @@ fn run_probe() -> String {
         ),
     );
 
+    let escaped = escape_elixir_string_literal(ESCAPE_PROBE_PAYLOAD);
+    let atom = elixir_atom_body(ESCAPE_PROBE_PAYLOAD);
+    let escape_probe = [
+        "defmodule AlefEscapeProbe do".to_owned(),
+        format!("  def escaped_string, do: \"{escaped}\""),
+        format!("  def escaped_atom, do: :{atom}"),
+        format!("  def unescaped_string, do: \"{ESCAPE_PROBE_CONTROL}\""),
+        "end".to_owned(),
+        String::new(),
+    ]
+    .join("\n");
+    write(&dir.join("escape_probe.ex"), &escape_probe);
+
     write(&expected.join("canary_path"), &canary.display().to_string());
     write(&expected.join("plain"), "Plain");
     write(&expected.join("interpolated"), &interpolation_payload(&canary));
@@ -206,6 +247,9 @@ fn run_probe() -> String {
     write(&expected.join("tag"), &interpolation_payload(&canary));
     write(&expected.join("enc_wire"), "UnitVariant");
     write(&expected.join("enc_field_key"), "fu\"ll\\Pa#{1}ge");
+    write(&expected.join("escaped_string"), ESCAPE_PROBE_PAYLOAD);
+    write(&expected.join("escaped_atom"), ESCAPE_PROBE_PAYLOAD);
+    write(&expected.join("unescaped_control"), ESCAPE_PROBE_CONTROL);
     write(&dir.join("probe.exs"), PROBE_SCRIPT);
 
     let stdout = run_elixir(&dir, "probe.exs");
@@ -312,6 +356,34 @@ fn compiling_generated_modules_executes_no_payload_from_a_serde_attribute() {
         stdout.lines().any(|line| line == "ALEF|canary|ABSENT"),
         "a `#{{File.write!(..)}}` payload in a serde attribute ran while the generated modules \
          compiled; full probe output:\n{stdout}"
+    );
+}
+
+/// The escaping primitives themselves, EVALUATED rather than pattern-matched.
+///
+/// The property is not "does `#{` appear in the output". The correct escaped form is `\#{`, which
+/// still contains `#{` as a substring, so a `!contains("#{")` assertion rejects correct output --
+/// a false negative that fires on the fix instead of on the bug. (The Rust-side unit test in
+/// `elixir_escape::tests` asserted exactly that, and this lane is what it now defers to.) The
+/// property is whether the literal INTERPOLATES when Elixir evaluates it, and only Elixir can
+/// answer that.
+///
+/// So the probe module carries three definitions of the same shape: an escaped string literal, an
+/// escaped quoted atom, and -- as the in-lane negative control -- an UNESCAPED copy. The first two
+/// must evaluate back to the exact payload; the third must NOT, or the lane is evaluating
+/// something that could not have interpolated in the first place and proves nothing. ~keep
+#[test]
+#[ignore = "evaluates escaped Elixir literals through the real `elixir` toolchain; \
+            run with `cargo test --lib elixir_oracle -- --ignored`"]
+fn escaped_literals_round_trip_and_an_unescaped_one_does_not() {
+    let stdout = run_probe();
+    assert_match(&stdout, "escaped_string");
+    assert_match(&stdout, "escaped_atom");
+    assert!(
+        stdout.lines().any(|line| line == "ALEF|unescaped_control|EVALUATED"),
+        "the unescaped control must INTERPOLATE when evaluated. If it came back LITERAL, the \
+         payload it carries cannot interpolate at all, so the two MATCH verdicts above are \
+         consistent with an escaper that does nothing; full probe output:\n{stdout}"
     );
 }
 

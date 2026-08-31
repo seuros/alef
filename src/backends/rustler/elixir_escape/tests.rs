@@ -53,16 +53,28 @@ fn escape_and_atom_body_agree_with_the_elixir_verified_table() {
 /// regression names itself. `#` alone is inert; `#{` is an interpolation, and an interpolation in
 /// a generated literal is code execution at the generated module's compile time — not a syntax
 /// error a compiler would catch. Both forms parse, so only escaping prevents it.
+///
+/// Asserts the exact output, never a substring. This test previously asserted
+/// `!escape_elixir_string_literal(payload).contains("#{")` — and the CORRECT escaped form is
+/// `\#{`, which still CONTAINS `#{`. So the check failed on the fix rather than on the bug: a
+/// false negative, the substring trap running in the opposite direction from the usual one. The
+/// real property is not "does `#{` appear in the text" but "does this literal INTERPOLATE when
+/// Elixir evaluates it", which no amount of text matching can answer. Equality is what is
+/// cheaply pinnable here; the property itself is checked by evaluation in
+/// `gen_bindings::helpers::elixir_oracle::escaped_literals_round_trip_and_an_unescaped_one_does_not`,
+/// which is authoritative. ~keep
 #[test]
-fn interpolation_openers_are_neutralised_in_both_literal_forms() {
+fn interpolation_openers_are_escaped_in_both_literal_forms() {
     let payload = "x#{System.halt(1)}y";
-    assert!(
-        !escape_elixir_string_literal(payload).contains("#{"),
-        "an unescaped `#{{` in a generated string literal executes when the module compiles"
+    assert_eq!(
+        escape_elixir_string_literal(payload),
+        "x\\#{System.halt(1)}y",
+        "the opener must be escaped as `\\#{{`, which still contains `#{{` as a substring"
     );
-    assert!(
-        !elixir_atom_body(payload).contains("#{"),
-        "an unescaped `#{{` in a generated quoted atom executes when the module compiles"
+    assert_eq!(
+        elixir_atom_body(payload),
+        "\"x\\#{System.halt(1)}y\"",
+        "the quoted atom body carries the same escaping inside its quotes"
     );
 }
 
