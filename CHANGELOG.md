@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   override text itself is left untouched, since it is meant to run as shell). Composed shell
   commands are now logged with env var values redacted (names only) to avoid leaking secrets
   into command-execution logs.
+- Quote registry test-app paths and pass configured PHP versions as typed arguments, preventing
+  either value from reaching shell syntax. Pin PHP PIE 1.4.10, verify its release SHA-256 before
+  execution, and always invoke Alef's version-scoped verified PHAR instead of a binary from PATH.
 - Shell-quote the directory `alef build`'s gradle command changes into. `build_command_for`'s
   `"gradle"` arm interpolated a consumer-configured `[crates.output]` path into `cd {dir} &&
   gradle …` unquoted, while the built-in default for the same language quoted it — so the two
@@ -90,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pass registry test-app environment variables as exact values rather than PATH-style prepend
+  values, so inherited variables are not appended.
 - Escape interpolation markers, quotes, backslashes, and control characters in generated Elixir
   literals, and emit reachable `wire_value/1` clauses for tagged enums.
 - Skip Java E2E assertions whose payload-union shape cannot be represented by the generated

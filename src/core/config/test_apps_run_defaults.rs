@@ -117,7 +117,10 @@ pub fn default_test_apps_run_config(
             // The three steps replace a `&&` chain exactly: `run_test_app_target` stops at the
             // first step that exits non-zero. ~keep
             let mut install_args = vec!["install.sh".to_owned()];
-            if let Some(version) = published_version.map(strip_version_constraint).filter(|v| !v.is_empty()) {
+            if let Some(version) = published_version
+                .map(strip_version_constraint)
+                .filter(|v| !v.is_empty())
+            {
                 install_args.push(version.to_owned());
             }
             TestAppRunConfig {
@@ -251,9 +254,7 @@ pub fn default_test_apps_run_config(
         Language::Swift => TestAppRunConfig {
             precondition: Some(require_tool("swift")),
             before: None,
-            run: Some(StringOrVec::Single(format!(
-                "cd {dir}/swift_e2e && swift test"
-            ))),
+            run: Some(StringOrVec::Single(format!("cd {dir}/swift_e2e && swift test"))),
             argv_run: None,
         },
         Language::Zig => TestAppRunConfig {

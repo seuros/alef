@@ -737,7 +737,10 @@ mod composer_json_tests {
             "refusing to run an unverified PIE PHAR",
             "checksum mismatch",
         ] {
-            assert!(content.contains(expected), "install.sh must contain {expected:?}, got:\n{content}");
+            assert!(
+                content.contains(expected),
+                "install.sh must contain {expected:?}, got:\n{content}"
+            );
         }
         // The PHAR is installed only after the digest comparison, never before it.
         let verify = content.find("checksum mismatch").expect("mismatch guard present");

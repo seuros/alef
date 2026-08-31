@@ -163,7 +163,10 @@ fn configured_value_arrives_exactly_when_nothing_is_inherited() {
 fn a_deliberately_wrong_expected_value_does_not_match() {
     let configured = "http://127.0.0.1:53211/";
     let observed = observed_env_value(configured, Some("http://attacker.example/inherited"));
-    assert_ne!(observed, "http://127.0.0.1:53212/", "a different port must not compare equal");
+    assert_ne!(
+        observed, "http://127.0.0.1:53212/",
+        "a different port must not compare equal"
+    );
     assert_ne!(observed, "", "an empty value must not compare equal");
     assert_ne!(
         observed, "http://127.0.0.1:53211",
@@ -179,7 +182,10 @@ fn a_deliberately_wrong_expected_value_does_not_match() {
 fn hostile_characters_in_an_env_value_arrive_verbatim() {
     let configured = "v'1 $(id) `id` \"dq\" a;b|c&&d\nsecond-line";
     let observed = observed_env_value(configured, None);
-    assert_eq!(observed, configured, "the value must arrive byte-exact, newline included");
+    assert_eq!(
+        observed, configured,
+        "the value must arrive byte-exact, newline included"
+    );
     assert_eq!(
         observed.lines().count(),
         2,
