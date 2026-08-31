@@ -270,6 +270,28 @@ pub mod packagist {
     pub const GUZZLE: &str = "^7.0 || ^8.0";
 }
 
+/// Artifacts fetched straight from a GitHub release by a generated installer script, rather
+/// than resolved by a package manager. Each one is a version/checksum PAIR and both halves
+/// must move together.
+pub mod github_release {
+    // ~keep Deliberately NO `renovate:` marker, on either const. Renovate's regex customManager
+    // bumps the single adjacent version string it matches; it has no way to recompute the
+    // digest below, so an automated bump would leave a version that no longer matches its
+    // checksum and every consumer's `install.sh` would hard-fail on the mismatch. Bump this
+    // pair by hand: read the `pie.phar` asset's `digest` from
+    // `https://api.github.com/repos/php/pie/releases/tags/<tag>`, confirm it against a real
+    // download (`shasum -a 256 pie.phar`), then update both lines in one commit.
+    //
+    // Pinning at all is the point: the generated `install.sh` used to fetch
+    // `releases/latest/download/pie.phar`, so whatever was published upstream at run time was
+    // executed with no integrity check and no way to reproduce a past run.
+    pub const PIE_VERSION: &str = "1.4.10";
+
+    /// SHA-256 of the `pie.phar` asset of [`PIE_VERSION`]. Verified against a real download of
+    /// `https://github.com/php/pie/releases/download/1.4.10/pie.phar` (6956483 bytes).
+    pub const PIE_PHAR_SHA256: &str = "b88792235c8e80be568436d4cb043b49fd1869c89b64e83d23e2882ae19d70a8";
+}
+
 pub mod maven {
     // renovate: datasource=maven depName=org.junit:junit-bom
     pub const JUNIT: &str = "6.1.3";

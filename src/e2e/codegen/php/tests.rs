@@ -684,12 +684,73 @@ mod composer_json_tests {
         let content = render_install_sh("test/pkg", "ext", "1.0.0");
         // Ensure the script downloads PIE as a PHAR, not via composer require.
         assert!(
-            content.contains("https://github.com/php/pie/releases/latest/download/pie.phar"),
+            content.contains("https://github.com/php/pie/releases/download/$PIE_VERSION/pie.phar"),
             "install.sh must download PIE PHAR from GitHub, got:\n{content}"
         );
         assert!(
             !content.contains("composer global require php/pie"),
             "install.sh must not use composer to install PIE, got:\n{content}"
+        );
+    }
+
+    /// A `releases/latest/download/` URL executes whatever upstream published at run time,
+    /// unverified and unreproducible. The pin and the digest are one pair: assert BOTH, and
+    /// assert the floating form is gone, so reintroducing either half of the exposure fails.
+    #[test]
+    fn registry_install_sh_pins_and_checksums_the_pie_phar() {
+        let content = render_install_sh("test/pkg", "ext", "1.0.0");
+        let version = crate::core::template_versions::github_release::PIE_VERSION;
+        let sha256 = crate::core::template_versions::github_release::PIE_PHAR_SHA256;
+
+        assert!(
+            !content.contains("releases/latest/download"),
+            "install.sh must not fetch a floating `latest` release, got:\n{content}"
+        );
+        assert!(
+            content.contains(&format!("PIE_VERSION={version}")),
+            "install.sh must pin PIE to {version}, got:\n{content}"
+        );
+        assert!(
+            content.contains(&format!("PIE_PHAR_SHA256={sha256}")),
+            "install.sh must carry the pinned PHAR digest, got:\n{content}"
+        );
+        assert_eq!(sha256.len(), 64, "a SHA-256 digest is 64 hex characters");
+        assert!(
+            sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "the digest must be lowercase hex, or the `!=` comparison in the script never matches"
+        );
+        assert!(
+            content.contains("$pie_actual_sha256\" != \"$PIE_PHAR_SHA256"),
+            "install.sh must compare the download's digest against the pin, got:\n{content}"
+        );
+    }
+
+    /// The digest check must be a hard gate, not a best-effort one: a script that skips
+    /// verification when no hashing tool is present verifies nothing on exactly the machines
+    /// where verification matters most.
+    #[test]
+    fn registry_install_sh_refuses_to_run_an_unverified_phar() {
+        let content = render_install_sh("test/pkg", "ext", "1.0.0");
+        for expected in [
+            "sha256sum",
+            "shasum -a 256",
+            "refusing to run an unverified PIE PHAR",
+            "checksum mismatch",
+        ] {
+            assert!(content.contains(expected), "install.sh must contain {expected:?}, got:\n{content}");
+        }
+        // The PHAR is installed only after the digest comparison, never before it.
+        let verify = content.find("checksum mismatch").expect("mismatch guard present");
+        let install = content
+            .find("install -m 0755 \"$pie_tmp\"")
+            .expect("phar installed with `install`");
+        assert!(
+            verify < install,
+            "the digest must be checked before the PHAR is made executable, got:\n{content}"
+        );
+        assert!(
+            !content.contains("chmod +x \"$pie_dir/pie\""),
+            "the old download-then-chmod path executed an unverified PHAR, got:\n{content}"
         );
     }
 

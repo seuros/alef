@@ -137,6 +137,8 @@ pub(super) fn render_install_sh(pkg_name: &str, extension_name: &str, pkg_versio
     let pkg_name = quote(pkg_name);
     let extension_name = quote(extension_name);
     let clean_version = quote(clean_version);
+    let pie_version = crate::core::template_versions::github_release::PIE_VERSION;
+    let pie_sha256 = crate::core::template_versions::github_release::PIE_PHAR_SHA256;
     // `generated_header: false` on this GeneratedFile (see php.rs) means ownership tracking
     // relies entirely on `hash::content_has_alef_marker` recognizing text embedded in the
     // rendered content itself -- so the marker line must come from the shared authority
@@ -157,6 +159,14 @@ EXTENSION_NAME={extension_name}
 PINNED_VERSION={clean_version}
 VERSION="${{1:-$PINNED_VERSION}}"
 
+# PIE itself is pinned to an exact release and its PHAR is checksum-verified before it is
+# ever executed. This used to fetch the floating newest-release asset, so whatever upstream
+# published at run time was executed unverified, and no past run could be reproduced.
+# PIE_VERSION and PIE_PHAR_SHA256 are one pair in alef's template_versions registry and must
+# always be bumped together.
+PIE_VERSION={pie_version}
+PIE_PHAR_SHA256={pie_sha256}
+
 # PIE >= 1.3.7 supports the array-form `php-ext.download-url-method`
 # our composer.json emits; 1.4.0+ is preferred. Download PIE if we don't
 # already have a recent enough version.
@@ -168,14 +178,34 @@ if command -v pie >/dev/null 2>&1; then
   fi
 fi
 if [[ "$need_pie_install" == "true" ]]; then
-  # Download PIE PHAR from latest GitHub release if not already installed.
+  # Download the pinned PIE PHAR from its GitHub release into a temp file, verify its
+  # SHA-256, and only then install it. Nothing downloaded here is executed before the
+  # digest matches.
   pie_dir="${{HOME}}/.local/bin"
   mkdir -p "$pie_dir"
-  curl -fL --output "$pie_dir/pie" "https://github.com/php/pie/releases/latest/download/pie.phar" 2>/dev/null || {{
-    echo "::error::Failed to download PIE from GitHub; ensure network access or pre-install PIE." >&2
+  pie_tmp="$(mktemp "${{TMPDIR:-/tmp}}/pie.phar.XXXXXX")"
+  trap 'rm -f "$pie_tmp"' EXIT
+  # stderr is NOT discarded: the previous `2>/dev/null` hid the actual reason (404, TLS,
+  # proxy) behind a generic message every time this failed in CI.
+  curl -fL --output "$pie_tmp" "https://github.com/php/pie/releases/download/$PIE_VERSION/pie.phar" || {{
+    echo "::error::Failed to download PIE $PIE_VERSION from GitHub; ensure network access or pre-install PIE." >&2
     exit 1
   }}
-  chmod +x "$pie_dir/pie"
+  if command -v sha256sum >/dev/null 2>&1; then
+    pie_actual_sha256="$(sha256sum "$pie_tmp" | awk '{{print $1}}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    pie_actual_sha256="$(shasum -a 256 "$pie_tmp" | awk '{{print $1}}')"
+  else
+    # Hard failure, not a skip: a verification step that silently passes when its tool is
+    # missing verifies nothing, and every supported platform ships one of these two.
+    echo "::error::No sha256 tool (sha256sum or shasum) found; refusing to run an unverified PIE PHAR." >&2
+    exit 1
+  fi
+  if [[ "$pie_actual_sha256" != "$PIE_PHAR_SHA256" ]]; then
+    echo "::error::PIE $PIE_VERSION checksum mismatch: expected $PIE_PHAR_SHA256, got $pie_actual_sha256" >&2
+    exit 1
+  fi
+  install -m 0755 "$pie_tmp" "$pie_dir/pie"
   PIE="$pie_dir/pie"
   # Ensure newly downloaded PIE is on PATH for this script.
   export PATH="$pie_dir:$PATH"
