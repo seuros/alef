@@ -128,11 +128,13 @@ fn a_numeric_wildcard_containment_compares_numerically_not_as_a_substring() {
         &array_resolver("items"),
     );
     assert_eq!(
-        out,
-        "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(true);\n",
+        out, "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(true);\n",
         "got: {out}"
     );
-    assert!(!out.contains("String(e.bar).includes"), "substring lowering survived: {out}");
+    assert!(
+        !out.contains("String(e.bar).includes"),
+        "substring lowering survived: {out}"
+    );
 }
 
 /// `Number(null)` is `0`, so an unguarded numeric comparison would report `contains: 0` as
@@ -164,8 +166,7 @@ fn a_boolean_wildcard_containment_compares_by_identity() {
         &array_resolver("items"),
     );
     assert_eq!(
-        out,
-        "    expect((result.items ?? []).some((e) => e.flag === true)).toBe(true);\n",
+        out, "    expect((result.items ?? []).some((e) => e.flag === true)).toBe(true);\n",
         "got: {out}"
     );
 }
@@ -182,8 +183,7 @@ fn a_numeric_wildcard_not_contains_uses_the_same_numeric_predicate() {
     };
     let out = render(&assertion, &array_resolver("items"));
     assert_eq!(
-        out,
-        "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(false);\n",
+        out, "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(false);\n",
         "got: {out}"
     );
 }
@@ -199,8 +199,7 @@ fn an_object_wildcard_expectation_is_skipped_visibly_rather_than_lowered() {
         &array_resolver("items"),
     );
     assert_eq!(
-        out,
-        "    // skipped: unsupported traversal assertion object value on 'items[].bar'\n",
+        out, "    // skipped: unsupported traversal assertion object value on 'items[].bar'\n",
         "got: {out}"
     );
     assert!(!out.contains("expect("), "an assertion was emitted anyway: {out}");
@@ -213,8 +212,7 @@ fn a_null_wildcard_expectation_is_skipped_visibly() {
         &array_resolver("items"),
     );
     assert_eq!(
-        out,
-        "    // skipped: unsupported traversal assertion null value on 'items[].bar'\n",
+        out, "    // skipped: unsupported traversal assertion null value on 'items[].bar'\n",
         "got: {out}"
     );
 }

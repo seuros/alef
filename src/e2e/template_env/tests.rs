@@ -432,7 +432,8 @@ mod minijinja_bool_spelling_tests {
     #[test]
     fn a_rust_bool_interpolated_by_minijinja_renders_python_spelled() {
         let mut env = minijinja::Environment::new();
-        env.add_template("probe", "{{ flag }}").expect("probe template is valid");
+        env.add_template("probe", "{{ flag }}")
+            .expect("probe template is valid");
         let template = env.get_template("probe").expect("probe template is registered");
 
         let rendered_true = template
@@ -452,7 +453,8 @@ mod minijinja_bool_spelling_tests {
     #[test]
     fn a_target_language_boolean_literal_passed_as_a_str_survives_intact() {
         let mut env = minijinja::Environment::new();
-        env.add_template("probe", "{{ flag }}").expect("probe template is valid");
+        env.add_template("probe", "{{ flag }}")
+            .expect("probe template is valid");
         let template = env.get_template("probe").expect("probe template is registered");
 
         let rendered = template

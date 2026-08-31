@@ -61,7 +61,9 @@ fn push_quantifier(
 ) {
     match element_predicate(elem_accessor, expected) {
         Some(predicate) => {
-            out.push_str(&format!("    expect({guarded}.some((e) => {predicate})).toBe({truth});\n"));
+            out.push_str(&format!(
+                "    expect({guarded}.some((e) => {predicate})).toBe({truth});\n"
+            ));
         }
         None => out.push_str(&unlowerable_value_skip_line(field, expected)),
     }
@@ -87,10 +89,7 @@ fn push_quantifier(
 /// expectation against a single element — and the caller must skip visibly rather than emit one.
 fn element_predicate(elem_accessor: &str, expected: &serde_json::Value) -> Option<String> {
     match expected {
-        serde_json::Value::String(_) => Some(format!(
-            "String({elem_accessor}).includes({})",
-            json_to_js(expected)
-        )),
+        serde_json::Value::String(_) => Some(format!("String({elem_accessor}).includes({})", json_to_js(expected))),
         serde_json::Value::Number(_) => Some(format!(
             "{elem_accessor} != null && Number({elem_accessor}) === {}",
             json_to_js(expected)

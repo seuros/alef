@@ -34,10 +34,7 @@ fn type_defs() -> Vec<TypeDef> {
         TypeDef {
             name: "Report".to_string(),
             fields: vec![
-                field(
-                    "codes",
-                    TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U32))),
-                ),
+                field("codes", TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U32)))),
                 field("warnings", TypeRef::Vec(Box::new(TypeRef::String))),
                 field(
                     "segments",
@@ -68,10 +65,7 @@ fn resolver() -> FieldResolver {
         &array_fields,
         &HashSet::new(),
     )
-    .with_ir_collection_map(
-        FieldResolver::ir_collection_fields(&defs),
-        Some("Report".to_string()),
-    )
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(&defs), Some("Report".to_string()))
 }
 
 fn render(assertion: &Assertion) -> String {
@@ -106,8 +100,7 @@ fn contains_on(field_path: &str, value: &str) -> Assertion {
 fn a_string_expectation_against_a_numeric_collection_leaves_the_text_surface() {
     let out = render(&contains_on("codes", "42"));
     assert_eq!(
-        out,
-        "    expect(result.codes.some((item) => String(item) === \"42\")).toBe(true);\n",
+        out, "    expect(result.codes.some((item) => String(item) === \"42\")).toBe(true);\n",
         "got: {out}"
     );
     assert!(!out.contains("_alefE2eItemTexts"), "text surface survived: {out}");
@@ -146,8 +139,7 @@ fn not_contains_on_a_numeric_collection_uses_the_same_equality_predicate() {
     };
     let out = render(&assertion);
     assert_eq!(
-        out,
-        "    expect(result.codes.some((item) => String(item) === \"42\")).toBe(false);\n",
+        out, "    expect(result.codes.some((item) => String(item) === \"42\")).toBe(false);\n",
         "got: {out}"
     );
 }
@@ -187,8 +179,7 @@ fn contains_any_on_a_numeric_collection_uses_the_equality_predicate() {
     };
     let out = render(&assertion);
     assert_eq!(
-        out,
-        "    expect([\"42\", \"7\"].some((v) => result.codes.some((item) => String(item) === v))).toBe(true);\n",
+        out, "    expect([\"42\", \"7\"].some((v) => result.codes.some((item) => String(item) === v))).toBe(true);\n",
         "got: {out}"
     );
 }

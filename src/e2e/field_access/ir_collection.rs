@@ -347,7 +347,10 @@ mod non_string_scalar_element_tests {
     /// `Option`-transparency. ~keep
     #[test]
     fn an_optional_numeric_collection_is_seen_through_its_option() {
-        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "optional_codes"));
+        assert!(has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            "optional_codes"
+        ));
     }
 
     /// THE OVER-APPLICATION CONTROL, and the whole reason this is a separate map rather than
@@ -378,7 +381,10 @@ mod non_string_scalar_element_tests {
 
     #[test]
     fn an_unknown_field_and_an_unanchored_map_both_answer_no() {
-        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "not_a_real_field"));
+        assert!(!has_non_string_scalar_elements_at_path(
+            &anchored_map(),
+            "not_a_real_field"
+        ));
         let unanchored = build_ir_collection_map(&type_defs());
         assert!(!has_non_string_scalar_elements_at_path(&unanchored, "codes"));
     }
