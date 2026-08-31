@@ -88,8 +88,10 @@ fn rendered_python_default(name: &str, ty: TypeRef, value: &DefaultValue) -> Str
     crate::codegen::config_gen::default_value_for_field(&field, "python")
 }
 
+mod cfg_gated_field_defaults;
 mod delegation;
 mod enum_and_associated_consts;
+mod function_call_folding;
 mod literals_and_consts;
 mod mutated_literal;
 mod mutated_literal_unresolved;

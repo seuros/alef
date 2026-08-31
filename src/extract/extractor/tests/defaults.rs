@@ -6,3 +6,4 @@ mod enum_field_defaults;
 mod excluded_unresolved_default;
 mod expressions;
 mod literals;
+mod serde_default_function_folding;

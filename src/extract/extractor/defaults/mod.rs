@@ -1,10 +1,15 @@
-use super::helpers::is_test_gated;
+use super::helpers::{extract_cfg_condition, is_test_gated};
 use crate::core::ir::{DefaultValue, FieldDef, TypeRef};
 use ahash::AHashMap;
 use quote::ToTokens;
 use syn;
 
+mod function_default;
 mod mutation;
+mod struct_literal;
+
+pub(crate) use function_default::{collect_free_functions, fold_constant_default_functions};
+use struct_literal::struct_expr_defaults;
 
 /// Every associated function of every inherent `impl` block in one module, keyed by
 /// `(type name, function name)`.
@@ -479,36 +484,6 @@ fn tail_is_bare_self(block: &syn::Block, self_type: &str) -> bool {
     }
     let ident = &path.path.segments[0].ident;
     ident == "Self" || ident == self_type
-}
-
-/// Map each initializer of a struct literal to a `DefaultValue`.
-fn struct_expr_defaults(struct_expr: &syn::ExprStruct, scope: &EvalScope<'_>) -> AHashMap<String, DefaultValue> {
-    let mut defaults = AHashMap::new();
-    for field in &struct_expr.fields {
-        let Some(ident) = &field.member_named() else {
-            continue;
-        };
-        let name = ident.to_string();
-        // `Self { #[cfg(feature = "x")] limit: 9, .. }` supplies this initializer only in builds
-        // that enable the feature, and this pass cannot know which those are. Same refusal, and
-        // same reason, as an attributed mutation statement — see `mutation`'s module doc. ~keep
-        let value = if field.attrs.is_empty() {
-            expr_to_default_value(&field.expr, scope, scope.field_types.get(&name))
-        } else {
-            unreadable(&field.expr)
-        };
-        if let DefaultValue::Unresolved(source) = &value {
-            tracing::debug!(
-                target: "alef::extract::defaults",
-                rust_type = scope.self_type,
-                field = %name,
-                initializer = %source,
-                "field initializer is not constant-foldable; its default is unresolved"
-            );
-        }
-        defaults.insert(name, value);
-    }
-    defaults
 }
 
 /// Helper trait to extract the named member from a `FieldValue`.

@@ -213,6 +213,17 @@ fn extract_items(
 ) -> Result<()> {
     let reexport_map = collect_reexport_map(items);
 
+    // Computed once per module, ahead of the item loop below, so struct extraction can fold a
+    // `#[serde(default = "path")]` field's function-call default to a literal at the point the
+    // struct's `TypeDef` is built (see the `syn::Item::Struct` arm below). The impl-block loop
+    // further down, which reads `impl Default` bodies, reuses the same module-scoped indexes. ~keep
+    let literal_consts = defaults::collect_literal_consts(items);
+    // Indexed once per module so a `fn default()` that delegates to `Self::new(..)` can be
+    // followed to the constructor's own struct literal instead of collapsing to a type-zero, and
+    // so a `#[serde(default = "Owner::method")]` path can be resolved to the same function. ~keep
+    let constructors = defaults::collect_constructors(items);
+    let free_functions = defaults::collect_free_functions(items);
+
     let mut declares_result_alias = false;
     for item in items {
         if let syn::Item::Type(item_type) = item
@@ -274,7 +285,13 @@ fn extract_items(
                     }
                     continue;
                 }
-                if let Some((td, serde_defaults)) = extract_struct(item_struct, crate_name, module_path) {
+                if let Some((mut td, serde_defaults)) = extract_struct(item_struct, crate_name, module_path) {
+                    defaults::fold_constant_default_functions(
+                        &mut td.fields,
+                        &free_functions,
+                        &constructors,
+                        &literal_consts,
+                    );
                     if !serde_defaults.is_empty() {
                         pending_serde_defaults.insert(td.rust_path.clone(), serde_defaults);
                     }
@@ -547,11 +564,6 @@ fn extract_items(
             _ => None,
         })
         .collect();
-
-    let literal_consts = defaults::collect_literal_consts(items);
-    // Indexed once per module so a `fn default()` that delegates to `Self::new(..)` can be
-    // followed to the constructor's own struct literal instead of collapsing to a type-zero. ~keep
-    let constructors = defaults::collect_constructors(items);
 
     for item in items {
         if let syn::Item::Impl(item_impl) = item {

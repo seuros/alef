@@ -502,37 +502,6 @@ fn an_attributed_local_binding_is_unresolved() {
     assert_every_field_unresolved(&resolved, "the binding itself is cfg-gated");
 }
 
-/// A `cfg` on one initializer of the struct literal is the same lie one level down. The field
-/// declaration carries the same gate, as it must for both configurations to compile: without
-/// `extras` the field does not exist at all, with it the default is `9`. `width` is ungated and
-/// stays readable, so the refusal is field-granular rather than whole-body. ~keep
-#[test]
-fn a_cfg_gated_struct_literal_initializer_is_unresolved() {
-    let resolved = defaults_for(
-        r#"
-                pub struct Prefs {
-                    #[cfg(feature = "extras")]
-                    pub max_depth: u32,
-                    pub width: u32,
-                }
-
-                impl Default for Prefs {
-                    fn default() -> Self {
-                        Self {
-                            #[cfg(feature = "extras")]
-                            max_depth: 9,
-                            width: 2,
-                        }
-                    }
-                }
-            "#,
-        "Prefs",
-        &["max_depth"],
-    );
-
-    assert_every_field_unresolved(&resolved, "the initializer is supplied only in some builds");
-}
-
 /// The tail literal is only *the* answer when nothing before it can return instead. A
 /// conditional early return gives the body two exits, and the tail is merely one of them.
 #[test]
