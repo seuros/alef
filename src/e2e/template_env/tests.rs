@@ -402,3 +402,80 @@ mod synthetic_assertion_line_discipline {
         );
     }
 }
+
+/// minijinja renders a Rust `bool` with PYTHON's spelling, not Rust's or JavaScript's.
+///
+/// ~keep This is not a quirk of any one template — it is `impl Display for minijinja::Value`
+/// (`ValueRepr::Bool(val) => f.write_str(if val { "True" } else { "False" })`, minijinja 2.24.0
+/// `src/value/mod.rs:794`), reached by every `{{ }}` interpolation: `Instruction::Emit` ->
+/// `write_escaped` -> `AutoEscape::None` -> `write!(out, "{value}")`. minijinja is a Jinja2
+/// implementation and Jinja2's booleans are Python's.
+///
+/// The consequence for a code generator is a hard defect, not a cosmetic one. A template that
+/// emits `.toBe({{ expected }})` from a Rust `bool` produces `.toBe(True)`, which is `TS2304:
+/// Cannot find name 'True'` under tsc and a `ReferenceError: True is not defined` under node —
+/// both verified by execution. The same trap is waiting in every target language whose boolean
+/// literal is lowercase (JS/TS, Rust, Java, Go, C, Swift, Kotlin, PHP, Dart, Zig): only Python
+/// itself is spelled the way minijinja writes it.
+///
+/// So a Rust `bool` must never reach generated code through `{{ }}`. Use it in `{% if %}` (where
+/// only its truthiness is read and the spelling never appears), or convert it to the target
+/// language's own literal in Rust first — the way
+/// `backends::extendr::trait_bridge` passes `has_error_check => if has_error { "true" } else
+/// { "false" }` as a `&str`. This test exists so the engine's behaviour is a pinned fact rather
+/// than something each generator author has to rediscover from a failing suite.
+#[cfg(test)]
+mod minijinja_bool_spelling_tests {
+    /// The engine's own rendering, asserted directly so this cannot pass because some template
+    /// happens to avoid the case. Fails if a future minijinja adopts Rust's spelling — at which
+    /// point the doc above, and any workaround written against it, need revisiting.
+    #[test]
+    fn a_rust_bool_interpolated_by_minijinja_renders_python_spelled() {
+        let mut env = minijinja::Environment::new();
+        env.add_template("probe", "{{ flag }}").expect("probe template is valid");
+        let template = env.get_template("probe").expect("probe template is registered");
+
+        let rendered_true = template
+            .render(minijinja::context! { flag => true })
+            .expect("probe renders");
+        let rendered_false = template
+            .render(minijinja::context! { flag => false })
+            .expect("probe renders");
+
+        assert_eq!(rendered_true, "True", "minijinja's bool spelling changed");
+        assert_eq!(rendered_false, "False", "minijinja's bool spelling changed");
+        assert_ne!(rendered_true, "true", "a bool is still not safe to interpolate");
+    }
+
+    /// The supported alternative, pinned alongside the trap so the fix is not guesswork: a Rust
+    /// `&str` carrying the target language's own literal passes through unchanged.
+    #[test]
+    fn a_target_language_boolean_literal_passed_as_a_str_survives_intact() {
+        let mut env = minijinja::Environment::new();
+        env.add_template("probe", "{{ flag }}").expect("probe template is valid");
+        let template = env.get_template("probe").expect("probe template is registered");
+
+        let rendered = template
+            .render(minijinja::context! { flag => if true { "true" } else { "false" } })
+            .expect("probe renders");
+
+        assert_eq!(rendered, "true", "got: {rendered}");
+    }
+
+    /// `{% if %}` reads truthiness only, so a bool is safe there — this is why the trap is
+    /// narrow and why most templates in this crate are unaffected. ~keep
+    #[test]
+    fn a_bool_used_only_as_a_condition_never_leaks_its_spelling() {
+        let mut env = minijinja::Environment::new();
+        env.add_template("probe", "{% if flag %}yes{% else %}no{% endif %}")
+            .expect("probe template is valid");
+        let template = env.get_template("probe").expect("probe template is registered");
+
+        let rendered = template
+            .render(minijinja::context! { flag => true })
+            .expect("probe renders");
+
+        assert_eq!(rendered, "yes", "got: {rendered}");
+        assert!(!rendered.contains("True"), "got: {rendered}");
+    }
+}
