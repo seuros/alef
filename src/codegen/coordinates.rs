@@ -12,7 +12,7 @@
 
 use crate::codegen::identifier_grammar::{
     is_csharp_identifier_part, is_csharp_identifier_start, is_java_identifier_part, is_java_identifier_start,
-    is_kotlin_identifier_part, is_kotlin_identifier_start,
+    is_kotlin_identifier_part, is_kotlin_identifier_start, is_swift_identifier_part, is_swift_identifier_start,
 };
 
 /// Java reserved keywords and literals (JLS SE 21 §3.9, §3.10.3, §3.10.7) that cannot
@@ -284,6 +284,22 @@ pub fn validate_nuget_package_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Fold a NuGet package ID into the collision key `validate_nuget_package_id`'s doc comment
+/// promises callers will check across a workspace ("Callers must also check case-insensitive
+/// collisions"): NuGet.org's own `PackageIdComparer` treats package IDs as
+/// `StringComparer.OrdinalIgnoreCase`, so two crates publishing `MyLib` and `mylib` would
+/// collide on the real registry even though they differ under a plain `==`.
+///
+/// This deliberately maps each character independently via [`icu_casemap::CaseMapper`]'s
+/// *simple* fold, not its full Unicode case folding (`CaseMapper::fold_string`): full folding
+/// can expand a single character into several (German `ß` folds to `"ss"`), which would produce
+/// a collision key of different length than the input and diverge from .NET's ordinal
+/// comparer, which maps one UTF-16 code unit to one code unit and performs no such expansion.
+pub fn nuget_ordinal_fold(value: &str) -> String {
+    let mapper = icu_casemap::CaseMapper::new();
+    value.chars().map(|character| mapper.simple_fold(character)).collect()
+}
+
 fn is_dotnet_word_character(character: char) -> bool {
     use unicode_general_category::{GeneralCategory, get_general_category};
 
@@ -406,7 +422,9 @@ pub fn validate_csharp_namespace(name: &str) -> Result<(), String> {
 
 /// Swift reserved keywords (Swift Language Reference, "Lexical Structure > Keywords and
 /// Punctuation", swift.org/documentation) that require backtick-escaping to use as an
-/// identifier.
+/// identifier. Swift keywords are case-sensitive -- `class` is reserved but `Class` is an
+/// ordinary identifier (confirmed against `swiftc` 6.3.1: `struct Class { ... }` compiles) --
+/// so this list must be compared against the input as-is, never lowercased first.
 const SWIFT_RESERVED: &[&str] = &[
     "associatedtype",
     "class",
@@ -463,28 +481,35 @@ const SWIFT_RESERVED: &[&str] = &[
 ];
 
 /// Validate a Swift module name (SwiftPM `Package.swift` target/product `name:`). Swift
-/// identifiers (Swift Language Reference, "Lexical Structure > Identifiers") start with a
-/// Unicode letter or `_` and continue with letters, digits, or `_`; unlike a JVM package
-/// or C# namespace, a Swift module name has no internal dot-separated structure -- it is
-/// a single identifier, since it becomes the argument to `import` and is embedded in
-/// mangled symbol names. SwiftPM rejects a target name containing `.` or `-` for the same
-/// reason.
+/// identifiers (Swift Language Reference, "Lexical Structure > Identifiers") start with one of
+/// a specific list of Unicode scalar ranges (see
+/// [`crate::codegen::identifier_grammar::is_swift_identifier_start`]) or `_`, and continue with
+/// those plus digits and a narrower combining-mark range; unlike a JVM package or C# namespace,
+/// a Swift module name has no internal dot-separated structure -- it is a single identifier,
+/// since it becomes the argument to `import` and is embedded in mangled symbol names. SwiftPM
+/// rejects a target name containing `.` or `-` for the same reason.
+///
+/// Two things `char::is_alphabetic()`/`is_alphanumeric()` get wrong here, both confirmed against
+/// `swiftc` 6.3.1: they reject emoji such as U+1F600, which Swift's own grammar accepts as an
+/// identifier character (`let 😀z = 1` compiles), and the reserved-word check below must compare
+/// case-sensitively, since `Class` (capitalized) is an ordinary identifier while only the exact
+/// spelling `class` is a keyword.
 pub fn validate_swift_module_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("must not be empty".to_string());
     }
     let mut chars = name.chars();
     let first = chars.next().expect("name is non-empty");
-    if !(first.is_alphabetic() || first == '_') {
+    if !is_swift_identifier_start(first) {
         return Err(format!("`{name}` must start with a letter or `_`"));
     }
-    if let Some(bad) = chars.find(|c| !(c.is_alphanumeric() || *c == '_')) {
+    if let Some(bad) = chars.find(|c| !is_swift_identifier_part(*c)) {
         return Err(format!(
             "`{name}` contains `{bad}`; a Swift module name has no internal `.`/`-` structure and must \
              be a single identifier"
         ));
     }
-    if SWIFT_RESERVED.contains(&name.to_ascii_lowercase().as_str()) {
+    if SWIFT_RESERVED.contains(&name) {
         return Err(format!(
             "`{name}` is a Swift reserved keyword and cannot be used unescaped"
         ));
@@ -543,6 +568,38 @@ pub fn validate_dart_package_name(name: &str) -> Result<(), String> {
     if DART_RESERVED.contains(&name) {
         return Err(format!(
             "`{name}` is a Dart reserved word and cannot be used as a package name"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a Dart library entrypoint basename (`[dart] lib_name`). This is spliced as a single
+/// Dart import-URI path segment -- `import 'package:{pubspec_name}/{lib_name}.dart'` -- and as
+/// the `lib/{lib_name}.dart` file on disk, never as a Dart source identifier.
+///
+/// This is deliberately looser than [`validate_dart_package_name`] (pub.dev's *package* name
+/// convention, which really does require `lowercase_with_underscores` because pub.dev's own
+/// validator enforces it): pub.dev does not require a library's file basename to be snake_case,
+/// and `ResolvedCrateConfig::dart_bridge_class_name` already documents and normalizes a
+/// hyphenated `lib_name` (e.g. `"sample-widget"` -> `"SampleWidgetBridge"`, via
+/// `heck::ToUpperCamelCase`) as a supported, previously-working input shape -- applying the
+/// stricter package-name grammar here would hard-reject a config that resolved cleanly before
+/// coordinate validation existed. The only real hazards are the value escaping the single
+/// import-URI path component it occupies, or breaking out of the Dart string literal it is
+/// spliced into.
+pub fn validate_dart_library_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(format!(
+            "`{name}` must be a single path component, with no `/`, `\\`, or `..`"
+        ));
+    }
+    if let Some(bad) = name.chars().find(|c| *c == '\'' || *c == '$' || c.is_control()) {
+        return Err(format!(
+            "`{name}` contains `{bad}`, which would break out of the Dart import string literal \
+             `import 'package:...'` it is spliced into"
         ));
     }
     Ok(())
@@ -680,6 +737,25 @@ mod tests {
         assert!(validate_nuget_package_id(&"a".repeat(100)).is_ok());
     }
 
+    /// Ground-truth values taken directly from `icu_casemap::CaseMapperBorrowed::simple_fold`'s
+    /// own doctest (icu_casemap 2.3.0), not re-derived here, so this proves `nuget_ordinal_fold`
+    /// calls the function it claims to and doesn't silently no-op.
+    #[test]
+    fn nuget_ordinal_fold_matches_case_insensitively() {
+        assert_eq!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("mylib"));
+        assert_eq!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("MYLIB"));
+        assert_ne!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("MyLib2"));
+    }
+
+    #[test]
+    fn nuget_ordinal_fold_does_not_expand_a_character_into_several() {
+        // `simple_fold('ß') == 'ß'` (unchanged): full Unicode case folding would expand it to
+        // "ss", which would silently change the collision key's length and diverge from .NET's
+        // ordinal (one-code-unit-to-one-code-unit) comparer.
+        assert_eq!(nuget_ordinal_fold("weiß"), "weiß");
+        assert_eq!(nuget_ordinal_fold("weiß").chars().count(), "weiß".chars().count());
+    }
+
     #[test]
     fn csharp_namespace_accepts_unicode_letters() {
         assert!(validate_csharp_namespace("München.Parser").is_ok());
@@ -715,6 +791,21 @@ mod tests {
     #[test]
     fn swift_module_name_rejects_interpolation_characters() {
         assert!(validate_swift_module_name("Sample\\(evilCode)").is_err());
+    }
+
+    #[test]
+    fn swift_module_name_keyword_check_is_case_sensitive() {
+        // Confirmed against swiftc 6.3.1: `struct Class { ... }` compiles, so a capitalized
+        // spelling of a keyword is an ordinary identifier, not a reserved word.
+        assert!(validate_swift_module_name("Class").is_ok());
+        assert!(validate_swift_module_name("class").is_err());
+    }
+
+    #[test]
+    fn swift_module_name_accepts_emoji() {
+        // Confirmed against swiftc 6.3.1: `let 😀 = 1` and `let 🎉 = 1` both compile.
+        assert!(validate_swift_module_name("\u{1F600}").is_ok());
+        assert!(validate_swift_module_name("\u{1F389}").is_ok());
     }
 
     #[test]
@@ -754,6 +845,25 @@ mod tests {
         assert!(validate_dart_package_name("sample-core").is_err());
         assert!(validate_dart_package_name("var").is_err());
         assert!(validate_dart_package_name("").is_err());
+    }
+
+    #[test]
+    fn dart_library_name_accepts_hyphens_that_the_package_name_grammar_rejects() {
+        // `dart_bridge_class_name` documents and normalizes exactly this shape
+        // (`"sample-widget"` -> `"SampleWidgetBridge"`); the library basename check must not
+        // regress that into a hard resolve-time error.
+        assert!(validate_dart_library_name("sample-widget").is_ok());
+        assert!(validate_dart_package_name("sample-widget").is_err());
+    }
+
+    #[test]
+    fn dart_library_name_rejects_path_traversal_and_string_breakout_characters() {
+        assert!(validate_dart_library_name("").is_err());
+        assert!(validate_dart_library_name("../evil").is_err());
+        assert!(validate_dart_library_name("a/b").is_err());
+        assert!(validate_dart_library_name("a\\b").is_err());
+        assert!(validate_dart_library_name("evil'; import 'dart:io").is_err());
+        assert!(validate_dart_library_name("evil${1+1}").is_err());
     }
 
     #[test]
