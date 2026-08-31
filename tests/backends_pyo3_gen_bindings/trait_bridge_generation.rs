@@ -37,6 +37,7 @@ fn test_gen_trait_bridge_produces_non_empty_output_for_plugin_pattern() {
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("trait bridge generation should succeed");
 
@@ -89,6 +90,7 @@ fn test_gen_trait_bridge_wrapper_struct_has_required_fields() {
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("trait bridge generation should succeed");
 
@@ -136,6 +138,7 @@ fn test_gen_trait_bridge_generates_registration_fn_when_configured() {
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("trait bridge generation should succeed");
 
@@ -195,6 +198,7 @@ fn test_gen_trait_bridge_with_sync_and_async_required_methods() {
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("trait bridge generation should succeed");
 

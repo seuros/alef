@@ -232,6 +232,7 @@ fn visitor_result_policy_is_metadata_driven_for_napi_wasm_pyo3_magnus_extendr_an
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("pyo3 visitor bridge should generate");
     assert_metadata_driven(&pyo3.code);
@@ -309,6 +310,7 @@ fn visitor_callbacks_are_filtered_by_configured_context_and_result_for_dynamic_b
         "Error::from({msg})",
         &api,
         &[],
+        &ahash::AHashSet::new(),
     )
     .expect("pyo3 visitor bridge should generate");
     assert_filtered_callback_surface(&pyo3.code, "PySyntaxWalkerBridge");
