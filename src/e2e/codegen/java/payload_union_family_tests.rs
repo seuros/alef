@@ -66,8 +66,14 @@ fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
 /// - `summary` — an OPTIONAL payload union, whose accessor is wrapped in `Optional.ofNullable`.
 /// - `payload` — a NON-OPTIONAL payload union, whose accessor stays bare.
 /// - `status` — a fieldless enum, the control that keeps `.getValue()`.
-/// - `title` / `count` / `tags` / `flag` — plain scalars and a collection, the per-family
+/// - `title` / `attempts` / `tags` / `flag` — plain scalars and a collection, the per-family
 ///   controls that must keep emitting their normal assertion.
+///
+/// ~keep The numeric control field is `attempts`, deliberately NOT `count`. `parse_path` lowers
+/// a segment literally named `length`, `count`, or `size` to a `PathSegment::Length`
+/// pseudo-segment, so a field called `count` never addresses the IR field at all — `render_java`
+/// emits `result.size()` for it. A control built on that name exercises the length pseudo-path
+/// instead of the numeric one, which is a test of the fixture rather than of the generator.
 fn union_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
     let type_defs = vec![TypeDef {
         name: "UnionResult".to_string(),
@@ -80,7 +86,7 @@ fn union_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
             field("payload", TypeRef::Named("StageOutput".to_string()), false),
             field("status", TypeRef::Named("StageStatus".to_string()), false),
             field("title", TypeRef::String, false),
-            field("count", TypeRef::Primitive(PrimitiveType::U32), false),
+            field("attempts", TypeRef::Primitive(PrimitiveType::U32), false),
             field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
             field("flag", TypeRef::Primitive(PrimitiveType::Bool), false),
         ],
@@ -261,8 +267,8 @@ fn numeric_comparison_on_a_payload_union_is_skipped() {
 /// Opposite control: the same family on a numeric leaf must still emit.
 #[test]
 fn numeric_comparison_on_a_numeric_field_still_emits() {
-    let out = render(assertion("greater_than", "count", number(1)), &[]);
-    assert_emitted(&out, "result.count() > 1");
+    let out = render(assertion("greater_than", "attempts", number(1)), &[]);
+    assert_emitted(&out, "result.attempts() > 1");
 }
 
 /// `equals` compiles on a wrapper instance through `assertEquals(Object, Object)` and is false
@@ -339,7 +345,7 @@ fn presence_on_a_non_optional_payload_union_is_skipped() {
     assert_skipped(&out, "payload", "result.payload().isEmpty()");
 }
 
-/// A `fields_display_as_text` field keeps every string-shaped family: its optional lowering is
+/// A `fields_display_as_text` field keeps the string-shaped families: its optional lowering is
 /// `.map(v -> v.text()).orElse("")`, and `.text()` is a real accessor on the wrapper the binding
 /// emits for exactly the types that config names.
 #[test]
