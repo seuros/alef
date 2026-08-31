@@ -147,7 +147,7 @@ fn generated_visitor_class(fields: &[&str], methods: &[&str]) -> String {
         emit_python_visitor_method(
             &mut body,
             method_name,
-            *action,
+            action,
             probe.as_ref().map(|probe| probe.probe_method.as_str()),
         );
     }
