@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use crate::core::config::e2e::CallConfig;
 use crate::core::ir::{DefaultValue, EnumDef, EnumVariant, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
@@ -7,23 +8,68 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
 use super::assertion_field_shape::resolve_assertion_field_shape;
+use super::go_batch::{GoBatchCase, GoBatchLayout, GoCaseOutcome, run_go_batch};
 use super::test_function::{GoTestFunctionContext, render_test_function};
 
-fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
-    let go = which::which("go").expect("Go is required for rendered assertion compile fixtures");
-    let directory = tempfile::tempdir().expect("create generated Go fixture");
-    std::fs::write(
-        directory.path().join("go.mod"),
-        "module example.com/sample\n\ngo 1.24\n",
-    )
-    .unwrap();
-    std::fs::write(directory.path().join("sample.go"), sample_source).unwrap();
-    let mut imports = vec!["\"testing\"", "sample \"example.com/sample\""];
+/// Import path of the throwaway module that holds every rendered-assertion case as its own
+/// package. One module means one `go test` process for the whole set; separate packages keep
+/// each case compiled on its own, so an unused import or a build error still fails only the
+/// case that caused it. ~keep
+const SHAPE_BATCH_MODULE: &str = "example.com/shapes";
+
+/// Every rendered-assertion case that must compile and run. Asserted as a set against the
+/// packages `go test` reports on: a batch that silently selects fewer packages exits 0 and
+/// is otherwise indistinguishable from a real pass. ~keep
+const RENDERED_SHAPE_CASE_COUNT: usize = 45;
+
+/// A case whose rendered Go cannot build. It shares the batch with the real cases to prove
+/// the single invocation still surfaces a failure instead of swallowing it, and that doing
+/// so does not disturb the verdict on any other case. ~keep
+const BROKEN_SOURCE_CONTROL: &str = "compile_control_broken_source";
+
+const PSEUDO_FIELD_SUFFIXES: [&str; 3] = ["length", "count", "size"];
+
+const PSEUDO_FIELD_ASSERTIONS: [&str; 6] = [
+    "greater_than",
+    "less_than_or_equal",
+    "count_min",
+    "count_equals",
+    "min_length",
+    "max_length",
+];
+
+const DATA_INTERFACE_STRING_FAMILIES: [(&str, &str); 5] = [
+    ("equals", "value"),
+    ("contains", "value"),
+    ("contains_all", "value"),
+    ("not_contains", "absent"),
+    ("contains_any", "value"),
+];
+
+const SAMPLE_DATA_INTERFACE: &str = "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n";
+
+const SAMPLE_RAW_MESSAGE: &str = "package sample\nimport \"encoding/json\"\ntype Envelope struct { Payload *json.RawMessage }\nfunc Inspect() (*Envelope, error) { raw := json.RawMessage(`{\"value\":\"sample\"}`); return &Envelope{Payload: &raw}, nil }\n";
+
+const SAMPLE_LABEL_POINTER: &str = "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n";
+
+const SAMPLE_LABEL_NIL: &str =
+    "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { return &Envelope{Label: nil}, nil }\n";
+
+const SAMPLE_LIMIT_POINTER: &str = "package sample\ntype Envelope struct { Limit *int64 }\nfunc Inspect() (*Envelope, error) { value := int64(5); return &Envelope{Limit: &value}, nil }\n";
+
+/// Package one rendered assertion as a Go package inside the batch module: the sample
+/// package under test plus the external test file that exercises it.
+fn rendered_case(name: &str, rendered: &str, sample_source: &str) -> GoBatchCase {
+    assert!(
+        emitted_test_functions(rendered) >= 1,
+        "a rendered case must emit at least one Go test function:\n{rendered}"
+    );
+    let mut imports = vec!["\"testing\"".to_owned(), format!("sample \"{SHAPE_BATCH_MODULE}/{name}\"")];
     if rendered.contains("strings.") {
-        imports.push("\"strings\"");
+        imports.push("\"strings\"".to_owned());
     }
     if rendered.contains("jsonString(") {
-        imports.push("\"encoding/json\"");
+        imports.push("\"encoding/json\"".to_owned());
     }
     let assertion_stub = if rendered.contains("assert.") {
         "type assertions struct{}\nvar assert assertions\nfunc (assertions) NotNil(*testing.T, any, ...string) {}\nfunc (assertions) GreaterOrEqual(*testing.T, any, any, ...string) {}\nfunc (assertions) LessOrEqual(*testing.T, any, any, ...string) {}\nfunc (assertions) Equal(*testing.T, any, any, ...string) {}\n"
@@ -39,18 +85,17 @@ fn assert_rendered_go_compiles(rendered: &str, sample_source: &str) {
         "package sample_test\nimport ({})\n{assertion_stub}{json_stub}\n{rendered}",
         imports.join("\n")
     );
-    std::fs::write(directory.path().join("shape_test.go"), source).unwrap();
-    let output = std::process::Command::new(go)
-        .args(["test", "./..."])
-        .current_dir(directory.path())
-        .output()
-        .expect("run Go compiler");
-    assert!(
-        output.status.success(),
-        "stdout:\n{}\nstderr:\n{}\n{rendered}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    GoBatchCase {
+        name: name.to_owned(),
+        files: vec![
+            ("sample.go".to_owned(), sample_source.to_owned()),
+            ("shape_test.go".to_owned(), source),
+        ],
+    }
+}
+
+fn emitted_test_functions(rendered: &str) -> usize {
+    rendered.lines().filter(|line| line.starts_with("func Test")).count()
 }
 
 fn render_field_assertion(
@@ -122,9 +167,8 @@ fn render_fixture(config: E2eConfig, fixture: Fixture, field: FieldDef, enums: &
     output
 }
 
-#[test]
-fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
-    let choice = EnumDef {
+fn data_choice_enum() -> EnumDef {
+    EnumDef {
         name: "Choice".into(),
         variants: vec![EnumVariant {
             name: "Value".into(),
@@ -136,7 +180,20 @@ fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
             ..Default::default()
         }],
         ..Default::default()
-    };
+    }
+}
+
+fn label_field() -> FieldDef {
+    FieldDef {
+        name: "label".into(),
+        ty: TypeRef::String,
+        default: Some("default_label".into()),
+        typed_default: Some(DefaultValue::StringLiteral("default".into())),
+        ..Default::default()
+    }
+}
+
+fn optional_data_interface_case() -> GoBatchCase {
     let output = render_field_assertion(
         FieldDef {
             name: "choice".into(),
@@ -145,7 +202,7 @@ fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
             ..Default::default()
         },
         "choice",
-        &[choice],
+        &[data_choice_enum()],
         true,
         "is_true",
         None,
@@ -155,10 +212,234 @@ fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
         !output.contains("*result.Choice"),
         "sealed interfaces are not pointers:\n{output}"
     );
-    assert_rendered_go_compiles(
+    rendered_case(
+        "optional_data_interface_nullable_not_dereferenced",
         &output,
-        "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n",
+        SAMPLE_DATA_INTERFACE,
+    )
+}
+
+fn required_unresolved_named_case() -> GoBatchCase {
+    let output = render_field_assertion(
+        FieldDef {
+            name: "payload".into(),
+            ty: TypeRef::Named("ForeignPayload".into()),
+            ..Default::default()
+        },
+        "payload",
+        &[],
+        false,
+        "contains",
+        Some(serde_json::json!("sample")),
     );
+
+    assert!(
+        output.contains("*result.Payload"),
+        "unresolved named fields are pointers:\n{output}"
+    );
+    rendered_case(
+        "required_unresolved_named_raw_message_pointer",
+        &output,
+        SAMPLE_RAW_MESSAGE,
+    )
+}
+
+fn required_default_string_count_case() -> GoBatchCase {
+    let output = render_field_assertion(
+        label_field(),
+        "label",
+        &[],
+        false,
+        "count_min",
+        Some(serde_json::json!(1)),
+    );
+
+    assert!(output.contains("len(*result.Label)"), "{output}");
+    rendered_case("required_default_string_count_pointer", &output, SAMPLE_LABEL_POINTER)
+}
+
+fn required_default_number_comparison_case() -> GoBatchCase {
+    let output = render_field_assertion(
+        FieldDef {
+            name: "limit".into(),
+            ty: TypeRef::Primitive(PrimitiveType::I64),
+            default: Some("default_limit".into()),
+            typed_default: Some(DefaultValue::IntLiteral(5)),
+            ..Default::default()
+        },
+        "limit",
+        &[],
+        false,
+        "greater_than",
+        Some(serde_json::json!(1)),
+    );
+
+    assert!(output.contains("*result.Limit < 2"), "{output}");
+    rendered_case(
+        "required_default_number_comparison_pointer",
+        &output,
+        SAMPLE_LIMIT_POINTER,
+    )
+}
+
+fn pointer_pseudo_field_compiles_case(suffix: &str, assertion_type: &str) -> GoBatchCase {
+    let expected = match assertion_type {
+        "greater_than" => 0,
+        "less_than_or_equal" | "max_length" => 10,
+        "count_equals" => 6,
+        _ => 1,
+    };
+    let output = render_field_assertion(
+        label_field(),
+        &format!("label.{suffix}"),
+        &[],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    assert!(!output.contains("len(*result.Label) != nil"), "{output}");
+    assert!(!output.contains("len(len(*result.Label))"), "{output}");
+    rendered_case(
+        &format!("pointer_pseudo_{suffix}_{assertion_type}_compiles"),
+        &output,
+        SAMPLE_LABEL_POINTER,
+    )
+}
+
+fn pointer_pseudo_field_nil_safe_case(suffix: &str, assertion_type: &str) -> GoBatchCase {
+    let expected = match assertion_type {
+        "less_than_or_equal" | "max_length" => 10,
+        _ => 1,
+    };
+    let output = render_field_assertion(
+        label_field(),
+        &format!("label.{suffix}"),
+        &[],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    rendered_case(
+        &format!("pointer_pseudo_{suffix}_{assertion_type}_nil_safe"),
+        &output,
+        SAMPLE_LABEL_NIL,
+    )
+}
+
+fn data_interface_string_family_case(assertion_type: &str, expected: &str) -> GoBatchCase {
+    let output = render_field_assertion(
+        FieldDef {
+            name: "choice".into(),
+            ty: TypeRef::Named("Choice".into()),
+            ..Default::default()
+        },
+        "choice",
+        &[data_choice_enum()],
+        false,
+        assertion_type,
+        Some(serde_json::json!(expected)),
+    );
+    assert!(output.contains("jsonString(t, result.Choice)"), "{output}");
+    rendered_case(
+        &format!("data_interface_string_{assertion_type}"),
+        &output,
+        SAMPLE_DATA_INTERFACE,
+    )
+}
+
+/// Every case the batch must run, in a stable order. The names double as the batch's case
+/// inventory, so each one names the exact fixture it replaced.
+fn rendered_shape_cases() -> Vec<GoBatchCase> {
+    let mut cases = vec![
+        optional_data_interface_case(),
+        required_unresolved_named_case(),
+        required_default_string_count_case(),
+        required_default_number_comparison_case(),
+    ];
+    for suffix in PSEUDO_FIELD_SUFFIXES {
+        for assertion_type in PSEUDO_FIELD_ASSERTIONS {
+            cases.push(pointer_pseudo_field_compiles_case(suffix, assertion_type));
+            cases.push(pointer_pseudo_field_nil_safe_case(suffix, assertion_type));
+        }
+    }
+    for (assertion_type, expected) in DATA_INTERFACE_STRING_FAMILIES {
+        cases.push(data_interface_string_family_case(assertion_type, expected));
+    }
+    cases
+}
+
+fn broken_source_control_case() -> GoBatchCase {
+    GoBatchCase {
+        name: BROKEN_SOURCE_CONTROL.to_owned(),
+        files: vec![
+            ("sample.go".to_owned(), "package sample\n".to_owned()),
+            (
+                "shape_test.go".to_owned(),
+                format!(
+                    "package sample_test\nimport (\n\"testing\"\nsample \"{SHAPE_BATCH_MODULE}/{BROKEN_SOURCE_CONTROL}\"\n)\nfunc TestBrokenControl(t *testing.T) {{ _ = sample.MissingSymbol }}\n"
+                ),
+            ),
+        ],
+    }
+}
+
+#[test]
+fn rendered_assertion_shapes_compile_and_run_in_one_go_test() {
+    let mut cases = rendered_shape_cases();
+    assert_eq!(
+        cases.len(),
+        RENDERED_SHAPE_CASE_COUNT,
+        "the rendered-shape inventory changed; update RENDERED_SHAPE_CASE_COUNT deliberately"
+    );
+    let passing: Vec<String> = cases.iter().map(|case| case.name.clone()).collect();
+    let emitted_tests: usize = cases
+        .iter()
+        .map(|case| {
+            case.files
+                .iter()
+                .map(|(_, content)| emitted_test_functions(content))
+                .sum::<usize>()
+        })
+        .sum();
+    cases.push(broken_source_control_case());
+    let inventory: Vec<String> = cases.iter().map(|case| case.name.clone()).collect();
+
+    let layout = GoBatchLayout {
+        root_files: vec![(
+            PathBuf::from("go.mod"),
+            format!("module {SHAPE_BATCH_MODULE}\n\ngo 1.24\n"),
+        )],
+        module_dir: PathBuf::new(),
+        module_path: SHAPE_BATCH_MODULE.to_owned(),
+        extra_args: Vec::new(),
+    };
+    let report = run_go_batch(&layout, &cases);
+
+    report.assert_inventory(&inventory);
+    for name in &passing {
+        report.assert_outcome(name, GoCaseOutcome::Passed);
+        assert!(
+            report.case(name).test_case_count >= 1,
+            "case `{name}` selected no Go test to run:\n{}",
+            report.case(name).output
+        );
+    }
+    report.assert_outcome(BROKEN_SOURCE_CONTROL, GoCaseOutcome::Failed);
+    report.assert_output_contains(BROKEN_SOURCE_CONTROL, "undefined: sample.MissingSymbol");
+    assert!(
+        emitted_tests >= RENDERED_SHAPE_CASE_COUNT,
+        "every rendered case must contribute at least one Go test: {emitted_tests}"
+    );
+    assert_eq!(
+        report.total_test_cases(),
+        emitted_tests,
+        "the batch executed a different number of Go tests than it generated"
+    );
+}
+
+#[test]
+fn optional_data_interface_field_is_nullable_but_not_dereferenced() {
+    optional_data_interface_case();
 }
 
 #[test]
@@ -185,27 +466,7 @@ fn required_unresolved_named_field_uses_raw_message_pointer_shape() {
     );
     assert_eq!(resolver.target_field_is_pointer("payload"), Some(true));
 
-    let output = render_field_assertion(
-        FieldDef {
-            name: "payload".into(),
-            ty: TypeRef::Named("ForeignPayload".into()),
-            ..Default::default()
-        },
-        "payload",
-        &[],
-        false,
-        "contains",
-        Some(serde_json::json!("sample")),
-    );
-
-    assert!(
-        output.contains("*result.Payload"),
-        "unresolved named fields are pointers:\n{output}"
-    );
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\nimport \"encoding/json\"\ntype Envelope struct { Payload *json.RawMessage }\nfunc Inspect() (*Envelope, error) { raw := json.RawMessage(`{\"value\":\"sample\"}`); return &Envelope{Payload: &raw}, nil }\n",
-    );
+    required_unresolved_named_case();
 }
 
 #[test]
@@ -285,168 +546,28 @@ fn optional_local_has_plain_value_shape() {
 
 #[test]
 fn required_default_string_count_dereferences_authoritative_pointer() {
-    let output = render_field_assertion(
-        FieldDef {
-            name: "label".into(),
-            ty: TypeRef::String,
-            default: Some("default_label".into()),
-            typed_default: Some(DefaultValue::StringLiteral("default".into())),
-            ..Default::default()
-        },
-        "label",
-        &[],
-        false,
-        "count_min",
-        Some(serde_json::json!(1)),
-    );
-
-    assert!(output.contains("len(*result.Label)"), "{output}");
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n",
-    );
+    required_default_string_count_case();
 }
 
 #[test]
 fn required_default_number_comparison_dereferences_authoritative_pointer() {
-    let output = render_field_assertion(
-        FieldDef {
-            name: "limit".into(),
-            ty: TypeRef::Primitive(PrimitiveType::I64),
-            default: Some("default_limit".into()),
-            typed_default: Some(DefaultValue::IntLiteral(5)),
-            ..Default::default()
-        },
-        "limit",
-        &[],
-        false,
-        "greater_than",
-        Some(serde_json::json!(1)),
-    );
-
-    assert!(output.contains("*result.Limit < 2"), "{output}");
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\ntype Envelope struct { Limit *int64 }\nfunc Inspect() (*Envelope, error) { value := int64(5); return &Envelope{Limit: &value}, nil }\n",
-    );
-}
-
-fn assert_pointer_pseudo_field_compiles(suffix: &str, assertion_type: &str) {
-    let field_path = format!("label.{suffix}");
-    let expected = match assertion_type {
-        "greater_than" => 0,
-        "less_than_or_equal" | "max_length" => 10,
-        "count_equals" => 6,
-        _ => 1,
-    };
-    let output = render_field_assertion(
-        FieldDef {
-            name: "label".into(),
-            ty: TypeRef::String,
-            default: Some("default_label".into()),
-            typed_default: Some(DefaultValue::StringLiteral("default".into())),
-            ..Default::default()
-        },
-        &field_path,
-        &[],
-        false,
-        assertion_type,
-        Some(serde_json::json!(expected)),
-    );
-    assert!(!output.contains("len(*result.Label) != nil"), "{output}");
-    assert!(!output.contains("len(len(*result.Label))"), "{output}");
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n",
-    );
-}
-
-fn assert_pointer_pseudo_field_nil_safe(suffix: &str, assertion_type: &str) {
-    let field_path = format!("label.{suffix}");
-    let expected = match assertion_type {
-        "less_than_or_equal" | "max_length" => 10,
-        _ => 1,
-    };
-    let output = render_field_assertion(
-        FieldDef {
-            name: "label".into(),
-            ty: TypeRef::String,
-            default: Some("default_label".into()),
-            typed_default: Some(DefaultValue::StringLiteral("default".into())),
-            ..Default::default()
-        },
-        &field_path,
-        &[],
-        false,
-        assertion_type,
-        Some(serde_json::json!(expected)),
-    );
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { return &Envelope{Label: nil}, nil }\n",
-    );
+    required_default_number_comparison_case();
 }
 
 #[test]
 fn pointer_length_and_count_pseudo_fields_compile_as_scalars() {
-    for suffix in ["length", "count", "size"] {
-        for assertion_type in [
-            "greater_than",
-            "less_than_or_equal",
-            "count_min",
-            "count_equals",
-            "min_length",
-            "max_length",
-        ] {
-            assert_pointer_pseudo_field_compiles(suffix, assertion_type);
-            assert_pointer_pseudo_field_nil_safe(suffix, assertion_type);
+    for suffix in PSEUDO_FIELD_SUFFIXES {
+        for assertion_type in PSEUDO_FIELD_ASSERTIONS {
+            pointer_pseudo_field_compiles_case(suffix, assertion_type);
+            pointer_pseudo_field_nil_safe_case(suffix, assertion_type);
         }
     }
 }
 
-fn assert_data_interface_string_family_compiles(assertion_type: &str, expected: &str) {
-    let choice = EnumDef {
-        name: "Choice".into(),
-        variants: vec![EnumVariant {
-            name: "Value".into(),
-            fields: vec![FieldDef {
-                name: "value".into(),
-                ty: TypeRef::String,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let output = render_field_assertion(
-        FieldDef {
-            name: "choice".into(),
-            ty: TypeRef::Named("Choice".into()),
-            ..Default::default()
-        },
-        "choice",
-        &[choice],
-        false,
-        assertion_type,
-        Some(serde_json::json!(expected)),
-    );
-    assert!(output.contains("jsonString(t, result.Choice)"), "{output}");
-    assert_rendered_go_compiles(
-        &output,
-        "package sample\ntype Choice interface{}\ntype Envelope struct { Choice Choice }\nfunc Inspect() (*Envelope, error) { return &Envelope{Choice: \"value\"}, nil }\n",
-    );
-}
-
 #[test]
 fn data_interface_string_assertion_families_compile_with_wire_json() {
-    for (assertion_type, expected) in [
-        ("equals", "value"),
-        ("contains", "value"),
-        ("contains_all", "value"),
-        ("not_contains", "absent"),
-        ("contains_any", "value"),
-    ] {
-        assert_data_interface_string_family_compiles(assertion_type, expected);
+    for (assertion_type, expected) in DATA_INTERFACE_STRING_FAMILIES {
+        data_interface_string_family_case(assertion_type, expected);
     }
 }
 
