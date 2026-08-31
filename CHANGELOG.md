@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literals, and emit reachable `wire_value/1` clauses for tagged enums.
 - Skip Java E2E assertions whose payload-union shape cannot be represented by the generated
   wrapper API, including wildcard, numeric, count, and equality operations that previously
-  emitted uncompilable Java source.
+  emitted uncompilable or semantically invalid Java assertions.
 - Escape arbitrary serde and wire names before embedding them in generated Java string literals,
   including `@JsonProperty` annotations, enum tags, builder paths, and E2E source. Quotes,
   backslashes, control characters, and Unicode line separators can no longer break or inject the
