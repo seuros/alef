@@ -1,6 +1,6 @@
 use crate::cli::cache;
 use crate::cli::pipeline::helpers::{
-    check_precondition_named, run_argv_step_streamed, run_command_streamed, run_command_streamed_with_env,
+    check_precondition_named, run_argv_step_streamed, run_command_streamed, run_command_streamed_with_envs,
 };
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::output::TestAppRunConfig;
@@ -10,6 +10,9 @@ use anyhow::Context as _;
 use rayon::prelude::*;
 use std::path::Path;
 use tracing::{error, info, warn};
+
+#[cfg(all(test, unix))]
+mod env_exactness_tests;
 
 /// Names in `names` whose `<registry output>/<name>/` directory exists, when `config`'s
 /// crate-wide generation-inputs fingerprint no longer matches what
@@ -324,6 +327,17 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
 /// interpolating it into an `export {k}='{v}'; ` prefix used to do exactly that -- an
 /// apostrophe in a value broke out of the quoting, and an unvalidated key needed no escaping
 /// at all to inject a second command.
+///
+/// Every pair here is an EXACT value, never a search path, so `run_test_app_target` hands them
+/// to `run_command_streamed_with_envs` as its `exact_env` argument with an empty `path_env`.
+/// They used to go through `path_env`, whose `inline_env_in_shell_cmd` renders the PATH-style
+/// `export K='V'"${K:+:$K}"` prepend guard: correct for `LD_LIBRARY_PATH`, silently corrupting
+/// here, because an inherited `MOCK_SERVER_URL` (or an `[crates.e2e.env]` key that happens to
+/// already exist in the operator's shell) is appended to the value alef set. A test app then
+/// resolved `http://127.0.0.1:<port>/:<whatever was inherited>`, and a strict comparison an
+/// e2e policy check performs never matched. `cli::pipeline::commands::test` already documents
+/// this exact split for the local `e2e/<lang>` runner and claims the registry-mode runner
+/// agrees with it -- until this change it did not. ~keep
 fn test_app_env_vars(config: &ResolvedCrateConfig, server: &Option<MockServerHandle>) -> Vec<(String, String)> {
     let server_env: Vec<(String, String)> = server.as_ref().map(|h| h.env_vars.clone()).unwrap_or_default();
     let e2e_env: Vec<(String, String)> = config
@@ -353,7 +367,7 @@ fn run_test_app_target(
     }
     if let Some(before) = &cfg.before {
         for cmd in before.commands() {
-            if let Err(e) = run_command_streamed_with_env(cmd, Some(name), env_pairs) {
+            if let Err(e) = run_command_streamed_with_envs(cmd, Some(name), &[], env_pairs) {
                 return TestAppOutcome::Failed(e);
             }
         }
@@ -371,7 +385,7 @@ fn run_test_app_target(
     match &cfg.run {
         Some(cmd_list) => {
             for cmd in cmd_list.commands() {
-                if let Err(e) = run_command_streamed_with_env(cmd, Some(name), env_pairs) {
+                if let Err(e) = run_command_streamed_with_envs(cmd, Some(name), &[], env_pairs) {
                     return TestAppOutcome::Failed(e);
                 }
             }
