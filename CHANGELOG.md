@@ -184,6 +184,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
   E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
   an identifier-less expression.
+- Stop the PyO3 visitor trait bridge handing a callback a bare `PyDict` while the generated
+  `.pyi` stub still typed the parameter as the context type's `#[pyclass]`. Every attribute
+  access the stub promised raised `AttributeError`, and the bridge's default-result arm swallowed
+  the exception, so the mismatch was silent at both the type-checker and at runtime. The bridge
+  and the stub now both ask a single `context_binding_class` predicate -- gated on the context
+  being present, not excluded, `Clone`, and having an emitted `From<core::T>` conversion -- so a
+  context that fails any of those four keeps the dict fallback on both sides instead of drifting
+  apart. `[crates.python] exclude_types` and `capsule_types` leave no IR flag when they drop a
+  type's `#[pyclass]`, so the predicate also consults the same `pyclass_absent_type_names` set the
+  `#[pyclass]` emitter itself uses, rather than re-deriving eligibility from the IR alone. The
+  dict-fallback annotation in the stub is now `dict[str, object]`, not `Any` -- `Any` switched the
+  checker off entirely, while `object` still admits every value the fallback can insert and forces
+  the consumer to narrow before use. A field the fallback fails to convert is now logged at `WARN`
+  instead of silently dropped from the dict.
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
   already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
   a literal character rather than a quoting operator, so maven was handed
