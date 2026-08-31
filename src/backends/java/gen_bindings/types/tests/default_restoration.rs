@@ -689,10 +689,22 @@ fn serde_default_collection_literal_declines_only_the_function_call_defaults() {
         serde_default_collection_literal(&vec_ty, true, true, Some(&DefaultValue::Empty)),
         Some("List.of()")
     );
-    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, None), Some("List.of()"));
-    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, Some(&named)), None);
-    assert_eq!(serde_default_collection_literal(&vec_ty, true, true, Some(&resolved)), None);
-    assert_eq!(serde_default_collection_literal(&map_ty, true, true, Some(&named)), None);
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, true, true, None),
+        Some("List.of()")
+    );
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, true, true, Some(&named)),
+        None
+    );
+    assert_eq!(
+        serde_default_collection_literal(&vec_ty, true, true, Some(&resolved)),
+        None
+    );
+    assert_eq!(
+        serde_default_collection_literal(&map_ty, true, true, Some(&named)),
+        None
+    );
     assert_eq!(
         serde_default_collection_literal(&map_ty, true, true, Some(&DefaultValue::Empty)),
         Some("Map.of()")

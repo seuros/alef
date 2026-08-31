@@ -110,12 +110,8 @@ pub(super) fn render_contains_all(
         let is_nullable = field_is_nullable;
         for val in values {
             let go_val = json_to_go(val);
-            let field_for_contains = contains_value_expression(
-                &field_expr,
-                field_is_pointer,
-                field_is_array,
-                field_is_data_interface,
-            );
+            let field_for_contains =
+                contains_value_expression(&field_expr, field_is_pointer, field_is_array, field_is_data_interface);
             if is_nullable {
                 let _ = writeln!(
                     out_ref,

@@ -829,7 +829,10 @@ fn struct_shared_by_two_unions_is_referenced_by_both() {
         all_plans.custom_section
     );
     assert_eq!(
-        all_plans.custom_section.matches("export interface AlefSharedWire").count(),
+        all_plans
+            .custom_section
+            .matches("export interface AlefSharedWire")
+            .count(),
         1,
         "actual:\n{}",
         all_plans.custom_section

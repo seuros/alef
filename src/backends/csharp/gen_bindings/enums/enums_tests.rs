@@ -39,7 +39,10 @@ fn tagged_union_enum(variants: Vec<EnumVariant>, rename_all_fields: Option<&str>
 #[test]
 fn struct_variant_field_with_serde_rename_uses_the_renamed_wire_name() {
     let enum_def = tagged_union_enum(
-        vec![struct_variant("Explicit", vec![named_field("resource_url", Some("resourceUrl"))])],
+        vec![struct_variant(
+            "Explicit",
+            vec![named_field("resource_url", Some("resourceUrl"))],
+        )],
         None,
     );
 

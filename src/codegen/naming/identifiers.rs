@@ -133,7 +133,6 @@ pub fn dart_tuple_field_identifier(name: &str) -> String {
     }
 }
 
-
 fn is_ascii_identifier(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -145,7 +144,6 @@ fn is_ascii_identifier(name: &str) -> bool {
     }
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
-
 
 fn backtick_keyword(lang: Language, name: &str) -> String {
     if is_reserved_keyword(lang, name) {

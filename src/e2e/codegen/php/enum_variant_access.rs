@@ -16,8 +16,8 @@
 
 use std::collections::HashSet;
 
-use crate::core::ir::{EnumDef, EnumVariant};
 use crate::codegen::serde_enum_repr::tagged_object_tag_key;
+use crate::core::ir::{EnumDef, EnumVariant};
 use crate::e2e::field_access::PhpGetterMap;
 
 /// How `backends::php` lowers each IR enum, partitioned exactly as

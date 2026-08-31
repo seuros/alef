@@ -12,8 +12,8 @@ use super::accessors::{
     materialise_vec_temporaries, swift_array_contains_expr, swift_array_count_expr, swift_array_is_empty_expr,
     swift_array_not_empty_predicate, swift_count_target, swift_stringy_aggregator_contains_assert,
 };
-use super::wildcard_assertion::render_wildcard_assertion;
 use super::values::{escape_swift, json_to_swift, swift_numeric_literal_cast};
+use super::wildcard_assertion::render_wildcard_assertion;
 
 /// ~keep The token a skip marker names when the assertion has no field path at all (a bare-result
 /// assertion). Every registered wording quotes a token, and a marker that quotes nothing matches

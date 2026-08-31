@@ -35,8 +35,7 @@ pub(super) fn render_not_empty(
     // numeric scalar always carries a value in Go (there is no zero-length state
     // to detect), so the check degrades to a no-op, matching how `not_empty`
     // already treats "no meaningful check applies" for e.g. `not_error`.
-    let is_numeric_scalar =
-        !field_is_pointer && !field_is_array && numeric_scalar_fields.contains(resolved_field);
+    let is_numeric_scalar = !field_is_pointer && !field_is_array && numeric_scalar_fields.contains(resolved_field);
     if field_is_pointer && !field_is_array {
         let _ = writeln!(out_ref, "\tif {field_expr} == nil {{");
     } else if field_is_nullable && field_is_slice {

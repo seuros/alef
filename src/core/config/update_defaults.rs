@@ -550,7 +550,6 @@ mod tests {
             );
         }
 
-        // (c) no rules file -> exactly 0 argv (never a stray empty argument).
         {
             const PACKAGE: &str = "packages/java";
             let root = tempfile::tempdir().expect("tempdir");

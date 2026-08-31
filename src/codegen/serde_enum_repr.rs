@@ -134,7 +134,12 @@ mod tagged_object_tag_key_tests {
     #[test]
     fn should_resolve_the_discriminator_key_for_every_container_attribute_shape() {
         let cases: [TagKeyCase<'_>; 5] = [
-            ("no container attribute falls back to the convention", None, None, "type"),
+            (
+                "no container attribute falls back to the convention",
+                None,
+                None,
+                "type",
+            ),
             ("an explicit tag wins over the fallback", Some("kind"), None, "kind"),
             (
                 "an explicit tag wins even when it equals the fallback",
@@ -165,7 +170,10 @@ mod tagged_object_tag_key_tests {
     /// so no emitter can be correct for one shape and wrong for the other.
     #[test]
     fn should_agree_with_the_named_constant() {
-        assert_eq!(tagged_object_tag_key(&enum_with(None, None)), DEFAULT_TAGGED_OBJECT_TAG_KEY);
+        assert_eq!(
+            tagged_object_tag_key(&enum_with(None, None)),
+            DEFAULT_TAGGED_OBJECT_TAG_KEY
+        );
     }
 }
 
