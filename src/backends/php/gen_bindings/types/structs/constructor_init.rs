@@ -15,6 +15,11 @@ pub(crate) const CORE_DEFAULTS_BINDING: &str = "__alef_core_defaults";
 
 /// The `Self { .. }` initialiser list for the named constructor, plus the statement it needs
 /// when at least one omitted field is recovered from the core type's `Default`.
+///
+/// `Debug` is required, not decorative: the refusal tests assert with `expect_err`, whose Ok arm
+/// formats the success value into the panic message. Both fields are plain generated-source
+/// text, so there is nothing sensitive or large to leak into a failure report. ~keep
+#[derive(Debug)]
 pub(crate) struct ConstructorInit {
     /// Emitted immediately before `Self { .. }`. Empty when no field needed the recovery, so a
     /// constructor that does not use the local never binds it (and never trips `unused_variables`).

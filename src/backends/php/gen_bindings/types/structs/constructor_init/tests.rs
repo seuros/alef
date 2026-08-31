@@ -5,7 +5,7 @@
 //! the refusal were deleted. The pairs below pin both directions. ~keep
 
 use super::*;
-use crate::core::ir::{DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::PrimitiveType;
 
 const CORE_TYPE: &str = "sample_core::FetchPolicy";
 
