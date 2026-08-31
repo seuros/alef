@@ -489,7 +489,14 @@ fn struct_expr_defaults(struct_expr: &syn::ExprStruct, scope: &EvalScope<'_>) ->
             continue;
         };
         let name = ident.to_string();
-        let value = expr_to_default_value(&field.expr, scope, scope.field_types.get(&name));
+        // `Self { #[cfg(feature = "x")] limit: 9, .. }` supplies this initializer only in builds
+        // that enable the feature, and this pass cannot know which those are. Same refusal, and
+        // same reason, as an attributed mutation statement — see `mutation`'s module doc. ~keep
+        let value = if field.attrs.is_empty() {
+            expr_to_default_value(&field.expr, scope, scope.field_types.get(&name))
+        } else {
+            unreadable(&field.expr)
+        };
         if let DefaultValue::Unresolved(source) = &value {
             tracing::debug!(
                 target: "alef::extract::defaults",

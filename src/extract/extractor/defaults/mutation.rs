@@ -20,7 +20,17 @@
 //! straight-line, locally-visible mutation of one binding — a branch, a loop, an early return,
 //! a helper the binding is handed to, a method whose effect is not modelled — is refused, and
 //! the refusal reaches the caller as a hard `Unresolved` over every field rather than as a
-//! best guess. ~keep
+//! best guess.
+//!
+//! An *attributed* statement is refused for the same reason and belongs in the same list.
+//! `#[cfg(feature = "x")] value.depth = 9;` runs only in builds that enable the feature, and
+//! which features a consumer enables is not knowable from the source alef reads — so the
+//! mutation's very existence is undetermined, not merely its value. Every attribute is refused,
+//! not only `cfg`: `cfg_attr` expands to arbitrary attributes under the same unknown condition,
+//! an attribute macro may rewrite or delete the statement outright, and an allowlist of
+//! "inert" attributes is the part that silently goes stale. Refusing costs one loud
+//! `Unresolved` on an exotic body; admitting costs silent wrong output in every build where
+//! the cfg went the other way. ~keep
 
 use super::{DefaultValue, EvalScope, carries_value, expr_to_default_value, struct_expr_defaults};
 use ahash::AHashMap;
@@ -134,17 +144,35 @@ fn extended(current: Option<&DefaultValue>, addition: DefaultValue, source: &str
 /// The struct literal a block evaluates to *as its tail expression*, looked through nested
 /// blocks. Only the tail counts: an earlier statement is not what the function returns, and
 /// treating one as if it were is the defect this module exists to close.
+///
+/// The tail is only *the* answer when nothing before it can return instead. A conditional early
+/// return followed by a struct literal has two exits and the literal is one of them, so the
+/// preceding statements are checked before the tail is believed. A macro is refused outright
+/// here: its expansion is not parsed, so a `return` inside one is invisible to the scan, and a
+/// statement this pass reads past yet cannot see through is exactly the shape it must refuse.
+/// The mutated-binding reader does not inherit that macro refusal — it folds its statements'
+/// value expressions rather than reading past them, so `list.extend(vec![..])` stays readable. ~keep
 fn tail_struct_expr(block: &syn::Block) -> Option<&syn::ExprStruct> {
-    match block.stmts.last()? {
-        syn::Stmt::Expr(expr, _) => unwrap_to_struct_expr(expr),
-        _ => None,
+    let (tail, leading) = block.stmts.split_last()?;
+    if is_attributed(tail) {
+        return None;
     }
+    if leading
+        .iter()
+        .any(|stmt| is_attributed(stmt) || contains_early_return(stmt) || contains_macro(stmt))
+    {
+        return None;
+    }
+    let syn::Stmt::Expr(expr, _) = tail else {
+        return None;
+    };
+    unwrap_to_struct_expr(expr)
 }
 
 fn unwrap_to_struct_expr(expr: &syn::Expr) -> Option<&syn::ExprStruct> {
     match expr {
-        syn::Expr::Struct(s) => Some(s),
-        syn::Expr::Block(b) => tail_struct_expr(&b.block),
+        syn::Expr::Struct(s) if s.attrs.is_empty() => Some(s),
+        syn::Expr::Block(b) if b.attrs.is_empty() => tail_struct_expr(&b.block),
         _ => None,
     }
 }
@@ -158,13 +186,22 @@ fn unwrap_to_struct_expr(expr: &syn::Expr) -> Option<&syn::ExprStruct> {
 /// branched on, conditionally returned, or handed to a function. Every other body shape fails
 /// one of these checks and becomes `Unresolved`. ~keep
 fn read_mutated_body(block: &syn::Block) -> Option<StructBody<'_>> {
-    let [first, rest @ ..] = block.stmts.as_slice() else {
+    let (tail, leading) = block.stmts.split_last()?;
+    if is_attributed(tail) {
+        return None;
+    }
+    // An attribute decides whether a statement exists in this build, and an early return decides
+    // whether the ones after it run. Neither is answerable from source alone. ~keep
+    if leading
+        .iter()
+        .any(|stmt| is_attributed(stmt) || contains_early_return(stmt))
+    {
+        return None;
+    }
+    let [first, mutation_stmts @ ..] = leading else {
         return None;
     };
     let (binding, struct_expr) = local_struct_binding(first)?;
-    let [mutation_stmts @ .., tail] = rest else {
-        return None;
-    };
     if !tail_returns_binding(tail, &binding) {
         return None;
     }
@@ -172,10 +209,7 @@ fn read_mutated_body(block: &syn::Block) -> Option<StructBody<'_>> {
     for stmt in mutation_stmts {
         mutations.push(classify_mutation(stmt, &binding)?);
     }
-    Some(StructBody {
-        struct_expr,
-        mutations,
-    })
+    Some(StructBody { struct_expr, mutations })
 }
 
 /// `let mut binding = Name { .. };` — the binding's name and the literal it starts from.
@@ -191,6 +225,11 @@ fn local_struct_binding(stmt: &syn::Stmt) -> Option<(String, &syn::ExprStruct)> 
     let syn::Expr::Struct(struct_expr) = init.expr.as_ref() else {
         return None;
     };
+    // An attribute on the initializer itself sits inside the statement rather than at its front,
+    // where [`is_attributed`] would see it. ~keep
+    if !struct_expr.attrs.is_empty() {
+        return None;
+    }
     // `Self { a: 1, ..base() }` carries fields from a base this pass never saw, so the starting
     // value is already unknown and mutating it cannot make it known. ~keep
     if struct_expr.rest.is_some() {
@@ -265,14 +304,62 @@ fn classify_mutation<'a>(stmt: &'a syn::Stmt, binding: &str) -> Option<FieldMuta
                 ("insert", _) => MutationKind::Opaque,
                 _ => return None,
             };
-            Some(FieldMutation {
-                field,
-                kind,
-                source,
-            })
+            Some(FieldMutation { field, kind, source })
         }
         _ => None,
     }
+}
+
+/// Whether a statement carries any attribute at all.
+///
+/// A rendered-token test rather than a `syn` field read, and the difference is the whole point:
+/// `syn` does **not** park a statement attribute uniformly on the statement's own expression
+/// node. For `#[cfg(feature = "x")] value.field = 9;` the attribute lands on the *left operand*
+/// (`ExprAssign.left`, an `Expr::Field`) and `ExprAssign.attrs` is empty, while for
+/// `#[cfg(..)] value.list.push(..)` it lands on `ExprMethodCall.attrs` as expected. Verified
+/// against `syn` 3.0.4. A check written as `!assign.attrs.is_empty()` therefore examines
+/// nothing for the assignment case — it reads clean on precisely the shape it exists to catch.
+/// An attribute always renders first, so testing the rendered prefix is uniform across every
+/// statement kind and independent of where the parser chose to hang it. ~keep
+fn is_attributed(stmt: &syn::Stmt) -> bool {
+    stmt.to_token_stream().to_string().trim_start().starts_with('#')
+}
+
+/// Whether a `return` that would exit `fn default()` appears anywhere in a statement.
+///
+/// A `return` inside a closure exits the closure, not the function, so closure bodies are
+/// skipped rather than refused. ~keep
+fn contains_early_return(stmt: &syn::Stmt) -> bool {
+    struct Scan {
+        found: bool,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Scan {
+        fn visit_expr_return(&mut self, _node: &'ast syn::ExprReturn) {
+            self.found = true;
+        }
+        fn visit_expr_closure(&mut self, _node: &'ast syn::ExprClosure) {}
+    }
+    let mut scan = Scan { found: false };
+    syn::visit::Visit::visit_stmt(&mut scan, stmt);
+    scan.found
+}
+
+/// Whether a macro invocation appears anywhere in a statement.
+///
+/// A macro's token stream is not parsed, so [`contains_early_return`] cannot see through one.
+/// Used only where a statement is read *past* rather than folded. ~keep
+fn contains_macro(stmt: &syn::Stmt) -> bool {
+    struct Scan {
+        found: bool,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Scan {
+        fn visit_macro(&mut self, _node: &'ast syn::Macro) {
+            self.found = true;
+        }
+    }
+    let mut scan = Scan { found: false };
+    syn::visit::Visit::visit_stmt(&mut scan, stmt);
+    scan.found
 }
 
 /// `binding.field` and nothing else. A nested access (`binding.inner.field`) mutates a value
