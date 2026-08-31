@@ -2,7 +2,7 @@ use crate::adapters::AdapterBodies;
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::ImplBuilder;
 use crate::codegen::generators::{self, RustBindingConfig};
-use crate::codegen::shared::{binding_fields, partition_methods};
+use crate::codegen::shared::partition_methods;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
 use ahash::AHashSet;
@@ -274,6 +274,7 @@ pub(crate) fn gen_php_struct(
     enum_names: &AHashSet<String>,
     _lang_rename_all: &str,
 ) -> String {
+    let binding_type = constructor_init::php_binding_type(typ, cfg.never_skip_cfg_field_names);
     // Build the php_class attributes: with namespace → plain #[php_class] + #[php(name = "Ns\\ClassName")],
     // ext-php-rs 0.15+ uses a separate #[php] attr for the name; #[php_class(<args>)] is no longer supported.
     let php_name_attr: String;
@@ -408,7 +409,7 @@ pub(crate) fn gen_php_struct(
             emit_delegating_default_for_types: cfg.emit_delegating_default_for_types,
             delegate_deserialize_to_core_for_types: cfg.delegate_deserialize_to_core_for_types,
         };
-        generators::gen_struct_with_per_field_attrs(typ, mapper, &modified_cfg, field_attrs_fn)
+        generators::gen_struct_with_per_field_attrs(binding_type.as_ref(), mapper, &modified_cfg, field_attrs_fn)
     } else {
         // Without serde, no `#[serde(default)]` is applied — the binding's `Default` impl
         let modified_cfg = RustBindingConfig {
@@ -416,7 +417,7 @@ pub(crate) fn gen_php_struct(
             emit_delegating_default_impl: false,
             ..*cfg
         };
-        generators::gen_struct_with_per_field_attrs(typ, mapper, &modified_cfg, field_attrs_fn)
+        generators::gen_struct_with_per_field_attrs(binding_type.as_ref(), mapper, &modified_cfg, field_attrs_fn)
     }
 }
 
@@ -491,7 +492,7 @@ fn gen_struct_methods_impl(
     enums: &[EnumDef],
     exclude_functions: &[String],
     bridge_type_aliases: &AHashSet<String>,
-    _never_skip_cfg_field_names: &[String],
+    never_skip_cfg_field_names: &[String],
     mutex_types: &AHashSet<String>,
     _untagged_union_text_types: &[String],
 ) -> anyhow::Result<String> {
@@ -501,14 +502,22 @@ fn gen_struct_methods_impl(
     // field-based `#[php(constructor)]` — the static method will be emitted as a named
     let has_explicit_static_new = typ.methods.iter().any(|m| m.is_static && m.name == "new");
 
-    if !has_explicit_static_new && !typ.fields.is_empty() {
+    let retained_fields = || {
+        typ.fields
+            .iter()
+            .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
+    };
+
+    if !has_explicit_static_new && retained_fields().next().is_some() {
         let has_named_params = typ
             .fields
             .iter()
+            .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
             .any(|f| !is_php_prop_scalar_with_enums(&f.ty, enum_names));
         let has_field_defaults = typ
             .fields
             .iter()
+            .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
             .any(|field| field.default.is_some() || field.typed_default.is_some());
         let use_from_json = has_serde && (has_named_params || typ.has_default || has_field_defaults);
         if use_from_json {
@@ -523,7 +532,7 @@ fn gen_struct_methods_impl(
             let has_representable_required = typ
                 .fields
                 .iter()
-                .filter(|f| !f.binding_excluded)
+                .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                 .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
 
             if has_representable_required {
@@ -546,7 +555,7 @@ fn gen_struct_methods_impl(
                 let mut ctor_fields: Vec<&FieldDef> = typ
                     .fields
                     .iter()
-                    .filter(|f| !f.binding_excluded)
+                    .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .filter(|f| f.cfg.is_none())
                     .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
                     .collect();
@@ -584,7 +593,7 @@ fn gen_struct_methods_impl(
                 for f in typ
                     .fields
                     .iter()
-                    .filter(|f| !f.binding_excluded)
+                    .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .filter(|f| f.cfg.is_none())
                     .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
                 {
@@ -606,7 +615,12 @@ fn gen_struct_methods_impl(
                     }
                 }
 
-                let init = constructor_init::gen_constructor_field_inits(typ, enum_names, opaque_types)?;
+                let init = constructor_init::gen_constructor_field_inits(
+                    typ,
+                    enum_names,
+                    opaque_types,
+                    never_skip_cfg_field_names,
+                )?;
                 let prelude = init.prelude;
                 let param_init = init.field_inits;
                 let named_constructor = format!(
@@ -627,7 +641,9 @@ fn gen_struct_methods_impl(
         } else {
             let map_fn = |ty: &crate::core::ir::TypeRef| mapper.map_type(ty);
             if typ.has_default {
-                let config_method = crate::codegen::config_gen::gen_php_kwargs_constructor(typ, &map_fn);
+                let binding_type = constructor_init::php_binding_type(typ, never_skip_cfg_field_names);
+                let config_method =
+                    crate::codegen::config_gen::gen_php_kwargs_constructor(binding_type.as_ref(), &map_fn);
                 impl_builder.add_method(&config_method);
             } else {
                 // decorated with #[php(constructor)] that accepts named parameters.
@@ -640,7 +656,7 @@ fn gen_struct_methods_impl(
                 let mut ctor_fields: Vec<&FieldDef> = typ
                     .fields
                     .iter()
-                    .filter(|f| !f.binding_excluded)
+                    .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .filter(|f| f.cfg.is_none())
                     .collect();
                 ctor_fields.sort_by_key(|f| f.optional);
@@ -670,7 +686,7 @@ fn gen_struct_methods_impl(
                     super::super::helpers::gen_php_function_params(&param_defs, mapper, opaque_types, &AHashSet::new());
 
                 let mut let_bindings = String::new();
-                for f in binding_fields(&typ.fields).filter(|f| f.cfg.is_none()) {
+                for f in retained_fields().filter(|f| f.cfg.is_none()) {
                     if let TypeRef::Vec(inner) = &f.ty
                         && let TypeRef::Named(name) = inner.as_ref()
                         && !opaque_types.contains(name.as_str())
@@ -692,7 +708,7 @@ fn gen_struct_methods_impl(
                 let param_init = typ
                     .fields
                     .iter()
-                    .filter(|f| !f.binding_excluded)
+                    .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .map(|f| {
                         let php_param_name = crate::codegen::naming::to_php_name(&f.name);
                         if f.cfg.is_some() {
@@ -726,8 +742,7 @@ fn gen_struct_methods_impl(
     // Scalar fields have `#[php(prop)]` on the struct field itself which exposes them as
     // Historical note: this code used to emit `#[php(getter)] pub fn get_camelCase(...)` so
     // unimplemented in its derive macro — so `#[php(getter)]` registers ONLY as a property
-    // Cfg-gated fields stay in the binding struct (gen_struct keeps them with #[serde(skip)])
-    for field in binding_fields(&typ.fields) {
+    for field in retained_fields() {
         let _effective_ty = &field.ty;
         // Use a snake_case Rust ident — ext-php-rs's `#[php_impl]` macro auto-converts
         let getter_ident = format!("get_{}", field.name);
@@ -866,7 +881,7 @@ fn gen_struct_methods_impl(
     }
 
     let all_opaque_types: AHashSet<String> = opaque_types.iter().chain(bridge_type_aliases.iter()).cloned().collect();
-    for field in typ.fields.iter() {
+    for field in retained_fields() {
         let bridge_inner: Option<&str> = match &field.ty {
             TypeRef::Optional(inner) => match inner.as_ref() {
                 TypeRef::Named(name) if all_opaque_types.contains(name.as_str()) => Some(name.as_str()),

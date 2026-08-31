@@ -3,10 +3,31 @@
 //! Split out of `structs.rs` so the rule deciding what a field the constructor *cannot accept as
 //! a parameter* is initialised with lives in one place, next to the tests that pin it.
 
+use std::borrow::Cow;
+
 use ahash::AHashSet;
 
 use super::php_field_can_be_constructor_param;
 use crate::core::ir::{DefaultValue, FieldDef, TypeDef, TypeRef};
+
+pub(crate) fn php_binding_keeps_field(field: &FieldDef, never_skip_cfg_field_names: &[String]) -> bool {
+    !field.binding_excluded && (field.cfg.is_none() || never_skip_cfg_field_names.contains(&field.name))
+}
+
+pub(crate) fn php_binding_type<'a>(typ: &'a TypeDef, never_skip_cfg_field_names: &[String]) -> Cow<'a, TypeDef> {
+    if typ
+        .fields
+        .iter()
+        .all(|field| php_binding_keeps_field(field, never_skip_cfg_field_names))
+    {
+        return Cow::Borrowed(typ);
+    }
+    let mut binding_type = typ.clone();
+    binding_type
+        .fields
+        .retain(|field| php_binding_keeps_field(field, never_skip_cfg_field_names));
+    Cow::Owned(binding_type)
+}
 
 /// Starting point for the local the generated constructor binds the core type's `Default` to, so
 /// a constructor that omits several fields reads them all off one delegating call instead of one
@@ -178,15 +199,17 @@ pub(crate) fn gen_constructor_field_inits(
     typ: &TypeDef,
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
+    never_skip_cfg_field_names: &[String],
 ) -> anyhow::Result<ConstructorInit> {
     let core_defaults = core_defaults_local(typ);
     let mut field_inits: Vec<String> = Vec::new();
     let mut needs_core_defaults = false;
 
-    for field in typ.fields.iter().filter(|f| !f.binding_excluded) {
-        // A `#[cfg]`-gated field is kept in the binding struct with `#[serde(skip)]` and has no
-        // parameter under either cfg state, so it is not part of the omitted-default question
-        // this module answers. ~keep
+    for field in typ
+        .fields
+        .iter()
+        .filter(|field| php_binding_keeps_field(field, never_skip_cfg_field_names))
+    {
         if field.cfg.is_some() {
             field_inits.push(format!("{}: Default::default()", field.name));
             continue;

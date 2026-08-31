@@ -65,3 +65,42 @@ fn php_standalone_function_never_wraps_body_in_cfg() {
         lib.content
     );
 }
+
+#[test]
+fn php_struct_and_conversions_strip_cfg_fields_by_default() {
+    let backend = PhpBackend;
+    let mut feature_only = make_field("feature_only", TypeRef::String, false);
+    feature_only.cfg = Some(r#"feature = "enterprise""#.to_string());
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Options".to_string(),
+            rust_path: "test_lib::Options".to_string(),
+            fields: vec![make_field("name", TypeRef::String, false), feature_only],
+            has_default: true,
+            has_serde: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_config())
+        .expect("PHP bindings generate");
+    let lib = files
+        .iter()
+        .find(|file| file.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs generated");
+
+    assert!(
+        lib.content.contains("pub name: String"),
+        "ordinary field missing:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("feature_only"),
+        "a default-stripped cfg field must not survive in the struct, constructor, accessors, or conversions:\n{}",
+        lib.content
+    );
+}

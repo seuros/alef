@@ -59,7 +59,70 @@ fn policy(has_default: bool, fields: Vec<FieldDef>) -> TypeDef {
 }
 
 fn build(typ: &TypeDef) -> anyhow::Result<ConstructorInit> {
-    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]))
+    build_with_retained_cfg(typ, &[])
+}
+
+fn build_with_retained_cfg(typ: &TypeDef, never_skip_cfg_field_names: &[String]) -> anyhow::Result<ConstructorInit> {
+    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]), never_skip_cfg_field_names)
+}
+
+#[test]
+fn should_omit_a_cfg_gated_field_that_the_binding_struct_strips() {
+    let mut gated = field("feature_only", TypeRef::String, Some(DefaultValue::Empty));
+    gated.cfg = Some("feature = \"enterprise\"".to_string());
+    let typ = policy(
+        true,
+        vec![field("name", TypeRef::String, Some(DefaultValue::Empty)), gated],
+    );
+
+    let init = build(&typ).expect("a stripped cfg field needs no constructor initializer");
+
+    assert_eq!(init.field_inits, "name");
+}
+
+#[test]
+fn should_default_a_cfg_gated_field_explicitly_retained_by_the_binding() {
+    let mut gated = field("feature_only", TypeRef::String, Some(DefaultValue::Empty));
+    gated.cfg = Some("feature = \"enterprise\"".to_string());
+    let typ = policy(
+        true,
+        vec![field("name", TypeRef::String, Some(DefaultValue::Empty)), gated],
+    );
+
+    let init = build_with_retained_cfg(&typ, &["feature_only".to_string()])
+        .expect("a retained cfg field is initialized without becoming a PHP parameter");
+
+    assert_eq!(init.field_inits, "name, feature_only: Default::default()");
+}
+
+#[test]
+fn should_apply_the_constructor_cfg_policy_to_the_binding_struct_field_set() {
+    let mut gated = field("feature_only", TypeRef::String, Some(DefaultValue::Empty));
+    gated.cfg = Some("feature = \"enterprise\"".to_string());
+    let typ = policy(
+        true,
+        vec![field("name", TypeRef::String, Some(DefaultValue::Empty)), gated],
+    );
+
+    let stripped = php_binding_type(&typ, &[]);
+    let retained = php_binding_type(&typ, &["feature_only".to_string()]);
+
+    assert_eq!(
+        stripped
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["name"]
+    );
+    assert_eq!(
+        retained
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["name", "feature_only"]
+    );
 }
 
 // ---------------------------------------------------------------------------

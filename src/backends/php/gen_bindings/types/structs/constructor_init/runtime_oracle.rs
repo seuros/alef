@@ -73,7 +73,11 @@ fn policy(has_default: bool, fields: Vec<FieldDef>) -> TypeDef {
 }
 
 fn build(typ: &TypeDef) -> anyhow::Result<ConstructorInit> {
-    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]))
+    build_with_retained_cfg(typ, &[])
+}
+
+fn build_with_retained_cfg(typ: &TypeDef, never_skip_cfg_field_names: &[String]) -> anyhow::Result<ConstructorInit> {
+    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]), never_skip_cfg_field_names)
 }
 
 /// Compiles `source` with a bare `rustc` invocation and runs the resulting binary.
@@ -159,6 +163,69 @@ fn harness_source(support: &str, init: &ConstructorInit, assertion: &str) -> Str
 }
 
 const SSRF_SURVIVES_ASSERTION: &str = r#"assert_eq!(value.ssrf, Some(SsrfMode::Strict), "authored Some(..) core default must survive construction, got {:?}", value.ssrf);"#;
+
+fn cfg_field(name: &str) -> FieldDef {
+    let mut field = field(name, TypeRef::String, Some(DefaultValue::Empty));
+    field.cfg = Some("feature = \"enterprise\"".to_string());
+    field
+}
+
+#[test]
+fn compiled_constructor_omits_a_cfg_field_stripped_from_the_binding_struct() {
+    let typ = policy(
+        true,
+        vec![
+            field("name", TypeRef::String, Some(DefaultValue::Empty)),
+            cfg_field("feature_only"),
+        ],
+    );
+    let init = build(&typ).expect("a stripped cfg field needs no initializer");
+    let source = harness_source(
+        "#[derive(Debug)]\nstruct FetchPolicy { name: String }\n",
+        &init,
+        r#"assert_eq!(value.name, "enabled");"#,
+    )
+    .replace(
+        "fn constructed() -> Self {",
+        "fn constructed() -> Self { let name = \"enabled\".to_string();",
+    );
+    let output = compile_and_run(&source);
+
+    assert!(
+        output.status.success(),
+        "constructor and stripped binding struct must compile together:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn compiled_constructor_initializes_a_cfg_field_retained_by_policy() {
+    let typ = policy(
+        true,
+        vec![
+            field("name", TypeRef::String, Some(DefaultValue::Empty)),
+            cfg_field("feature_only"),
+        ],
+    );
+    let init = build_with_retained_cfg(&typ, &["feature_only".to_string()])
+        .expect("a retained cfg field is initialized without a PHP parameter");
+    let source = harness_source(
+        "#[derive(Debug)]\nstruct FetchPolicy { name: String, feature_only: String }\n",
+        &init,
+        r#"assert_eq!(value.name, "enabled"); assert_eq!(value.feature_only, "");"#,
+    )
+    .replace(
+        "fn constructed() -> Self {",
+        "fn constructed() -> Self { let name = \"enabled\".to_string();",
+    );
+    let output = compile_and_run(&source);
+
+    assert!(
+        output.status.success(),
+        "constructor and retained binding struct must compile together:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 /// Positive oracle, both halves of the brief's claim in one construction: a manually-authored
 /// non-empty `allow_list` and a `Some(..)`-holding `ssrf` must both come out of the compiled

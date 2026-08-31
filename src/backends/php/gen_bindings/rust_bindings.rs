@@ -629,6 +629,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         option_duration_on_defaults: true,
         from_binding_skip_types: &bridge_skip_types,
         never_skip_cfg_field_names: &never_skip_cfg_field_names,
+        strip_cfg_fields_from_binding_struct: true,
         opaque_types: Some(&conv_opaque_types),
         trait_bridge_arc_wrapper_field_names: &trait_bridge_arc_wrapper_field_names,
         ..Default::default()
