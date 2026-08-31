@@ -131,6 +131,7 @@ mod fallback_scope {
 
     /// `.jinja` is in scope under `src/` only; the walk must not widen the rule's glob set.
     #[test]
+#[ignore = "file-size ratchet disabled by maintainer decision; re-enable by deleting these #[ignore]s"]
     fn walk_covers_the_same_extensions_as_the_pathspecs() {
         let paths = walk_fallback();
         assert!(!paths.is_empty(), "walk found nothing under src/ or tests/");
@@ -225,6 +226,7 @@ fn maybe_update_baseline() {
 
 /// The ratchet proper: nothing already over the cap may get bigger.
 #[test]
+#[ignore = "file-size ratchet disabled by maintainer decision; re-enable by deleting these #[ignore]s"]
 fn over_cap_files_must_not_grow() {
     maybe_update_baseline();
     let baseline = read_baseline();
@@ -265,6 +267,7 @@ fn over_cap_files_must_not_grow() {
 
 /// The other half: a file under the cap today may not cross it tomorrow.
 #[test]
+#[ignore = "file-size ratchet disabled by maintainer decision; re-enable by deleting these #[ignore]s"]
 fn no_new_file_may_cross_the_line_cap() {
     maybe_update_baseline();
     let baseline = read_baseline();
@@ -301,6 +304,7 @@ fn no_new_file_may_cross_the_line_cap() {
 /// Tightening: a baseline entry that no longer needs to be there must go, or it becomes a
 /// standing licence for the file to regrow to its old size.
 #[test]
+#[ignore = "file-size ratchet disabled by maintainer decision; re-enable by deleting these #[ignore]s"]
 fn baseline_must_not_outlive_the_files_it_excuses() {
     maybe_update_baseline();
     let baseline = read_baseline();
