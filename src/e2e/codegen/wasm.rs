@@ -189,6 +189,7 @@ impl E2eCodegen for WasmCodegen {
         // intent; the previous condition (`f.is_http_test()`) only detected
         // the `http: { ... }` shape and missed direct mock-response fixtures.
         let has_http_fixtures = any_fixtures.clone().any(|f| f.needs_mock_server());
+        let file_input_scan = super::file_inputs::FileInputScan::new(type_defs, enums);
         // File-backed arguments are read off disk by generated code at runtime, including byte
         // fields nested in typed request objects; add setup.ts so relative paths resolve.
         let has_file_fixtures = active_per_group.iter().flatten().any(|f| {
@@ -199,7 +200,7 @@ impl E2eCodegen for WasmCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
+            file_input_scan.fixture_uses_test_documents(f, cc)
         });
 
         // Generate package.json — adds vitest + rollup dev deps so that the test

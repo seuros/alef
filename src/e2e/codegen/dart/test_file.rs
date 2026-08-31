@@ -46,6 +46,7 @@ pub(super) fn render_test_file(
         })
     });
 
+    let file_input_scan = super::super::file_inputs::FileInputScan::new(type_defs, enums);
     // Detect file-backed values, including byte fields nested in typed request objects, so
     // setUpAll can resolve their relative paths from the test-documents directory.
     let needs_chdir = fixtures.iter().any(|f| {
@@ -54,7 +55,7 @@ pub(super) fn render_test_file(
         }
         let call_config =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        super::super::file_inputs::fixture_uses_test_documents(f, call_config, type_defs, enums)
+        file_input_scan.fixture_uses_test_documents(f, call_config)
     });
 
     // Detect whether any non-HTTP fixture uses a json_object arg that resolves to a JSON array —

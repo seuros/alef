@@ -92,6 +92,7 @@ impl E2eCodegen for TypeScriptCodegen {
         // is emitted by a consumer extension via Extension::emit_e2e —
         // server-pattern e2e is not generic, so alef does not generate it.
 
+        let file_input_scan = super::file_inputs::FileInputScan::new(type_defs, enums);
         let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
             let cc = e2e_config.resolve_call_for_fixture(
                 f.call.as_deref(),
@@ -100,7 +101,7 @@ impl E2eCodegen for TypeScriptCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
+            file_input_scan.fixture_uses_test_documents(f, cc)
         });
 
         files.push(GeneratedFile {

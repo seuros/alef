@@ -337,10 +337,11 @@ pub(super) fn render_conftest(
         python_override.and_then(|o| o.client_factory.as_deref()).is_some()
     });
 
+    let file_input_scan = crate::e2e::codegen::file_inputs::FileInputScan::new(type_defs, enums);
     let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
         let cc =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        crate::e2e::codegen::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
+        file_input_scan.fixture_uses_test_documents(f, cc)
     });
 
     let header = hash::header(CommentStyle::Hash);

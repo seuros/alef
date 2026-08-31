@@ -188,6 +188,7 @@ impl E2eCodegen for GoCodegen {
             });
         }
 
+        let file_input_scan = super::file_inputs::FileInputScan::new(type_defs, enums);
         // Generate main_test.go with TestMain when:
         // 1. Any fixture needs the mock server (has mock_response), or
         // 2. Any fixture is client_factory-based (reads MOCK_SERVER_URL), or
@@ -206,7 +207,7 @@ impl E2eCodegen for GoCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, call, type_defs, enums)
+            file_input_scan.fixture_uses_test_documents(f, call)
         });
 
         // Determine if any fixture needs the mock-server binary or HTTP integration tests.

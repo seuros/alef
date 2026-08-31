@@ -326,6 +326,7 @@ impl E2eCodegen for ZigE2eCodegen {
 
         // Generate build.zig - collect test file names first.
 
+        let file_input_scan = super::file_inputs::FileInputScan::new(type_defs, enums);
         // Whether any active fixture uses file-based args (`file_path` or
         // `bytes`). Only when true do the generated tests need the working
         // directory to be `test_documents/` at run time. Consumers whose
@@ -341,7 +342,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
+            file_input_scan.fixture_uses_test_documents(f, cc)
         });
 
         // Whether any fixture hits the mock server: a direct HTTP fixture, a

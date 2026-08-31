@@ -28,14 +28,40 @@ fn build_named_index<'a>(type_defs: &'a [TypeDef], enums: &'a [EnumDef]) -> Name
     index
 }
 
+/// The fixture-independent half of a file-input scan: the by-name index over the crate's structs
+/// and enums.
+///
+/// Nothing in the index depends on the fixture or on the target language, yet every generator asks
+/// the same question once per fixture -- and every generator asks it. Holding the index in a value
+/// the generator builds once turns that O(languages * fixtures * definitions) rebuild into one
+/// build per generator, with an O(1) lookup per fixture. ~keep
+pub(super) struct FileInputScan<'a> {
+    index: NamedIndex<'a>,
+}
+
+impl<'a> FileInputScan<'a> {
+    pub(super) fn new(type_defs: &'a [TypeDef], enums: &'a [EnumDef]) -> Self {
+        Self {
+            index: build_named_index(type_defs, enums),
+        }
+    }
+
+    pub(super) fn fixture_uses_test_documents(&self, fixture: &Fixture, call: &CallConfig) -> bool {
+        scan_fixture(&self.index, fixture, call).0
+    }
+}
+
+/// The un-hoisted form, retained so the behaviour tests below can state "these definitions, this
+/// fixture" as a single call. Generators must go through `FileInputScan` instead: they ask this
+/// question once per fixture, and this entry point rebuilds the whole index every time. ~keep
+#[cfg(test)]
 pub(super) fn fixture_uses_test_documents(
     fixture: &Fixture,
     call: &CallConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
 ) -> bool {
-    let index = build_named_index(type_defs, enums);
-    scan_fixture(&index, fixture, call).0
+    FileInputScan::new(type_defs, enums).fixture_uses_test_documents(fixture, call)
 }
 
 /// Scan one fixture against a prebuilt index, reporting the answer alongside the number of

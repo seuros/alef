@@ -93,6 +93,7 @@ impl E2eCodegen for RubyCodegen {
             .flat_map(|g| g.fixtures.iter())
             .any(|f| f.needs_mock_server());
 
+        let file_input_scan = super::file_inputs::FileInputScan::new(type_defs, enums);
         // Check if any fixture uses file_path or bytes args (needs chdir to test_documents).
         let has_file_fixtures = groups.iter().flat_map(|g| g.fixtures.iter()).any(|f| {
             let cc = e2e_config.resolve_call_for_fixture(
@@ -102,7 +103,7 @@ impl E2eCodegen for RubyCodegen {
                 &f.tags,
                 &f.input,
             );
-            super::file_inputs::fixture_uses_test_documents(f, cc, type_defs, enums)
+            file_input_scan.fixture_uses_test_documents(f, cc)
         });
 
         // For client/mock-server pattern only: emit spec_helper.rb.

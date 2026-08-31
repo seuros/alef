@@ -28,6 +28,7 @@ pub(super) fn render_test_file(
     functions: &[crate::core::ir::FunctionDef],
     errors: &[crate::core::ir::ErrorDef],
 ) -> String {
+    let file_input_scan = crate::e2e::codegen::file_inputs::FileInputScan::new(type_defs, enums);
     // Detect whether any fixture in this group uses a file_path or bytes arg — if so
     // the test class chdir's to <repo>/test_documents at setUp time so the
     // fixture-relative paths in test bodies (e.g. "docx/fake.docx") resolve correctly.
@@ -37,7 +38,7 @@ pub(super) fn render_test_file(
     let needs_chdir = fixtures.iter().any(|f| {
         let call_config =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        crate::e2e::codegen::file_inputs::fixture_uses_test_documents(f, call_config, type_defs, enums)
+        file_input_scan.fixture_uses_test_documents(f, call_config)
     });
 
     let mut out = String::new();
