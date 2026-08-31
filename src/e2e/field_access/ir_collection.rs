@@ -41,6 +41,7 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
 
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut collection_fields: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut non_string_scalar_element_fields: HashMap<String, HashSet<String>> = HashMap::new();
 
     for type_def in type_defs {
         for field in &type_def.fields {
@@ -49,6 +50,12 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone());
+                if has_non_string_scalar_elements(&field.ty) {
+                    non_string_scalar_element_fields
+                        .entry(type_def.name.clone())
+                        .or_default()
+                        .insert(field.name.clone());
+                }
             }
             let Some(named) = named_type(&field.ty) else {
                 continue;
@@ -65,7 +72,34 @@ pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap 
     IrCollectionMap {
         field_types,
         collection_fields,
+        non_string_scalar_element_fields,
         root_type: None,
+    }
+}
+
+/// `true` when `ty` is a `Vec<T>` (seeing through `Option` exactly as [`is_vec_type`] does) whose
+/// element `T` is a numeric, boolean or `char` primitive — a value with no text to search inside.
+///
+/// ~keep `TypeRef::String` is deliberately excluded, and that exclusion is the whole point: a
+/// `Vec<String>` element legitimately answers a substring question, a `Vec<u32>` element does not.
+/// `Named`, `Json`, `Map`, `Bytes`, `Path`, `Duration`, `Unit` and a nested `Vec` are all
+/// excluded too — none of them is a scalar this distinction is about, and answering `false` for
+/// them preserves whatever behaviour they already had.
+fn has_non_string_scalar_elements(ty: &crate::core::ir::TypeRef) -> bool {
+    match ty {
+        crate::core::ir::TypeRef::Optional(inner) => has_non_string_scalar_elements(inner),
+        crate::core::ir::TypeRef::Vec(element) => is_non_string_scalar(element),
+        _ => false,
+    }
+}
+
+/// `true` for a numeric, boolean or `char` leaf, seeing through an `Option` because an
+/// `Option<u32>` element is still numeric when it is present.
+fn is_non_string_scalar(ty: &crate::core::ir::TypeRef) -> bool {
+    match ty {
+        crate::core::ir::TypeRef::Optional(inner) => is_non_string_scalar(inner),
+        crate::core::ir::TypeRef::Primitive(_) | crate::core::ir::TypeRef::Char => true,
+        _ => false,
     }
 }
 
@@ -150,6 +184,41 @@ pub(super) fn element_type_at_path(map: &IrCollectionMap, path: &str) -> Option<
     Some(owner.to_string())
 }
 
+/// Whether the collection `path` names holds numeric/boolean/`char` elements, per
+/// [`build_ir_collection_map`]'s `non_string_scalar_element_fields`.
+///
+/// Walks `map.field_types` from `map.root_type` through the path's PREFIX and answers at the leaf,
+/// mirroring [`is_collection_path`] exactly — the same per-owner anchoring, and the same `false`
+/// (never "unknown") default whenever the root is unresolved or a segment is unrecognized. A
+/// caller must read `false` as "no positive evidence", never as "known to be textual". ~keep
+pub(super) fn has_non_string_scalar_elements_at_path(map: &IrCollectionMap, path: &str) -> bool {
+    let Some(root) = map.root_type.as_deref() else {
+        return false;
+    };
+    let segments = parse_path(path);
+    let Some((last, prefix)) = segments.split_last() else {
+        return false;
+    };
+
+    let mut owner = root;
+    for segment in prefix {
+        let Some(name) = segment_name(segment) else {
+            return false;
+        };
+        match map.field_types.get(owner).and_then(|fields| fields.get(name)) {
+            Some(next) => owner = next.as_str(),
+            None => return false,
+        }
+    }
+
+    let Some(name) = segment_name(last) else {
+        return false;
+    };
+    map.non_string_scalar_element_fields
+        .get(owner)
+        .is_some_and(|fields| fields.contains(name))
+}
+
 #[cfg(test)]
 mod element_type_at_path_tests {
     use super::*;
@@ -208,5 +277,109 @@ mod element_type_at_path_tests {
     fn no_anchored_root_resolves_to_nothing() {
         let map = build_ir_collection_map(&type_defs());
         assert_eq!(element_type_at_path(&map, "rows"), None);
+    }
+}
+
+#[cfg(test)]
+mod non_string_scalar_element_tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, PrimitiveType, TypeDef, TypeRef};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    fn vec_of(inner: TypeRef) -> TypeRef {
+        TypeRef::Vec(Box::new(inner))
+    }
+
+    /// One struct carrying every element shape the distinction has to keep apart.
+    fn type_defs() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "Container".to_string(),
+                fields: vec![
+                    field("codes", vec_of(TypeRef::Primitive(PrimitiveType::U32))),
+                    field("ratios", vec_of(TypeRef::Primitive(PrimitiveType::F64))),
+                    field("flags", vec_of(TypeRef::Primitive(PrimitiveType::Bool))),
+                    field("initials", vec_of(TypeRef::Char)),
+                    field(
+                        "optional_codes",
+                        TypeRef::Optional(Box::new(vec_of(TypeRef::Primitive(PrimitiveType::I64)))),
+                    ),
+                    field("warnings", vec_of(TypeRef::String)),
+                    field("rows", vec_of(TypeRef::Named("Row".to_string()))),
+                    field("title", TypeRef::String),
+                ],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Row".to_string(),
+                fields: vec![field("scores", vec_of(TypeRef::Primitive(PrimitiveType::U8)))],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn anchored_map() -> IrCollectionMap {
+        let mut map = build_ir_collection_map(&type_defs());
+        map.root_type = Some("Container".to_string());
+        map
+    }
+
+    #[test]
+    fn a_numeric_collection_is_recognised_as_a_non_string_scalar_element() {
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "codes"));
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "ratios"));
+    }
+
+    #[test]
+    fn boolean_and_char_collections_are_recognised_too() {
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "flags"));
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "initials"));
+    }
+
+    /// `Option<Vec<T>>` must not hide the element's shape, matching `is_vec_type`'s own
+    /// `Option`-transparency. ~keep
+    #[test]
+    fn an_optional_numeric_collection_is_seen_through_its_option() {
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "optional_codes"));
+    }
+
+    /// THE OVER-APPLICATION CONTROL, and the whole reason this is a separate map rather than
+    /// "`collection_element_type` returned `None`": a `Vec<String>` also resolves to no
+    /// struct-to-struct edge, and it must stay on the text surface. ~keep
+    #[test]
+    fn a_string_collection_is_not_a_non_string_scalar() {
+        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "warnings"));
+        assert_eq!(element_type_at_path(&anchored_map(), "warnings"), None);
+    }
+
+    #[test]
+    fn a_struct_collection_is_not_a_non_string_scalar() {
+        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "rows"));
+    }
+
+    #[test]
+    fn a_scalar_field_that_is_not_a_collection_is_not_one_either() {
+        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "title"));
+    }
+
+    /// Anchored per owner type, like every other oracle here: the answer is walked to the type
+    /// that actually declares the leaf, not matched on the bare field name. ~keep
+    #[test]
+    fn a_nested_numeric_collection_is_resolved_through_its_owner() {
+        assert!(has_non_string_scalar_elements_at_path(&anchored_map(), "rows.scores"));
+    }
+
+    #[test]
+    fn an_unknown_field_and_an_unanchored_map_both_answer_no() {
+        assert!(!has_non_string_scalar_elements_at_path(&anchored_map(), "not_a_real_field"));
+        let unanchored = build_ir_collection_map(&type_defs());
+        assert!(!has_non_string_scalar_elements_at_path(&unanchored, "codes"));
     }
 }

@@ -220,12 +220,24 @@ pub struct IrResultFieldMap {
 ///   traverses into, when that type is another struct the path can keep walking through.
 /// * `collection_fields[type_name]` — field names on `type_name` whose declared type (after
 ///   unwrapping `Option`) is `Vec<T>`.
+/// * `non_string_scalar_element_fields[type_name]` — the subset of `collection_fields` whose
+///   element type `T` is a NUMERIC, boolean or `char` primitive rather than a string or a struct.
 /// * `root_type` — the IR type name backing the call's result variable, resolved the same way
 ///   `IrEnumMap::root_type` is.
 #[derive(Debug, Clone, Default)]
 pub struct IrCollectionMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub collection_fields: HashMap<String, HashSet<String>>,
+    /// Element types that carry no text to search, keyed by owner type like every other map here.
+    ///
+    /// ~keep `field_types` only records an edge when the element type is another `TypeDef`, so
+    /// `element_type_at_path` answers `None` identically for `Vec<u32>`, for `Vec<String>` and for
+    /// "the IR has never heard of this field". A caller that must treat a numeric element
+    /// differently from a textual one cannot distinguish them from that answer — which is exactly
+    /// how a `contains: "42"` against a `Vec<u32>` reached the TypeScript text surface and
+    /// substring-matched `421`. This set is the missing distinction, and only the positive case:
+    /// absence still means "not known to be a non-string scalar", never "known to be a string".
+    pub non_string_scalar_element_fields: HashMap<String, HashSet<String>>,
     pub root_type: Option<String>,
 }
 

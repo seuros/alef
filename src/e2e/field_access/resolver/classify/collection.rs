@@ -8,7 +8,9 @@
 //! narrower, config-first question (`fields_array` membership before any IR fallback) that call
 //! sites reach for directly, rather than composing with either method here. ~keep
 
-use super::super::super::ir_collection::{element_type_at_path, is_collection_path};
+use super::super::super::ir_collection::{
+    element_type_at_path, has_non_string_scalar_elements_at_path, is_collection_path,
+};
 use super::super::super::types::FieldResolver;
 
 impl FieldResolver {
@@ -53,5 +55,22 @@ impl FieldResolver {
     pub fn collection_element_type(&self, field: &str) -> Option<String> {
         let resolved = self.resolve(field);
         element_type_at_path(&self.ir_collection_map, resolved)
+    }
+
+    /// Whether `field` is a collection whose elements are numeric, boolean or `char` — values
+    /// with no text inside them to search.
+    ///
+    /// [`Self::collection_element_type`] cannot answer this. It resolves only struct-to-struct
+    /// edges, so it returns `None` for `Vec<u32>`, for `Vec<String>` and for a field the IR has
+    /// never heard of, all alike. A caller deciding whether a string expectation may be lowered
+    /// as substring containment over the elements needs those three cases apart, and reading
+    /// `None` as "scalar" would sweep the other two in with it.
+    ///
+    /// `false` means "no positive evidence", never "known to be textual" — the same convention
+    /// every other IR oracle on this resolver uses, so a call site with no anchored root keeps
+    /// exactly the behaviour it had. ~keep
+    pub fn collection_element_is_non_string_scalar(&self, field: &str) -> bool {
+        let resolved = self.resolve(field);
+        has_non_string_scalar_elements_at_path(&self.ir_collection_map, resolved)
     }
 }

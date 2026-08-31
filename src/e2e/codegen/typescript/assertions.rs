@@ -487,6 +487,10 @@ fn render_standard_assertion(
     let resolved_field = assertion.field.as_deref().unwrap_or("");
     let field_is_optional =
         !resolved_field.is_empty() && field_resolver.is_optional(field_resolver.resolve(resolved_field));
+    // Whether the array's elements have any text to search. See `assertion.jinja`'s
+    // `element_is_non_string_scalar` note for what routes on it and why. ~keep
+    let element_is_non_string_scalar =
+        !resolved_field.is_empty() && field_resolver.collection_element_is_non_string_scalar(resolved_field);
 
     // Handle different assertion types
     match assertion_type {
@@ -519,6 +523,7 @@ fn render_standard_assertion(
                         field_expr => field_expr,
                         field_is_optional => field_is_optional,
                         field_is_array => field_is_array,
+                        element_is_non_string_scalar => element_is_non_string_scalar,
                         is_string_val => expected.is_string(),
                         js_val => js_val,
                         has_js_val => true,
@@ -537,6 +542,7 @@ fn render_standard_assertion(
                         field_expr => field_expr,
                         field_is_optional => field_is_optional,
                         field_is_array => field_is_array,
+                        element_is_non_string_scalar => element_is_non_string_scalar,
                         is_string_val => values.iter().all(|v| v.is_string()),
                         values_js => items,
                     },
@@ -553,6 +559,7 @@ fn render_standard_assertion(
                         assertion_type => assertion_type,
                         field_expr => field_expr,
                         field_is_array => field_is_array,
+                        element_is_non_string_scalar => element_is_non_string_scalar,
                         is_string_val => expected.is_string(),
                         js_val => js_val,
                         has_js_val => true,
@@ -591,6 +598,7 @@ fn render_standard_assertion(
                         assertion_type => assertion_type,
                         field_expr => field_expr,
                         field_is_array => field_is_array,
+                        element_is_non_string_scalar => element_is_non_string_scalar,
                         is_string_val => values.iter().all(|v| v.is_string()),
                         values_js => items,
                     },
@@ -1222,6 +1230,9 @@ mod tests {
 #[cfg(test)]
 #[path = "assertions/skip_marker_tests.rs"]
 mod skip_marker_tests;
+#[cfg(test)]
+#[path = "assertions/text_surface_tests.rs"]
+mod text_surface_tests;
 #[cfg(test)]
 #[path = "assertions/wildcard_tests.rs"]
 mod wildcard_tests;

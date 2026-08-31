@@ -16,6 +16,12 @@
    - check_n: number for check (or 0)
    - field_is_array: bool
    - use_item_texts: bool (for array string containment)
+   - element_is_non_string_scalar: bool — the array's elements are numeric/boolean/`char`, so
+     they carry no text to search. `_alefE2eItemTexts` stringifies such an element and then
+     SUBSTRING-matches it, which reported `Vec<u32>` `[421]` as containing "42" and `[3.142]` as
+     containing "42" too. Those elements compare by exact stringified equality instead. Elements
+     that really are textual (`Vec<String>`) or structured (`Vec<Chunk>`) keep the text surface
+     unchanged — reaching into a struct's prose fields is what it exists for. ~keep
 #}
 {% if assertion_type == "equals" %}
 {% if is_string_val %}
@@ -42,7 +48,9 @@
     expect({{ field_expr }}).toBe({{ js_val }});
 {% endif %}
 {% elif assertion_type == "contains" %}
-{% if field_is_array and is_string_val %}
+{% if field_is_array and is_string_val and element_is_non_string_scalar %}
+    expect({{ field_expr }}.some((item) => String(item) === {{ js_val }})).toBe(true);
+{% elif field_is_array and is_string_val %}
     expect({{ field_expr }}.some((item) => _alefE2eItemTexts(item).some((text) => text.includes({{ js_val }})))).toBe(true);
 {% elif field_is_optional and is_string_val %}
     expect({{ field_expr }} ?? "").toContain({{ js_val }});
@@ -51,14 +59,18 @@
 {% endif %}
 {% elif assertion_type == "contains_all" %}
 {% for val in values_js %}
-{% if field_is_array and is_string_val %}
+{% if field_is_array and is_string_val and element_is_non_string_scalar %}
+    expect({{ field_expr }}.some((item) => String(item) === {{ val }})).toBe(true);
+{% elif field_is_array and is_string_val %}
     expect({{ field_expr }}.some((item) => _alefE2eItemTexts(item).some((text) => text.includes({{ val }})))).toBe(true);
 {% else %}
     expect({{ field_expr }}).toContain({{ val }});
 {% endif %}
 {% endfor %}
 {% elif assertion_type == "not_contains" %}
-{% if field_is_array and is_string_val %}
+{% if field_is_array and is_string_val and element_is_non_string_scalar %}
+    expect({{ field_expr }}.some((item) => String(item) === {{ js_val }})).toBe(false);
+{% elif field_is_array and is_string_val %}
     expect({{ field_expr }}.some((item) => _alefE2eItemTexts(item).some((text) => text.includes({{ js_val }})))).toBe(false);
 {% else %}
     expect({{ field_expr }}).not.toContain({{ js_val }});
@@ -78,7 +90,9 @@
 {% elif assertion_type == "is_empty" %}
     expect(({{ field_expr }} ?? "").length).toBe(0);
 {% elif assertion_type == "contains_any" %}
-{% if field_is_array and is_string_val %}
+{% if field_is_array and is_string_val and element_is_non_string_scalar %}
+    expect([{{ values_js|join(", ") }}].some((v) => {{ field_expr }}.some((item) => String(item) === v))).toBe(true);
+{% elif field_is_array and is_string_val %}
     expect([{{ values_js|join(", ") }}].some((v) => {{ field_expr }}.some((item) => _alefE2eItemTexts(item).some((text) => text.includes(v))))).toBe(true);
 {% else %}
     expect([{{ values_js|join(", ") }}].some((v) => {{ field_expr }}.includes(v))).toBe(true);
