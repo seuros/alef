@@ -26,7 +26,11 @@ use std::path::Path;
 /// masked by a single boolean. The final `#` line comments out whatever the surrounding
 /// `format!` appended (`/rust && cargo test`, `/python && uv sync && ...`), which is what
 /// keeps this test from ever invoking a real toolchain. ~keep
-const HOSTILE_DIR: &str = "ta;touch SEMI;$(touch DOLLAR);`touch BACKTICK`;touch PIPE|cat;true&&touch AND;echo 'sq' \"dq\"\ntouch NEWLINE\n#";
+const HOSTILE_DIR: &str = concat!(
+    "ta;touch SEMI;$(touch DOLLAR);`touch BACKTICK`;",
+    "touch PIPE|cat;true&&touch AND;echo 'sq' \"dq\"\n",
+    "touch NEWLINE\n#"
+);
 
 /// Marker filenames the [`HOSTILE_DIR`] payload creates if any part of it is parsed as shell
 /// syntax rather than carried as one literal word.
@@ -174,8 +178,8 @@ fn quoted_registry_output_round_trips_byte_exactly() {
         .expect("/bin/sh should start");
     assert!(output.status.success(), "printf should succeed for: {quoted}");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("{HOSTILE_DIR}/rust"),
+        String::from_utf8_lossy(&output.stdout).as_ref(),
+        format!("{HOSTILE_DIR}/rust").as_str(),
         "the quoted directory must expand back to the exact configured value"
     );
 }
