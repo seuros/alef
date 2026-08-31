@@ -146,6 +146,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including `@JsonProperty` annotations, enum tags, builder paths, and E2E source. Quotes,
   backslashes, control characters, and Unicode line separators can no longer break or inject the
   generated Java source.
+- Validate `[crates.java].package` against the Kotlin identifier grammar, not only the Java one,
+  whenever a plain `kotlin` target is enabled. The plain Kotlin backend (not `kotlin_android`)
+  splices `config.java_package()` verbatim into emitted `.kt` source (`import`, fully-qualified
+  names), so a package segment that is a Kotlin hard keyword but not a Java one -- `dev.fun`, for
+  example -- passed resolution and then failed to compile as generated Kotlin. `dev.fun` is now
+  rejected at config-resolve time when `languages` includes `kotlin`.
+- Make the Swift identifier grammar case-sensitive: `Class` is an ordinary identifier (only the
+  exact spelling `class` is a keyword), but the reserved-word check lowercased its input before
+  comparing, so a capitalized module name was wrongly rejected. Also replace the
+  `char::is_alphabetic`/`is_alphanumeric` approximation with Swift's own documented
+  `identifier-head`/`identifier-character` scalar-range grammar
+  (`codegen::identifier_grammar::is_swift_identifier_{start,part}`): Swift accepts a wide set of
+  symbol and emoji code points (`let 😀 = 1` compiles) that are not Unicode-Alphabetic, which the
+  old check silently rejected. Both halves confirmed against `swiftc` 6.3.1.
+- Stop `[crates.dart].lib_name` from hard-rejecting a hyphenated value such as `"sample-widget"`.
+  `dart_library_name` is spliced as a single Dart import-URI path segment
+  (`import 'package:{pubspec}/{lib_name}.dart'`), not a pub.dev package identifier, and
+  `dart_bridge_class_name` already documents and normalizes a hyphenated `lib_name` into
+  PascalCase as a supported input shape. Coordinate validation was applying the strict
+  `lowercase_with_underscores` pub.dev *package*-name grammar to it instead, turning a
+  previously-working config into a hard resolve error. It now gets a grammar scoped to what it
+  actually is: a path segment that must not escape its position or the string literal it sits in.
+- Wire `[crates.swift].package_name` into the generated `Package(name: ...)` argument in both the
+  in-tree and root `Package.swift` manifests. The field was validated at resolve time but every
+  emitter used `swift_module()` for the top-level package name too, so setting `package_name` had
+  no effect on generated output -- the exact "validated but unused" shape coordinate validation
+  exists to prevent. `Package(name: ...)` now uses `swift_package_name()` (falling back to the
+  module name, unchanged, when unset); `.library(name:)`/target names are unaffected.
+- Close the gap `validate_nuget_package_id`'s own doc comment named but nothing implemented:
+  "Callers must also check case-insensitive collisions across a workspace." Two `[[crates]]`
+  publishing NuGet package IDs that differ only by case (`MyLib` / `mylib`) each validated
+  cleanly in isolation but collide on nuget.org, whose `PackageIdComparer` folds case ordinally.
+  `resolve()` now runs a cross-crate collision check, alongside the existing overlapping-output-
+  path check, using `icu_casemap`'s per-character ordinal fold -- the dependency the earlier
+  "match NuGet ordinal casing" work added but never wired to a call site.
 - Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
   E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
   an identifier-less expression.
