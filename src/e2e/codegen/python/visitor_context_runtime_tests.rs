@@ -133,7 +133,7 @@ fn generated_visitor_class(fields: &[&str], methods: &[&str]) -> String {
     let fixture = visitor_fixture();
     let convertible = core_to_binding_convertible_types(&type_defs, &[]);
 
-    let callbacks = visitor_callback_probes(&config, &type_defs, &convertible, &fixture);
+    let callbacks = visitor_callback_probes(&config, &type_defs, &[], &convertible, &fixture);
     let distinct = distinct_context_probes(&callbacks);
     assert!(
         !distinct.is_empty(),

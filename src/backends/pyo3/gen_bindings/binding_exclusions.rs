@@ -1,5 +1,5 @@
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::TypeDef;
+use crate::core::ir::{ErrorDef, TypeDef};
 use ahash::AHashSet;
 
 /// The type names the generated PyO3 module emits no `#[pyclass]` for.
@@ -15,7 +15,10 @@ use ahash::AHashSet;
 /// - `[crates.python] capsule_types`, whose entries travel as raw `PyCapsule` handles and are
 ///   skipped by the emitter outright;
 /// - the capsule/opaque intersection [`super::config_opaque::exclude_capsule_opaque_types`]
-///   already owns, kept as a call so that rule keeps one definition.
+///   already owns, kept as a call so that rule keeps one definition;
+/// - every `ErrorDef` and the Python exception name generated for each of its variants: an error
+///   is emitted as a `create_exception!` class, never a `#[pyclass]`, so naming one as a binding
+///   class writes a reference the module never defines.
 ///
 /// `api.excluded_type_paths` is deliberately absent: those types are not in `api.types` at all, so
 /// callers that walk the surface never reach them, and callers that resolve a name by lookup must
@@ -23,7 +26,11 @@ use ahash::AHashSet;
 ///
 /// Takes the type slice rather than an `ApiSurface` because the Python e2e generator holds only
 /// `&[TypeDef]` and must reach the same answer as the two binding generators. ~keep
-pub(crate) fn pyclass_absent_type_names(config: &ResolvedCrateConfig, types: &[TypeDef]) -> AHashSet<String> {
+pub(crate) fn pyclass_absent_type_names(
+    config: &ResolvedCrateConfig,
+    types: &[TypeDef],
+    errors: &[ErrorDef],
+) -> AHashSet<String> {
     let mut absent: AHashSet<String> = config
         .python
         .as_ref()
@@ -43,6 +50,15 @@ pub(crate) fn pyclass_absent_type_names(config: &ResolvedCrateConfig, types: &[T
         .unwrap_or_default();
     super::config_opaque::exclude_capsule_opaque_types(&mut absent, config, &capsule_types);
     absent.extend(capsule_types.keys().cloned());
+    for error in errors {
+        absent.insert(error.name.clone());
+        absent.extend(
+            error
+                .variants
+                .iter()
+                .map(|variant| crate::codegen::error_gen::python_exception_name(&variant.name, &error.name)),
+        );
+    }
 
     absent
 }

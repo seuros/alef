@@ -86,9 +86,9 @@ fn each_callback_resolves_the_context_type_of_its_own_bridge() {
     };
     let convertible_types = convertible(&type_defs);
 
-    let text =
-        visitor_context_probe(&config, &type_defs, &convertible_types, "visit_text").expect("visit_text has a bridge");
-    let frame = visitor_context_probe(&config, &type_defs, &convertible_types, "visit_frame")
+    let text = visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_text")
+        .expect("visit_text has a bridge");
+    let frame = visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_frame")
         .expect("visit_frame has a bridge");
 
     assert_eq!(text.probe_method, "_probe_traversal_state");
@@ -109,7 +109,7 @@ fn a_callback_no_bridge_declares_gets_no_probe() {
     };
     let convertible_types = convertible(&type_defs);
 
-    assert!(visitor_context_probe(&config, &type_defs, &convertible_types, "visit_image").is_none());
+    assert!(visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_image").is_none());
 }
 
 /// A `cfg`-gated field is present only when the core crate was compiled with that feature, and a
@@ -140,7 +140,7 @@ fn cfg_gated_and_excluded_fields_are_not_probed() {
     };
     let convertible_types = convertible(&type_defs);
 
-    let probe = visitor_context_probe(&config, &type_defs, &convertible_types, "visit_text")
+    let probe = visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_text")
         .expect("bridge declares a context");
     assert_eq!(probe.attributes, vec!["node_kind".to_string()]);
 }
@@ -202,7 +202,7 @@ fn only_callable_zero_arg_instance_methods_are_probed() {
     };
     let convertible_types = convertible(&type_defs);
 
-    let probe = visitor_context_probe(&config, &type_defs, &convertible_types, "visit_text")
+    let probe = visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_text")
         .expect("bridge declares a context");
     assert_eq!(
         probe.methods,
@@ -240,7 +240,7 @@ fn a_fixture_spanning_two_bridges_gets_one_probe_helper_per_bridge() {
     .expect("fixture must parse");
     let convertible_types = convertible(&type_defs);
 
-    let callbacks = visitor_callback_probes(&config, &type_defs, &convertible_types, &fixture);
+    let callbacks = visitor_callback_probes(&config, &type_defs, &[], &convertible_types, &fixture);
     let wiring: Vec<(&str, Option<&str>)> = callbacks
         .iter()
         .map(|(name, _, probe)| (*name, probe.as_ref().map(|probe| probe.probe_method.as_str())))
@@ -277,7 +277,7 @@ fn a_context_with_no_probeable_surface_yields_no_probe() {
     };
     let convertible_types = convertible(&type_defs);
 
-    assert!(visitor_context_probe(&config, &type_defs, &convertible_types, "visit_text").is_none());
+    assert!(visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_text").is_none());
 }
 
 /// A context type removed by `[crates.python] exclude_types` gets no `#[pyclass]`, so the bridge
@@ -300,7 +300,7 @@ fn a_config_excluded_context_is_not_probed_while_an_unexcluded_one_still_is() {
     let convertible_types = convertible(&type_defs);
 
     assert!(
-        visitor_context_probe(&base, &type_defs, &convertible_types, "visit_text").is_some(),
+        visitor_context_probe(&base, &type_defs, &[], &convertible_types, "visit_text").is_some(),
         "control: an unexcluded context must still be probed, or the exclusion assertion below \
          would hold for a change that suppressed every probe"
     );
@@ -308,7 +308,7 @@ fn a_config_excluded_context_is_not_probed_while_an_unexcluded_one_still_is() {
     let mut excluded = base.clone();
     excluded.python = Some(python_config_excluding(&["TraversalState"]));
     assert!(
-        visitor_context_probe(&excluded, &type_defs, &convertible_types, "visit_text").is_none(),
+        visitor_context_probe(&excluded, &type_defs, &[], &convertible_types, "visit_text").is_none(),
         "a context with no generated #[pyclass] must not be probed for class attributes"
     );
 }
@@ -342,13 +342,20 @@ fn a_non_clone_context_is_not_probed_while_a_clone_one_still_is() {
 
     let clone_defs = type_defs_for(true);
     assert!(
-        visitor_context_probe(&config, &clone_defs, &convertible(&clone_defs), "visit_text").is_some(),
+        visitor_context_probe(&config, &clone_defs, &[], &convertible(&clone_defs), "visit_text").is_some(),
         "control: a Clone context with an emitted From impl must still be probed"
     );
 
     let non_clone_defs = type_defs_for(false);
     assert!(
-        visitor_context_probe(&config, &non_clone_defs, &convertible(&non_clone_defs), "visit_text").is_none(),
+        visitor_context_probe(
+            &config,
+            &non_clone_defs,
+            &[],
+            &convertible(&non_clone_defs),
+            "visit_text"
+        )
+        .is_none(),
         "a non-Clone context is handed to the callback as a dict, not the generated pyclass"
     );
 }
@@ -380,7 +387,7 @@ fn a_clone_but_unconvertible_context_is_not_probed() {
         "test setup: an opaque type must not be core-to-binding convertible"
     );
 
-    assert!(visitor_context_probe(&config, &type_defs, &convertible_types, "visit_text").is_none());
+    assert!(visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_text").is_none());
 }
 
 /// The `Clone` + convertible context fixtures exercised as the eligible ("gets a pyclass") side of
@@ -420,7 +427,7 @@ fn eligible_context_fixture_set_is_non_empty_and_every_entry_resolves_to_the_cla
         };
         let convertible_types = convertible(&type_defs);
         assert!(
-            visitor_context_probe(&config, &type_defs, &convertible_types, "visit_probe").is_some(),
+            visitor_context_probe(&config, &type_defs, &[], &convertible_types, "visit_probe").is_some(),
             "{context_name} must still resolve to the class path"
         );
     }

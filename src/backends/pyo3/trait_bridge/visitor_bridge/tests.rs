@@ -116,7 +116,7 @@ fn python_exclude_types_and_capsule_types_both_reach_the_pyclass_absent_set() {
     let (api, _, _) = neutral_visitor_fixture();
 
     let mut config = ResolvedCrateConfig::default();
-    let empty = pyclass_absent_type_names(&config, &api.types);
+    let empty = pyclass_absent_type_names(&config, &api.types, &api.errors);
     assert!(
         !empty.contains("TraversalState"),
         "control: with no config exclusions the context must be present, or the assertions below \
@@ -124,14 +124,14 @@ fn python_exclude_types_and_capsule_types_both_reach_the_pyclass_absent_set() {
     );
 
     config.python = Some(python_config(&["TraversalState"], &[]));
-    let via_exclude_types = pyclass_absent_type_names(&config, &api.types);
+    let via_exclude_types = pyclass_absent_type_names(&config, &api.types, &api.errors);
     assert!(
         via_exclude_types.contains("TraversalState"),
         "`exclude_types` must remove the type from the pyclass surface: {via_exclude_types:?}"
     );
 
     config.python = Some(python_config(&[], &["TraversalState"]));
-    let via_capsule_types = pyclass_absent_type_names(&config, &api.types);
+    let via_capsule_types = pyclass_absent_type_names(&config, &api.types, &api.errors);
     assert!(
         via_capsule_types.contains("TraversalState"),
         "`capsule_types` must remove the type from the pyclass surface: {via_capsule_types:?}"
@@ -366,5 +366,47 @@ fn visitor_bridge_keeps_dict_fallback_when_no_core_to_binding_impl_is_emitted() 
         !output.code.contains("ctx.clone().into()"),
         "the bridge must not call a conversion the type emitter never wrote:\n{}",
         output.code
+    );
+}
+
+#[test]
+fn visitor_context_local_avoids_parameters_and_preserves_tuple_order() {
+    let (mut api, mut trait_type, bridge) = clone_able_fixture();
+    let method = trait_type
+        .methods
+        .iter_mut()
+        .find(|method| method.name == "inspect_node")
+        .expect("neutral fixture should include inspect_node");
+    let context_index = method
+        .params
+        .iter()
+        .position(|param| matches!(&param.ty, crate::core::ir::TypeRef::Named(name) if name == "TraversalState"))
+        .expect("inspect_node should receive the visitor context");
+    let context_name = method.params[context_index].name.clone();
+    method.params.insert(
+        context_index + 1,
+        crate::core::ir::ParamDef {
+            name: format!("{context_name}_py"),
+            ty: crate::core::ir::TypeRef::String,
+            is_ref: true,
+            ..Default::default()
+        },
+    );
+    api.types
+        .iter_mut()
+        .find(|type_def| type_def.name == trait_type.name)
+        .expect("API should include the visitor trait")
+        .methods = trait_type.methods.clone();
+
+    let code = render_bridge(&api, &trait_type, &bridge, &AHashSet::new());
+    let collision = format!("{context_name}_py");
+    let unique = format!("{context_name}_py_2");
+    assert!(
+        code.contains(&format!("let {unique} = match nodecontext_to_py_object")),
+        "generated local must not shadow the existing `{collision}` parameter:\n{code}"
+    );
+    assert!(
+        code.contains(&format!("({unique}, {collision},")),
+        "the collision-safe local must replace only the context argument and retain exact parameter order:\n{code}"
     );
 }

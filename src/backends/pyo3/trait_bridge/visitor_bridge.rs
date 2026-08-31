@@ -213,6 +213,13 @@ fn build_visitor_py_args(
 ) -> VisitorPyArgs {
     use crate::core::ir::TypeRef;
     let mut setup = String::new();
+    let mut reserved_names: std::collections::HashSet<String> =
+        method.params.iter().map(|param| param.name.clone()).collect();
+    reserved_names.extend(
+        ["py", "obj", "result", "s", "py_dict", "d", "action", "v", "e"]
+            .into_iter()
+            .map(str::to_string),
+    );
     let args: Vec<String> = method
         .params
         .iter()
@@ -225,7 +232,7 @@ fn build_visitor_py_args(
                 } else {
                     format!("&{}", p.name)
                 };
-                let arg_name = format!("{}_py", p.name);
+                let arg_name = collision_free_local_name(&format!("{}_py", p.name), &mut reserved_names);
                 setup.push_str(&crate::backends::pyo3::template_env::render(
                     "trait_bridge/visitor_context_arg.jinja",
                     minijinja::context! {
@@ -272,4 +279,17 @@ fn build_visitor_py_args(
         args.join(", ")
     };
     VisitorPyArgs { setup, args }
+}
+
+fn collision_free_local_name(base: &str, reserved_names: &mut std::collections::HashSet<String>) -> String {
+    if reserved_names.insert(base.to_string()) {
+        return base.to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{base}_{suffix}");
+        if reserved_names.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!()
 }

@@ -5,7 +5,7 @@
 //! never probes another bridge's context type.
 
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{MethodDef, TypeDef};
+use crate::core::ir::{ErrorDef, MethodDef, TypeDef};
 use crate::e2e::fixture::{CallbackAction, Fixture};
 
 /// One entry per fixture callback: the callback, its action, and the context probe of the bridge
@@ -22,6 +22,7 @@ pub(super) type CallbackProbe<'a> = (&'a str, &'a CallbackAction, Option<Visitor
 pub(super) fn visitor_callback_probes<'a>(
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
+    errors: &[ErrorDef],
     convertible_types: &ahash::AHashSet<String>,
     fixture: &'a Fixture,
 ) -> Vec<CallbackProbe<'a>> {
@@ -33,7 +34,7 @@ pub(super) fn visitor_callback_probes<'a>(
             (
                 method_name.as_str(),
                 action,
-                visitor_context_probe(config, type_defs, convertible_types, method_name),
+                visitor_context_probe(config, type_defs, errors, convertible_types, method_name),
             )
         })
         .collect()
@@ -76,10 +77,11 @@ impl VisitorContextProbe {
 pub(super) fn visitor_context_probe(
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
+    errors: &[ErrorDef],
     convertible_types: &ahash::AHashSet<String>,
     callback_name: &str,
 ) -> Option<VisitorContextProbe> {
-    let context_def = callback_context_type(config, type_defs, convertible_types, callback_name)?;
+    let context_def = callback_context_type(config, type_defs, errors, convertible_types, callback_name)?;
     let probe = VisitorContextProbe {
         probe_method: format!("_probe_{}", crate::codegen::naming::to_python_name(&context_def.name)),
         attributes: probed_attribute_names(config, context_def),
@@ -109,11 +111,12 @@ pub(super) fn visitor_context_probe(
 fn callback_context_type<'a>(
     config: &ResolvedCrateConfig,
     type_defs: &'a [TypeDef],
+    errors: &[ErrorDef],
     convertible_types: &ahash::AHashSet<String>,
     callback_name: &str,
 ) -> Option<&'a TypeDef> {
     let pyclass_absent =
-        crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(config, type_defs);
+        crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(config, type_defs, errors);
     config.trait_bridges.iter().find_map(|bridge| {
         let trait_def = type_defs
             .iter()

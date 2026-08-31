@@ -228,10 +228,15 @@ pub fn gen_stubs(
         .and_then(|p| p.stubs.as_ref())
         .is_some_and(|s| s.emit_docstrings);
 
+    let pyclass_absent_types = crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(
+        config,
+        &api.types,
+        &api.errors,
+    );
     let (opaque, non_opaque): (Vec<_>, Vec<_>) = api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !typ.binding_excluded)
+        .filter(|typ| !typ.is_trait && !pyclass_absent_types.contains(&typ.name))
         .partition(|typ| typ.is_opaque);
 
     let has_serde = crate::backends::pyo3::gen_bindings::crate_has_serde(config);
@@ -245,8 +250,6 @@ pub fn gen_stubs(
         .map(|c| c.reexported_types.clone())
         .unwrap_or_default();
     let options_types = crate::backends::pyo3::gen_bindings::options_dataclass_type_names(api, &stub_reexported_types);
-    let pyclass_absent_types =
-        crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(config, &api.types);
     // Precomputed once for this stub-generation pass rather than inside `context_binding_class`
     // per bridge -- the fixpoint is transitive over every type and field in `api`, so a per-bridge
     // recompute scales as bridges x fixpoint instead of once. ~keep

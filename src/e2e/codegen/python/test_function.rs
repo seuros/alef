@@ -225,7 +225,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     // Build visitor class if present. Each callback is resolved to the bridge whose trait
     // declares it, so a crate with more than one visitor bridge probes each callback against its
     // own context type instead of one globally-picked one.
-    let callback_probes = visitor_callback_probes(config, type_defs, convertible_types, fixture);
+    let callback_probes = visitor_callback_probes(config, type_defs, errors, convertible_types, fixture);
     let distinct_probes = distinct_context_probes(&callback_probes);
     let probe_context = !distinct_probes.is_empty();
     let mut visitor_class = String::new();

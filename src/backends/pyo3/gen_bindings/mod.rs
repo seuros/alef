@@ -282,7 +282,7 @@ impl Backend for Pyo3Backend {
             .collect();
         // Shared with the visitor trait bridge and the `.pyi` protocol stub, both of which write
         // a generated class name and must not name one this loop skips. ~keep
-        let py_exclude_types = binding_exclusions::pyclass_absent_type_names(config, &api.types);
+        let py_exclude_types = binding_exclusions::pyclass_absent_type_names(config, &api.types, &api.errors);
         // Types listed in capsule_types bypass #[pyclass] generation entirely — they are
         let capsule_types = config
             .python
@@ -646,7 +646,8 @@ impl Backend for Pyo3Backend {
                 .as_ref()
                 .map(|c| c.reexported_types.clone())
                 .unwrap_or_default();
-            let bridge_pyclass_absent_types = binding_exclusions::pyclass_absent_type_names(config, &api.types);
+            let bridge_pyclass_absent_types =
+                binding_exclusions::pyclass_absent_type_names(config, &api.types, &api.errors);
             // Precomputed once for this trait-bridge loop rather than inside
             // `context_binding_class` per bridge -- the fixpoint is transitive over every type and
             // field in `api`, so a per-bridge recompute scales as bridges x fixpoint instead of
@@ -725,7 +726,11 @@ impl Backend for Pyo3Backend {
             declaration_drops_unreachable_foreign_variants: true,
             ..Default::default()
         };
-        for typ in api.types.iter().filter(|typ| !typ.is_trait) {
+        for typ in api
+            .types
+            .iter()
+            .filter(|typ| !typ.is_trait && !py_exclude_types.contains(&typ.name))
+        {
             if input_types.contains(&typ.name)
                 && crate::codegen::conversions::can_generate_conversion(typ, &binding_to_core)
             {

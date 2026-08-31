@@ -671,3 +671,99 @@ fn should_declare_the_same_escaped_field_name_in_the_binding_and_the_stub() {
         "binding and stub must agree on the attribute name\nbinding: {binding}\nstub: {stub}"
     );
 }
+
+fn pyclass_surface_type(name: &str) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        rust_path: format!("test_lib::{name}"),
+        fields: vec![make_field("value", TypeRef::String, false)],
+        is_clone: true,
+        ..Default::default()
+    }
+}
+
+fn assert_type_absent_from_runtime_conversions_and_stub(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    type_name: &str,
+) {
+    let files = Pyo3Backend
+        .generate_bindings(api, config)
+        .expect("bindings should generate");
+    let binding = &files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated binding crate should include lib.rs")
+        .content;
+    assert!(
+        !binding.contains(&format!("impl From<test_lib::{type_name}> for {type_name}")),
+        "core-to-binding conversion must not target an absent pyclass:\n{binding}"
+    );
+    assert!(
+        !binding.contains(&format!("impl From<{type_name}> for test_lib::{type_name}")),
+        "binding-to-core conversion must not target an absent pyclass:\n{binding}"
+    );
+
+    let stub = Pyo3Backend
+        .generate_type_stubs(api, config)
+        .expect("stubs should generate")
+        .into_iter()
+        .find(|file| file.path.extension().is_some_and(|extension| extension == "pyi"))
+        .expect("stub generation should emit a .pyi file")
+        .content;
+    assert!(
+        !stub.contains(&format!("class {type_name}:")),
+        "stub must not declare a class absent from the extension module:\n{stub}"
+    );
+}
+
+#[test]
+fn absent_pyclasses_do_not_receive_conversions_or_stub_classes() {
+    use alef::core::config::CapsuleTypeConfig;
+
+    for case in ["config", "capsule", "binding", "error"] {
+        let type_name = match case {
+            "config" => "ConfigExcluded",
+            "capsule" => "CapsuleExcluded",
+            "binding" => "BindingExcluded",
+            "error" => "ConflictError",
+            _ => unreachable!(),
+        };
+        let mut typ = pyclass_surface_type(type_name);
+        let mut api = ApiSurface {
+            crate_name: "test_lib".to_string(),
+            types: vec![typ.clone()],
+            ..Default::default()
+        };
+        let mut config = config_with_stubs();
+        let python = config.python.as_mut().expect("test config enables Python");
+        match case {
+            "config" => python.exclude_types.push(type_name.to_string()),
+            "capsule" => {
+                python.capsule_types.insert(
+                    type_name.to_string(),
+                    CapsuleTypeConfig::Capsule(format!("test_lib.{type_name}")),
+                );
+            }
+            "binding" => {
+                typ.binding_excluded = true;
+                api.types[0] = typ;
+            }
+            "error" => {
+                api.errors.push(ErrorDef {
+                    name: type_name.to_string(),
+                    rust_path: format!("test_lib::{type_name}"),
+                    original_rust_path: String::new(),
+                    variants: Vec::new(),
+                    doc: String::new(),
+                    methods: Vec::new(),
+                    binding_excluded: false,
+                    binding_exclusion_reason: None,
+                    version: Default::default(),
+                });
+            }
+            _ => unreachable!(),
+        }
+        assert_type_absent_from_runtime_conversions_and_stub(&api, &config, type_name);
+    }
+}
