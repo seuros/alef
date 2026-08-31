@@ -149,3 +149,18 @@ fn inaccessible_existing_ancestor_fails_closed() {
         "{error}"
     );
 }
+
+#[test]
+fn inaccessible_base_directory_fails_closed() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let blocked = temporary.path().join("blocked");
+    let base = blocked.join("base");
+    std::fs::create_dir_all(&base).expect("base directory");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("remove permissions");
+
+    let result = super::contained_output_path(&base, Path::new("leaf.txt"));
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("restore permissions");
+    let error = result.expect_err("an inaccessible base must not be treated as absent");
+    assert!(error.to_string().contains("failed to resolve output base"), "{error}");
+}

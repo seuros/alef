@@ -35,10 +35,19 @@ use std::path::{Component, Path};
 /// and joining each component onto the previously-resolved parent keeps both sides in the same
 /// namespace. ~keep
 pub(super) fn ensure_no_symlink_escape(base_dir: &Path, emitted_path: &Path) -> Result<(), String> {
-    let Ok(canonical_base) = base_dir.canonicalize() else {
-        // A base that does not exist yet has nothing beneath it to follow; `create_dir_all`
-        // materialises the whole chain itself, so every component is one we create. ~keep
-        return Ok(());
+    let canonical_base = match base_dir.canonicalize() {
+        Ok(canonical_base) => canonical_base,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // A base that does not exist yet has nothing beneath it to follow; `create_dir_all`
+            // materialises the whole chain itself, so every component is one we create. ~keep
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to resolve output base `{}`: {error}",
+                base_dir.display()
+            ));
+        }
     };
     let mut resolved = canonical_base.clone();
     for component in emitted_path.components() {

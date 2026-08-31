@@ -618,7 +618,12 @@ pub fn validate_dart_library_name(name: &str) -> Result<(), String> {
     let is_numbered_device = uppercase_stem
         .strip_prefix("COM")
         .or_else(|| uppercase_stem.strip_prefix("LPT"))
-        .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        });
     if matches!(uppercase_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || is_numbered_device {
         return Err(format!("`{name}` uses a Windows-reserved file basename"));
     }
@@ -791,7 +796,8 @@ mod tests {
     #[test]
     fn dart_library_name_rejects_non_portable_file_basenames() {
         for name in [
-            "CON", "com1", "Lpt9", "name:", "name*", "name?", "name\"", "name<", "name>", "name|",
+            "CON", "com1", "Lpt9", "COM¹", "com²", "LPT³", "name:", "name*", "name?", "name\"", "name<", "name>",
+            "name|",
         ] {
             assert!(validate_dart_library_name(name).is_err(), "accepted {name:?}");
         }
