@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn scaffold_swift(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
-    let module = config.swift_module();
+    let (module, package_name) = (config.swift_module(), config.swift_package_name());
     let min_macos_major = swift_min_macos(config).split('.').next().unwrap_or("13").to_string();
     let min_ios_major = swift_min_ios(config).split('.').next().unwrap_or("16").to_string();
 
@@ -116,7 +116,7 @@ func resolvedStaticLib(_ name: String) -> String {{
 }}
 
 let package = Package(
-  name: "{module}",
+  name: "{package_name}",
   platforms: [
     .macOS(.v{min_macos}),
     .iOS(.v{min_ios}),
@@ -294,7 +294,7 @@ struct Demo {{
 import PackageDescription
 
 let package = Package(
-  name: "{module}",
+  name: "{package_name}",
   platforms: [
     .macOS(.v{min_macos}),
     .iOS(.v{min_ios}),

@@ -229,6 +229,53 @@ fn test_scaffold_swift() {
     );
 }
 
+/// `[crates.swift].package_name` is validated at resolve time (`validate_swift_coordinates` /
+/// `ResolvedCrateConfig::swift_package_name`) precisely because it is spliced into the
+/// top-level `Package(name: ...)` argument -- a coordinate distinct from `module_name`, since
+/// real published SwiftPM packages routinely use kebab-case here. Both the in-tree and root
+/// manifests must actually use it, not silently fall back to the module name, or the validated
+/// field would have no effect on generated output.
+#[test]
+fn package_swift_uses_configured_package_name_not_module_name() {
+    let config = test_config_from_toml(
+        r#"
+[crates.swift]
+module_name = "SwiftPkgModule"
+package_name = "swift-pkg-name"
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Swift]).unwrap();
+    let files = language_files(&all_files);
+
+    let in_tree = files
+        .iter()
+        .find(|f| f.path == Path::new("packages/swift/Package.swift"))
+        .unwrap();
+    assert!(
+        in_tree.content.contains("name: \"swift-pkg-name\","),
+        "in-tree Package.swift must use the configured package_name, got:\n{}",
+        in_tree.content
+    );
+    assert!(
+        in_tree.content.contains(".library(name: \"SwiftPkgModule\""),
+        "in-tree Package.swift library/target names must still use module_name, got:\n{}",
+        in_tree.content
+    );
+
+    let root = files.iter().find(|f| f.path == Path::new("Package.swift")).unwrap();
+    assert!(
+        root.content.contains("name: \"swift-pkg-name\","),
+        "root Package.swift must use the configured package_name, got:\n{}",
+        root.content
+    );
+    assert!(
+        root.content.contains(".library(name: \"SwiftPkgModule\""),
+        "root Package.swift library/target names must still use module_name, got:\n{}",
+        root.content
+    );
+}
+
 // Regression for #555: once `[crates.readme.languages.swift]` is configured, the
 // README module (`crate::readme`) owns `packages/swift/README.md` end-to-end, and
 // scaffold must not emit a second, independent copy at the same path. A run that
