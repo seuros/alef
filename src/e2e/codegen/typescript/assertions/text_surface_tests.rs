@@ -1,7 +1,7 @@
 //! Which array-element shapes may be answered from the `_alefE2eItemTexts` TEXT SURFACE, and
 //! which must not.
 //!
-//! ~keep The text surface exists to reach INTO a structured element — a chunk's `text`, a node's
+//! ~keep The text surface exists to reach INTO a structured element — a segment's `text`, a node's
 //! `name` — and it does that by stringifying candidate members and substring-matching them. For
 //! an element that is a bare number that operation is not "reaching in", it is a coercion: the
 //! generated check for `contains: "42"` against a `Vec<u32>` was
@@ -26,7 +26,7 @@ fn field(name: &str, ty: TypeRef) -> FieldDef {
     }
 }
 
-/// `Report { codes: Vec<u32>, warnings: Vec<String>, chunks: Vec<Chunk> }` — one numeric
+/// `Report { codes: Vec<u32>, warnings: Vec<String>, segments: Vec<Segment> }` — one numeric
 /// collection, one textual one, and one structured one, so the routing decision is exercised
 /// against all three from a single resolver.
 fn type_defs() -> Vec<TypeDef> {
@@ -40,14 +40,14 @@ fn type_defs() -> Vec<TypeDef> {
                 ),
                 field("warnings", TypeRef::Vec(Box::new(TypeRef::String))),
                 field(
-                    "chunks",
-                    TypeRef::Vec(Box::new(TypeRef::Named("Chunk".to_string()))),
+                    "segments",
+                    TypeRef::Vec(Box::new(TypeRef::Named("Segment".to_string()))),
                 ),
             ],
             ..TypeDef::default()
         },
         TypeDef {
-            name: "Chunk".to_string(),
+            name: "Segment".to_string(),
             fields: vec![field("text", TypeRef::String)],
             ..TypeDef::default()
         },
@@ -56,7 +56,7 @@ fn type_defs() -> Vec<TypeDef> {
 
 fn resolver() -> FieldResolver {
     let defs = type_defs();
-    let result_fields: HashSet<String> = ["codes", "warnings", "chunks"]
+    let result_fields: HashSet<String> = ["codes", "warnings", "segments"]
         .iter()
         .map(|s| (*s).to_string())
         .collect();
@@ -131,7 +131,7 @@ fn a_string_collection_keeps_the_text_surface() {
 /// text surface is for, and it does not move. ~keep
 #[test]
 fn a_struct_collection_keeps_the_text_surface() {
-    let out = render(&contains_on("chunks", "hello"));
+    let out = render(&contains_on("segments", "hello"));
     assert!(out.contains("_alefE2eItemTexts(item)"), "got: {out}");
     assert!(!out.contains("String(item) ==="), "got: {out}");
 }
