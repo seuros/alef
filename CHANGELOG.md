@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-built Windows CLI archive and writes/updates `bucket/alef.json` in a Scoop bucket
   repository. Add `Registry::Scoop` to `alef check-registry`.
 
+### Changed
+
+- Bound nested file-input detection on flattened and cyclic type graphs by memoizing each JSON
+  value/type pair, and reuse the struct/enum name index across a generator's fixtures.
+
 ### Fixed
 
 - Escape arbitrary serde and wire names before embedding them in generated Java string literals,
