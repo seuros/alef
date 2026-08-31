@@ -225,7 +225,7 @@ pub fn validate_kotlin_package(name: &str) -> Result<(), String> {
 /// (Sonatype OSSRH publishing requirements) restricts both to ASCII letters, digits,
 /// `.`, `_`, and `-`, since they become repository path segments; `..` or a leading/
 /// trailing `.`/`-`/`/` would let a coordinate escape its repository directory. This is
-/// deliberately more permissive than [`validate_jvm_package`] (Maven groupIds commonly
+/// deliberately more permissive than [`validate_java_package`] (Maven groupIds commonly
 /// contain hyphens, e.g. `io.projectreactor.netty`) and deliberately ASCII-only (Maven
 /// Central coordinates are conventionally ASCII; unlike a JVM package name, there is no
 /// widely-interoperable non-ASCII Maven coordinate convention to preserve).
@@ -559,7 +559,7 @@ pub fn validate_dart_package_name(name: &str) -> Result<(), String> {
 /// and `${expression}` trigger string templates (Kotlin language specification, "String
 /// templates"), so a literal `$` must become `\$` or injected config data can reference (or,
 /// via `${...}`, evaluate) arbitrary in-scope Gradle build-script symbols. Grammar validation
-/// (e.g. [`validate_jvm_package`]) already rejects most injection shapes for identifier-typed
+/// (e.g. [`validate_java_package`]) already rejects most injection shapes for identifier-typed
 /// coordinates, but `$` is a legal JVM identifier character, so this escape is the remaining
 /// defense for any coordinate spliced into a raw `.kts` string literal.
 pub fn kotlin_string_escape(s: &str) -> String {
