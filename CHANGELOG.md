@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.3] - 2026-08-31
+
 ### Security
 
 - Escape serde wire values before emitting TypeScript/WASM assertions, preventing malformed or
