@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Validate every consumer-configured C ABI identifier, path, header, export, registry, E2E, and
-  package surface through the canonical per-field grammar, and revalidate the packaged canonical
-  header before publication. Invalid configuration can no longer bypass resolution and reach
-  generated source, filesystem operations, or release artifacts through a less strict path.
+- Validate consumer-configured C ABI identifiers, paths, header names, Cargo metadata, cfg
+  expressions, and generated registry, E2E, and package inputs through their canonical per-field
+  grammars. Revalidate the packaged canonical header before publication, so invalid configuration
+  cannot bypass resolution and reach generated source, filesystem operations, or release artifacts
+  through a less strict path.
 - Stop `#[derive(Default)]` erasing a field's named `#[serde(default = "path")]` from the IR.
   Extraction blanket-overwrote every field's `typed_default` with `DefaultValue::Empty` whenever
   the container derived `Default`, destroying the `FunctionCall` recorded for the named form.
@@ -87,8 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
   E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
   an identifier-less expression.
-- Preserve explicit `null` for optional Go collection arguments while continuing to normalize a
-  required nil collection to its empty `[]` or `{}` wire value.
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
   already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
   a literal character rather than a quoting operator, so maven was handed
