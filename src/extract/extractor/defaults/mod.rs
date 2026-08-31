@@ -4,6 +4,8 @@ use ahash::AHashMap;
 use quote::ToTokens;
 use syn;
 
+mod mutation;
+
 /// Every associated function of every inherent `impl` block in one module, keyed by
 /// `(type name, function name)`.
 ///
@@ -27,7 +29,9 @@ const MAX_DELEGATION_DEPTH: usize = 4;
 /// Finds the `fn default() -> Self` method and reads its body one of three ways:
 ///
 /// 1. a struct literal (`Self { field: expr, ... }`), each initializer lowered to a
-///    [`DefaultValue`]; or
+///    [`DefaultValue`] — including the `let mut value = Self { .. }; value.field = ..; value`
+///    spelling, whose mutations are applied over the literal by [`mutation::read_struct_body`];
+///    or
 /// 2. a delegation to one of `T`'s own constructors (`Self::new("en")`), whose parameters are
 ///    bound to the literal arguments the delegation passed and whose struct literal is then
 ///    read against that binding; or
@@ -75,8 +79,8 @@ pub(crate) fn extract_default_values(
         .collect();
     let scope = EvalScope::new(self_type, literal_consts, &field_types);
 
-    let defaults = if let Some(struct_expr) = find_struct_expr(&default_fn.block) {
-        struct_expr_defaults(struct_expr, &scope)
+    let defaults = if let Some(body) = mutation::read_struct_body(&default_fn.block) {
+        mutation::struct_body_defaults(&body, &scope)
     } else if let Some(delegated) = follow_delegation(&default_fn.block, self_type, constructors, &scope, 0) {
         delegated
     } else if tail_is_bare_self(&default_fn.block, self_type) {
@@ -380,8 +384,8 @@ fn follow_delegation(
     }
 
     let inner = scope.with_params(params);
-    if let Some(struct_expr) = find_struct_expr(&target.block) {
-        return Some(struct_expr_defaults(struct_expr, &inner));
+    if let Some(body) = mutation::read_struct_body(&target.block) {
+        return Some(mutation::struct_body_defaults(&body, &inner));
     }
     if tail_is_bare_self(&target.block, self_type) {
         return Some(AHashMap::new());
@@ -459,7 +463,8 @@ fn unwrap_to_path_expr(expr: &syn::Expr) -> Option<&syn::ExprPath> {
 ///
 /// That spelling only ever compiles for a type with zero fields — a struct with any field
 /// needs `Self { field: expr, .. }` (a real `syn::ExprStruct`, already read by
-/// [`find_struct_expr`]/[`struct_expr_defaults`]) or a tuple struct needs `Self(expr)` (a call).
+/// [`mutation::read_struct_body`]/[`struct_expr_defaults`]) or a tuple struct needs `Self(expr)`
+/// (a call).
 /// So finding a bare `Self` tail here means there is nothing for a field default to disagree
 /// about, and the "neither a struct literal nor a foldable delegation" fallback in
 /// [`extract_default_values`] — the one that logs and writes [`DefaultValue::Unresolved`] to
@@ -497,37 +502,6 @@ fn struct_expr_defaults(struct_expr: &syn::ExprStruct, scope: &EvalScope<'_>) ->
         defaults.insert(name, value);
     }
     defaults
-}
-
-/// Recursively search a block for a struct expression (`Self { ... }` or `Name { ... }`).
-fn find_struct_expr(block: &syn::Block) -> Option<&syn::ExprStruct> {
-    for stmt in block.stmts.iter().rev() {
-        match stmt {
-            syn::Stmt::Expr(expr, _) => {
-                if let Some(s) = unwrap_to_struct_expr(expr) {
-                    return Some(s);
-                }
-            }
-            syn::Stmt::Local(local) => {
-                if let Some(init) = &local.init
-                    && let Some(s) = unwrap_to_struct_expr(&init.expr)
-                {
-                    return Some(s);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Try to unwrap an expression to a struct expression, looking through blocks.
-fn unwrap_to_struct_expr(expr: &syn::Expr) -> Option<&syn::ExprStruct> {
-    match expr {
-        syn::Expr::Struct(s) => Some(s),
-        syn::Expr::Block(b) => find_struct_expr(&b.block),
-        _ => None,
-    }
 }
 
 /// Helper trait to extract the named member from a `FieldValue`.
