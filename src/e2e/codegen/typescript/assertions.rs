@@ -313,11 +313,14 @@ fn render_wasm_enum_assertion(
                 let wire = field_resolver.enum_wire_value_for_variant(field, s).unwrap_or(s);
                 let is_data_carrying = field_resolver.ir_enum_is_data_carrying(field).unwrap_or(false);
                 let read = if is_data_carrying {
-                    format!("(typeof {field_expr} === \"string\" ? {field_expr} : Object.keys({field_expr} ?? {{}})[0])")
+                    format!(
+                        "(typeof {field_expr} === \"string\" ? {field_expr} : Object.keys({field_expr} ?? {{}})[0])"
+                    )
                 } else {
                     field_expr.to_string()
                 };
-                out.push_str(&format!("    expect({read}).toBe(\"{wire}\");\n"));
+                let wire_literal = json_to_js(&serde_json::Value::String(wire.to_string()));
+                out.push_str(&format!("    expect({read}).toBe({wire_literal});\n"));
                 return true;
             }
         }

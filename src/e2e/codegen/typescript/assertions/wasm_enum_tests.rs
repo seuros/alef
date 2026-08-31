@@ -45,10 +45,7 @@ fn enums() -> Vec<EnumDef> {
         },
         EnumDef {
             name: "Format".to_string(),
-            variants: vec![
-                variant("Markdown", vec![], Some("md")),
-                variant("Html", vec![], None),
-            ],
+            variants: vec![variant("Markdown", vec![], Some("md")), variant("Html", vec![], None)],
             ..EnumDef::default()
         },
     ]
@@ -141,7 +138,10 @@ fn a_data_carrying_enum_field_reads_the_variant_off_the_wire_objects_only_key() 
 #[test]
 fn the_data_carrying_accessor_still_reads_a_bare_string_unit_variant() {
     let out = render_wasm("kind", "Unit");
-    assert!(out.contains("typeof result.kind === \"string\" ? result.kind"), "got: {out}");
+    assert!(
+        out.contains("typeof result.kind === \"string\" ? result.kind"),
+        "got: {out}"
+    );
     assert!(out.ends_with(".toBe(\"Unit\");\n"), "got: {out}");
 }
 
@@ -161,6 +161,84 @@ fn a_renamed_unit_variant_is_compared_against_its_wire_value_not_its_identifier(
 fn a_fixture_that_already_names_the_wire_value_is_untouched() {
     let out = render_wasm("format", "md");
     assert_eq!(out, "    expect(result.format).toBe(\"md\");\n", "got: {out}");
+}
+
+/// Renders the `equals` wasm enum path (the `render_wasm_enum_assertion` arm at
+/// `assertions.rs`) against a `Format` enum whose sole variant is renamed to `wire` — the wire
+/// value is a `#[serde(rename)]` string a consumer controls, not `render_wasm`'s fixed fixture.
+fn render_wasm_with_wire(wire: &str) -> String {
+    let type_defs = vec![TypeDef {
+        name: "Report".to_string(),
+        fields: vec![FieldDef {
+            name: "format".to_string(),
+            ty: TypeRef::Named("Format".to_string()),
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    }];
+    let enum_defs = vec![EnumDef {
+        name: "Format".to_string(),
+        variants: vec![variant("Markdown", vec![], Some(wire))],
+        ..EnumDef::default()
+    }];
+    let result_fields: HashSet<String> = ["format".to_string()].into_iter().collect();
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_enum_map(
+        FieldResolver::ir_enum_fields(&type_defs, &enum_defs),
+        Some("Report".to_string()),
+    );
+    let config = HashMap::from([("format".to_string(), "Format".to_string())]);
+    let assertion = Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("format".to_string()),
+        value: Some(serde_json::Value::String("Markdown".to_string())),
+        ..Default::default()
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out, &assertion, "result", &resolver, false, &config, "wasm", false, false, false,
+    );
+    out
+}
+
+/// GAP 4 (security-relevant). The pre-fix wire comparison was `format!("... .toBe(\"{wire}\");\n")`
+/// — `wire` spliced raw between hand-written double quotes with no escaping. A `#[serde(rename)]`
+/// containing a `"` broke the emitted string literal outright (closed it early and left trailing
+/// garbage tsc could not parse). Routed through `json_to_js`, the quote is escaped rather than
+/// terminating the literal. See `multiword_wire_tag_tsc_tests.rs` for the real `tsc`/`node` proof
+/// over the same shape. ~keep
+#[test]
+fn a_wire_value_containing_a_double_quote_is_escaped_not_spliced() {
+    let out = render_wasm_with_wire("bad\"value");
+    assert_eq!(out, "    expect(result.format).toBe(\"bad\\\"value\");\n", "got: {out}");
+}
+
+/// GAP 4 continued: an unescaped backslash before a recognized escape letter (`\t`, `\n`, ...)
+/// silently changes MEANING rather than breaking syntax — `"C:\temp"` pre-fix decoded to
+/// `C:<TAB>emp`, not the intended `C:\temp`, a false pass or false fail no `tsc` diagnostic would
+/// ever catch. `json_to_js` doubles the backslash so it round-trips as data. ~keep
+#[test]
+fn a_wire_value_containing_a_backslash_is_escaped_not_spliced() {
+    let out = render_wasm_with_wire("C:\\temp");
+    assert_eq!(out, "    expect(result.format).toBe(\"C:\\\\temp\");\n", "got: {out}");
+}
+
+/// GAP 4 continued: a literal newline byte spliced raw into a hand-written double-quoted JS string
+/// literal is an unterminated string literal — a deterministic `tsc` syntax error. `json_to_js`
+/// emits the `\n` escape sequence instead of the raw byte. ~keep
+#[test]
+fn a_wire_value_containing_a_newline_is_escaped_not_spliced() {
+    let out = render_wasm_with_wire("line1\nline2");
+    assert_eq!(
+        out, "    expect(result.format).toBe(\"line1\\nline2\");\n",
+        "got: {out}"
+    );
 }
 
 /// OVER-APPLICATION CONTROL: an unrenamed unit variant keeps its own spelling, and an all-unit
