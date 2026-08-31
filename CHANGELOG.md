@@ -14,6 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grammars. Revalidate the packaged canonical header before publication, so invalid configuration
   cannot bypass resolution and reach generated source, filesystem operations, or release artifacts
   through a less strict path.
+- Stop recording a fabricated default for an `impl Default` that mutates its struct literal
+  before returning it. `find_struct_expr` scanned the `fn default()` body backwards and took the
+  first struct literal it met -- including one sitting in a `let` it had no reason to believe was
+  returned -- so `let mut p = Self { max_depth: 0, deny_list: Vec::new() }; p.deny_list.push(..);
+  p.max_depth = 9; p` recorded `IntLiteral(0)` and `Empty`: the values the type held *before*
+  every mutation. `Empty` asserts "the value is exactly this type's zero", so the per-field-literal
+  backends emitted their own zero for a deny-list that is not empty and a limit that is not zero,
+  substituting a permissive value for a restrictive one with nothing to distinguish it from a
+  value alef had actually read. The same backwards scan could cross bindings entirely and report
+  a struct literal belonging to a *different* type as this one's default. Straight-line mutation
+  is now lowered instead of ignored -- scalar assignment, `Vec::push` and `Vec::extend` yield the
+  post-mutation value -- while a map or set `insert`, which `DefaultValue` has no variant for,
+  leaves that field `Unresolved` rather than claiming the collection is empty.
+- Refuse every `impl Default` body whose result alef cannot determine, instead of reporting the
+  initial literal as though it were the answer. A conditional or early return (including a tail
+  struct literal that a preceding `return` can pre-empt), a loop, a binding handed to a helper or
+  read by one of its own mutations, an unmodelled mutating method, a nested field write, a
+  `..base` literal, and a macro statement whose expansion is not visible now all resolve to
+  `Unresolved`, which `alef generate` reports rather than silently lowering. Attributed statements
+  are refused on the same ground and are the sharpest case: `#[cfg(feature = "x")]
+  prefs.tags.push(..)` yields a different default in each build configuration, and which features
+  a consumer enables is not knowable from the source alef reads, so the mutation's *existence* --
+  not merely its value -- is undetermined. Every attribute is refused rather than an allow-list of
+  the ones believed inert, since the allow-list is the part that goes stale. The check tests the
+  statement's rendered tokens rather than a `syn` `attrs` field, because `syn` parks a statement
+  attribute on `ExprAssign.left` rather than `ExprAssign.attrs`, where the obvious check would
+  have read clean on exactly the shape it exists to catch.
 - Stop `#[derive(Default)]` erasing a field's named `#[serde(default = "path")]` from the IR.
   Extraction blanket-overwrote every field's `typed_default` with `DefaultValue::Empty` whenever
   the container derived `Default`, destroying the `FunctionCall` recorded for the named form.
