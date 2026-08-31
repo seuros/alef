@@ -105,3 +105,116 @@ fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() 
         "got: {out}"
     );
 }
+
+fn contains_value_on(field: &str, value: serde_json::Value) -> Assertion {
+    Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some(field.to_string()),
+        value: Some(value),
+        ..Default::default()
+    }
+}
+
+/// FALSE-POSITIVE CONTROL, and the reason this lowering changed. The pre-fix renderer emitted
+/// `String(e.bar).includes(42)`; `String.prototype.includes` stringifies its argument, so that
+/// expression is `"421".includes("42")` — TRUE — for an element of 421, and true again for
+/// 3.142. Executed under node against `[{bar: 421}]` the old text reports the assertion as
+/// PASSING and the new text reports it as failing. This test fails against the pre-fix code,
+/// where `String(e.bar).includes` is present and `Number(` is not. ~keep
+#[test]
+fn a_numeric_wildcard_containment_compares_numerically_not_as_a_substring() {
+    let out = render(
+        &contains_value_on("items[].bar", serde_json::json!(42)),
+        &array_resolver("items"),
+    );
+    assert_eq!(
+        out,
+        "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(true);\n",
+        "got: {out}"
+    );
+    assert!(!out.contains("String(e.bar).includes"), "substring lowering survived: {out}");
+}
+
+/// `Number(null)` is `0`, so an unguarded numeric comparison would report `contains: 0` as
+/// satisfied by an absent leaf. Pins the guard that stops it. ~keep
+#[test]
+fn a_zero_expectation_is_guarded_against_an_absent_leaf() {
+    let out = render(
+        &contains_value_on("items[].bar", serde_json::json!(0)),
+        &array_resolver("items"),
+    );
+    assert!(out.contains("e.bar != null &&"), "null guard missing: {out}");
+}
+
+/// OVER-APPLICATION CONTROL: a string expectation is still substring containment, byte for
+/// byte. The numeric fix must not move the case that was already correct. ~keep
+#[test]
+fn a_string_wildcard_containment_keeps_its_substring_lowering() {
+    let out = render(&contains_on("items[].name", "beta"), &array_resolver("items"));
+    assert_eq!(
+        out, "    expect((result.items ?? []).some((e) => String(e.name).includes(\"beta\"))).toBe(true);\n",
+        "got: {out}"
+    );
+}
+
+#[test]
+fn a_boolean_wildcard_containment_compares_by_identity() {
+    let out = render(
+        &contains_value_on("items[].flag", serde_json::json!(true)),
+        &array_resolver("items"),
+    );
+    assert_eq!(
+        out,
+        "    expect((result.items ?? []).some((e) => e.flag === true)).toBe(true);\n",
+        "got: {out}"
+    );
+}
+
+/// A `not_contains` inherits the same predicate, so the false positive it inherited is gone
+/// with it — and inverted, the old lowering made `not_contains 42` FAIL against 421. ~keep
+#[test]
+fn a_numeric_wildcard_not_contains_uses_the_same_numeric_predicate() {
+    let assertion = Assertion {
+        assertion_type: "not_contains".to_string(),
+        field: Some("items[].bar".to_string()),
+        value: Some(serde_json::json!(42)),
+        ..Default::default()
+    };
+    let out = render(&assertion, &array_resolver("items"));
+    assert_eq!(
+        out,
+        "    expect((result.items ?? []).some((e) => e.bar != null && Number(e.bar) === 42)).toBe(false);\n",
+        "got: {out}"
+    );
+}
+
+/// LOUD SKIP, not a quiet pass: an object expectation has no sound single-element comparison,
+/// so nothing executable is emitted for it. The pre-fix renderer emitted
+/// `String(e.bar).includes({ a: 1 })`, i.e. `.includes("[object Object]")`, which is false for
+/// every real value — a permanently-failing assertion dressed as coverage. ~keep
+#[test]
+fn an_object_wildcard_expectation_is_skipped_visibly_rather_than_lowered() {
+    let out = render(
+        &contains_value_on("items[].bar", serde_json::json!({ "a": 1 })),
+        &array_resolver("items"),
+    );
+    assert_eq!(
+        out,
+        "    // skipped: unsupported traversal assertion object value on 'items[].bar'\n",
+        "got: {out}"
+    );
+    assert!(!out.contains("expect("), "an assertion was emitted anyway: {out}");
+}
+
+#[test]
+fn a_null_wildcard_expectation_is_skipped_visibly() {
+    let out = render(
+        &contains_value_on("items[].bar", serde_json::Value::Null),
+        &array_resolver("items"),
+    );
+    assert_eq!(
+        out,
+        "    // skipped: unsupported traversal assertion null value on 'items[].bar'\n",
+        "got: {out}"
+    );
+}
