@@ -80,10 +80,7 @@ builder = "always"
 "#,
     )
     .expect("valid hostile-name Java config");
-    config
-        .resolve()
-        .expect("resolved hostile-name Java config")
-        .remove(0)
+    config.resolve().expect("resolved hostile-name Java config").remove(0)
 }
 
 fn renamed_field(index: usize, wire_name: &str) -> FieldDef {
@@ -129,7 +126,11 @@ fn hostile_api() -> ApiSurface {
             has_serde: true,
             ..Default::default()
         }],
-        enums: vec![simple_enum(variants), internally_tagged_enum(), adjacently_tagged_enum()],
+        enums: vec![
+            simple_enum(variants),
+            internally_tagged_enum(),
+            adjacently_tagged_enum(),
+        ],
         ..Default::default()
     }
 }
