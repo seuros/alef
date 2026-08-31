@@ -264,6 +264,11 @@ pub fn validate_nuget_package_id(value: &str) -> Result<(), String> {
             "NuGet package ID `{value}` must not start or end with `.` or `-`"
         ));
     }
+    if let Some(character) = value.chars().find(|character| character.len_utf16() != 1) {
+        return Err(format!(
+            "NuGet package ID `{value}` contains supplementary character `{character}`; NuGet's .NET regex evaluates UTF-16 code units and rejects surrogate pairs"
+        ));
+    }
     if let Some(bad) = value
         .chars()
         .find(|character| !is_dotnet_word_character(*character) && !matches!(character, '.' | '-'))
@@ -290,14 +295,23 @@ pub fn validate_nuget_package_id(value: &str) -> Result<(), String> {
 /// `StringComparer.OrdinalIgnoreCase`, so two crates publishing `MyLib` and `mylib` would
 /// collide on the real registry even though they differ under a plain `==`.
 ///
-/// This deliberately maps each character independently via [`icu_casemap::CaseMapper`]'s
-/// *simple* fold, not its full Unicode case folding (`CaseMapper::fold_string`): full folding
-/// can expand a single character into several (German `ß` folds to `"ss"`), which would produce
-/// a collision key of different length than the input and diverge from .NET's ordinal
-/// comparer, which maps one UTF-16 code unit to one code unit and performs no such expansion.
+/// This maps each character through ICU's simple uppercase table, matching .NET's ICU-backed
+/// `OrdinalCasing.ToUpper` one-code-point mapping. A non-ASCII character is never allowed to map
+/// onto ASCII: .NET's ordinal fast path explicitly keeps those domains unequal (`ſ` != `S`,
+/// `K` != `K`).
 pub fn nuget_ordinal_fold(value: &str) -> String {
     let mapper = icu_casemap::CaseMapper::new();
-    value.chars().map(|character| mapper.simple_fold(character)).collect()
+    value
+        .chars()
+        .map(|character| {
+            let uppercase = mapper.simple_uppercase(character);
+            if !character.is_ascii() && uppercase.is_ascii() {
+                character
+            } else {
+                uppercase
+            }
+        })
+        .collect()
 }
 
 fn is_dotnet_word_character(character: char) -> bool {
@@ -596,10 +610,25 @@ pub fn validate_dart_library_name(name: &str) -> Result<(), String> {
             "`{name}` must be a single path component, with no `/`, `\\`, or `..`"
         ));
     }
-    if let Some(bad) = name.chars().find(|c| *c == '\'' || *c == '$' || c.is_control()) {
+    if name.ends_with(['.', ' ']) {
+        return Err(format!("`{name}` must not end with a dot or space"));
+    }
+    let device_stem = name.split('.').next().unwrap_or(name);
+    let uppercase_stem = device_stem.to_ascii_uppercase();
+    let is_numbered_device = uppercase_stem
+        .strip_prefix("COM")
+        .or_else(|| uppercase_stem.strip_prefix("LPT"))
+        .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+    if matches!(uppercase_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || is_numbered_device {
+        return Err(format!("`{name}` uses a Windows-reserved file basename"));
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| matches!(*c, '\'' | '$' | '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control())
+    {
         return Err(format!(
-            "`{name}` contains `{bad}`, which would break out of the Dart import string literal \
-             `import 'package:...'` it is spliced into"
+            "`{name}` contains `{bad}`, which is not valid in a portable file basename or the \
+             Dart import string literal `import 'package:...'` it is spliced into"
         ));
     }
     Ok(())
@@ -722,7 +751,7 @@ mod tests {
 
     #[test]
     fn nuget_package_id_limit_counts_dotnet_utf16_code_units() {
-        assert!(validate_nuget_package_id(&"𐐀".repeat(50)).is_ok());
+        assert!(validate_nuget_package_id("𐐀").is_err());
         assert!(validate_nuget_package_id(&"𐐀".repeat(51)).is_err());
     }
 
@@ -745,6 +774,9 @@ mod tests {
         assert_eq!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("mylib"));
         assert_eq!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("MYLIB"));
         assert_ne!(nuget_ordinal_fold("MyLib"), nuget_ordinal_fold("MyLib2"));
+        assert_ne!(nuget_ordinal_fold("ẞ"), nuget_ordinal_fold("ß"));
+        assert_ne!(nuget_ordinal_fold("ſ"), nuget_ordinal_fold("S"));
+        assert_ne!(nuget_ordinal_fold("K"), nuget_ordinal_fold("K"));
     }
 
     #[test]
@@ -752,8 +784,20 @@ mod tests {
         // `simple_fold('ß') == 'ß'` (unchanged): full Unicode case folding would expand it to
         // "ss", which would silently change the collision key's length and diverge from .NET's
         // ordinal (one-code-unit-to-one-code-unit) comparer.
-        assert_eq!(nuget_ordinal_fold("weiß"), "weiß");
+        assert_eq!(nuget_ordinal_fold("weiß"), "WEIß");
         assert_eq!(nuget_ordinal_fold("weiß").chars().count(), "weiß".chars().count());
+    }
+
+    #[test]
+    fn dart_library_name_rejects_non_portable_file_basenames() {
+        for name in [
+            "CON", "com1", "Lpt9", "name:", "name*", "name?", "name\"", "name<", "name>", "name|",
+        ] {
+            assert!(validate_dart_library_name(name).is_err(), "accepted {name:?}");
+        }
+        assert!(validate_dart_library_name("trailing.").is_err());
+        assert!(validate_dart_library_name("trailing ").is_err());
+        assert!(validate_dart_library_name("sample-widget").is_ok());
     }
 
     #[test]

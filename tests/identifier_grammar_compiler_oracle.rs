@@ -19,7 +19,10 @@
 use std::path::Path;
 use std::process::Command;
 
-use alef::codegen::coordinates::{validate_csharp_namespace, validate_java_package, validate_kotlin_package};
+use alef::codegen::coordinates::{
+    nuget_ordinal_fold, validate_csharp_namespace, validate_java_package, validate_kotlin_package,
+    validate_nuget_package_id,
+};
 
 /// Probe characters, chosen to straddle every boundary where the two grammars differ from each
 /// other or from `char::is_alphabetic` / `char::is_alphanumeric`. No expected verdict here: the
@@ -67,11 +70,24 @@ fn probe_segments() -> Vec<(String, String)> {
 }
 
 fn tool_available(tool: &str) -> bool {
+    let version_flag = if tool == "kotlinc" { "-version" } else { "--version" };
     Command::new(tool)
-        .arg("--version")
+        .arg(version_flag)
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[test]
+fn installed_kotlinc_is_detected_by_the_availability_probe() {
+    if Command::new("kotlinc").arg("-version").output().is_err() {
+        eprintln!("SKIPPED: kotlinc is not installed; its availability probe was not verified");
+        return;
+    }
+    assert!(
+        tool_available("kotlinc"),
+        "the installed kotlinc must not be reported unavailable"
+    );
 }
 
 /// Checks whether `tool` is on `PATH`. When `required` is `true` and it is not, panics naming
@@ -225,6 +241,72 @@ fn dotnet_agrees_with_validate_csharp_namespace() {
     compare("csharp", &rejected, |segment| {
         validate_csharp_namespace(&format!("Probe.{segment}")).is_ok()
     });
+}
+
+#[test]
+fn dotnet_agrees_with_nuget_validation_and_ordinal_collisions() {
+    if !require_tool(
+        "dotnet",
+        "ALEF_REQUIRE_DOTNET",
+        std::env::var_os("ALEF_REQUIRE_DOTNET").is_some(),
+    ) {
+        eprintln!("SKIPPED: dotnet is not installed; NuGet semantics were NOT verified");
+        return;
+    }
+    let directory = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(
+        directory.path().join("probe.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>",
+    )
+    .expect("write csproj");
+    std::fs::write(
+        directory.path().join("Program.cs"),
+        r#"using System;
+using System.Text.RegularExpressions;
+foreach (var value in new[] { "MyLib", "München.Δοκιμή", "𐐀" })
+    Console.WriteLine(Regex.IsMatch(value, @"^\w+([_.-]\w+)*$"));
+foreach (var pair in new[] { ("MyLib", "mylib"), ("Ü", "ü"), ("ẞ", "ß"), ("ſ", "S"), ("K", "K") })
+    Console.WriteLine(StringComparer.OrdinalIgnoreCase.Equals(pair.Item1, pair.Item2));
+"#,
+    )
+    .expect("write program");
+    let output = Command::new("dotnet")
+        .args(["run", "-c", "Release", "--nologo"])
+        .current_dir(directory.path())
+        .output()
+        .expect("run dotnet");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let verdicts: Vec<bool> = stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.eq_ignore_ascii_case("true") {
+                Some(true)
+            } else if line.eq_ignore_ascii_case("false") {
+                Some(false)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let expected = [
+        validate_nuget_package_id("MyLib").is_ok(),
+        validate_nuget_package_id("München.Δοκιμή").is_ok(),
+        validate_nuget_package_id("𐐀").is_ok(),
+        nuget_ordinal_fold("MyLib") == nuget_ordinal_fold("mylib"),
+        nuget_ordinal_fold("Ü") == nuget_ordinal_fold("ü"),
+        nuget_ordinal_fold("ẞ") == nuget_ordinal_fold("ß"),
+        nuget_ordinal_fold("ſ") == nuget_ordinal_fold("S"),
+        nuget_ordinal_fold("K") == nuget_ordinal_fold("K"),
+    ];
+    assert_eq!(
+        verdicts.len(),
+        expected.len(),
+        "expected one .NET verdict per probe; stdout={stdout:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(verdicts, expected, "Alef diverged from .NET NuGet semantics");
 }
 
 #[test]
