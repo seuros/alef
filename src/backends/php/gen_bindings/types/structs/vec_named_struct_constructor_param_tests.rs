@@ -302,3 +302,60 @@ fn optional_vec_of_plain_struct_field_also_wraps_constructor_in_php_result() {
         "got:\n{ctor_only}"
     );
 }
+
+/// A constructor's `Vec<Named>` let-binding must collect the **binding** element type, not the
+/// core one.
+///
+/// `php_vec_named_struct_let_binding.jinja` is shared with the function-argument path in
+/// `helpers/params.rs` and `functions/params.rs`, where the decoded vector is handed straight to a
+/// core API call and so must be `Vec<{core_import}::T>` built with `parsed.clone().into()`. A
+/// constructor is the opposite direction: it initializes a `#[php_class]` field, whose declared
+/// type is the *binding* `T`. Emitting the core type here produced `expected T, found
+/// {core_import}::T` for every such field -- 91 of them in one real consumer -- and for a
+/// binding-only element type (no core counterpart at all) it produced `cannot find type` instead.
+/// The template takes a `to_core` flag for exactly this split; this test pins the constructor
+/// side of it. ~keep
+#[test]
+fn constructor_vec_of_plain_struct_collects_the_binding_element_type() {
+    let typ = TypeDef {
+        name: "Attributes".to_string(),
+        rust_path: "test_lib::Attributes".to_string(),
+        fields: vec![field(
+            "key_values",
+            TypeRef::Vec(Box::new(TypeRef::Named("KeyValueAttribute".to_string()))),
+            false,
+        )],
+        has_serde: true,
+        ..Default::default()
+    };
+
+    let out = super::gen_struct_methods_with_exclude(
+        &typ,
+        &mapper(),
+        true,
+        "test_lib",
+        &AHashSet::new(),
+        &AHashSet::new(),
+        &[],
+        &[],
+        &AHashSet::new(),
+        &[],
+        &AHashSet::new(),
+        &[],
+    )
+    .expect("struct methods generate");
+
+    assert!(
+        out.contains("keyValues_core_result: Vec<KeyValueAttribute>"),
+        "the constructor initializes a binding-typed field, so its let-binding must collect \
+         `Vec<KeyValueAttribute>`:\n{out}"
+    );
+    assert!(
+        !out.contains("Vec<test_lib::KeyValueAttribute>"),
+        "collecting the core element type does not type-check against the binding field:\n{out}"
+    );
+    assert!(
+        !out.contains("parsed.clone().into()"),
+        "a binding-typed element needs no conversion; `.into()` targets the core type:\n{out}"
+    );
+}

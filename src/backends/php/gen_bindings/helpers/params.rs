@@ -420,6 +420,7 @@ pub(crate) fn gen_php_named_let_bindings(
                                     core_import => core_import,
                                     struct_name => name,
                                     is_optional => p.optional,
+                                    to_core => true,
                                 },
                             ));
                         }

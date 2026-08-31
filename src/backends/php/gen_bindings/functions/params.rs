@@ -247,6 +247,7 @@ pub(super) fn gen_php_serde_let_bindings(
                                     core_import => core_import,
                                     struct_name => name,
                                     is_optional => p.optional,
+                                    to_core => true,
                                 },
                             ));
                         }

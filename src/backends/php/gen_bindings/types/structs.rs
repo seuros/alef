@@ -624,6 +624,7 @@ fn gen_struct_methods_impl(
                                 core_import => core_import,
                                 struct_name => name.as_str(),
                                 is_optional => f.optional,
+                                to_core => false,
                             },
                         ));
                     }
@@ -723,6 +724,7 @@ fn gen_struct_methods_impl(
                                 core_import => core_import,
                                 struct_name => name.as_str(),
                                 is_optional => f.optional,
+                                to_core => false,
                             },
                         ));
                     }
