@@ -16,6 +16,7 @@ pub(super) fn gen_visitor_bridge(
     type_paths: &HashMap<String, String>,
     api: &ApiSurface,
     pyclass_absent_types: &ahash::AHashSet<String>,
+    core_to_binding_convertible_types: &ahash::AHashSet<String>,
 ) -> anyhow::Result<String> {
     let result_metadata = crate::codegen::visitor_result::required_visitor_result_metadata(api, bridge_cfg)?;
     let context_helper = crate::codegen::visitor_context::visitor_context_helper(
@@ -25,7 +26,7 @@ pub(super) fn gen_visitor_bridge(
         crate::codegen::visitor_context::VisitorContextBackend::Pyo3,
     )?;
 
-    let binding_class = context_binding_class(api, bridge_cfg, pyclass_absent_types);
+    let binding_class = context_binding_class(api, bridge_cfg, pyclass_absent_types, core_to_binding_convertible_types);
     let helper_fn = crate::backends::pyo3::template_env::render(
         "trait_bridge/nodecontext_to_py_object.jinja",
         minijinja::context! {
@@ -76,11 +77,12 @@ pub(super) fn gen_visitor_bridge(
 ///   and `gen_stubs::protocol` additionally treats `api.excluded_type_paths` as absent, so a
 ///   context reached through either exclusion has no class for the bridge to construct;
 /// - `impl From<core::T> for T` is actually emitted, asked through the same shared predicate the
-///   type emitter itself gates on
-///   ([`crate::codegen::conversions::core_to_binding_from_impl_emitted`] over
-///   `core_to_binding_convertible_types(api, &[])` — the identical set and the identical
-///   `&[]` exclusions `generate_bindings` passes). Re-deriving eligibility here instead would let
-///   the bridge emit `.into()` against a `From` impl that was never generated;
+///   type emitter itself gates on ([`crate::codegen::conversions::core_to_binding_from_impl_emitted`]
+///   over the caller-supplied `core_to_binding_convertible_types` -- the same
+///   `core_to_binding_convertible_types(api, &[])` set `generate_bindings` computes, now
+///   precomputed once per generation loop and passed in rather than rebuilt on every bridge, since
+///   the fixpoint is transitive over every type and field in `api`). Re-deriving eligibility here
+///   instead would let the bridge emit `.into()` against a `From` impl that was never generated;
 /// - the conversion is reachable from what the bridge holds: the generated `From` takes the core
 ///   value **by value** and the bridge only has `&core::T`, so `T: Clone` is required to get there;
 /// - the module emits the `#[pyclass]` at all: `pyclass_absent_types` is
@@ -93,10 +95,11 @@ pub(super) fn gen_visitor_bridge(
 ///
 /// The `.pyi` protocol stub calls this same function, so the class the stub names on a visitor
 /// callback's context parameter and the object the bridge actually passes cannot diverge. ~keep
-pub fn context_binding_class<'a>(
+pub(crate) fn context_binding_class<'a>(
     api: &'a ApiSurface,
     bridge_cfg: &TraitBridgeConfig,
     pyclass_absent_types: &ahash::AHashSet<String>,
+    core_to_binding_convertible_types: &ahash::AHashSet<String>,
 ) -> Option<&'a TypeDef> {
     let context_type = bridge_cfg.context_type.as_deref()?;
     let context_def = api.types.iter().find(|type_def| type_def.name == *context_type)?;
@@ -109,8 +112,8 @@ pub fn context_binding_class<'a>(
     if !context_def.is_clone {
         return None;
     }
-    let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
-    crate::codegen::conversions::core_to_binding_from_impl_emitted(context_def, &core_to_binding).then_some(context_def)
+    crate::codegen::conversions::core_to_binding_from_impl_emitted(context_def, core_to_binding_convertible_types)
+        .then_some(context_def)
 }
 
 /// Generate a single visitor-style trait method that tries Python dispatch, falls back to default.

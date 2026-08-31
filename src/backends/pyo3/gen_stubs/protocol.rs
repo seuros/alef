@@ -35,6 +35,7 @@ pub(super) fn gen_visitor_protocol_stub(
     emit_docstrings: bool,
     options_types: &std::collections::HashSet<String>,
     pyclass_absent_types: &ahash::AHashSet<String>,
+    core_to_binding_convertible_types: &ahash::AHashSet<String>,
 ) -> Option<String> {
     let methods = bridge.resolve_methods(api);
     if methods.is_empty() {
@@ -62,7 +63,13 @@ pub(super) fn gen_visitor_protocol_stub(
         .then_some(bridge.context_type.as_deref())
         .flatten()
         .filter(|_| {
-            crate::backends::pyo3::trait_bridge::context_binding_class(api, bridge, pyclass_absent_types).is_none()
+            crate::backends::pyo3::trait_bridge::context_binding_class(
+                api,
+                bridge,
+                pyclass_absent_types,
+                core_to_binding_convertible_types,
+            )
+            .is_none()
         });
 
     let mut lines = vec![format!("class {}(Protocol):", bridge.trait_name)];
@@ -202,6 +209,7 @@ mod tests {
     }
 
     fn render(api: &ApiSurface, bridge: &TraitBridgeConfig, pyclass_absent_types: &AHashSet<String>) -> String {
+        let convertible = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
         super::gen_visitor_protocol_stub(
             bridge,
             api,
@@ -209,6 +217,7 @@ mod tests {
             false,
             &std::collections::HashSet::new(),
             pyclass_absent_types,
+            &convertible,
         )
         .expect("visitor protocol stub should generate")
     }

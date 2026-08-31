@@ -1,5 +1,5 @@
 use crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names;
-use crate::backends::pyo3::trait_bridge::gen_trait_bridge;
+use crate::backends::pyo3::trait_bridge::{gen_trait_bridge, gen_trait_bridge_with_absent_types};
 use crate::codegen::visitor_context::test_support::neutral_visitor_fixture;
 use crate::core::config::{CapsuleTypeConfig, PythonConfig, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::{ApiSurface, TypeDef};
@@ -55,7 +55,10 @@ fn render_bridge(
     bridge: &TraitBridgeConfig,
     pyclass_absent_types: &AHashSet<String>,
 ) -> String {
-    gen_trait_bridge(
+    // Exercises the internal seam directly: this helper's whole point is varying
+    // `pyclass_absent_types`, which the public 7-arg `gen_trait_bridge` no longer accepts. ~keep
+    let convertible = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+    gen_trait_bridge_with_absent_types(
         trait_type,
         bridge,
         "sample_core",
@@ -64,6 +67,7 @@ fn render_bridge(
         api,
         &[],
         pyclass_absent_types,
+        &convertible,
     )
     .expect("visitor bridge should generate")
     .code
@@ -187,7 +191,6 @@ fn visitor_bridge_passes_context_as_binding_class_not_dict() {
         "SampleError::Message { message: {msg} }",
         &api,
         &[],
-        &ahash::AHashSet::new(),
     )
     .expect("visitor bridge should generate");
 
@@ -240,7 +243,6 @@ fn visitor_bridge_propagates_a_context_construction_error() {
         "SampleError::Message { message: {msg} }",
         &api,
         &[],
-        &ahash::AHashSet::new(),
     )
     .expect("visitor bridge should generate");
 
@@ -283,7 +285,6 @@ fn visitor_bridge_keeps_dict_fallback_for_non_clone_context() {
         "SampleError::Message { message: {msg} }",
         &api,
         &[],
-        &ahash::AHashSet::new(),
     )
     .expect("visitor bridge should generate");
 
@@ -340,7 +341,6 @@ fn visitor_bridge_keeps_dict_fallback_when_no_core_to_binding_impl_is_emitted() 
         "SampleError::Message { message: {msg} }",
         &api,
         &[],
-        &ahash::AHashSet::new(),
     )
     .expect("visitor bridge should generate");
 

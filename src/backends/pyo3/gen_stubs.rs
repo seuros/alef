@@ -247,6 +247,10 @@ pub fn gen_stubs(
     let options_types = crate::backends::pyo3::gen_bindings::options_dataclass_type_names(api, &stub_reexported_types);
     let pyclass_absent_types =
         crate::backends::pyo3::gen_bindings::binding_exclusions::pyclass_absent_type_names(config, &api.types);
+    // Precomputed once for this stub-generation pass rather than inside `context_binding_class`
+    // per bridge -- the fixpoint is transitive over every type and field in `api`, so a per-bridge
+    // recompute scales as bridges x fixpoint instead of once. ~keep
+    let core_to_binding_convertible_types = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
     for bridge in trait_bridges {
         if crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge, api).is_none() {
             continue;
@@ -263,6 +267,7 @@ pub fn gen_stubs(
             emit_docstrings,
             &options_types,
             &pyclass_absent_types,
+            &core_to_binding_convertible_types,
         ) {
             body_lines.push(stub);
             body_lines.push("".to_string());

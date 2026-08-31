@@ -647,6 +647,12 @@ impl Backend for Pyo3Backend {
                 .map(|c| c.reexported_types.clone())
                 .unwrap_or_default();
             let bridge_pyclass_absent_types = binding_exclusions::pyclass_absent_type_names(config, &api.types);
+            // Precomputed once for this trait-bridge loop rather than inside
+            // `context_binding_class` per bridge -- the fixpoint is transitive over every type and
+            // field in `api`, so a per-bridge recompute scales as bridges x fixpoint instead of
+            // once. ~keep
+            let bridge_core_to_binding_convertible_types =
+                crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
             builder.add_item(&crate::backends::pyo3::template_env::render(
                 "trait_bridge/options_from_native_helper.jinja",
                 minijinja::context! {
@@ -655,7 +661,7 @@ impl Backend for Pyo3Backend {
             ));
             for bridge_cfg in &config.trait_bridges {
                 if let Some(trait_type) = crate::backends::pyo3::trait_bridge::active_bridge_trait(bridge_cfg, api) {
-                    let bridge = crate::backends::pyo3::trait_bridge::gen_trait_bridge(
+                    let bridge = crate::backends::pyo3::trait_bridge::gen_trait_bridge_with_absent_types(
                         trait_type,
                         bridge_cfg,
                         &core_import,
@@ -664,6 +670,7 @@ impl Backend for Pyo3Backend {
                         api,
                         &reexported_types,
                         &bridge_pyclass_absent_types,
+                        &bridge_core_to_binding_convertible_types,
                     )?;
                     for imp in &bridge.imports {
                         builder.add_import(imp);

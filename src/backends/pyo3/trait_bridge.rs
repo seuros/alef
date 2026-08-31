@@ -53,9 +53,16 @@ pub fn is_visitor_bridge(trait_type: &TypeDef, bridge_cfg: &TraitBridgeConfig) -
         && trait_type.methods.iter().all(|m| m.has_default_impl)
 }
 
-pub use visitor_bridge::context_binding_class;
+pub(crate) use visitor_bridge::context_binding_class;
 
-#[allow(clippy::too_many_arguments)]
+/// Generate the PyO3 trait bridge for `trait_type`.
+///
+/// This is public API with a semver-locked 7-argument signature as of 0.79.x. It assumes no
+/// context type has had its `#[pyclass]` removed by `[crates.python] exclude_types`/
+/// `capsule_types` -- the same assumption every call made before that distinction existed.
+/// alef's own generation pipeline knows the real answer (via
+/// `binding_exclusions::pyclass_absent_type_names`) and calls
+/// [`gen_trait_bridge_with_absent_types`] directly instead of this wrapper. ~keep
 pub fn gen_trait_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,
@@ -64,7 +71,38 @@ pub fn gen_trait_bridge(
     error_constructor: &str,
     api: &ApiSurface,
     reexported_types: &[String],
+) -> anyhow::Result<BridgeOutput> {
+    let core_to_binding_convertible_types = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+    gen_trait_bridge_with_absent_types(
+        trait_type,
+        bridge_cfg,
+        core_import,
+        error_type,
+        error_constructor,
+        api,
+        reexported_types,
+        &ahash::AHashSet::new(),
+        &core_to_binding_convertible_types,
+    )
+}
+
+/// The internal seam carrying `pyclass_absent_types` and the precomputed
+/// `core_to_binding_convertible_types` fixpoint -- both come from the caller's generation scope
+/// rather than being rebuilt here, so a caller driving many bridges pays for the fixpoint once,
+/// not once per bridge. [`gen_trait_bridge`] is the public, semver-locked 7-argument entry point;
+/// this is what alef's own generation pipeline calls instead, since it has the real
+/// `pyclass_absent_types` answer and already owns the precomputed fixpoint. ~keep
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gen_trait_bridge_with_absent_types(
+    trait_type: &TypeDef,
+    bridge_cfg: &TraitBridgeConfig,
+    core_import: &str,
+    error_type: &str,
+    error_constructor: &str,
+    api: &ApiSurface,
+    reexported_types: &[String],
     pyclass_absent_types: &ahash::AHashSet<String>,
+    core_to_binding_convertible_types: &ahash::AHashSet<String>,
 ) -> anyhow::Result<BridgeOutput> {
     let type_paths: HashMap<String, String> = api
         .types
@@ -94,6 +132,7 @@ pub fn gen_trait_bridge(
             &type_paths,
             api,
             pyclass_absent_types,
+            core_to_binding_convertible_types,
         )?;
         Ok(BridgeOutput { imports: vec![], code })
     } else {
@@ -709,7 +748,6 @@ mod tests {
             "SampleError::Message { message: {msg} }",
             &api,
             &[],
-            &ahash::AHashSet::new(),
         )
         .expect("visitor bridge should generate");
 

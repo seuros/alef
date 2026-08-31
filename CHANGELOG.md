@@ -197,7 +197,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dict-fallback annotation in the stub is now `dict[str, object]`, not `Any` -- `Any` switched the
   checker off entirely, while `object` still admits every value the fallback can insert and forces
   the consumer to narrow before use. A field the fallback fails to convert is now logged at `WARN`
-  instead of silently dropped from the dict.
+  instead of silently dropped from the dict. The public
+  `alef::backends::pyo3::trait_bridge::gen_trait_bridge` signature is unchanged -- the
+  pyclass-absent set and the transitive `core_to_binding_convertible_types` fixpoint it needs are
+  threaded through a crate-internal seam alef's own generation pipeline calls instead, so external
+  callers of the public entry point are unaffected and pay no extra argument.
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
   already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
   a literal character rather than a quoting operator, so maven was handed
