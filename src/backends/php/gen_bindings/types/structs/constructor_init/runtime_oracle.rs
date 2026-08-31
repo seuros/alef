@@ -53,10 +53,14 @@ fn optional_field(name: &str, ty: TypeRef, typed_default: Option<DefaultValue>) 
     }
 }
 
+/// See the sibling `tests.rs`'s identically-named helper for why this must stay a type this
+/// crate's `untagged_data_enum_names` set names, not a plain non-opaque, non-enum struct.
 fn rule_list() -> TypeRef {
     TypeRef::Vec(Box::new(TypeRef::Named("Rule".to_string())))
 }
 
+/// See the sibling `tests.rs`'s identically-named helper for why this must stay a type this
+/// crate's `untagged_data_enum_names` set names, not a plain nested struct.
 fn nested_policy() -> TypeRef {
     TypeRef::Named("SsrfPolicy".to_string())
 }
@@ -77,7 +81,13 @@ fn build(typ: &TypeDef) -> anyhow::Result<ConstructorInit> {
 }
 
 fn build_with_retained_cfg(typ: &TypeDef, never_skip_cfg_field_names: &[String]) -> anyhow::Result<ConstructorInit> {
-    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]), never_skip_cfg_field_names)
+    gen_constructor_field_inits(
+        typ,
+        &names(&["Mode"]),
+        &names(&["Client"]),
+        &names(&["SsrfPolicy", "Rule"]),
+        never_skip_cfg_field_names,
+    )
 }
 
 /// Compiles `source` with a bare `rustc` invocation and runs the resulting binary.

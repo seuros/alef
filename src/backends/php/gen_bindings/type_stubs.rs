@@ -164,8 +164,10 @@ pub(super) fn generate_type_stubs(
         // struct (whether or not it made the constructor) still gets a getter, per the real
         // extension's `for field in binding_fields(&typ.fields)` getter loop in structs.rs —
         // so a field can be readable via `get<Field>()` while being unreachable from `new(...)`.
-        let is_constructor_param =
-            |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types);
+        let is_constructor_param = |f: &FieldDef| {
+            f.cfg.is_none()
+                && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types, &untagged_data_enum_names)
+        };
 
         // A field that fails `php_field_can_be_constructor_param` also fails `is_php_prop_scalar`,
         // so in a serde-capable crate its struct always qualifies for `from_json` — the field is
@@ -185,7 +187,13 @@ pub(super) fn generate_type_stubs(
             }
         }
 
-        match stub_constructor_shape(typ, &enum_names, &opaque_types, serde_available) {
+        match stub_constructor_shape(
+            typ,
+            &enum_names,
+            &opaque_types,
+            &untagged_data_enum_names,
+            serde_available,
+        ) {
             // The runtime's `use_from_json` branch (structs.rs) only ALSO emits a positional
             // `#[php(constructor)]` when at least one representable field is required; when
             // every representable field is optional, `from_json` (rendered below) is the only
@@ -222,7 +230,13 @@ pub(super) fn generate_type_stubs(
                 ));
             }
             StubConstructorShape::Positional => {
-                let params = gen_struct_constructor_stub_params(typ, &enum_names, &opaque_types, serde_available);
+                let params = gen_struct_constructor_stub_params(
+                    typ,
+                    &enum_names,
+                    &opaque_types,
+                    &untagged_data_enum_names,
+                    serde_available,
+                );
                 content.push_str(&crate::backends::php::template_env::render(
                     "php_constructor_method.jinja",
                     context! { params => &params.join(",\n") },
@@ -589,6 +603,7 @@ fn stub_constructor_shape(
     typ: &crate::core::ir::TypeDef,
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
+    untagged_data_enum_names: &AHashSet<String>,
     serde_available: bool,
 ) -> StubConstructorShape {
     // `gen_struct_methods_impl` (structs.rs) gates its ENTIRE constructor block on
@@ -603,11 +618,9 @@ fn stub_constructor_shape(
         return StubConstructorShape::ThrowsNoParams;
     }
     if struct_needs_from_json_stub(typ, enum_names, serde_available) {
-        let has_representable_required = typ
-            .fields
-            .iter()
-            .filter(|f| !f.binding_excluded)
-            .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
+        let has_representable_required = typ.fields.iter().filter(|f| !f.binding_excluded).any(|f| {
+            !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types, untagged_data_enum_names)
+        });
         return if has_representable_required {
             StubConstructorShape::Positional
         } else {
@@ -651,10 +664,12 @@ fn gen_struct_constructor_stub_params(
     typ: &crate::core::ir::TypeDef,
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
+    untagged_data_enum_names: &AHashSet<String>,
     serde_available: bool,
 ) -> Vec<String> {
-    let is_constructor_param =
-        |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types);
+    let is_constructor_param = |f: &FieldDef| {
+        f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types, untagged_data_enum_names)
+    };
 
     let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)
         .filter(|f| is_constructor_param(f))

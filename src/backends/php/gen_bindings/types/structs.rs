@@ -52,33 +52,9 @@ fn is_php_prop_scalar_with_enums(ty: &TypeRef, enum_names: &AHashSet<String>) ->
     }
 }
 
-/// Returns true if `ty` is representable as a promoted `#[php(constructor)]` parameter.
-///
-/// This is the WIDER predicate the real extension's constructor uses to decide which fields
-/// become constructor params — a superset of [`is_php_prop_scalar`] (every prop-scalar field
-/// can be a param, but some non-prop-scalar fields — e.g. `Vec<Named>` of an opaque/enum type,
-/// or `Bytes` — can be params too even though they are not `#[php(prop)]` properties).
-///
-/// The PHPStan stub generator (`type_stubs.rs`) MUST call this exact function (not reimplement
-/// its own copy) to decide the stub constructor's parameter list, and must separately consult
-/// [`is_php_prop_scalar`] to decide which of those params may be emitted as promoted
-/// `public readonly` properties — a param can exist without a matching PHP property.
-pub fn php_field_can_be_constructor_param(
-    ty: &TypeRef,
-    enum_names: &AHashSet<String>,
-    opaque_types: &AHashSet<String>,
-) -> bool {
-    match ty {
-        TypeRef::Vec(inner) => match inner.as_ref() {
-            TypeRef::Named(name) => opaque_types.contains(name.as_str()) || enum_names.contains(name.as_str()),
-            TypeRef::Json => false,
-            _ => true,
-        },
-        TypeRef::Bytes => true,
-        TypeRef::Optional(inner) => php_field_can_be_constructor_param(inner, enum_names, opaque_types),
-        _ => is_php_prop_scalar_with_enums(ty, enum_names),
-    }
-}
+mod constructor_param;
+
+pub use constructor_param::php_field_can_be_constructor_param;
 
 /// True when `ty` is, or transitively wraps, `Json`.
 ///
@@ -533,7 +509,15 @@ fn gen_struct_methods_impl(
                 .fields
                 .iter()
                 .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
-                .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
+                .any(|f| {
+                    !f.optional
+                        && php_field_can_be_constructor_param(
+                            &f.ty,
+                            enum_names,
+                            opaque_types,
+                            &mapper.untagged_data_enum_names,
+                        )
+                });
 
             if has_representable_required {
                 // A `Duration` field on a type with a `Default` impl is widened to an optional,
@@ -557,7 +541,14 @@ fn gen_struct_methods_impl(
                     .iter()
                     .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .filter(|f| f.cfg.is_none())
-                    .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
+                    .filter(|f| {
+                        php_field_can_be_constructor_param(
+                            &f.ty,
+                            enum_names,
+                            opaque_types,
+                            &mapper.untagged_data_enum_names,
+                        )
+                    })
                     .collect();
                 ctor_fields.sort_by_key(|f| effective_optional(f));
 
@@ -589,13 +580,36 @@ fn gen_struct_methods_impl(
                 let param_lines =
                     super::super::helpers::gen_php_function_params(&param_defs, mapper, opaque_types, &AHashSet::new());
 
+                // `Vec<Named>` of a plain (non-opaque, non-enum) struct decodes its
+                // `ZendHashTable` element-by-element and can fail per element (see the
+                // `php_vec_named_struct_let_binding.jinja` render below and
+                // `param_conversion_is_fallible`'s own docs) -- a constructor accepting such a
+                // field must return `PhpResult<Self>`, not the ordinarily-infallible bare `Self`,
+                // or the emitted `return Err(...)` inside it does not type-check. ~keep
+                // `Vec<Named>` of a plain (non-opaque, non-enum) struct decodes its
+                // `ZendHashTable` element-by-element and can fail per element (see the
+                // `php_vec_named_struct_let_binding.jinja` render below and
+                // `param_conversion_is_fallible`'s own docs) -- a constructor accepting such a
+                // field must return `PhpResult<Self>`, not the ordinarily-infallible bare `Self`,
+                // or the emitted `return Err(...)` inside it does not type-check.
+                let needs_php_result = param_defs
+                    .iter()
+                    .any(|p| super::super::helpers::param_conversion_is_fallible(p, opaque_types, enum_names));
+
                 let mut let_bindings = String::new();
                 for f in typ
                     .fields
                     .iter()
                     .filter(|field| constructor_init::php_binding_keeps_field(field, never_skip_cfg_field_names))
                     .filter(|f| f.cfg.is_none())
-                    .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
+                    .filter(|f| {
+                        php_field_can_be_constructor_param(
+                            &f.ty,
+                            enum_names,
+                            opaque_types,
+                            &mapper.untagged_data_enum_names,
+                        )
+                    })
                 {
                     if let TypeRef::Vec(inner) = &f.ty
                         && let TypeRef::Named(name) = inner.as_ref()
@@ -619,15 +633,24 @@ fn gen_struct_methods_impl(
                     typ,
                     enum_names,
                     opaque_types,
+                    &mapper.untagged_data_enum_names,
                     never_skip_cfg_field_names,
                 )?;
                 let prelude = init.prelude;
                 let param_init = init.field_inits;
-                let named_constructor = format!(
-                    "#[php(constructor)]\npub fn new(\n{param_lines}\n) -> Self {{\n    \
-                     {prelude}{let_bindings}Self {{ {param_init} }}\n\
-                     }}"
-                );
+                let named_constructor = if needs_php_result {
+                    format!(
+                        "#[php(constructor)]\npub fn new(\n{param_lines}\n) -> PhpResult<Self> {{\n    \
+                         {prelude}{let_bindings}Ok(Self {{ {param_init} }})\n\
+                         }}"
+                    )
+                } else {
+                    format!(
+                        "#[php(constructor)]\npub fn new(\n{param_lines}\n) -> Self {{\n    \
+                         {prelude}{let_bindings}Self {{ {param_init} }}\n\
+                         }}"
+                    )
+                };
                 impl_builder.add_method(&named_constructor);
             }
         } else if has_named_params {

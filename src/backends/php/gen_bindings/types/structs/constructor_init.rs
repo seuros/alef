@@ -168,15 +168,35 @@ fn classify_omitted_field(typ: &TypeDef, field: &FieldDef) -> anyhow::Result<Omi
     )
 }
 
+/// True for a field type that `gen_php_function_params` (`helpers/params.rs`) renders as a
+/// by-reference `#[php_class]` parameter — a bare `Named` (or `Optional<Named>`) type that is
+/// neither an enum (moved as an owned PHP `string`) nor opaque (bridged separately). Such a
+/// param is a *reference* to the caller's already-constructed mirror object, so the field
+/// initialiser must `.clone()` it rather than move it. ~keep
+fn is_named_struct_by_ref(ty: &TypeRef, enum_names: &AHashSet<String>, opaque_types: &AHashSet<String>) -> bool {
+    match ty {
+        TypeRef::Named(name) => !enum_names.contains(name.as_str()) && !opaque_types.contains(name.as_str()),
+        TypeRef::Optional(inner) => is_named_struct_by_ref(inner, enum_names, opaque_types),
+        _ => false,
+    }
+}
+
 /// The initialiser for a field the constructor *does* accept as a parameter, keyed off the same
 /// param-name convention `gen_php_function_params` establishes for the parameter list.
 ///
-/// There is deliberately no `Vec<Named>` -> `{param}_core` arm here, unlike the sibling
-/// constructor in `structs.rs` that takes every field as a parameter. That arm needs the inner
-/// name to be neither opaque nor an enum, while reaching this function at all needs
-/// `php_field_can_be_constructor_param`, which for `Vec<Named>` requires the inner name to be
-/// opaque or an enum — the two conditions are mutually exclusive. ~keep
-fn representable_field_init(field: &FieldDef, php_param_name: &str) -> String {
+/// `Vec<Named>` DOES have a `{param}_core` arm here, unlike a stale version of this comment used
+/// to claim: `php_field_can_be_constructor_param`'s `Vec` arm now accepts a plain (non-opaque,
+/// non-enum) struct element too, not only an opaque or enum one, so the two conditions this
+/// comment used to call "mutually exclusive" are not. The sibling constructor in `structs.rs`
+/// already emits the `{param}_core` let-binding (`php_vec_named_struct_let_binding.jinja`) for
+/// every representable `Vec<Named>` field before this function runs; this arm only has to
+/// reference the local it created, by the SAME `{php_param_name}_core` name.
+fn representable_field_init(
+    field: &FieldDef,
+    php_param_name: &str,
+    enum_names: &AHashSet<String>,
+    opaque_types: &AHashSet<String>,
+) -> String {
     let is_bytes = matches!(&field.ty, TypeRef::Bytes)
         || matches!(&field.ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes));
     if is_bytes {
@@ -184,6 +204,46 @@ fn representable_field_init(field: &FieldDef, php_param_name: &str) -> String {
             return format!("{}: {php_param_name}.map(|b| b.0)", field.name);
         }
         return format!("{}: {php_param_name}.0", field.name);
+    }
+    // Symmetric with the Json GETTER (`ty_is_or_wraps_json` in `types.rs`), which returns a
+    // serialized JSON `String` because `serde_json::Value` has no ext-php-rs `FromZval` impl: the
+    // constructor takes the SAME `String` shape (`gen_php_function_params`'s `Json` arm) and
+    // decodes it back with `serde_json::from_str`. A malformed string is refused with `?` rather
+    // than silently defaulted to `Value::Null` -- fabricating a value the PHP caller's own input
+    // never specified is exactly what the no-fabrication check exists to prevent, and unlike an
+    // OMITTED field (which never runs this function at all) this value came from the caller, not
+    // from alef inventing one, so `?`-propagating the real parse error is the honest outcome, not
+    // an over-refusal. `?` type-checks here because `php_field_can_be_constructor_param`'s `Json`
+    // arm makes `param_conversion_is_fallible` true for this field, which
+    // `gen_struct_methods_impl` (`structs.rs`) reads to wrap the constructor in `PhpResult<Self>`
+    // instead of the ordinarily-infallible bare `Self`. ~keep
+    if matches!(&field.ty, TypeRef::Json) {
+        if field.optional {
+            return format!(
+                "{}: {php_param_name}.map(|s| serde_json::from_str(&s)).transpose().map_err(|e|                  PhpException::default(e.to_string()))?",
+                field.name
+            );
+        }
+        return format!(
+            "{}: serde_json::from_str(&{php_param_name}).map_err(|e| PhpException::default(e.to_string()))?",
+            field.name
+        );
+    }
+    if let TypeRef::Vec(inner) = &field.ty
+        && let TypeRef::Named(name) = inner.as_ref()
+        && !enum_names.contains(name.as_str())
+        && !opaque_types.contains(name.as_str())
+    {
+        return format!("{}: {php_param_name}_core", field.name);
+    }
+    if is_named_struct_by_ref(&field.ty, enum_names, opaque_types) {
+        if field.optional {
+            // `.cloned()`, not `.map(|v| v.clone())` — same value on `Option<&T>`, but the
+            // longer form trips `clippy::map_clone` in the CONSUMER crate this lands in, not in
+            // alef. ~keep
+            return format!("{}: {php_param_name}.cloned()", field.name);
+        }
+        return format!("{}: {php_param_name}.clone()", field.name);
     }
     if field.name == php_param_name {
         field.name.clone()
@@ -199,6 +259,7 @@ pub(crate) fn gen_constructor_field_inits(
     typ: &TypeDef,
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
+    untagged_data_enum_names: &AHashSet<String>,
     never_skip_cfg_field_names: &[String],
 ) -> anyhow::Result<ConstructorInit> {
     let core_defaults = core_defaults_local(typ);
@@ -214,9 +275,14 @@ pub(crate) fn gen_constructor_field_inits(
             field_inits.push(format!("{}: Default::default()", field.name));
             continue;
         }
-        if php_field_can_be_constructor_param(&field.ty, enum_names, opaque_types) {
+        if php_field_can_be_constructor_param(&field.ty, enum_names, opaque_types, untagged_data_enum_names) {
             let php_param_name = crate::codegen::naming::to_php_name(&field.name);
-            field_inits.push(representable_field_init(field, &php_param_name));
+            field_inits.push(representable_field_init(
+                field,
+                &php_param_name,
+                enum_names,
+                opaque_types,
+            ));
             continue;
         }
         match classify_omitted_field(typ, field)? {

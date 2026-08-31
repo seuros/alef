@@ -562,6 +562,10 @@ mod constructor_param_order_tests {
     }
 }
 
+mod json_constructor_param_tests;
+mod nested_struct_constructor_param_tests;
+mod vec_named_struct_constructor_param_tests;
+
 /// Cross-emitter parity between the `#[php(constructor)]` signature this module emits and the
 /// PHP named-argument constructor call the e2e generator writes for the SAME `TypeDef`.
 ///

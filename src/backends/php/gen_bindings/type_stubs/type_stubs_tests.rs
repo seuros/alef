@@ -532,7 +532,7 @@ fn struct_constructor_param_of_unit_enum_type_is_typed_string() {
     };
     let enum_names: AHashSet<String> = ["BatchStatus".to_string()].into_iter().collect();
 
-    let params = gen_struct_constructor_stub_params(&typ, &enum_names, &AHashSet::new(), true);
+    let params = gen_struct_constructor_stub_params(&typ, &enum_names, &AHashSet::new(), &AHashSet::new(), true);
     let joined = params.join("\n");
 
     assert!(joined.contains("public readonly string $status"), "{joined}");
@@ -758,7 +758,7 @@ fn required_fields_sort_before_optional_regardless_of_declaration_order() {
         ..Default::default()
     };
 
-    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true);
+    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true);
     let joined = params.join("\n");
 
     let model_limits_idx = joined.find("$modelLimits").expect("modelLimits param present");
@@ -794,7 +794,7 @@ fn duration_field_widened_by_default_impl_is_optional_int_and_sorts_last() {
         ..Default::default()
     };
 
-    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true);
+    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true);
     let joined = params.join("\n");
 
     assert!(
@@ -826,7 +826,7 @@ fn duration_field_is_not_widened_when_the_crate_has_no_serde() {
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), false),
         StubConstructorShape::Kwargs
     );
 
@@ -907,7 +907,7 @@ fn stub_constructor_shape_is_throws_no_params_when_field_needs_named_param_witho
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), false),
         StubConstructorShape::ThrowsNoParams
     );
 }
@@ -929,7 +929,7 @@ fn stub_constructor_shape_is_from_json_only_when_only_the_crate_has_serde() {
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::FromJsonOnly
     );
 }
@@ -950,7 +950,7 @@ fn stub_constructor_shape_is_from_json_only_when_no_representable_required_field
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::FromJsonOnly
     );
 }
@@ -972,7 +972,7 @@ fn stub_constructor_shape_is_positional_when_a_required_field_is_representable()
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::Positional
     );
 }
@@ -993,7 +993,7 @@ fn stub_constructor_shape_is_positional_for_the_plain_scalar_case() {
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::Positional
     );
 }
@@ -1006,7 +1006,7 @@ fn stub_constructor_shape_is_kwargs_for_default_impl_without_serde() {
     let typ = kwargs_config_type();
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), false),
         StubConstructorShape::Kwargs
     );
 }
@@ -1035,7 +1035,7 @@ fn stub_constructor_shape_is_throws_no_params_when_type_has_explicit_static_new(
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::ThrowsNoParams
     );
 }

@@ -29,6 +29,13 @@ pub(crate) fn references_named_type(ty: &crate::core::ir::TypeRef, names: &AHash
 /// `FromZval`, and a non-convertible element triggers `return Err(...)` (see
 /// `php_vec_named_struct_let_binding.jinja`). `Vec<enum>` (string round-trip) and `Vec<opaque>` do
 /// not fail this way.
+///
+/// Also the case for a bare `Json` param: it crosses the FFI boundary as a `String` (see
+/// `gen_php_function_params`'s `Json` arm), decoded back via `serde_json::from_str`, which fails
+/// on malformed input (see `representable_field_init` in `types/structs/constructor_init.rs`,
+/// the constructor-specific caller this predicate exists for). `p.ty` is already the UNWRAPPED
+/// type for an optional field (the extractor's `optional: true` + bare `ty` convention), so this
+/// covers `Option<Json>` too without a separate check.
 pub(crate) fn param_conversion_is_fallible(
     p: &crate::core::ir::ParamDef,
     opaque_types: &AHashSet<String>,
@@ -40,7 +47,7 @@ pub(crate) fn param_conversion_is_fallible(
     {
         return !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str());
     }
-    false
+    matches!(p.ty, TypeRef::Json)
 }
 
 pub(crate) fn has_enum_named_field(typ: &crate::core::ir::TypeDef, enum_names: &AHashSet<String>) -> bool {

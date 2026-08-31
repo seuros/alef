@@ -64,11 +64,12 @@ fn positional_constructor_stub_is_unaffected_by_the_kwargs_derivation() {
     };
 
     assert_eq!(
-        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true),
         StubConstructorShape::Positional
     );
 
-    let joined = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true).join("\n");
+    let joined =
+        gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), &AHashSet::new(), true).join("\n");
 
     assert!(
         joined.contains("public readonly int $maxRetries"),

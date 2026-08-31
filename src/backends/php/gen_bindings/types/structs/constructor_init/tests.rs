@@ -35,14 +35,24 @@ fn optional_field(name: &str, ty: TypeRef, typed_default: Option<DefaultValue>) 
     }
 }
 
-/// A `Vec<SomeStruct>` whose inner type is neither opaque nor an enum: not representable as a
-/// PHP constructor parameter, so the constructor omits it. This is the allow-list shape.
+/// A `Vec<SomeStruct>` whose element type is an untagged data enum: not representable as a PHP
+/// constructor parameter, so the constructor omits it. This is the allow-list shape.
+///
+/// The element is modeled as an untagged data enum, not a plain struct, because
+/// `php_field_can_be_constructor_param`'s `Vec` arm now accepts `Vec<Named>` for a plain
+/// (non-opaque, non-enum) struct element too -- see `nested_struct_constructor_param_tests` in
+/// `structs/tests.rs` for the positive coverage of that arm. Only an opaque type, an enum, or (as
+/// used here) an untagged data enum keeps this collection axis genuinely non-representable.
 fn rule_list() -> TypeRef {
     TypeRef::Vec(Box::new(TypeRef::Named("Rule".to_string())))
 }
 
-/// A single nested struct field — the scalar (non-collection) half of the shape axis. Also not
-/// representable, for the same reason.
+/// A single unrepresentable field — the scalar (non-collection) half of the shape axis. Modeled
+/// as an untagged data enum (mapped to `serde_json::Value`, which has no ext-php-rs `FromZval`
+/// impl) rather than a plain nested struct: `php_field_can_be_constructor_param`'s `Named` arm
+/// (`structs.rs`) now accepts a bare nested `#[php_class]` struct as a by-reference constructor
+/// param, so only an opaque type, an enum, or (as used here) an untagged data enum keeps this
+/// axis genuinely non-representable.
 fn nested_policy() -> TypeRef {
     TypeRef::Named("SsrfPolicy".to_string())
 }
@@ -63,7 +73,13 @@ fn build(typ: &TypeDef) -> anyhow::Result<ConstructorInit> {
 }
 
 fn build_with_retained_cfg(typ: &TypeDef, never_skip_cfg_field_names: &[String]) -> anyhow::Result<ConstructorInit> {
-    gen_constructor_field_inits(typ, &names(&["Mode"]), &names(&["Client"]), never_skip_cfg_field_names)
+    gen_constructor_field_inits(
+        typ,
+        &names(&["Mode"]),
+        &names(&["Client"]),
+        &names(&["SsrfPolicy", "Rule"]),
+        never_skip_cfg_field_names,
+    )
 }
 
 #[test]
