@@ -409,19 +409,37 @@ fn invalid_coordinate(resolved: &ResolvedCrateConfig, field: &str, value: &str, 
 fn validate_package_coordinates(resolved: &ResolvedCrateConfig) -> Result<(), ResolveError> {
     let languages = resolved.effective_languages();
     validate_jvm_coordinates(resolved, &languages)?;
+    validate_kotlin_android_coordinates(resolved, &languages)?;
     validate_dotnet_coordinates(resolved, &languages)?;
     validate_swift_coordinates(resolved, &languages)?;
     validate_dart_coordinates(resolved, &languages)?;
     Ok(())
 }
 
+/// `[crates.java].package` is consumed by more than the `java` backend: the plain `kotlin`
+/// backend (target `jvm`/`multiplatform`, i.e. *not* `kotlin_android`) reads
+/// `config.java_package()` too, and splices it verbatim into emitted `.kt` source --
+/// `import {java_package}.{Type}` and `{java_package}.{ClassName}` fully-qualified names in
+/// `backends::kotlin::gen_bindings::{emit_client_type_file, generate_jvm}`,
+/// `backends::kotlin::gen_mpp::emit_jvm_actual`, and
+/// `backends::kotlin::gen_bindings::service_api::generate`. A `languages = ["kotlin"]` crate
+/// with no `java`/`kotlin_android` in `languages` reaches every one of those, so the package
+/// must be validated even when neither of the other two JVM languages is selected. ~keep
+fn java_package_is_consumed(languages: &[Language]) -> bool {
+    languages.contains(&Language::Java)
+        || languages.contains(&Language::Kotlin)
+        || languages.contains(&Language::KotlinAndroid)
+}
+
 fn validate_jvm_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
     use crate::codegen::coordinates::{validate_java_package, validate_kotlin_package, validate_maven_coordinate};
 
     let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
-    if languages.contains(&Language::Java) || languages.contains(&Language::KotlinAndroid) {
+    if java_package_is_consumed(languages) {
         let package = resolved.java_package();
         validate_java_package(&package).map_err(|error| invalid("[crates.java].package", &package, error))?;
+    }
+    if languages.contains(&Language::Java) || languages.contains(&Language::KotlinAndroid) {
         let group = resolved.java_group_id();
         validate_maven_coordinate("groupId", &group)
             .map_err(|error| invalid("[crates.java].group_id", &group, error))?;
@@ -433,6 +451,46 @@ fn validate_jvm_coordinates(resolved: &ResolvedCrateConfig, languages: &[Languag
         let package = resolved.kotlin_package();
         validate_kotlin_package(&package).map_err(|error| invalid("[crates.kotlin].package", &package, error))?;
     }
+    Ok(())
+}
+
+/// `[crates.kotlin_android]` carries its own `package`/`namespace`/`group_id`/`artifact_id` --
+/// distinct config fields from `[crates.java]` and `[crates.kotlin]`, each with its own default
+/// (see `backends::kotlin_android::naming`) -- so validating those two tables does not cover
+/// this one. All four are genuinely spliced into generated output: `naming::kotlin_package` and
+/// `naming::namespace` reach the bundled Kotlin facade's `package` declarations
+/// (`backends::kotlin_android::gen_bindings`, `gen_proguard`, `gen_seed_test`) and the AAR's
+/// Gradle `namespace = "..."` line, while `naming::aar_group_id`/`naming::aar_artifact_id` reach
+/// the Maven publish coordinates in `build.gradle.kts`
+/// (`backends::kotlin_android::gen_build_gradle::emit`) and `settings.gradle.kts`
+/// (`backends::kotlin_android::gen_settings_gradle`).
+fn validate_kotlin_android_coordinates(
+    resolved: &ResolvedCrateConfig,
+    languages: &[Language],
+) -> Result<(), ResolveError> {
+    use crate::backends::kotlin_android::naming::{aar_artifact_id, aar_group_id, kotlin_package, namespace};
+    use crate::codegen::coordinates::{validate_kotlin_package, validate_maven_coordinate};
+
+    if !languages.contains(&Language::KotlinAndroid) {
+        return Ok(());
+    }
+    let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
+
+    let package = kotlin_package(resolved);
+    validate_kotlin_package(&package).map_err(|error| invalid("[crates.kotlin_android].package", &package, error))?;
+
+    let android_namespace = namespace(resolved);
+    validate_kotlin_package(&android_namespace)
+        .map_err(|error| invalid("[crates.kotlin_android].namespace", &android_namespace, error))?;
+
+    let group = aar_group_id(resolved);
+    validate_maven_coordinate("groupId", &group)
+        .map_err(|error| invalid("[crates.kotlin_android].group_id", &group, error))?;
+
+    let artifact = aar_artifact_id(resolved);
+    validate_maven_coordinate("artifactId", &artifact)
+        .map_err(|error| invalid("[crates.kotlin_android].artifact_id", &artifact, error))?;
+
     Ok(())
 }
 

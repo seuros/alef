@@ -114,13 +114,19 @@ fn a_valid_coordinate_still_scaffolds_through_the_same_cli_path() {
         .expect("run the alef binary");
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "the valid fixture must still scaffold\nstderr:\n{stderr}");
+    assert!(
+        output.status.success(),
+        "the valid fixture must still scaffold\nstderr:\n{stderr}"
+    );
     assert!(
         dir.path().join("packages/java/pom.xml").exists(),
         "the valid fixture must still produce pom.xml\nstderr:\n{stderr}"
     );
     let pom = std::fs::read_to_string(dir.path().join("packages/java/pom.xml")).expect("read pom.xml");
-    assert!(pom.contains("<groupId>dev.example.samplecore</groupId>"), "pom.xml:\n{pom}");
+    assert!(
+        pom.contains("<groupId>dev.example.samplecore</groupId>"),
+        "pom.xml:\n{pom}"
+    );
 }
 
 #[test]
@@ -153,11 +159,36 @@ fn coordinate_validation_is_reachable_from_resolution_for_every_wired_language()
     // Guards the scope of the wiring rather than one language's grammar: if a language's
     // coordinate check is ever dropped from `validate_package_coordinates`, this fails.
     for (language, table, bad) in [
-        ("java", "[crates.java]\npackage = \"dev.class\"", "[crates.java].package"),
-        ("kotlin", "[crates.kotlin]\npackage = \"dev.fun\"", "[crates.kotlin].package"),
-        ("csharp", "[crates.csharp]\nnamespace = \"My.class\"", "[crates.csharp].namespace"),
-        ("swift", "[crates.swift]\nmodule_name = \"Sample.Core\"", "[crates.swift].module_name"),
-        ("dart", "[crates.dart]\npubspec_name = \"Sample-Core\"", "[crates.dart].pubspec_name"),
+        (
+            "java",
+            "[crates.java]\npackage = \"dev.class\"",
+            "[crates.java].package",
+        ),
+        (
+            "kotlin",
+            "[crates.kotlin]\npackage = \"dev.fun\"",
+            "[crates.kotlin].package",
+        ),
+        (
+            "kotlin_android",
+            "[crates.kotlin_android]\npackage = \"dev.class\"",
+            "[crates.kotlin_android].package",
+        ),
+        (
+            "csharp",
+            "[crates.csharp]\nnamespace = \"My.class\"",
+            "[crates.csharp].namespace",
+        ),
+        (
+            "swift",
+            "[crates.swift]\nmodule_name = \"Sample.Core\"",
+            "[crates.swift].module_name",
+        ),
+        (
+            "dart",
+            "[crates.dart]\npubspec_name = \"Sample-Core\"",
+            "[crates.dart].pubspec_name",
+        ),
     ] {
         let toml = format!(
             "[workspace]\nlanguages = [{language:?}]\n\n\
@@ -170,4 +201,125 @@ fn coordinate_validation_is_reachable_from_resolution_for_every_wired_language()
             .to_string();
         assert!(error.contains(bad), "{language}: expected `{bad}` in: {error}");
     }
+}
+
+fn kotlin_only_toml(java_package: &str) -> String {
+    format!(
+        "[workspace]\nlanguages = [\"kotlin\"]\n\n\
+         [[crates]]\nname = \"sample-core\"\nsources = [\"src/lib.rs\"]\n\n\
+         [crates.java]\npackage = {java_package:?}\n"
+    )
+}
+
+/// The gap this closes: `backends::kotlin::gen_bindings` (`emit_client_type_file`,
+/// `generate_jvm`), `backends::kotlin::gen_mpp::emit_jvm_actual`, and
+/// `backends::kotlin::gen_bindings::service_api::generate` all splice `config.java_package()`
+/// verbatim into `import {java_package}.{Type}` and `{java_package}.{ClassName}` in emitted
+/// `.kt` source -- and every one of them runs on a `languages = ["kotlin"]` build, with `java`
+/// and `kotlin_android` both absent. Before this fix, only the `java`/`kotlin_android` branch of
+/// `validate_jvm_coordinates` validated `[crates.java].package`, so this exact build shape
+/// reached those four call sites with an unvalidated package.
+#[test]
+fn kotlin_only_build_validates_the_java_package_it_reuses() {
+    let config: NewAlefConfig = toml::from_str(&kotlin_only_toml("dev\"; System.exit(1); //")).expect("fixture parses");
+    let error = config
+        .resolve()
+        .expect_err("a hostile java package must not resolve on a kotlin-only build")
+        .to_string();
+    assert!(error.contains("[crates.java].package"), "{error}");
+}
+
+/// The opposite control for the test above: a validator that rejected every `[crates.java]`
+/// value regardless of build shape would also make the hostile-only test pass.
+#[test]
+fn kotlin_only_build_accepts_a_valid_java_package() {
+    let config: NewAlefConfig = toml::from_str(&kotlin_only_toml("dev.example.samplecore")).expect("fixture parses");
+    let resolved = config
+        .resolve()
+        .expect("a valid java package must still resolve on a kotlin-only build");
+    assert_eq!(resolved[0].java_package(), "dev.example.samplecore");
+}
+
+/// `(package, namespace, group_id, artifact_id)` -- every coordinate
+/// `backends::kotlin_android::naming` derives from `[crates.kotlin_android]`, all four of which
+/// reach generated output (see `validate_kotlin_android_coordinates` in `new_config.rs`).
+fn kotlin_android_toml(package: &str, namespace: &str, group_id: &str, artifact_id: &str) -> String {
+    format!(
+        "[workspace]\nlanguages = [\"kotlin_android\"]\n\n\
+         [[crates]]\nname = \"sample-core\"\nsources = [\"src/lib.rs\"]\n\n\
+         [crates.kotlin_android]\npackage = {package:?}\nnamespace = {namespace:?}\n\
+         group_id = {group_id:?}\nartifact_id = {artifact_id:?}\n"
+    )
+}
+
+const KOTLIN_ANDROID_VALID: (&str, &str, &str, &str) = (
+    "dev.example.samplecore",
+    "dev.example.samplecore.app",
+    "dev.example.samplecore",
+    "sample-core-android",
+);
+
+const KOTLIN_ANDROID_FIELDS: [&str; 4] = [
+    "[crates.kotlin_android].package",
+    "[crates.kotlin_android].namespace",
+    "[crates.kotlin_android].group_id",
+    "[crates.kotlin_android].artifact_id",
+];
+
+/// `(name, field index into `KOTLIN_ANDROID_FIELDS`/the valid tuple, hostile value)`. Every case
+/// swaps exactly one field of [`KOTLIN_ANDROID_VALID`] for a hostile value, so the other three
+/// fields are always the accepted defaults -- a validator that rejected everything could not
+/// pass this alongside `kotlin_android_valid_coordinates_are_accepted_at_resolution`.
+const KOTLIN_ANDROID_HOSTILE: &[(&str, usize, &str)] = &[
+    ("package keyword segment", 0, "dev.class"),
+    ("package source injection", 0, "dev\"; System.exit(1); //"),
+    ("namespace keyword segment", 1, "dev.example.class"),
+    ("namespace empty segment", 1, "dev..example"),
+    ("group_id path traversal", 2, "../../evil"),
+    ("group_id quote injection", 2, "dev\"); System.exit(1); //"),
+    ("artifact_id path traversal", 3, "../../evil"),
+    ("artifact_id leading dot", 3, ".evil"),
+];
+
+fn kotlin_android_toml_with_override(field_index: usize, value: &str) -> String {
+    let mut fields = [
+        KOTLIN_ANDROID_VALID.0.to_string(),
+        KOTLIN_ANDROID_VALID.1.to_string(),
+        KOTLIN_ANDROID_VALID.2.to_string(),
+        KOTLIN_ANDROID_VALID.3.to_string(),
+    ];
+    fields[field_index] = value.to_string();
+    kotlin_android_toml(&fields[0], &fields[1], &fields[2], &fields[3])
+}
+
+#[test]
+fn kotlin_android_hostile_coordinates_are_rejected_at_resolution() {
+    for &(name, field_index, value) in KOTLIN_ANDROID_HOSTILE {
+        let toml = kotlin_android_toml_with_override(field_index, value);
+        let config: NewAlefConfig = toml::from_str(&toml).expect("fixture parses");
+        let error = config
+            .resolve()
+            .expect_err(&format!("`{name}` must not resolve"))
+            .to_string();
+        let expected_field = KOTLIN_ANDROID_FIELDS[field_index];
+        assert!(
+            error.contains(expected_field),
+            "`{name}`: expected `{expected_field}` in: {error}"
+        );
+    }
+}
+
+/// The binary control for the hostile matrix above: every one of `KOTLIN_ANDROID_VALID`'s four
+/// fields, applied together, must still resolve.
+#[test]
+fn kotlin_android_valid_coordinates_are_accepted_at_resolution() {
+    let toml = kotlin_android_toml(
+        KOTLIN_ANDROID_VALID.0,
+        KOTLIN_ANDROID_VALID.1,
+        KOTLIN_ANDROID_VALID.2,
+        KOTLIN_ANDROID_VALID.3,
+    );
+    let config: NewAlefConfig = toml::from_str(&toml).expect("fixture parses");
+    let resolved = config.resolve().expect("the valid kotlin_android fixture must resolve");
+    assert_eq!(resolved.len(), 1);
 }
