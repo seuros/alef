@@ -6,6 +6,7 @@ use crate::e2e::fixture::Fixture;
 
 /// A `Named` type resolves to either a struct or an enum definition. Both carry field data
 /// that can nest a file input, so `Named` resolution must consult whichever one matches. ~keep
+#[derive(Clone, Copy)]
 enum NamedDef<'a> {
     Struct(&'a TypeDef),
     Enum(&'a EnumDef),
@@ -34,7 +35,20 @@ pub(super) fn fixture_uses_test_documents(
     enums: &[EnumDef],
 ) -> bool {
     let index = build_named_index(type_defs, enums);
-    fixture.resolved_args(call).iter().any(|argument| {
+    scan_fixture(&index, fixture, call).0
+}
+
+/// Scan one fixture against a prebuilt index, reporting the answer alongside the number of
+/// `Named` resolutions the traversal entered.
+///
+/// The count is the traversal's unit of work and its complexity witness: a type graph where the
+/// same value is reachable by many paths (flattened fields and untagged/internally tagged enum
+/// variants all recurse against the SAME JSON value) revisits named types once per path, which is
+/// exponential in the number of diamonds. Returning the count lets a regression test bound it
+/// instead of timing it. ~keep
+fn scan_fixture(index: &NamedIndex<'_>, fixture: &Fixture, call: &CallConfig) -> (bool, usize) {
+    let mut walk = DocumentWalk::new(index);
+    let found = fixture.resolved_args(call).iter().any(|argument| {
         if !fixture.docs_files_for_arg(&argument.field).is_empty() || argument.arg_type == "file_path" {
             return true;
         }
@@ -47,149 +61,176 @@ pub(super) fn fixture_uses_test_documents(
             return false;
         }
 
-        argument
-            .element_type
-            .as_deref()
-            .filter(|name| index.contains_key(*name))
-            .is_some_and(|name| {
-                let element_type = TypeRef::Named(name.to_string());
-                let mut visited = HashSet::new();
-                if value.is_array() {
-                    let vec_type = TypeRef::Vec(Box::new(element_type));
-                    typed_value_uses_test_documents(value, &vec_type, &index, &mut visited)
-                } else {
-                    typed_value_uses_test_documents(value, &element_type, &index, &mut visited)
-                }
-            })
-    })
-}
-
-fn typed_value_uses_test_documents(
-    value: &serde_json::Value,
-    ty: &TypeRef,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    match ty {
-        TypeRef::Bytes => value.as_str().is_some_and(is_relative_document_path),
-        TypeRef::Optional(inner) => typed_value_uses_test_documents(value, inner, index, visited),
-        TypeRef::Vec(inner) => value.as_array().is_some_and(|values| {
-            values
-                .iter()
-                .any(|value| typed_value_uses_test_documents(value, inner, index, visited))
-        }),
-        TypeRef::Map(_, value_type) => value.as_object().is_some_and(|values| {
-            values
-                .values()
-                .any(|value| typed_value_uses_test_documents(value, value_type, index, visited))
-        }),
-        TypeRef::Named(name) => resolve_named_uses_test_documents(value, name, index, visited),
-        _ => false,
-    }
-}
-
-/// Resolve a `Named` type against the combined struct/enum index, guarding against cycles.
-///
-/// A `#[serde(flatten)]` field recurses against the SAME JSON value (see
-/// `fields_use_test_documents`) rather than a smaller sub-value, so — unlike the rest of this
-/// traversal — recursion here is no longer naturally bounded by the shrinking size of the JSON
-/// value. A self-referential TypeDef/EnumDef reached only through flattened fields would recurse
-/// forever on the same value. `visited` tracks names already being resolved along the current
-/// path and is removed on the way back out, so sibling branches may still revisit the same named
-/// type — only a true cycle on the active path is rejected. ~keep
-fn resolve_named_uses_test_documents(
-    value: &serde_json::Value,
-    name: &str,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    if !visited.insert(name.to_string()) {
-        return false;
-    }
-    let found = match index.get(name) {
-        Some(NamedDef::Struct(definition)) => struct_value_uses_test_documents(value, definition, index, visited),
-        Some(NamedDef::Enum(definition)) => enum_value_uses_test_documents(value, definition, index, visited),
-        None => false,
-    };
-    visited.remove(name);
-    found
-}
-
-fn struct_value_uses_test_documents(
-    value: &serde_json::Value,
-    definition: &TypeDef,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    fields_use_test_documents(
-        value,
-        &definition.fields,
-        definition.serde_rename_all.as_deref(),
-        index,
-        visited,
-    )
-}
-
-/// Walk an object's fields against a JSON object value, shared by struct bodies and
-/// struct-shaped enum variants (both are "named fields against an object" in the same way). ~keep
-fn fields_use_test_documents(
-    value: &serde_json::Value,
-    fields: &[FieldDef],
-    rename_all: Option<&str>,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    fields.iter().any(|field| {
-        if field.serde_flatten {
-            // Flattened fields have no wire key of their own -- their sub-fields appear
-            // inline in the SAME parent object, so recurse against `value`, not a nested
-            // sub-value. ~keep
-            return typed_value_uses_test_documents(value, &field.ty, index, visited);
+        let Some(element_type) = argument.element_type.as_deref() else {
+            return false;
+        };
+        match value.as_array() {
+            Some(values) => values.iter().any(|element| walk.resolve_named(element, element_type)),
+            None => walk.resolve_named(value, element_type),
         }
-        let wire_name = crate::codegen::naming::wire_field_name(&field.name, field.serde_rename.as_deref(), rename_all);
-        object
-            .get(&field.name)
-            .or_else(|| object.get(&wire_name))
-            .is_some_and(|value| typed_value_uses_test_documents(value, &field.ty, index, visited))
-    })
+    });
+    (found, walk.named_resolutions)
 }
 
-fn enum_value_uses_test_documents(
-    value: &serde_json::Value,
-    definition: &EnumDef,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    definition
-        .variants
-        .iter()
-        .any(|variant| variant_uses_test_documents(value, definition, variant, index, visited))
+/// Identity of a JSON sub-value, forming half of a memo key.
+///
+/// Every value a scan reaches is borrowed out of the one live `Fixture::input` tree (or the
+/// `'static` `Value::Null` `resolve_field` falls back to when a path misses), and the memo lives
+/// no longer than the scan. No referent can therefore be dropped while an entry naming it is
+/// still readable, so an address cannot be recycled for a different value mid-scan. ~keep
+fn value_identity(value: &serde_json::Value) -> usize {
+    std::ptr::from_ref(value).addr()
 }
 
-fn variant_uses_test_documents(
-    value: &serde_json::Value,
-    definition: &EnumDef,
-    variant: &EnumVariant,
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    let Some(candidate) = variant_payload(value, definition, variant) else {
-        return false;
-    };
-    if variant.is_tuple {
-        return tuple_variant_uses_test_documents(candidate, &variant.fields, index, visited);
+/// One fixture's traversal state: the cycle guard, the memo, and the work counter.
+///
+/// `active` and `memo` answer two different questions and must not be merged. `active` is
+/// path-scoped and only ever *cuts* recursion; `memo` is scan-scoped and caches finished answers.
+/// A result computed while a cut occurred anywhere beneath it is NOT cacheable, because that
+/// `false` reflects the path taken rather than the value/type pair alone -- see `resolve_named`. ~keep
+struct DocumentWalk<'defs, 'index> {
+    index: &'index NamedIndex<'defs>,
+    active: HashSet<&'defs str>,
+    memo: HashMap<(usize, &'defs str), bool>,
+    cycle_cut: bool,
+    named_resolutions: usize,
+}
+
+impl<'defs, 'index> DocumentWalk<'defs, 'index> {
+    fn new(index: &'index NamedIndex<'defs>) -> Self {
+        Self {
+            index,
+            active: HashSet::new(),
+            memo: HashMap::new(),
+            cycle_cut: false,
+            named_resolutions: 0,
+        }
     }
-    // `definition.serde_rename_all` cases the enum's VARIANT names (used above, in
-    // `variant_payload`) -- a different serde namespace from how this variant's own payload
-    // FIELDS are cased. `EnumVariant` carries no per-variant field-casing rule in the IR, so
-    // there is no correct value to pass here; borrowing the enum's rule produced false matches
-    // whenever a field happened to collide with that unrelated casing. Pass `None` so only the
-    // raw field name and each field's own explicit `serde_rename` are tried (both still handled
-    // by `fields_use_test_documents`'s `.or_else` fallback). ~keep
-    fields_use_test_documents(candidate, &variant.fields, None, index, visited)
+
+    fn typed_value(&mut self, value: &serde_json::Value, ty: &TypeRef) -> bool {
+        match ty {
+            TypeRef::Bytes => value.as_str().is_some_and(is_relative_document_path),
+            TypeRef::Optional(inner) => self.typed_value(value, inner),
+            TypeRef::Vec(inner) => value
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| self.typed_value(value, inner))),
+            TypeRef::Map(_, value_type) => value
+                .as_object()
+                .is_some_and(|values| values.values().any(|value| self.typed_value(value, value_type))),
+            TypeRef::Named(name) => self.resolve_named(value, name),
+            _ => false,
+        }
+    }
+
+    /// Resolve a `Named` type against the combined struct/enum index, memoizing per
+    /// (value identity, type name) and guarding against cycles.
+    ///
+    /// A `#[serde(flatten)]` field recurses against the SAME JSON value (see `fields`) rather than
+    /// a smaller sub-value, so -- unlike the rest of this traversal -- recursion here is not
+    /// bounded by the shrinking size of the JSON value. Two consequences follow. A self-referential
+    /// definition reached only through flattened fields would recurse forever, which `active`
+    /// prevents; and a definition reachable by many distinct paths is otherwise re-walked once per
+    /// path, which the memo collapses to once per (value, name).
+    ///
+    /// The memo is consulted BEFORE `active`: a cached answer was computed without ever consulting
+    /// the cycle guard (see below), so it is the path-independent answer and is correct to return
+    /// even for a name currently on the active path.
+    ///
+    /// `cycle_cut` is what keeps the two mechanisms compatible. A subtree whose evaluation hit the
+    /// guard returned `false` *because of the path*, not because of the value, so caching it would
+    /// leak a path-dependent answer into a sibling branch that has no such cycle. Only results
+    /// computed with no cut anywhere beneath them are stored -- those never read `active` at all,
+    /// so they equal what an unguarded traversal would compute. ~keep
+    fn resolve_named(&mut self, value: &serde_json::Value, name: &str) -> bool {
+        self.named_resolutions += 1;
+        let index = self.index;
+        let Some((&definition_name, definition)) = index.get_key_value(name) else {
+            return false;
+        };
+        let key = (value_identity(value), definition_name);
+        if let Some(&cached) = self.memo.get(&key) {
+            return cached;
+        }
+        if !self.active.insert(definition_name) {
+            self.cycle_cut = true;
+            return false;
+        }
+
+        let outer_cut = std::mem::replace(&mut self.cycle_cut, false);
+        let found = match *definition {
+            NamedDef::Struct(struct_def) => {
+                self.fields(value, &struct_def.fields, struct_def.serde_rename_all.as_deref())
+            }
+            NamedDef::Enum(enum_def) => self.enum_value(value, enum_def),
+        };
+        let inner_cut = self.cycle_cut;
+
+        self.cycle_cut = outer_cut || inner_cut;
+        self.active.remove(definition_name);
+        if !inner_cut {
+            self.memo.insert(key, found);
+        }
+        found
+    }
+
+    /// Walk an object's fields against a JSON object value, shared by struct bodies and
+    /// struct-shaped enum variants (both are "named fields against an object" in the same way). ~keep
+    fn fields(&mut self, value: &serde_json::Value, fields: &[FieldDef], rename_all: Option<&str>) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        fields.iter().any(|field| {
+            if field.serde_flatten {
+                // Flattened fields have no wire key of their own -- their sub-fields appear
+                // inline in the SAME parent object, so recurse against `value`, not a nested
+                // sub-value. ~keep
+                return self.typed_value(value, &field.ty);
+            }
+            let wire_name =
+                crate::codegen::naming::wire_field_name(&field.name, field.serde_rename.as_deref(), rename_all);
+            let Some(field_value) = object.get(&field.name).or_else(|| object.get(&wire_name)) else {
+                return false;
+            };
+            self.typed_value(field_value, &field.ty)
+        })
+    }
+
+    fn enum_value(&mut self, value: &serde_json::Value, definition: &EnumDef) -> bool {
+        definition
+            .variants
+            .iter()
+            .any(|variant| self.variant(value, definition, variant))
+    }
+
+    fn variant(&mut self, value: &serde_json::Value, definition: &EnumDef, variant: &EnumVariant) -> bool {
+        let Some(candidate) = variant_payload(value, definition, variant) else {
+            return false;
+        };
+        if variant.is_tuple {
+            return self.tuple_variant(candidate, &variant.fields);
+        }
+        // `definition.serde_rename_all` cases the enum's VARIANT names (used above, in
+        // `variant_payload`) -- a different serde namespace from how this variant's own payload
+        // FIELDS are cased. `EnumVariant` carries no per-variant field-casing rule in the IR, so
+        // there is no correct value to pass here; borrowing the enum's rule produced false matches
+        // whenever a field happened to collide with that unrelated casing. Pass `None` so only the
+        // raw field name and each field's own explicit `serde_rename` are tried (both still handled
+        // by `fields`'s `.or_else` fallback). ~keep
+        self.fields(candidate, &variant.fields, None)
+    }
+
+    fn tuple_variant(&mut self, candidate: &serde_json::Value, fields: &[FieldDef]) -> bool {
+        if let [only] = fields {
+            return self.typed_value(candidate, &only.ty);
+        }
+        let Some(values) = candidate.as_array() else {
+            return false;
+        };
+        fields
+            .iter()
+            .zip(values.iter())
+            .any(|(field, value)| self.typed_value(value, &field.ty))
+    }
 }
 
 /// Locate the sub-value that carries a variant's payload, per the enum's serde tagging style. ~keep
@@ -235,23 +276,6 @@ fn tag_matches_variant(value: &serde_json::Value, tag_key: &str, definition: &En
     value.get(tag_key).and_then(serde_json::Value::as_str) == Some(wire_name.as_str())
 }
 
-fn tuple_variant_uses_test_documents(
-    candidate: &serde_json::Value,
-    fields: &[FieldDef],
-    index: &NamedIndex<'_>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    if let [only] = fields {
-        return typed_value_uses_test_documents(candidate, &only.ty, index, visited);
-    }
-    candidate.as_array().is_some_and(|values| {
-        fields
-            .iter()
-            .zip(values.iter())
-            .any(|(field, value)| typed_value_uses_test_documents(value, &field.ty, index, visited))
-    })
-}
-
 fn is_relative_document_path(value: &str) -> bool {
     if value.starts_with('<') || value.starts_with('{') || value.starts_with('[') || value.contains(' ') {
         return false;
@@ -269,11 +293,15 @@ fn is_relative_document_path(value: &str) -> bool {
 #[cfg(test)]
 mod cycle_guard_tests;
 #[cfg(test)]
+mod cycle_memo_taint_tests;
+#[cfg(test)]
 mod tag_and_shape_tests;
 #[cfg(test)]
 mod tag_value_discrimination_tests;
 #[cfg(test)]
 mod variant_field_rename_all_tests;
+#[cfg(test)]
+mod wide_dag_memo_tests;
 
 #[cfg(test)]
 mod tests {
