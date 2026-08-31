@@ -1,7 +1,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 
-//! Differential test: `javac` and `dotnet` are the authority for the Java and C# identifier
-//! grammars, invoked as subprocesses on every run.
+//! Differential test: `javac`, `dotnet`, and `kotlinc` are the authority for the Java, C#, and
+//! Kotlin identifier grammars, invoked as subprocesses on every run.
 //!
 //! The expected accept/reject value for each probe is not written down anywhere in this file. It
 //! is whatever the compiler says when it is handed the probe. A table of transcribed booleans
@@ -19,7 +19,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use alef::codegen::coordinates::{validate_csharp_namespace, validate_java_package};
+use alef::codegen::coordinates::{validate_csharp_namespace, validate_java_package, validate_kotlin_package};
 
 /// Probe characters, chosen to straddle every boundary where the two grammars differ from each
 /// other or from `char::is_alphabetic` / `char::is_alphanumeric`. No expected verdict here: the
@@ -198,5 +198,40 @@ fn dotnet_agrees_with_validate_csharp_namespace() {
         .collect();
     compare("csharp", &rejected, |segment| {
         validate_csharp_namespace(&format!("Probe.{segment}")).is_ok()
+    });
+}
+
+#[test]
+fn kotlinc_agrees_with_validate_kotlin_package() {
+    if !tool_available("kotlinc") {
+        eprintln!("SKIPPED: kotlinc is not installed; the Kotlin grammar was NOT verified on this machine");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let sources = dir.path().join("src");
+    std::fs::create_dir_all(&sources).expect("create src");
+    write_probe_sources(&sources, "kt", |class, segment| {
+        format!("package probe.{segment}\nclass {class}\n")
+    });
+
+    let mut command = Command::new("kotlinc");
+    command.arg("-d").arg(dir.path().join("out")).current_dir(&sources);
+    for (index, _) in probe_segments().iter().enumerate() {
+        command.arg(format!("P{index:04}.kt"));
+    }
+    let output = command.output().expect("run kotlinc");
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let rejected: Vec<bool> = probe_segments()
+        .iter()
+        .enumerate()
+        .map(|(index, _)| diagnostics.contains(&format!("P{index:04}.kt:")))
+        .collect();
+    compare("kotlin", &rejected, |segment| {
+        validate_kotlin_package(&format!("probe.{segment}")).is_ok()
     });
 }

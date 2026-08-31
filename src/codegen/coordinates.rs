@@ -12,6 +12,7 @@
 
 use crate::codegen::identifier_grammar::{
     is_csharp_identifier_part, is_csharp_identifier_start, is_java_identifier_part, is_java_identifier_start,
+    is_kotlin_identifier_part, is_kotlin_identifier_start,
 };
 
 /// Java reserved keywords and literals (JLS SE 21 §3.9, §3.10.3, §3.10.7) that cannot
@@ -150,24 +151,17 @@ const JAVA_SEGMENT_GRAMMAR: SegmentGrammar = SegmentGrammar {
     reserved: JAVA_RESERVED,
 };
 
-/// Kotlin's own lexer accepts a narrower set than this: measured against kotlinc 2.4.10, a
-/// Kotlin identifier starts with `Lu|Ll|Lt|Lm|Lo` or a literal `_` and continues with those plus
-/// `Nd`, rejecting `Nl` and every connector but `_`. Tightening it belongs in a Kotlin lane with
-/// its own oracle -- this repair covers Java and C# -- so the previous approximation is kept
-/// verbatim here rather than half-corrected. ~keep
-fn is_kotlin_package_start(character: char) -> bool {
-    character.is_alphabetic() || character == '_'
-}
-
-fn is_kotlin_package_part(character: char) -> bool {
-    character.is_alphanumeric() || character == '_'
-}
-
+/// Kotlin's own lexer accepts a narrower set than Java or C#: measured against `kotlinc` 2.4.10
+/// (see `codegen::identifier_grammar` and
+/// `tests/identifier_grammar_compiler_oracle.rs::kotlinc_agrees_with_validate_kotlin_package`,
+/// which invokes `kotlinc` as a subprocess on every run), a Kotlin identifier starts with
+/// `Lu|Ll|Lt|Lm|Lo` or a literal `_` and continues with those plus `Nd`, rejecting `Nl` and every
+/// mark/format category that Java and C# both admit inside an identifier.
 const KOTLIN_SEGMENT_GRAMMAR: SegmentGrammar = SegmentGrammar {
     language: "Kotlin",
-    is_start: is_kotlin_package_start,
-    is_part: is_kotlin_package_part,
-    start_hint: "a letter or `_`",
+    is_start: is_kotlin_identifier_start,
+    is_part: is_kotlin_identifier_part,
+    start_hint: "a letter (not a letter-number such as a Roman numeral) or `_`",
     reserved: KOTLIN_HARD_KEYWORDS,
 };
 
