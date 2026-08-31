@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Escape arbitrary serde and wire names before embedding them in generated Java string literals,
+  including `@JsonProperty` annotations, enum tags, builder paths, and E2E source. Quotes,
+  backslashes, control characters, and Unicode line separators can no longer break or inject the
+  generated Java source.
 - Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
   E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
   an identifier-less expression.
