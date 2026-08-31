@@ -59,7 +59,7 @@ pub(super) fn gen_visitor_protocol_stub(
     // config-only removal (`[crates.python] exclude_types`, `capsule_types`), which no IR flag
     // records, moves both sides together. ~keep
     let dict_fallback_context: Option<&str> = crate::backends::pyo3::trait_bridge::is_visitor_bridge(trait_def, bridge)
-        .then(|| bridge.context_type.as_deref())
+        .then_some(bridge.context_type.as_deref())
         .flatten()
         .filter(|_| {
             crate::backends::pyo3::trait_bridge::context_binding_class(api, bridge, pyclass_absent_types).is_none()
