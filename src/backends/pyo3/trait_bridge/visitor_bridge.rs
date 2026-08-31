@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[cfg(test)]
 mod tests;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn gen_visitor_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,

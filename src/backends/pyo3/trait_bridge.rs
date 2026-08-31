@@ -55,6 +55,7 @@ pub fn is_visitor_bridge(trait_type: &TypeDef, bridge_cfg: &TraitBridgeConfig) -
 
 pub use visitor_bridge::context_binding_class;
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_trait_bridge(
     trait_type: &TypeDef,
     bridge_cfg: &TraitBridgeConfig,
