@@ -41,11 +41,7 @@ fn escape_and_atom_body_agree_with_the_elixir_verified_table() {
             expected_escaped,
             "string-literal escaping of {input:?}"
         );
-        assert_eq!(
-            &elixir_atom_body(input),
-            expected_atom_body,
-            "atom body for {input:?}"
-        );
+        assert_eq!(&elixir_atom_body(input), expected_atom_body, "atom body for {input:?}");
     }
 }
 
@@ -91,7 +87,17 @@ fn bare_identifiers_stay_unquoted() {
 /// these may come back as a bare (unquoted) atom, because each is a `SyntaxError` after a `:`.
 #[test]
 fn every_invalid_atom_shape_comes_back_quoted() {
-    for name in ["", "123", "1foo", "café", "has space", "og:image", "a?b", "-lead", "no!bang"] {
+    for name in [
+        "",
+        "123",
+        "1foo",
+        "café",
+        "has space",
+        "og:image",
+        "a?b",
+        "-lead",
+        "no!bang",
+    ] {
         let body = elixir_atom_body(name);
         assert!(
             body.starts_with('"') && body.ends_with('"'),

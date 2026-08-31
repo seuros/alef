@@ -212,7 +212,9 @@ fn the_workflow_readers_narrow_to_what_they_name() {
         "the reader must return the named step's own command"
     );
     assert!(
-        !step_run_command(&block, "Target").expect("target command").contains("--ignored"),
+        !step_run_command(&block, "Target")
+            .expect("target command")
+            .contains("--ignored"),
         "the reader must not pick up the preceding comment's `--ignored`, nor the FOLLOWING \
          step's -- matching either is how a wiring check keeps passing after the flag is deleted"
     );

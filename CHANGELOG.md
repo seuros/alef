@@ -90,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Escape interpolation markers, quotes, backslashes, and control characters in generated Elixir
+  literals, and emit reachable `wire_value/1` clauses for tagged enums.
 - Skip Java E2E assertions whose payload-union shape cannot be represented by the generated
   wrapper API, including wildcard, numeric, count, and equality operations that previously
   emitted uncompilable Java source.

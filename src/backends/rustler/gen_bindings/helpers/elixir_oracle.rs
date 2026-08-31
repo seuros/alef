@@ -207,7 +207,10 @@ fn run_probe() -> String {
     let unit_enum = hostile_unit_enum(&canary);
     let tagged_enum = hostile_tagged_enum(&canary);
 
-    write(&dir.join("enum_module.ex"), &gen_elixir_enum_module(&unit_enum, APP_MODULE));
+    write(
+        &dir.join("enum_module.ex"),
+        &gen_elixir_enum_module(&unit_enum, APP_MODULE),
+    );
     let clauses = emit_tagged_enum_encoder(&tagged_enum);
     assert!(
         clauses.contains("defp encode_action("),
@@ -326,7 +329,14 @@ fn run_elixir(dir: &Path, script: &str) -> String {
             run with `cargo test --lib elixir_oracle -- --ignored`"]
 fn generated_enum_module_returns_literal_wire_values() {
     let stdout = run_probe();
-    for key in ["plain", "interpolated", "quoted", "controls", "digit_wire", "atom_spelling"] {
+    for key in [
+        "plain",
+        "interpolated",
+        "quoted",
+        "controls",
+        "digit_wire",
+        "atom_spelling",
+    ] {
         assert_match(&stdout, key);
     }
 }
