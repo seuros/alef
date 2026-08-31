@@ -236,7 +236,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
             emit_python_visitor_method(
                 &mut visitor_class,
                 method_name,
-                *action,
+                action,
                 probe.as_ref().map(|probe| probe.probe_method.as_str()),
             );
         }
