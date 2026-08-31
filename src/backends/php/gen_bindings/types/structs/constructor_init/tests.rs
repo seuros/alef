@@ -22,6 +22,19 @@ fn field(name: &str, ty: TypeRef, typed_default: Option<DefaultValue>) -> FieldD
     }
 }
 
+/// An `Option<T>` field, in the shape the extractor actually produces.
+///
+/// Verified against real IR (`alef extract`): `Option<Rule>` becomes `optional: true` with
+/// `ty: Named("Rule")` — the `Option` is unwrapped, NOT kept as `TypeRef::Optional`. That variant
+/// shows up only for the inner `Option` of an `Option<Option<T>>`. Modelling optionality with
+/// `TypeRef::Optional` here would test a shape no crate produces. ~keep
+fn optional_field(name: &str, ty: TypeRef, typed_default: Option<DefaultValue>) -> FieldDef {
+    FieldDef {
+        optional: true,
+        ..field(name, ty, typed_default)
+    }
+}
+
 /// A `Vec<SomeStruct>` whose inner type is neither opaque nor an enum: not representable as a
 /// PHP constructor parameter, so the constructor omits it. This is the allow-list shape.
 fn rule_list() -> TypeRef {
@@ -259,37 +272,140 @@ fn should_fail_when_any_omitted_field_is_unknowable_even_beside_a_knowable_one()
     assert!(format!("{error}").contains("deny_list"));
 }
 
-/// `None` for an omitted `Option` field is not the fabrication the refusal targets: it encodes
-/// "absent", which is exactly true of a field the caller had no way to pass, and no core
-/// `Default` can be contradicting it because this shape requires the type to have none.
+// ---------------------------------------------------------------------------
+// Optionality is not an exemption.
+//
+// `None` for an omitted `Option` is the arm most likely to be right by accident: it type-checks,
+// it looks like absence rather than invention, and it is what an empty `Option` looks like anyway.
+// The generated PHPStan stub decides it. For every omitted field the stub says only:
+//
+//   @readonly Not settable via the constructor — this field's type has no ext-php-rs
+//   #[php(prop)]/constructor-param support, so it can only be read via this getter.
+//
+// It promises the caller nothing about the VALUE. So absence is not defined at this boundary, and
+// `None` is a claim nothing in the source crate made — the same fabrication as an empty
+// allow-list. What lowers is absence the IR actually RECORDS, or a real `Default` to read. ~keep
+// ---------------------------------------------------------------------------
+
+/// Positive: absence the IR records. `DefaultValue::None` is the extractor stating the default is
+/// null, which is an authored fact, so it lowers.
 #[test]
-fn should_emit_none_for_an_omitted_option_field_with_no_type_level_default() {
+fn should_lower_an_omitted_option_field_whose_recorded_default_is_none() {
     let typ = policy(
         false,
-        vec![field("ssrf", TypeRef::Optional(Box::new(nested_policy())), None)],
+        vec![optional_field("ssrf", nested_policy(), Some(DefaultValue::None))],
     );
 
-    let init = build(&typ).expect("an omitted Option field is honestly absent, not invented");
+    let init = build(&typ).expect("a recorded null default is authored, not invented");
 
-    assert_eq!(init.field_inits, "ssrf: None");
+    assert_eq!(init.field_inits, "ssrf: Default::default()");
 }
 
-/// The discrimination control for the arm above: wrapping a *collection* in `Option` is the only
-/// thing that makes it acceptable. A bare collection with the same provenance must still fail, or
-/// the `Option` arm has widened into the blanket fallback this module exists to delete.
+/// Positive, and the reason a blanket `None` would have been wrong even when it looked harmless:
+/// an optional field on a type WITH a `Default` can default to `Some(..)`. The recovery reads
+/// whatever the core impl says instead of assuming the empty `Option`.
 #[test]
-fn should_still_fail_for_a_bare_collection_beside_an_acceptable_option_field() {
+fn should_read_an_omitted_option_field_off_a_core_default_that_may_hold_some() {
     let typ = policy(
-        false,
+        true,
+        vec![optional_field(
+            "ssrf",
+            nested_policy(),
+            Some(DefaultValue::EnumVariant("Strict".to_string())),
+        )],
+    );
+
+    let init = build(&typ).expect("a type with a Default impl can always be read back from");
+
+    assert_eq!(init.field_inits, "ssrf: __alef_core_defaults.ssrf");
+    assert!(
+        !init.field_inits.contains("None"),
+        "an optional field must not be assumed empty when the core Default may hold Some(..), got: {}",
+        init.field_inits
+    );
+}
+
+/// Negative: no recorded default, no owning `Default`. Optionality alone must not license a value.
+#[test]
+fn should_fail_for_an_omitted_option_field_with_no_default_anywhere() {
+    let typ = policy(false, vec![optional_field("ssrf", nested_policy(), None)]);
+
+    let error = build(&typ).expect_err("optionality is not an exemption from the no-fabrication rule");
+
+    assert!(format!("{error}").contains("ssrf"));
+}
+
+// ---------------------------------------------------------------------------
+// Hostile identifiers.
+//
+// A consumer crate's field names are adversarial input. The `let` holding the core defaults must
+// not be able to shadow a parameter or local, because a shadowed binding still type-checks
+// whenever the types happen to agree — so the failure would be silent. ~keep
+// ---------------------------------------------------------------------------
+
+/// Control: an ordinary type keeps the plain base name, so the derivation is not gratuitously
+/// renaming. Without this, a bug that always appended `_` would pass the hostile test below.
+#[test]
+fn should_use_the_plain_base_local_when_nothing_collides() {
+    let typ = policy(true, vec![field("allow_list", rule_list(), Some(DefaultValue::Empty))]);
+
+    assert_eq!(core_defaults_local(&typ), "__alef_core_defaults");
+}
+
+/// A field named exactly like the generated local must push the local aside, not the other way
+/// round. `to_php_name("__alef_core_defaults")` is `alefCoreDefaults` (verified against real
+/// generated output), so the parameter itself cannot collide — but the raw field name is also an
+/// identifier this constructor emits, and nothing about `to_php_name` is guaranteed to keep
+/// underscores out forever.
+#[test]
+fn should_pick_a_local_no_hostile_field_name_can_shadow() {
+    let typ = policy(
+        true,
         vec![
-            field("ssrf", TypeRef::Optional(Box::new(nested_policy())), None),
-            field("allow_list", rule_list(), None),
+            field(
+                "__alef_core_defaults",
+                TypeRef::Primitive(PrimitiveType::U32),
+                Some(DefaultValue::IntLiteral(7)),
+            ),
+            field(
+                "allow_list",
+                rule_list(),
+                Some(DefaultValue::ListLiteral(vec![DefaultValue::StringLiteral("internal".to_string())])),
+            ),
         ],
     );
 
-    let error = build(&typ).expect_err("an Option sibling must not license a bare collection");
+    let local = core_defaults_local(&typ);
+    assert_ne!(local, "__alef_core_defaults", "the local must not reuse a real field name");
 
-    assert!(format!("{error}").contains("allow_list"));
+    let init = build(&typ).expect("a type with a Default impl can always be read back from");
+
+    assert!(
+        init.prelude.contains(&format!("let {local} =")),
+        "the prelude must bind the derived local, got: {}",
+        init.prelude
+    );
+    assert_eq!(
+        init.field_inits,
+        format!("__alef_core_defaults: alefCoreDefaults, allow_list: {local}.allow_list"),
+        "the hostile field keeps its own parameter; only the core-defaults local moves"
+    );
+}
+
+/// The derivation must survive the obvious second-order attack: occupying the base name AND the
+/// name the first fallback would pick. One `_` is not a strategy.
+#[test]
+fn should_keep_lengthening_past_an_occupied_first_fallback() {
+    let typ = policy(
+        true,
+        vec![
+            field("__alef_core_defaults", TypeRef::String, Some(DefaultValue::Empty)),
+            field("__alef_core_defaults_", TypeRef::String, Some(DefaultValue::Empty)),
+            field("allow_list", rule_list(), Some(DefaultValue::Empty)),
+        ],
+    );
+
+    assert_eq!(core_defaults_local(&typ), "__alef_core_defaults__");
 }
 
 // ---------------------------------------------------------------------------

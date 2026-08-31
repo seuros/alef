@@ -8,10 +8,48 @@ use ahash::AHashSet;
 use super::php_field_can_be_constructor_param;
 use crate::core::ir::{DefaultValue, FieldDef, TypeDef, TypeRef};
 
-/// Local the generated constructor binds the core type's `Default` to, so a constructor that
-/// omits several fields reads them all off one delegating call instead of one call per field.
-/// Prefixed to stay out of the way of any real field or parameter name. ~keep
-pub(crate) const CORE_DEFAULTS_BINDING: &str = "__alef_core_defaults";
+/// Starting point for the local the generated constructor binds the core type's `Default` to, so
+/// a constructor that omits several fields reads them all off one delegating call instead of one
+/// call per field. Only a starting point: [`core_defaults_local`] lengthens it until it cannot
+/// collide, because a consumer crate's identifiers are adversarial input and no fixed prefix is a
+/// guarantee. ~keep
+const CORE_DEFAULTS_BASE: &str = "__alef_core_defaults";
+
+/// Every identifier that is, or could become, a binding in the generated constructor's scope.
+///
+/// Deliberately a superset of what any single constructor shape emits — the raw field name (used
+/// by the shorthand initialiser), the PHP parameter name, and the `*_core` / `*_core_result`
+/// locals the `Vec<Named>` let-binding template introduces — computed for *every* field rather
+/// than only the ones this shape turns into parameters. Narrowing it to the exact emitted set
+/// would re-couple the reservation to the parameter filter, so a later change to that filter
+/// could reintroduce a collision without touching this function. ~keep
+fn reserved_constructor_identifiers(typ: &TypeDef) -> AHashSet<String> {
+    let mut reserved = AHashSet::new();
+    for field in typ.fields.iter().filter(|f| !f.binding_excluded) {
+        let php_param_name = crate::codegen::naming::to_php_name(&field.name);
+        reserved.insert(format!("{php_param_name}_core_result"));
+        reserved.insert(format!("{php_param_name}_core"));
+        reserved.insert(php_param_name);
+        reserved.insert(field.name.clone());
+    }
+    reserved
+}
+
+/// The name of the local holding `<Self as Default>::default()`, chosen so it cannot shadow any
+/// parameter or local in the generated constructor.
+///
+/// A fixed name would be a convention, not a guarantee: if a consumer field or parameter ever
+/// spelled it, the `let` would shadow the parameter and `Self { .. }` would bind the wrong value
+/// at the wrong type — silently, because the shadowed binding still type-checks whenever the
+/// types happen to agree. Appending `_` terminates because the reserved set is finite. ~keep
+fn core_defaults_local(typ: &TypeDef) -> String {
+    let reserved = reserved_constructor_identifiers(typ);
+    let mut local = CORE_DEFAULTS_BASE.to_string();
+    while reserved.contains(local.as_str()) {
+        local.push('_');
+    }
+    local
+}
 
 /// The `Self { .. }` initialiser list for the named constructor, plus the statement it needs
 /// when at least one omitted field is recovered from the core type's `Default`.
@@ -24,7 +62,7 @@ pub(crate) struct ConstructorInit {
     /// Emitted immediately before `Self { .. }`. Empty when no field needed the recovery, so a
     /// constructor that does not use the local never binds it (and never trips `unused_variables`).
     pub(crate) prelude: String,
-    /// Comma-joined `a, b: b_php, c: __alef_core_defaults.c`.
+    /// Comma-joined `a, b: b_php, c: <core-defaults local>.c`.
     pub(crate) field_inits: String,
 }
 
@@ -46,15 +84,6 @@ enum OmittedInit {
     /// Read back off `<Self as Default>::default()`, which for a type with a core `Default` is
     /// the delegating impl (see [`classify_omitted_field`]).
     FromCoreDefault,
-    /// An `Option`-typed field on a type with no `Default` at all: `None`.
-    ///
-    /// This is the one omitted shape where the target-language zero is not an invention. `None`
-    /// does not claim a value — it encodes *absent*, which is exactly true of a field the caller
-    /// was given no way to pass. The dangerous case is the opposite one: an empty `Vec` claims
-    /// "the list is empty", a statement about content that nothing in the source crate made.
-    /// And no core `Default` can contradict `None` here, because reaching this variant requires
-    /// the owning type to have no `Default` for a `Some(..)` to have been written in. ~keep
-    Absent,
 }
 
 /// How a diagnostic names the type that owns an unrenderable field: the full Rust path when the
@@ -80,6 +109,16 @@ fn owning_type_path(typ: &TypeDef) -> &str {
 /// (`cli::pipeline::generate::validation`) already fails the whole run for it. It does reach here
 /// for a crate that suppresses that code, and the delegating read is the right answer then too —
 /// alef could not *spell* the value, but the compiled `Default` impl still produces it. ~keep
+///
+/// `field.optional` is deliberately NOT an exemption. `None` for an omitted `Option` looks
+/// principled — it is what an empty `Option` looks like anyway — but the generated stub promises
+/// callers only that such a field is "not settable via the constructor" and says nothing about
+/// its value, so `None` is a claim no part of the source crate made. The sibling PHP constructor
+/// (`codegen::config_gen::php::gen_php_kwargs_constructor`) never invents it either: for an
+/// optional field it passes the caller's own `Option` straight through. The one place alef does
+/// map optional to `None` (`gen_struct_default_impl`) is guarded by `has_default`, which is the
+/// branch above. An omitted `Option` with no `Default` anywhere is the same fabrication as an
+/// empty allow-list, wearing a type that makes it look like absence. ~keep
 fn classify_omitted_field(typ: &TypeDef, field: &FieldDef) -> anyhow::Result<OmittedInit> {
     if matches!(field.typed_default, Some(DefaultValue::Empty | DefaultValue::None)) {
         return Ok(OmittedInit::TypeZero);
@@ -87,18 +126,17 @@ fn classify_omitted_field(typ: &TypeDef, field: &FieldDef) -> anyhow::Result<Omi
     if typ.has_default {
         return Ok(OmittedInit::FromCoreDefault);
     }
-    if matches!(field.ty, TypeRef::Optional(_)) {
-        return Ok(OmittedInit::Absent);
-    }
     anyhow::bail!(
         "php backend: cannot initialise `{type_path}.{field_name}` in the generated \
          `#[php(constructor)] new(...)`.\n\
          The field's type is not representable as a PHP constructor parameter, so the constructor \
-         omits it; `{type_name}` has no `Default` impl for alef to read the field's real value \
-         back from; and the field is not an `Option`, whose absence `None` would honestly encode. \
-         Alef will not fall back to `Default::default()`: that invents a value the source crate \
-         never specifies — an empty allow-list, an empty deny-list, a zero limit — and for a \
-         security control the invented empty value is the fail-open direction.\n\
+         omits it, and `{type_name}` has no `Default` impl for alef to read the field's real value \
+         back from. Alef will not fall back to `Default::default()`: that invents a value the \
+         source crate never specifies — an empty allow-list, an empty deny-list, a zero limit, a \
+         null policy — and for a security control the invented empty value is the fail-open \
+         direction. The generated stub tells PHP callers only that the field is \"not settable via \
+         the constructor\"; it promises nothing about the value, so nothing here is entitled to \
+         invent one.\n\
          Fix one of:\n  \
          - add `#[derive(Default)]` or `impl Default for {type_name}` so alef delegates to it;\n  \
          - mark the field `#[alef(skip)]` if PHP callers must never set it;\n  \
@@ -141,6 +179,7 @@ pub(crate) fn gen_constructor_field_inits(
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
 ) -> anyhow::Result<ConstructorInit> {
+    let core_defaults = core_defaults_local(typ);
     let mut field_inits: Vec<String> = Vec::new();
     let mut needs_core_defaults = false;
 
@@ -161,16 +200,15 @@ pub(crate) fn gen_constructor_field_inits(
             OmittedInit::TypeZero => field_inits.push(format!("{}: Default::default()", field.name)),
             OmittedInit::FromCoreDefault => {
                 needs_core_defaults = true;
-                field_inits.push(format!("{}: {CORE_DEFAULTS_BINDING}.{}", field.name, field.name));
+                field_inits.push(format!("{}: {core_defaults}.{}", field.name, field.name));
             }
-            OmittedInit::Absent => field_inits.push(format!("{}: None", field.name)),
         }
     }
 
     let prelude = if needs_core_defaults {
         crate::backends::php::template_env::render(
             "php_core_defaults_let_binding.jinja",
-            minijinja::context! { binding => CORE_DEFAULTS_BINDING },
+            minijinja::context! { binding => core_defaults.as_str() },
         )
     } else {
         String::new()
