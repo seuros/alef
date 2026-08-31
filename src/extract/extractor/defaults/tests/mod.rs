@@ -91,4 +91,6 @@ fn rendered_python_default(name: &str, ty: TypeRef, value: &DefaultValue) -> Str
 mod delegation;
 mod enum_and_associated_consts;
 mod literals_and_consts;
+mod mutated_literal;
+mod mutated_literal_unresolved;
 mod variant_folding;
