@@ -10,6 +10,10 @@
 //! Every validator accepts every value a currently-working default configuration would
 //! produce; only explicit, out-of-grammar user input is rejected.
 
+use crate::codegen::identifier_grammar::{
+    is_csharp_identifier_part, is_csharp_identifier_start, is_java_identifier_part, is_java_identifier_start,
+};
+
 /// Java reserved keywords and literals (JLS SE 21 §3.9, §3.10.3, §3.10.7) that cannot
 /// appear as an `Identifier`, and therefore cannot appear as a package-name segment
 /// (JLS §7.4.1: `PackageName: Identifier | PackageName . Identifier`). Restricted
@@ -71,6 +75,11 @@ const JAVA_RESERVED: &[&str] = &[
     "true",
     "false",
     "null",
+    // `_` is a keyword as of Java 9 (JLS SE 21 3.9) even though
+    // `Character.isJavaIdentifierStart('_')` is true, so the character grammar cannot catch it.
+    // Confirmed against javac 25.0.2: `package probe._;` fails, `package probe._core;` compiles.
+    // C# has no equivalent rule -- `namespace Probe._` compiles under dotnet 10.0.100. ~keep
+    "_",
 ];
 
 /// Kotlin hard keywords (kotlinlang.org/docs/keyword-reference.html "Hard keywords") that
@@ -109,46 +118,107 @@ const KOTLIN_HARD_KEYWORDS: &[&str] = &[
     "while",
 ];
 
-fn validate_package_segments(name: &str, language: &str, allows_dollar: bool, reserved: &[&str]) -> Result<(), String> {
+/// The identifier grammar one dot-separated coordinate segment must satisfy. A Java package, a
+/// Kotlin package, and a C# namespace share this shape -- `Identifier ('.' Identifier)*` -- but
+/// each admits a *different* set of characters, so the character classes are supplied per
+/// language rather than approximated by one shared pair of predicates.
+struct SegmentGrammar {
+    language: &'static str,
+    is_start: fn(char) -> bool,
+    is_part: fn(char) -> bool,
+    start_hint: &'static str,
+    reserved: &'static [&'static str],
+}
+
+/// A Java package segment, minus the ISO control characters `Character.isJavaIdentifierPart`
+/// accepts.
+///
+/// The JLS really does admit those 56 code points inside an identifier, and
+/// [`is_java_identifier_part`] mirrors that exactly. A *coordinate* is additionally spliced into
+/// `pom.xml`, `build.gradle.kts`, and filesystem paths, where an invisible control character is
+/// a spoofing vector that no working default configuration can produce, so coordinate validation
+/// is deliberately stricter than the JLS on this one point. ~keep
+fn is_java_package_part(character: char) -> bool {
+    is_java_identifier_part(character) && !character.is_control()
+}
+
+const JAVA_SEGMENT_GRAMMAR: SegmentGrammar = SegmentGrammar {
+    language: "Java",
+    is_start: is_java_identifier_start,
+    is_part: is_java_package_part,
+    start_hint: "a letter, or a currency (`$`) or connector (`_`) character",
+    reserved: JAVA_RESERVED,
+};
+
+/// Kotlin's own lexer accepts a narrower set than this: measured against kotlinc 2.4.10, a
+/// Kotlin identifier starts with `Lu|Ll|Lt|Lm|Lo` or a literal `_` and continues with those plus
+/// `Nd`, rejecting `Nl` and every connector but `_`. Tightening it belongs in a Kotlin lane with
+/// its own oracle -- this repair covers Java and C# -- so the previous approximation is kept
+/// verbatim here rather than half-corrected. ~keep
+fn is_kotlin_package_start(character: char) -> bool {
+    character.is_alphabetic() || character == '_'
+}
+
+fn is_kotlin_package_part(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+const KOTLIN_SEGMENT_GRAMMAR: SegmentGrammar = SegmentGrammar {
+    language: "Kotlin",
+    is_start: is_kotlin_package_start,
+    is_part: is_kotlin_package_part,
+    start_hint: "a letter or `_`",
+    reserved: KOTLIN_HARD_KEYWORDS,
+};
+
+fn validate_package_segments(name: &str, grammar: &SegmentGrammar) -> Result<(), String> {
     if name.is_empty() {
         return Err("must not be empty".to_string());
     }
     for segment in name.split('.') {
-        if segment.is_empty() {
-            return Err(format!("`{name}` has an empty segment (leading/trailing/double dot)"));
-        }
-        let mut chars = segment.chars();
-        let first = chars.next().expect("segment is non-empty");
-        if !(first.is_alphabetic() || first == '_' || (allows_dollar && first == '$')) {
-            return Err(format!(
-                "segment `{segment}` in `{name}` must start with a letter or `_`{}",
-                if allows_dollar { " (Java also permits `$`)" } else { "" }
-            ));
-        }
-        if let Some(bad) = chars.find(|c| !(c.is_alphanumeric() || *c == '_' || (allows_dollar && *c == '$'))) {
-            return Err(format!(
-                "segment `{segment}` in `{name}` contains `{bad}`, which is not a valid {language} identifier character"
-            ));
-        }
-        if reserved.contains(&segment) {
-            return Err(format!(
-                "segment `{segment}` in `{name}` is a {language} reserved word and cannot be used unescaped"
-            ));
-        }
+        validate_one_segment(name, segment, grammar)?;
     }
     Ok(())
 }
 
-/// Validate a Java package name using the JLS identifier grammar. Java keywords are
-/// case-sensitive and `$` is a legal Java identifier character.
+fn validate_one_segment(name: &str, segment: &str, grammar: &SegmentGrammar) -> Result<(), String> {
+    let language = grammar.language;
+    if segment.is_empty() {
+        return Err(format!("`{name}` has an empty segment (leading/trailing/double dot)"));
+    }
+    let mut chars = segment.chars();
+    let first = chars.next().expect("segment is non-empty");
+    if !(grammar.is_start)(first) {
+        return Err(format!(
+            "segment `{segment}` in `{name}` must start with {}",
+            grammar.start_hint
+        ));
+    }
+    if let Some(bad) = chars.find(|character| !(grammar.is_part)(*character)) {
+        return Err(format!(
+            "segment `{segment}` in `{name}` contains `{bad}`, which is not a valid {language} identifier character"
+        ));
+    }
+    if grammar.reserved.contains(&segment) {
+        return Err(format!(
+            "segment `{segment}` in `{name}` is a {language} reserved word and cannot be used unescaped"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a Java package name using the JLS identifier grammar (JLS SE 21 3.8, 7.4.1), as
+/// implemented by `Character.isJavaIdentifierStart`/`isJavaIdentifierPart`. Java keywords are
+/// case-sensitive, and `$` is legal because it is a currency symbol -- as is every other
+/// currency symbol, and every connector punctuation character.
 pub fn validate_java_package(name: &str) -> Result<(), String> {
-    validate_package_segments(name, "Java", true, JAVA_RESERVED)
+    validate_package_segments(name, &JAVA_SEGMENT_GRAMMAR)
 }
 
 /// Validate a Kotlin package name as it is emitted in Kotlin source. Kotlin keywords are
 /// case-sensitive and `$` is not accepted in an unescaped source identifier.
 pub fn validate_kotlin_package(name: &str) -> Result<(), String> {
-    validate_package_segments(name, "Kotlin", false, KOTLIN_HARD_KEYWORDS)
+    validate_package_segments(name, &KOTLIN_SEGMENT_GRAMMAR)
 }
 
 /// Validate a Maven `groupId` or `artifactId`. Maven Central's component validation
@@ -320,39 +390,24 @@ const CSHARP_RESERVED: &[&str] = &[
     "while",
 ];
 
-/// Validate a C# namespace: dot-separated identifiers per the C# language specification
-/// (`qualified-identifier`), each starting with a Unicode letter-character or `_` and
-/// continuing with letters, digits, or `_` (this covers the common cases of the
-/// specification's Unicode identifier-character categories without requiring a full
-/// Unicode category table), and none of which is a C# reserved keyword. Unicode letters
-/// are accepted, so e.g. `München.Parser` is a legal namespace.
+const CSHARP_SEGMENT_GRAMMAR: SegmentGrammar = SegmentGrammar {
+    language: "C#",
+    is_start: is_csharp_identifier_start,
+    is_part: is_csharp_identifier_part,
+    start_hint: "a letter or `_`",
+    reserved: CSHARP_RESERVED,
+};
+
+/// Validate a C# namespace: dot-separated identifiers per the C# language specification's
+/// `qualified_identifier`, each an `identifier` under ECMA-334 6.4.3 and none of which is a
+/// reserved keyword. Unicode letters are accepted, so `München.Parser` is a legal namespace.
+///
+/// This is *not* the Java package grammar with different keywords. Two differences bite:
+/// a currency symbol starts a Java identifier but not a C# one, and Roslyn lexes UTF-16 code
+/// units, so a supplementary-plane letter that `javac` accepts is a `CS1056` under `dotnet`.
+/// Both are enforced by [`is_csharp_identifier_start`]/[`is_csharp_identifier_part`].
 pub fn validate_csharp_namespace(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("must not be empty".to_string());
-    }
-    for segment in name.split('.') {
-        if segment.is_empty() {
-            return Err(format!("`{name}` has an empty segment (leading/trailing/double dot)"));
-        }
-        let mut chars = segment.chars();
-        let first = chars.next().expect("segment is non-empty");
-        if !(first.is_alphabetic() || first == '_') {
-            return Err(format!(
-                "segment `{segment}` in `{name}` must start with a letter or `_`"
-            ));
-        }
-        if let Some(bad) = chars.find(|c| !(c.is_alphanumeric() || *c == '_')) {
-            return Err(format!(
-                "segment `{segment}` in `{name}` contains `{bad}`, which is not a valid C# identifier character"
-            ));
-        }
-        if CSHARP_RESERVED.contains(&segment) {
-            return Err(format!(
-                "segment `{segment}` in `{name}` is a C# reserved keyword and cannot be used unescaped"
-            ));
-        }
-    }
-    Ok(())
+    validate_package_segments(name, &CSHARP_SEGMENT_GRAMMAR)
 }
 
 /// Swift reserved keywords (Swift Language Reference, "Lexical Structure > Keywords and
