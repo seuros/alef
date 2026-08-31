@@ -23,8 +23,8 @@ fn defaults_for(source: &str, type_name: &str, field_names: &[&str]) -> Vec<(Str
     defaults_for_typed(source, type_name, &fields)
 }
 
-/// As [`defaults_for`], but with each field's declared type spelled out. Only the two-segment
-/// path lowering consults it, so every other case can keep using the untyped helper. ~keep
+/// As [`defaults_for`], but with each field's declared type spelled out. Path and collection
+/// mutation lowering consult it; every other case can keep using the untyped helper. ~keep
 fn defaults_for_typed(source: &str, type_name: &str, fields: &[(&str, TypeRef)]) -> Vec<(String, DefaultValue)> {
     let file: syn::File = syn::parse_str(source).expect("valid module source");
     let literal_consts = collect_literal_consts(&file.items);
