@@ -1,6 +1,10 @@
 use super::extras::Language;
 use super::output::{ArgvRunConfig, ArgvStep, StringOrVec, TestAppRunConfig};
+use super::shell::quote_word;
 use super::tools::{LangContext, require_ruby_bundler, require_tool, ruby_bundle, ruby_bundle_exec};
+
+#[cfg(all(test, unix))]
+mod shell_safety_tests;
 
 /// Strip a leading package-manager version-constraint prefix (`^`, `~`, `>`,
 /// `<`, `=`) from a version string, returning the bare version. A concrete
@@ -29,19 +33,30 @@ pub fn default_test_apps_run_config(
     published_version: Option<&str>,
     go_module_path: Option<&str>,
 ) -> TestAppRunConfig {
+    // `test_apps_dir` is `[crates.e2e.registry].output` -- a free-form, user-authored config
+    // value with no syntax restrictions, and the Rust side already treats it as a literal path
+    // (`base_dir.join(&e2e.registry.output)` in `cli::pipeline::commands::test_apps`). Every
+    // default below that still needs a shell (a `&&` chain, a heredoc, a command substitution)
+    // splices it into `cd <dir>/<lang>`, so it must arrive as exactly one literal shell word:
+    // unquoted, a `;`, backtick, or `$(...)` inside `output` executed arbitrary commands during
+    // `alef test-apps run`. Defaults that need no shell at all (Go, PHP, brew/homebrew) pass the
+    // raw value as an `ArgvRunConfig::work_dir` instead, where `Command::current_dir` takes it as
+    // an opaque path -- quoting is the fallback for the arms a shell is genuinely required for,
+    // not the goal. ~keep
+    let dir = quote_word(test_apps_dir);
     match lang {
         Language::Rust => TestAppRunConfig {
             precondition: Some(require_tool("cargo")),
             before: None,
-            run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/rust && cargo test"))),
+            run: Some(StringOrVec::Single(format!("cd {dir}/rust && cargo test"))),
             argv_run: None,
         },
         Language::Python => {
             let pm = ctx.tools.python_pm();
             let run = match pm {
-                "pip" => format!("cd {test_apps_dir}/python && pip install -e . && pytest"),
-                "poetry" => format!("cd {test_apps_dir}/python && poetry install && poetry run pytest"),
-                _ => format!("cd {test_apps_dir}/python && uv sync && uv run pytest"),
+                "pip" => format!("cd {dir}/python && pip install -e . && pytest"),
+                "poetry" => format!("cd {dir}/python && poetry install && poetry run pytest"),
+                _ => format!("cd {dir}/python && uv sync && uv run pytest"),
             };
             TestAppRunConfig {
                 precondition: Some(require_tool(pm)),
@@ -53,10 +68,10 @@ pub fn default_test_apps_run_config(
         Language::Node => {
             let pm = ctx.tools.node_pm();
             let run = match pm {
-                "npm" => format!("cd {test_apps_dir}/node && npm install --no-package-lock && npm test"),
-                "yarn" => format!("cd {test_apps_dir}/node && yarn install && yarn test"),
+                "npm" => format!("cd {dir}/node && npm install --no-package-lock && npm test"),
+                "yarn" => format!("cd {dir}/node && yarn install && yarn test"),
                 _ => format!(
-                    "cd {test_apps_dir}/node && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && pnpm --config.minimumReleaseAge=0 test"
+                    "cd {dir}/node && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && pnpm --config.minimumReleaseAge=0 test"
                 ),
             };
             TestAppRunConfig {
@@ -69,10 +84,10 @@ pub fn default_test_apps_run_config(
         Language::Wasm => {
             let pm = ctx.tools.node_pm();
             let run = match pm {
-                "npm" => format!("cd {test_apps_dir}/wasm && npm install --no-package-lock && npm test"),
-                "yarn" => format!("cd {test_apps_dir}/wasm && yarn install && yarn test"),
+                "npm" => format!("cd {dir}/wasm && npm install --no-package-lock && npm test"),
+                "yarn" => format!("cd {dir}/wasm && yarn install && yarn test"),
                 _ => format!(
-                    "cd {test_apps_dir}/wasm && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && pnpm --config.minimumReleaseAge=0 test"
+                    "cd {dir}/wasm && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && pnpm --config.minimumReleaseAge=0 test"
                 ),
             };
             TestAppRunConfig {
@@ -86,32 +101,54 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_ruby_bundler()),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/ruby && {} && {}",
+                "cd {dir}/ruby && {} && {}",
                 ruby_bundle("install"),
                 ruby_bundle_exec("rspec")
             ))),
             argv_run: None,
         },
         Language::Php => {
-            let version_arg = published_version
-                .map(strip_version_constraint)
-                .filter(|v| !v.is_empty())
-                .map(|v| format!(" {v}"))
-                .unwrap_or_default();
+            // `published_version` is `[crates.e2e.registry.packages.php].version` (falling back
+            // to the crate's resolved version) -- a free-form config value with no syntax
+            // restrictions. It used to be spliced unquoted into `bash install.sh {version}`, so
+            // `;`, backticks, or `$(...)` inside it executed arbitrary commands during `alef
+            // test-apps run`. It is now one literal argv element handed to `install.sh`, and
+            // `test_apps_dir` is the argv work_dir, so neither value reaches a shell at all.
+            // The three steps replace a `&&` chain exactly: `run_test_app_target` stops at the
+            // first step that exits non-zero. ~keep
+            let mut install_args = vec!["install.sh".to_owned()];
+            if let Some(version) = published_version.map(strip_version_constraint).filter(|v| !v.is_empty()) {
+                install_args.push(version.to_owned());
+            }
             TestAppRunConfig {
                 precondition: Some(require_tool("composer")),
                 before: None,
-                run: Some(StringOrVec::Single(format!(
-                    "cd {test_apps_dir}/php && bash install.sh{version_arg} && composer install && composer test"
-                ))),
-                argv_run: None,
+                run: None,
+                argv_run: Some(ArgvRunConfig {
+                    work_dir: format!("{test_apps_dir}/php"),
+                    env: Vec::new(),
+                    steps: vec![
+                        ArgvStep {
+                            command: "bash".to_owned(),
+                            args: install_args,
+                        },
+                        ArgvStep {
+                            command: "composer".to_owned(),
+                            args: vec!["install".to_owned()],
+                        },
+                        ArgvStep {
+                            command: "composer".to_owned(),
+                            args: vec!["test".to_owned()],
+                        },
+                    ],
+                }),
             }
         }
         Language::Elixir => TestAppRunConfig {
             precondition: Some(require_tool("mix")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/elixir && mix deps.get && mix test"
+                "cd {dir}/elixir && mix deps.get && mix test"
             ))),
             argv_run: None,
         },
@@ -158,21 +195,21 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("mvn")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/java && mvn --batch-mode --no-transfer-progress test"
+                "cd {dir}/java && mvn --batch-mode --no-transfer-progress test"
             ))),
             argv_run: None,
         },
         Language::Csharp => TestAppRunConfig {
             precondition: Some(require_tool("dotnet")),
             before: None,
-            run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/csharp && dotnet test"))),
+            run: Some(StringOrVec::Single(format!("cd {dir}/csharp && dotnet test"))),
             argv_run: None,
         },
         Language::Kotlin => TestAppRunConfig {
             precondition: Some(require_tool("gradle")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/kotlin && gradle test --no-daemon"
+                "cd {dir}/kotlin && gradle test --no-daemon"
             ))),
             argv_run: None,
         },
@@ -180,7 +217,7 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("gradle")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/kotlin_android && gradle test --no-daemon"
+                "cd {dir}/kotlin_android && gradle test --no-daemon"
             ))),
             argv_run: None,
         },
@@ -203,7 +240,7 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("dart")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/dart && \
+                "cd {dir}/dart && \
                 dart pub get && \
                 DART_PKG=$(awk '/^dependencies:$/{{f=1;next}} f && /^  [a-z]/{{sub(/:.*/,\"\");sub(/^  /,\"\");print;exit}}' pubspec.yaml) && \
                 dart run \"${{DART_PKG}}:download_libs\" && \
@@ -215,7 +252,7 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("swift")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/swift_e2e && swift test"
+                "cd {dir}/swift_e2e && swift test"
             ))),
             argv_run: None,
         },
@@ -223,7 +260,7 @@ pub fn default_test_apps_run_config(
             precondition: Some(require_tool("zig")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                r#"cd {test_apps_dir}/zig && rm -rf zig-pkg .zig-cache && python3 - <<'PYEOF'
+                r#"cd {dir}/zig && rm -rf zig-pkg .zig-cache && python3 - <<'PYEOF'
 import pathlib, re, subprocess
 zon = pathlib.Path('build.zig.zon')
 content = zon.read_text()
@@ -246,21 +283,21 @@ zig build test"#
         Language::Gleam => TestAppRunConfig {
             precondition: Some(require_tool("gleam")),
             before: None,
-            run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/gleam && gleam test"))),
+            run: Some(StringOrVec::Single(format!("cd {dir}/gleam && gleam test"))),
             argv_run: None,
         },
         Language::R => TestAppRunConfig {
             precondition: Some(require_tool("Rscript")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/r && Rscript -e \"devtools::test()\""
+                "cd {dir}/r && Rscript -e \"devtools::test()\""
             ))),
             argv_run: None,
         },
         Language::C => TestAppRunConfig {
             precondition: Some(require_tool("make")),
             before: None,
-            run: Some(StringOrVec::Single(format!("cd {test_apps_dir}/c && make test"))),
+            run: Some(StringOrVec::Single(format!("cd {dir}/c && make test"))),
             argv_run: None,
         },
         Language::Ffi => TestAppRunConfig {
@@ -273,7 +310,7 @@ zig build test"#
             precondition: Some(require_tool("gradle")),
             before: None,
             run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/kotlin_android && gradle test --no-daemon"
+                "cd {dir}/kotlin_android && gradle test --no-daemon"
             ))),
             argv_run: None,
         },
@@ -291,13 +328,21 @@ zig build test"#
 /// names get no run.
 pub fn default_test_apps_run_config_for_name(name: &str, test_apps_dir: &str, _ctx: &LangContext) -> TestAppRunConfig {
     match name {
+        // `test_apps_dir` is free-form user config; `bash run_tests.sh` needs no shell features
+        // of its own, so the whole step runs as argv with the directory as the work_dir --
+        // `Command::current_dir` takes it as an opaque path and no shell ever parses it. ~keep
         "brew" | "homebrew" => TestAppRunConfig {
             precondition: Some(require_tool("brew")),
             before: None,
-            run: Some(StringOrVec::Single(format!(
-                "cd {test_apps_dir}/{name} && bash run_tests.sh"
-            ))),
-            argv_run: None,
+            run: None,
+            argv_run: Some(ArgvRunConfig {
+                work_dir: format!("{test_apps_dir}/{name}"),
+                env: Vec::new(),
+                steps: vec![ArgvStep {
+                    command: "bash".to_owned(),
+                    args: vec!["run_tests.sh".to_owned()],
+                }],
+            }),
         },
         _ => TestAppRunConfig {
             precondition: None,
@@ -388,7 +433,7 @@ mod tests {
         let c = cfg(Language::Rust, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v cargo >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/rust"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/rust"), "got: {run}");
         assert!(run.contains("cargo test"), "got: {run}");
     }
 
@@ -397,7 +442,7 @@ mod tests {
         let c = cfg(Language::Python, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v uv >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/python"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/python"), "got: {run}");
         assert!(run.contains("uv sync"), "got: {run}");
         assert!(run.contains("uv run pytest"), "got: {run}");
     }
@@ -417,7 +462,7 @@ mod tests {
             assert_eq!(c.precondition.as_deref(), Some(expected_pre), "{pm} precondition");
             let run = c.run.unwrap().commands().join(" ");
             assert!(run.contains(expected_cmd), "{pm}: expected {expected_cmd}, got: {run}");
-            assert!(run.contains("cd test_apps/python"), "{pm}: got: {run}");
+            assert!(run.contains("cd 'test_apps'/python"), "{pm}: got: {run}");
         }
     }
 
@@ -426,7 +471,7 @@ mod tests {
         let c = cfg(Language::Node, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v pnpm >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/node"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/node"), "got: {run}");
         assert!(
             run.contains("pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0"),
             "got: {run}"
@@ -469,7 +514,7 @@ mod tests {
                 "command -v ruby >/dev/null 2>&1 && BUNDLE_PATH=vendor/bundle ruby -S bundle --version >/dev/null 2>&1"
             )
         );
-        assert!(run.contains("cd test_apps/ruby"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/ruby"), "got: {run}");
         assert!(
             run.contains(
                 "BUNDLE_PATH=vendor/bundle ruby -S bundle install && BUNDLE_PATH=vendor/bundle ruby -S bundle exec ruby -S rspec"
@@ -481,14 +526,38 @@ mod tests {
     #[test]
     fn php_runs_composer_test() {
         let c = cfg(Language::Php, "test_apps");
-        let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v composer >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/php"), "got: {run}");
         assert!(
-            run.contains("bash install.sh"),
-            "PHP run command must call alef-emitted install.sh (PIE bootstrap) before composer; got: {run}"
+            c.run.is_none(),
+            "php's default run must be argv-only, not a shell string: {:?}",
+            c.run
         );
-        assert!(run.contains("composer install && composer test"), "got: {run}");
+        let argv = c.argv_run.expect("php should have an argv run command");
+        assert_eq!(argv.work_dir, "test_apps/php");
+        assert_eq!(argv.steps.len(), 3, "install.sh, composer install, composer test");
+        assert_eq!(argv.steps[0].command, "bash");
+        assert_eq!(
+            argv.steps[0].args,
+            vec!["install.sh"],
+            "PHP must call the alef-emitted install.sh (PIE bootstrap) before composer"
+        );
+        assert_eq!(argv.steps[1].command, "composer");
+        assert_eq!(argv.steps[1].args, vec!["install"]);
+        assert_eq!(argv.steps[2].command, "composer");
+        assert_eq!(argv.steps[2].args, vec!["test"]);
+    }
+
+    #[test]
+    fn php_forwards_the_published_version_as_one_literal_argument() {
+        let tools = ToolsConfig::default();
+        let ctx = LangContext::default(&tools);
+        let c = default_test_apps_run_config(Language::Php, "test_apps", &ctx, Some("^1.2.3"), None);
+        let argv = c.argv_run.expect("php should have an argv run command");
+        assert_eq!(
+            argv.steps[0].args,
+            vec!["install.sh", "1.2.3"],
+            "the constraint prefix is stripped and the bare version is a separate argv element"
+        );
     }
 
     #[test]
@@ -496,7 +565,7 @@ mod tests {
         let c = cfg(Language::Elixir, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v mix >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/elixir"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/elixir"), "got: {run}");
         assert!(run.contains("mix deps.get && mix test"), "got: {run}");
     }
 
@@ -505,9 +574,9 @@ mod tests {
         let c = cfg(Language::Swift, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v swift >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/swift_e2e"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/swift_e2e"), "got: {run}");
         assert!(
-            !run.contains("cd test_apps/swift "),
+            !run.contains("cd 'test_apps'/swift "),
             "must not use swift/ subdir, got: {run}"
         );
         assert!(run.contains("swift test"), "got: {run}");
@@ -594,7 +663,7 @@ mod tests {
     fn zig_runs_zig_build_test() {
         let c = cfg(Language::Zig, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
-        assert!(run.contains("cd test_apps/zig"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/zig"), "got: {run}");
         assert!(run.contains("python3"), "got: {run}");
         assert!(run.contains("'zig', 'fetch'"), "got: {run}");
         assert!(run.contains("zig build test"), "got: {run}");
@@ -610,7 +679,7 @@ mod tests {
     fn wasm_runs_under_wasm_subdir() {
         let c = cfg(Language::Wasm, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
-        assert!(run.contains("cd test_apps/wasm"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/wasm"), "got: {run}");
         assert!(
             run.contains("pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0"),
             "got: {run}"
@@ -633,9 +702,13 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         let c = default_test_apps_run_config_for_name("brew", "test_apps", &ctx);
-        let run = c.run.expect("brew should have a run command").commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v brew >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/brew && bash run_tests.sh"), "got: {run}");
+        assert!(c.run.is_none(), "brew's default run must be argv-only: {:?}", c.run);
+        let argv = c.argv_run.expect("brew should have an argv run command");
+        assert_eq!(argv.work_dir, "test_apps/brew");
+        assert_eq!(argv.steps.len(), 1);
+        assert_eq!(argv.steps[0].command, "bash");
+        assert_eq!(argv.steps[0].args, vec!["run_tests.sh"]);
     }
 
     #[test]
@@ -643,13 +716,16 @@ mod tests {
         let tools = ToolsConfig::default();
         let ctx = LangContext::default(&tools);
         let c = default_test_apps_run_config_for_name("homebrew", "test_apps", &ctx);
-        let run = c.run.expect("homebrew should have a run command").commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v brew >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/homebrew && bash run_tests.sh"), "got: {run}");
-        assert!(
-            !run.contains("cd test_apps/brew "),
-            "must not use brew/ subdir for homebrew target, got: {run}"
+        assert!(c.run.is_none(), "homebrew's default run must be argv-only: {:?}", c.run);
+        let argv = c.argv_run.expect("homebrew should have an argv run command");
+        assert_eq!(
+            argv.work_dir, "test_apps/homebrew",
+            "must not use the brew/ subdir for the homebrew target"
         );
+        assert_eq!(argv.steps.len(), 1);
+        assert_eq!(argv.steps[0].command, "bash");
+        assert_eq!(argv.steps[0].args, vec!["run_tests.sh"]);
     }
 
     #[test]
@@ -662,7 +738,7 @@ mod tests {
         let c = cfg(Language::Dart, "test_apps");
         let run = c.run.expect("dart should have a run command").commands().join(" ");
         assert_eq!(c.precondition.as_deref(), Some("command -v dart >/dev/null 2>&1"));
-        assert!(run.contains("cd test_apps/dart"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/dart"), "got: {run}");
         assert!(run.contains("dart pub get"), "got: {run}");
         assert!(run.contains("dart test"), "got: {run}");
         assert!(
@@ -683,9 +759,9 @@ mod tests {
     fn kotlin_android_runs_under_kotlin_android_subdir() {
         let c = cfg(Language::KotlinAndroid, "test_apps");
         let run = c.run.unwrap().commands().join(" ");
-        assert!(run.contains("cd test_apps/kotlin_android"), "got: {run}");
+        assert!(run.contains("cd 'test_apps'/kotlin_android"), "got: {run}");
         assert!(
-            !run.contains("cd test_apps/kotlin "),
+            !run.contains("cd 'test_apps'/kotlin "),
             "must use kotlin_android/ subdir, not kotlin/, got: {run}"
         );
         assert!(run.contains("gradle test --no-daemon"), "got: {run}");
