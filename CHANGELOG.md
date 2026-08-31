@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Validate every consumer-configured C ABI identifier, path, header, export, registry, E2E, and
+  package surface through the canonical per-field grammar, and revalidate the packaged canonical
+  header before publication. Invalid configuration can no longer bypass resolution and reach
+  generated source, filesystem operations, or release artifacts through a less strict path.
 - Stop `#[derive(Default)]` erasing a field's named `#[serde(default = "path")]` from the IR.
   Extraction blanket-overwrote every field's `typed_default` with `DefaultValue::Empty` whenever
   the container derived `Default`, destroying the `FunctionCall` recorded for the named form.
@@ -78,24 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-built Windows CLI archive and writes/updates `bucket/alef.json` in a Scoop bucket
   repository. Add `Registry::Scoop` to `alef check-registry`.
 
-### Changed
-
-- Split `codegen::naming` into one submodule per name surface (`surfaces`, `wire`, `host`,
-  `symbols`, `identifiers`, `languages`, `case`), leaving `naming.rs` as a re-export facade.
-  Every `codegen::naming::<item>` path is unchanged; this is a refactor with no behavior change.
-  `hooks/check_backend_naming_helpers.py`'s allowlist now points at the canonical definitions'
-  new files, so the hook no longer flags `wire_variant_value` and `pascal_to_snake` themselves.
-- Consolidate the four independent `snake_to_camel` definitions (TypeScript e2e, WASM e2e, Dart
-  e2e, Dart FRB rewrite) into `codegen::naming::underscore_camel_case`, and add `snake_to_camel`
-  to the naming-helper gate's banned set so a fifth cannot appear. The Dart FRB rewrite keeps a
-  context-specific `frb_dart_function_name` wrapper that delegates to it, because it models
-  flutter_rust_bridge's output rather than alef's naming policy. Output is unchanged.
-
 ### Fixed
 
 - Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
   E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
   an identifier-less expression.
+- Preserve explicit `null` for optional Go collection arguments while continuing to normalize a
+  required nil collection to its empty `[]` or `{}` wire value.
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
   already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
   a literal character rather than a quoting operator, so maven was handed
@@ -194,6 +187,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously declared host spelling described a shape neither deserializer accepts and
   silently fell through to the enum's `Default`. `rename_all_fields` is now honored, and the
   enum's variant-level `rename_all` is no longer applied to field keys.
+- Honor the full serde field-wire precedence (`rename` over `rename_all_fields` over the raw field
+  name) for tagged-union payload fields in C#, Java, and Swift adjacent-tagged encoding.
 - Derive the synthesized discriminator key for a tagged-object enum lowering from one
   shared authority (`codegen::serde_enum_repr::tagged_object_tag_key`). The Ruby/Magnus
   `from_hash` dispatcher spelled its fallback `kind` while every other backend spelled theirs
