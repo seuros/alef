@@ -101,6 +101,31 @@ impl FieldResolver {
             .map(String::as_str)
     }
 
+    /// The serde WIRE value a Rust `variant` identifier produces, for the enum type backing
+    /// `field` — the inverse direction of [`Self::enum_variant_for_wire_value`], read off the same
+    /// restricted map and therefore carrying the same guarantees: an answer exists only when a
+    /// rename actually separates the two spellings AND the pairing is unambiguous in both
+    /// directions (see [`super::super::super::ir_enum::build_enum_wire_variants`]).
+    ///
+    /// A generator that renders a value read off the WIRE surface — a wasm `to_api_str()` getter,
+    /// a `serde_wasm_bindgen` payload — but compares it against a fixture's expected value needs
+    /// this whenever the fixture named the variant by its Rust identifier. `None` means either
+    /// "the IR cannot resolve this field to a concrete enum" or "no rename is in effect", and a
+    /// caller must treat both the same way: keep the fixture value untranslated, which is correct
+    /// whenever the identifier IS the wire value and is the behaviour that predates this lookup.
+    ///
+    /// The inversion is total rather than lossy: every variant produces exactly one wire value,
+    /// so the wire-keyed map holds at most one entry per Rust identifier. ~keep
+    pub fn enum_wire_value_for_variant(&self, field: &str, variant: &str) -> Option<&str> {
+        let enum_name = self.ir_enum_type_name(field)?;
+        self.ir_enum_map
+            .enum_wire_variants
+            .get(&enum_name)?
+            .iter()
+            .find(|(_, identifier)| identifier.as_str() == variant)
+            .map(|(wire, _)| wire.as_str())
+    }
+
     /// The serde discriminator key and wire value for a concrete tagged-enum variant.
     pub fn tagged_enum_wire_discriminator(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
         let wire = self.ir_enum_map.tagged_enum_wire.get(union_type)?;

@@ -186,15 +186,16 @@ pub(super) fn render_assertion_with_streaming_item_type(
     // Check if this is metadata.format field (FormatMetadata tagged enum)
     let is_format_metadata = assertion.field.as_deref().is_some_and(|f| f == "metadata.format");
 
-    // WASM: enum-typed result fields are exposed as numeric discriminants by
-    // wasm-bindgen, not strings. Compare against `EnumClass.Variant` instead of
-    // running `.trim()` on a number.
+    // WASM lowers an enum-typed struct field to something that is never the wasm-bindgen numeric
+    // discriminant a struct getter might suggest — see `render_wasm_enum_assertion` for the two
+    // shapes and which one applies when.
     if lang == "wasm" {
-        if let Some(enum_class) = assertion.field.as_deref().and_then(|f| {
-            result_enum_fields
+        if let Some(f) = assertion.field.as_deref()
+            && result_enum_fields
                 .get(f)
                 .or_else(|| result_enum_fields.get(field_resolver.resolve(f)))
-        }) && render_wasm_enum_assertion(out, assertion, &field_expr, enum_class)
+                .is_some()
+            && render_wasm_enum_assertion(out, assertion, &field_expr, f, field_resolver)
         {
             return;
         }
@@ -264,18 +265,59 @@ fn assertion_value_is_numeric(assertion: &Assertion) -> bool {
     }
 }
 
-/// Render an enum-typed result assertion. WASM optional-enum getters return
-/// `Option<String>` (the serde wire format) rather than the wasm-bindgen enum
-/// discriminant, so we compare against the original snake_case string value
-/// rather than the `EnumClass.Variant` reference. The `enum_class` is no longer
-/// referenced in the emitted code but is retained in the signature for clarity
-/// at the call site.
-/// Returns `true` if the assertion was rendered.
-fn render_wasm_enum_assertion(out: &mut String, assertion: &Assertion, field_expr: &str, _enum_class: &str) -> bool {
+/// Render an enum-typed result assertion for the wasm binding. Returns `true` when it rendered.
+///
+/// ~keep wasm hands JavaScript TWO different shapes for an enum-typed STRUCT FIELD, and which one
+/// depends on whether the enum carries variant data:
+///
+/// * An all-unit enum stays wrapper-backed and its getter returns `to_api_str()` — a `String`
+///   holding the serde WIRE value, honoring `#[serde(rename)]`/`rename_all`
+///   (`backends::wasm::gen_bindings::types`' `is_required_enum` branch, and the `to_api_str`
+///   emitter in that backend's `enums.rs`). Comparing it against a bare string is right, and
+///   stays.
+/// * A data-carrying enum's FIELD is declared `JsValue` and filled by
+///   `serde_wasm_bindgen::to_value(&core_value)`
+///   (`codegen::conversions::core_to_binding::fields`), so JavaScript receives serde's OWN wire
+///   form — not the flat discriminator struct `gen_tagged_enum_as_struct` emits, which is only
+///   reachable in return position. Under serde's default (external) representation that is the
+///   bare string `"Unit"` for a unit variant and the single-key object `{"Custom": payload}` for
+///   a data one, so `expect(result.kind).toBe("Custom")` compared an object against a string and
+///   could never pass. The variant name has to be read out of the object's only key.
+///   wasm-bindgen types a `JsValue` getter `any`, so tsc reports nothing: the failure is
+///   runtime-only.
+///
+/// The expected value is brought onto the wire surface in both shapes. A fixture may legitimately
+/// name a variant by its Rust identifier or by its serde wire value — the same latitude
+/// `codegen::serde_enum_repr::variant_name_for_wire` documents for the inverse direction — while
+/// serde only ever wrote the wire spelling, so a `#[serde(rename = "md")] Markdown` fixture
+/// written as `Markdown` used to fail against a binding that was working correctly.
+///
+/// `unwrap_or(false)` on the data-carrying question is the deliberate default, not laziness:
+/// `result_enum_fields` is hand-written config, so a field classified only there has no IR answer
+/// and must keep the scalar comparison it already had.
+///
+/// Residual, stated rather than hidden: a `#[serde(untagged)]` data enum writes the payload alone
+/// with no variant name anywhere on the wire, so no accessor can recover one. `IrEnumMap` records
+/// no untagged flag, so this cannot single that case out — it takes the data-carrying branch and
+/// fails, exactly as it failed before. It never passes falsely.
+fn render_wasm_enum_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field_expr: &str,
+    field: &str,
+    field_resolver: &FieldResolver,
+) -> bool {
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(serde_json::Value::String(s)) = &assertion.value {
-                out.push_str(&format!("    expect({field_expr}).toBe(\"{s}\");\n"));
+                let wire = field_resolver.enum_wire_value_for_variant(field, s).unwrap_or(s);
+                let is_data_carrying = field_resolver.ir_enum_is_data_carrying(field).unwrap_or(false);
+                let read = if is_data_carrying {
+                    format!("(typeof {field_expr} === \"string\" ? {field_expr} : Object.keys({field_expr} ?? {{}})[0])")
+                } else {
+                    field_expr.to_string()
+                };
+                out.push_str(&format!("    expect({read}).toBe(\"{wire}\");\n"));
                 return true;
             }
         }
@@ -1233,6 +1275,9 @@ mod skip_marker_tests;
 #[cfg(test)]
 #[path = "assertions/text_surface_tests.rs"]
 mod text_surface_tests;
+#[cfg(test)]
+#[path = "assertions/wasm_enum_tests.rs"]
+mod wasm_enum_tests;
 #[cfg(test)]
 #[path = "assertions/wildcard_tests.rs"]
 mod wildcard_tests;
