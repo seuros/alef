@@ -6,6 +6,16 @@
 //! pass every test in `mutated_literal.rs` and still ship the original defect — the failure
 //! mode is not "misses a mutation", it is "reports a value it did not read". Each case below
 //! is a shape where the *pre-fix* extractor answered with confident, wrong data.
+//!
+//! **Every fixture here must be source that `rustc` actually accepts.** `syn` parses strictly
+//! more than `rustc` compiles, so a fixture can look fine, parse fine, and still describe a
+//! program that cannot exist — in which case the test protects against nothing. Checked against
+//! `rustc` 1.98: `#[cfg(..)]` on a bare assignment statement (`prefs.depth = 9;`) is **rejected**
+//! with `error[E0658]: attributes on expressions are experimental`, while the same attribute on
+//! a method-call statement (`prefs.tags.push(..);`), on a block, on a `let`, or on a
+//! struct-literal field is accepted. The cfg fixtures below use only the accepted spellings, and
+//! each was compiled under both `--cfg feature="extras"` states to confirm it builds and to read
+//! the two runtime values it really produces. ~keep
 
 use super::*;
 
@@ -321,33 +331,38 @@ fn a_mutated_literal_with_a_rest_base_is_unresolved() {
 /// Whether a `cfg`-gated mutation runs depends on the features the *consumer* enables, which is
 /// not knowable from the source alef reads. Both directions of the gate are tested because a
 /// rule that refuses every attribute is easy to write and a rule that refuses the right ones has
-/// to be shown. This is the cfg-TRUE direction: with the feature on, the real default is `9`.
+/// to be shown.
+///
+/// This body compiles in both configurations and produces a *different* value in each: built
+/// without `extras` the default is `[]`, built with it the default is `["alpha"]`. Verified by
+/// compiling this exact source twice with `rustc`, once per `--cfg` state. One source text, two
+/// runtime answers, and alef sees only the text. ~keep
 #[test]
-fn a_cfg_gated_assignment_is_unresolved_when_the_feature_would_be_on() {
-    let resolved = defaults_for(
+fn a_cfg_gated_push_is_unresolved_when_the_feature_would_be_on() {
+    let resolved = defaults_for_typed(
         r#"
-                pub struct Prefs { pub max_depth: u32 }
+                pub struct Prefs { pub tags: Vec<String> }
 
                 impl Default for Prefs {
                     fn default() -> Self {
-                        let mut prefs = Self { max_depth: 0 };
+                        let mut prefs = Self { tags: Vec::new() };
                         #[cfg(feature = "extras")]
-                        prefs.max_depth = 9;
+                        prefs.tags.push("alpha".to_string());
                         prefs
                     }
                 }
             "#,
         "Prefs",
-        &["max_depth"],
+        &[("tags", TypeRef::Vec(Box::new(TypeRef::String)))],
     );
 
     assert_every_field_unresolved(&resolved, "a cfg-gated mutation may or may not exist in a build");
 }
 
-/// The cfg-FALSE direction. With the feature off the mutation is compiled out and the real
-/// default is the literal's `0` — but recording `0` would be right by accident, and wrong in
-/// every build that enables the feature. The extractor sees one source text for both builds, so
-/// the only honest answer is that it does not know.
+/// The cfg-FALSE direction, with the gate negated: built without `extras` the default is
+/// `["alpha"]`, built with it the default is `[]` — the mirror image of the test above, and
+/// likewise verified by compiling this source under both `--cfg` states. Recording either value
+/// would be right in one build and wrong in the other.
 #[test]
 fn a_cfg_gated_push_is_unresolved_when_the_feature_would_be_off() {
     let resolved = defaults_for_typed(
@@ -373,52 +388,56 @@ fn a_cfg_gated_push_is_unresolved_when_the_feature_would_be_off() {
 /// `cfg_attr` expands to arbitrary attributes under the same unknown condition.
 #[test]
 fn a_cfg_attr_gated_mutation_is_unresolved() {
-    let resolved = defaults_for(
+    let resolved = defaults_for_typed(
         r#"
-                pub struct Prefs { pub max_depth: u32 }
+                pub struct Prefs { pub tags: Vec<String> }
 
                 impl Default for Prefs {
                     fn default() -> Self {
-                        let mut prefs = Self { max_depth: 0 };
-                        #[cfg_attr(feature = "extras", deprecated)]
-                        prefs.max_depth = 9;
+                        let mut prefs = Self { tags: Vec::new() };
+                        #[cfg_attr(feature = "extras", allow(unused))]
+                        prefs.tags.push("alpha".to_string());
                         prefs
                     }
                 }
             "#,
         "Prefs",
-        &["max_depth"],
+        &[("tags", TypeRef::Vec(Box::new(TypeRef::String)))],
     );
 
     assert_every_field_unresolved(&resolved, "cfg_attr hides an arbitrary attribute behind a feature");
 }
 
-/// An attribute this pass has never heard of may be a macro that rewrites or deletes the
-/// statement. Refusing every attribute rather than allowlisting the inert ones is deliberate:
-/// the allowlist is the part that goes stale.
+/// `#[rustfmt::skip]` is a real, stable attribute that alef does not model. It happens to be
+/// inert here — this body yields `["alpha"]` in every configuration — so refusing it costs
+/// precision, and that cost is accepted deliberately: an allowlist of "attributes known to be
+/// inert" is the part that silently goes stale when a new one appears, and the failure it would
+/// admit is a wrong value rather than a missing one. ~keep
 #[test]
 fn an_unrecognized_attribute_on_a_mutation_is_unresolved() {
-    let resolved = defaults_for(
+    let resolved = defaults_for_typed(
         r#"
-                pub struct Prefs { pub max_depth: u32 }
+                pub struct Prefs { pub tags: Vec<String> }
 
                 impl Default for Prefs {
                     fn default() -> Self {
-                        let mut prefs = Self { max_depth: 0 };
-                        #[some_crate::rewrite]
-                        prefs.max_depth = 9;
+                        let mut prefs = Self { tags: Vec::new() };
+                        #[rustfmt::skip]
+                        prefs.tags.push("alpha".to_string());
                         prefs
                     }
                 }
             "#,
         "Prefs",
-        &["max_depth"],
+        &[("tags", TypeRef::Vec(Box::new(TypeRef::String)))],
     );
 
-    assert_every_field_unresolved(&resolved, "an attribute macro may rewrite or delete the statement");
+    assert_every_field_unresolved(&resolved, "an unmodelled attribute is refused rather than allowlisted");
 }
 
-/// The attribute may equally sit on the binding itself.
+/// The attribute may equally sit on the binding itself. Spelled as a matched pair so both
+/// configurations compile — a lone `#[cfg]` on the only `let` would leave the binding undefined
+/// in the other build. Built without `extras` the default is `0`, with it `7`.
 #[test]
 fn an_attributed_local_binding_is_unresolved() {
     let resolved = defaults_for(
@@ -428,8 +447,9 @@ fn an_attributed_local_binding_is_unresolved() {
                 impl Default for Prefs {
                     fn default() -> Self {
                         #[cfg(feature = "extras")]
-                        let mut prefs = Self { max_depth: 7 };
-                        prefs.max_depth = 9;
+                        let prefs = Self { max_depth: 7 };
+                        #[cfg(not(feature = "extras"))]
+                        let prefs = Self { max_depth: 0 };
                         prefs
                     }
                 }
@@ -441,13 +461,19 @@ fn an_attributed_local_binding_is_unresolved() {
     assert_every_field_unresolved(&resolved, "the binding itself is cfg-gated");
 }
 
-/// A `cfg` on one initializer of the struct literal is the same lie one level down: the
-/// initializer exists only in some builds.
+/// A `cfg` on one initializer of the struct literal is the same lie one level down. The field
+/// declaration carries the same gate, as it must for both configurations to compile: without
+/// `extras` the field does not exist at all, with it the default is `9`. `width` is ungated and
+/// stays readable, so the refusal is field-granular rather than whole-body. ~keep
 #[test]
 fn a_cfg_gated_struct_literal_initializer_is_unresolved() {
     let resolved = defaults_for(
         r#"
-                pub struct Prefs { pub max_depth: u32, pub width: u32 }
+                pub struct Prefs {
+                    #[cfg(feature = "extras")]
+                    pub max_depth: u32,
+                    pub width: u32,
+                }
 
                 impl Default for Prefs {
                     fn default() -> Self {
@@ -534,4 +560,30 @@ fn a_macro_statement_before_a_tail_literal_is_unresolved() {
     );
 
     assert_every_field_unresolved(&resolved, "a macro's expansion is not parsed");
+}
+
+/// The legal spelling of a cfg-gated assignment: the attribute sits on a block, because Rust
+/// rejects it on a bare assignment statement (see this module's header). Refused on shape --
+/// a block is not a modelled mutation -- rather than on its attribute, and the answer is the
+/// same either way. Built without `extras` the default is `0`, with it `9`.
+#[test]
+fn a_cfg_gated_block_of_mutations_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { max_depth: 0 };
+                        #[cfg(feature = "extras")]
+                        { prefs.max_depth = 9; }
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "the gated block may or may not run");
 }
