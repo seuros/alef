@@ -93,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep Go assertion helpers on the resolved result-variable name, so programmatically constructed
+  E2E calls with an omitted or blank `result_var` emit the documented `result` binding instead of
+  an identifier-less expression.
 - Fix the `-Dmaven.version.rules=` argument in the Java `update`/`upgrade` defaults. The
   already-quoted output directory was interpolated inside an `echo "…"`, where a single quote is
   a literal character rather than a quoting operator, so maven was handed
