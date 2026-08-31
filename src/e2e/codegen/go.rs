@@ -939,17 +939,17 @@ mod go_mod_tests;
 #[path = "go/tests/import_set_tests.rs"]
 mod import_set_tests;
 #[cfg(test)]
+#[path = "go/tests/indexed_element_prefix_guard_tests.rs"]
+mod indexed_element_prefix_guard_tests;
+#[cfg(test)]
 #[path = "go/tests/main_test_go_gofmt_tests.rs"]
 mod main_test_go_gofmt_tests;
 #[cfg(test)]
 #[path = "go/tests/main_test_go_harness_tests.rs"]
 mod main_test_go_harness_tests;
 #[cfg(test)]
-#[path = "go/tests/streaming_fixture_render_tests.rs"]
-mod streaming_fixture_render_tests;
-#[cfg(test)]
-#[path = "go/tests/indexed_element_prefix_guard_tests.rs"]
-mod indexed_element_prefix_guard_tests;
-#[cfg(test)]
 #[path = "go/tests/optional_field_accessor_tests.rs"]
 mod optional_field_accessor_tests;
+#[cfg(test)]
+#[path = "go/tests/streaming_fixture_render_tests.rs"]
+mod streaming_fixture_render_tests;

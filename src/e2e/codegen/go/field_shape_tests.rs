@@ -52,8 +52,7 @@ const SAMPLE_RAW_MESSAGE: &str = "package sample\nimport \"encoding/json\"\ntype
 
 const SAMPLE_LABEL_POINTER: &str = "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { value := \"sample\"; return &Envelope{Label: &value}, nil }\n";
 
-const SAMPLE_LABEL_NIL: &str =
-    "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { return &Envelope{Label: nil}, nil }\n";
+const SAMPLE_LABEL_NIL: &str = "package sample\ntype Envelope struct { Label *string }\nfunc Inspect() (*Envelope, error) { return &Envelope{Label: nil}, nil }\n";
 
 const SAMPLE_LIMIT_POINTER: &str = "package sample\ntype Envelope struct { Limit *int64 }\nfunc Inspect() (*Envelope, error) { value := int64(5); return &Envelope{Limit: &value}, nil }\n";
 
@@ -64,7 +63,10 @@ fn rendered_case(name: &str, rendered: &str, sample_source: &str) -> GoBatchCase
         emitted_test_functions(rendered) >= 1,
         "a rendered case must emit at least one Go test function:\n{rendered}"
     );
-    let mut imports = vec!["\"testing\"".to_owned(), format!("sample \"{SHAPE_BATCH_MODULE}/{name}\"")];
+    let mut imports = vec![
+        "\"testing\"".to_owned(),
+        format!("sample \"{SHAPE_BATCH_MODULE}/{name}\""),
+    ];
     if rendered.contains("strings.") {
         imports.push("\"strings\"".to_owned());
     }

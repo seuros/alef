@@ -94,7 +94,11 @@ impl GoBatchReport {
             deduped.dedup();
             deduped.len()
         };
-        assert_eq!(unique, expected.len(), "batched Go case names must be unique: {expected:?}");
+        assert_eq!(
+            unique,
+            expected.len(),
+            "batched Go case names must be unique: {expected:?}"
+        );
         assert!(!expected.is_empty(), "a batched Go run must contain at least one case");
         let observed: Vec<&str> = self.cases.keys().map(String::as_str).collect();
         assert_eq!(

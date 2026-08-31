@@ -210,7 +210,11 @@ fn generated_data_interface_packages_compile_and_run_in_one_go_test() {
             "case `{}` generated a different go.mod; it can no longer share a module root",
             case.case.name
         );
-        assert_eq!(case.module_dir, module_dir, "case `{}` moved output_base", case.case.name);
+        assert_eq!(
+            case.module_dir, module_dir,
+            "case `{}` moved output_base",
+            case.case.name
+        );
     }
 
     let mut cases: Vec<GoBatchCase> = generated.into_iter().map(|entry| entry.case).collect();
@@ -228,10 +232,7 @@ fn generated_data_interface_packages_compile_and_run_in_one_go_test() {
                 PathBuf::from("packages/go/go.mod"),
                 "module example.com/sample\n\ngo 1.26\n".to_owned(),
             ),
-            (
-                PathBuf::from("packages/go/sample.go"),
-                SAMPLE_PACKAGE_SOURCE.to_owned(),
-            ),
+            (PathBuf::from("packages/go/sample.go"), SAMPLE_PACKAGE_SOURCE.to_owned()),
             (module_dir.join("go.mod"), manifest.clone()),
         ],
         module_dir,
