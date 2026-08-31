@@ -152,6 +152,19 @@ impl ResolvedCrateConfig {
             })
     }
 
+    /// Get the SwiftPM package name (`Package(name: "...")`).
+    ///
+    /// Defaults to [`Self::swift_module`]. This is a different coordinate from the module name
+    /// and carries a different grammar: real published packages use kebab-case
+    /// (`swift-argument-parser`), which is not a Swift identifier.
+    pub fn swift_package_name(&self) -> String {
+        self.swift
+            .as_ref()
+            .and_then(|s| s.package_name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.swift_module())
+    }
+
     /// Get the R package name.
     pub fn r_package_name(&self) -> String {
         self.r

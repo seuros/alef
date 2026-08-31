@@ -385,8 +385,104 @@ impl NewAlefConfig {
             verify: krate.verify.clone(),
         };
         validate_all_effective_ffi_configs(&resolved)?;
+        validate_package_coordinates(&resolved)?;
         Ok(resolved)
     }
+}
+
+fn invalid_coordinate(resolved: &ResolvedCrateConfig, field: &str, value: &str, reason: String) -> ResolveError {
+    ResolveError::InvalidConfig(format!(
+        "crate `{}`: {field} value `{value}` is not a valid coordinate: {reason}",
+        resolved.name
+    ))
+}
+
+/// Reject out-of-grammar package coordinates before any generator can splice them into a
+/// manifest.
+///
+/// ~keep This runs inside `resolve_one`, so every command that loads an `alef.toml` is covered by
+/// construction. Validating at the point of *use* instead would leave each backend free to skip
+/// the check, which is how these coordinates reached `pom.xml` and `.csproj` unvalidated: a
+/// `package` of `dev"; System.exit(1); //` was emitted verbatim as a `<groupId>`, and a
+/// `namespace` of `My.$(Evil)` became a live MSBuild property expansion in a generated project
+/// file.
+fn validate_package_coordinates(resolved: &ResolvedCrateConfig) -> Result<(), ResolveError> {
+    let languages = resolved.effective_languages();
+    validate_jvm_coordinates(resolved, &languages)?;
+    validate_dotnet_coordinates(resolved, &languages)?;
+    validate_swift_coordinates(resolved, &languages)?;
+    validate_dart_coordinates(resolved, &languages)?;
+    Ok(())
+}
+
+fn validate_jvm_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
+    use crate::codegen::coordinates::{validate_java_package, validate_kotlin_package, validate_maven_coordinate};
+
+    let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
+    if languages.contains(&Language::Java) || languages.contains(&Language::KotlinAndroid) {
+        let package = resolved.java_package();
+        validate_java_package(&package).map_err(|error| invalid("[crates.java].package", &package, error))?;
+        let group = resolved.java_group_id();
+        validate_maven_coordinate("groupId", &group).map_err(|error| invalid("[crates.java].group_id", &group, error))?;
+        let artifact = resolved.java_artifact_id();
+        validate_maven_coordinate("artifactId", &artifact)
+            .map_err(|error| invalid("[crates.java].artifact_id", &artifact, error))?;
+    }
+    if languages.contains(&Language::Kotlin) {
+        let package = resolved.kotlin_package();
+        validate_kotlin_package(&package).map_err(|error| invalid("[crates.kotlin].package", &package, error))?;
+    }
+    Ok(())
+}
+
+fn validate_dotnet_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
+    use crate::codegen::coordinates::{validate_csharp_namespace, validate_nuget_package_id};
+
+    if !languages.contains(&Language::Csharp) {
+        return Ok(());
+    }
+    let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
+    let namespace = resolved.csharp_namespace();
+    validate_csharp_namespace(&namespace).map_err(|error| invalid("[crates.csharp].namespace", &namespace, error))?;
+    let package_id = resolved
+        .csharp
+        .as_ref()
+        .and_then(|config| config.package_id.clone())
+        .unwrap_or_else(|| namespace.clone());
+    validate_nuget_package_id(&package_id).map_err(|error| invalid("[crates.csharp].package_id", &package_id, error))
+}
+
+/// `Package.swift` is executable Swift, and its two coordinates have different grammars.
+/// `module_name` becomes a compiled Swift identifier (`import <name>`); `package_name` is a
+/// free-form manifest label that published packages routinely write in kebab-case, so it only
+/// gets the narrower "cannot break out of the string literal" check.
+fn validate_swift_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
+    use crate::codegen::coordinates::{validate_swift_module_name, validate_swift_package_name};
+
+    if !languages.contains(&Language::Swift) {
+        return Ok(());
+    }
+    let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
+    let module_name = resolved.swift_module();
+    validate_swift_module_name(&module_name)
+        .map_err(|error| invalid("[crates.swift].module_name", &module_name, error))?;
+    let package_name = resolved.swift_package_name();
+    validate_swift_package_name(&package_name)
+        .map_err(|error| invalid("[crates.swift].package_name", &package_name, error))
+}
+
+fn validate_dart_coordinates(resolved: &ResolvedCrateConfig, languages: &[Language]) -> Result<(), ResolveError> {
+    use crate::codegen::coordinates::validate_dart_package_name;
+
+    if !languages.contains(&Language::Dart) {
+        return Ok(());
+    }
+    let invalid = |field: &str, value: &str, reason: String| invalid_coordinate(resolved, field, value, reason);
+    let pubspec_name = resolved.dart_pubspec_name();
+    validate_dart_package_name(&pubspec_name)
+        .map_err(|error| invalid("[crates.dart].pubspec_name", &pubspec_name, error))?;
+    let library_name = resolved.dart_library_name();
+    validate_dart_package_name(&library_name).map_err(|error| invalid("[crates.dart].lib_name", &library_name, error))
 }
 
 /// Validate a single `crate_attributes` entry.

@@ -10,6 +10,7 @@
 //! resolved through the workspace [`crate::core::config::output::OutputTemplate`]
 //! unless the crate set an explicit path in its `[crates.output]` table.
 
+mod effective_languages;
 pub mod ffi;
 pub mod fields;
 pub mod identifiers;
