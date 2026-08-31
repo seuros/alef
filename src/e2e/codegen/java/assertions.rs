@@ -423,7 +423,12 @@ pub(super) fn render_assertion(
         sealed_display_type,
         is_sealed_display_field,
         field_is_enum,
-    } = classify_enum_lowering(assertion.field.as_deref(), field_resolver, enum_fields, assert_enum_types);
+    } = classify_enum_lowering(
+        assertion.field.as_deref(),
+        field_resolver,
+        enum_fields,
+        assert_enum_types,
+    );
 
     // Runs BEFORE the wildcard lowering below, not after: `render_wildcard_assertion` returns
     // without consulting anything downstream, so a gate placed after it decides nothing for a

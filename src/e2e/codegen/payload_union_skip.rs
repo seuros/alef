@@ -263,8 +263,14 @@ mod tests {
     #[test]
     fn the_rendered_line_is_exact_and_recognised() {
         let resolver = resolver();
-        let line = payload_union_skip_line("        ", "//", &resolver, Some("untagged"), UnionLoweringTarget::Swift)
-            .expect("a payload union must be refused");
+        let line = payload_union_skip_line(
+            "        ",
+            "//",
+            &resolver,
+            Some("untagged"),
+            UnionLoweringTarget::Swift,
+        )
+        .expect("a payload union must be refused");
         assert_eq!(
             line,
             "        // skipped: enum field 'untagged' is a payload-carrying union with no scalar \
