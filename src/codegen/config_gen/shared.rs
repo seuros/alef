@@ -533,10 +533,12 @@ fn owning_type_path(typ: &TypeDef) -> &str {
 /// mechanism serde itself uses `path()` for: every sibling field serde will genuinely fill
 /// when its wire key is absent — one with its own field-level serde default, one covered by
 /// a container-level `#[serde(default)]`, or `Option<T>` — is omitted from the JSON, so
-/// serde fills it — including the field this call is solving for — with its real,
-/// source-crate-computed value. Every other (truly required) sibling gets a placeholder
-/// value, since its presence is needed only to make the object deserialize at all and does
-/// not affect the field being solved for.
+/// serde fills it with its real, source-crate-computed value. `field` itself — the one this
+/// call is solving for — is omitted unconditionally, never by falling through to the same
+/// `has_own_default`/`is_optional` test the other siblings use (see the loop's own comment):
+/// that test is not a reliable signal for `field` in particular. Every other (truly required)
+/// sibling gets a placeholder value, since its presence is needed only to make the object
+/// deserialize at all and does not affect the field being solved for.
 ///
 /// Returns `None` when this cannot be done with confidence, in which case the caller must
 /// fail generation rather than guess:
@@ -559,6 +561,21 @@ fn rust_default_via_source_deserialize(field: &FieldDef, typ: &TypeDef) -> Optio
     for sibling in &typ.fields {
         if sibling.serde_flatten || sibling.cfg.is_some() {
             return None;
+        }
+        // The field being solved for must never get a placeholder in its own probe JSON: the
+        // whole mechanism depends on its wire key being *absent*, so serde fills it with the
+        // real value `path()`/`impl Default` computes — the value this function exists to
+        // recover. Before this check, `field` fell through to the same `has_own_default`/
+        // `is_optional` test as any other sibling, and neither one reliably holds for it: a
+        // `FunctionCall` read from a manual `impl Default`'s call expression (rather than a
+        // field-level `#[serde(default = "path")]` attribute) leaves `field.default` at `None`,
+        // so the field looked exactly like a genuinely required sibling and got a
+        // `json_placeholder_literal` type-zero (`0`, `""`, `false`) forced into its own key —
+        // well-formed Rust that silently deserialized back to that placeholder instead of the
+        // real default. Skipping the field unconditionally, ahead of that test, is what actually
+        // omits its key from the probe body. ~keep
+        if sibling.name == field.name {
+            continue;
         }
         // `sibling.typed_default.is_some()` is NOT a substitute for "serde will fill this
         // field if its wire key is absent": `#[derive(Default)]` seeds `typed_default =
