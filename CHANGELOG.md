@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statement's rendered tokens rather than a `syn` `attrs` field, because `syn` parks a statement
   attribute on `ExprAssign.left` rather than `ExprAssign.attrs`, where the obvious check would
   have read clean on exactly the shape it exists to catch.
+- Stop the PHP backend fabricating empty/zero/null values for a constructor-omitted field. Two
+  defects: the local holding the core type's `Default` was the fixed name `__alef_core_defaults`,
+  which a consumer field or PHP parameter of the same name would silently shadow -- the shadowed
+  `let` still type-checks whenever the types agree, so the wrong value would bind with no warning.
+  It is now derived per type, reserving every field name, PHP parameter name, and `*_core`/
+  `*_core_result` local the constructor could emit, and lengthening with `_` until it cannot
+  collide. Separately, an omitted `Option` field with no default anywhere invented `None` instead
+  of refusing: that is the same fabrication as an empty allow-list wearing a type that makes it
+  look like absence, and the generated stub promises callers nothing about the value of a field
+  it says is "not settable via the constructor." Alef now reuses the real `Default` when one
+  exists, honors only a default the IR actually recorded (`DefaultValue::Empty`/`None`), and
+  refuses generation -- naming the field and the remedy -- when neither is available.
 - Stop `#[derive(Default)]` erasing a field's named `#[serde(default = "path")]` from the IR.
   Extraction blanket-overwrote every field's `typed_default` with `DefaultValue::Empty` whenever
   the container derived `Default`, destroying the `FunctionCall` recorded for the named form.

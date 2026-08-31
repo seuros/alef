@@ -223,3 +223,7 @@ pub(crate) fn gen_constructor_field_inits(
 #[cfg(test)]
 #[path = "constructor_init/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "constructor_init/runtime_oracle.rs"]
+mod runtime_oracle;

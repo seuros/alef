@@ -75,10 +75,7 @@ fn should_emit_type_zero_when_derived_default_marks_collection_field_empty() {
     let init = build(&typ).expect("a derived Default is knowable and must not fail generation");
 
     assert_eq!(init.field_inits, "allow_list: Default::default()");
-    assert_eq!(
-        init.prelude, "",
-        "an exact type zero needs no delegating-Default local"
-    );
+    assert_eq!(init.prelude, "", "an exact type zero needs no delegating-Default local");
 }
 
 #[test]
@@ -175,8 +172,16 @@ fn should_bind_the_core_default_local_once_for_several_recovered_fields() {
     let typ = policy(
         true,
         vec![
-            field("allow_list", rule_list(), Some(DefaultValue::Unresolved("x".to_string()))),
-            field("deny_list", rule_list(), Some(DefaultValue::Unresolved("x".to_string()))),
+            field(
+                "allow_list",
+                rule_list(),
+                Some(DefaultValue::Unresolved("x".to_string())),
+            ),
+            field(
+                "deny_list",
+                rule_list(),
+                Some(DefaultValue::Unresolved("x".to_string())),
+            ),
         ],
     );
 
@@ -211,7 +216,10 @@ fn should_fail_generation_for_an_allow_list_with_no_recoverable_default() {
     let error = build(&typ).expect_err("an unknowable allow-list default must fail generation");
     let message = format!("{error}");
 
-    assert!(message.contains("allow_list"), "error must name the field, got: {message}");
+    assert!(
+        message.contains("allow_list"),
+        "error must name the field, got: {message}"
+    );
     assert!(message.contains(CORE_TYPE), "error must name the type, got: {message}");
     // Not merely `contains("Default")` — the message mentions `Default::default()` while
     // explaining what it refuses to emit, so that would pass with the remedy list deleted. ~keep
@@ -370,13 +378,18 @@ fn should_pick_a_local_no_hostile_field_name_can_shadow() {
             field(
                 "allow_list",
                 rule_list(),
-                Some(DefaultValue::ListLiteral(vec![DefaultValue::StringLiteral("internal".to_string())])),
+                Some(DefaultValue::ListLiteral(vec![DefaultValue::StringLiteral(
+                    "internal".to_string(),
+                )])),
             ),
         ],
     );
 
     let local = core_defaults_local(&typ);
-    assert_ne!(local, "__alef_core_defaults", "the local must not reuse a real field name");
+    assert_ne!(
+        local, "__alef_core_defaults",
+        "the local must not reuse a real field name"
+    );
 
     let init = build(&typ).expect("a type with a Default impl can always be read back from");
 
