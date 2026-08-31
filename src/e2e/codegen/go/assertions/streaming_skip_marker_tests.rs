@@ -31,7 +31,7 @@ fn render_streaming(assertion: &Assertion) -> String {
     );
     let mut out = String::new();
     let context = AssertionRenderContext {
-        result_var: "result",
+        effective_result_var: "result",
         import_alias: "pkg",
         field_resolver: &resolver,
         optional_locals: &HashMap::new(),

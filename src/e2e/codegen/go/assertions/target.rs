@@ -35,7 +35,7 @@ pub(super) fn resolve_assertion_target(
     context: &AssertionRenderContext<'_>,
 ) -> ResolvedAssertionTarget {
     let result_is_simple = context.result_is_simple;
-    let result_var = context.result_var;
+    let result_var = context.effective_result_var;
     let optional_locals = context.optional_locals;
     let field_resolver = context.field_resolver;
 

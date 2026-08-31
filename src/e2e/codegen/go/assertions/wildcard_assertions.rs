@@ -217,9 +217,9 @@ pub(super) fn render_wildcard_assertion(
     }
     let field_resolver = context.field_resolver;
     let array_accessor = if array_part.is_empty() {
-        context.result_var.to_string()
+        context.effective_result_var.to_string()
     } else {
-        field_resolver.accessor(array_part, "go", context.result_var)
+        field_resolver.accessor(array_part, "go", context.effective_result_var)
     };
     // `element_accessor`, not `accessor`: the path is already element-relative, so the
     // result-anchoring `accessor` applies would re-prefix it with the container. ~keep

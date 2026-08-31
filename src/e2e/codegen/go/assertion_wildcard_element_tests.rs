@@ -27,7 +27,7 @@ const CONTAINER_ACCESSOR: &str = ".Records";
 fn render(resolver: &FieldResolver) -> String {
     let mut out = String::new();
     let context = AssertionRenderContext {
-        result_var: "result",
+        effective_result_var: "result",
         import_alias: "sample",
         field_resolver: resolver,
         optional_locals: &HashMap::new(),

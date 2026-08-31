@@ -2,8 +2,8 @@
 
 use crate::e2e::fixture::Assertion;
 
-use synthetic_fields::render_synthetic_field_assertion;
 use streaming_fields::render_streaming_field_assertion;
+use synthetic_fields::render_synthetic_field_assertion;
 use target::resolve_assertion_target;
 use wildcard_assertions::{emit_non_empty_precondition, render_wildcard_or_unavailable_field};
 
@@ -12,7 +12,7 @@ use wildcard_assertions::{emit_non_empty_precondition, render_wildcard_or_unavai
 /// assertion loop, in contrast to `assertion`, which varies per call. Immutable by
 /// construction -- every field is a borrow or a `Copy` value.
 pub(super) struct AssertionRenderContext<'a> {
-    pub(super) result_var: &'a str,
+    pub(super) effective_result_var: &'a str,
     pub(super) import_alias: &'a str,
     pub(super) field_resolver: &'a crate::e2e::field_access::FieldResolver,
     pub(super) optional_locals: &'a std::collections::HashMap<String, String>,

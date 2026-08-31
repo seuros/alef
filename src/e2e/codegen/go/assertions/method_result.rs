@@ -16,7 +16,12 @@ pub(super) fn render_method_result(out_ref: &mut String, context: &AssertionRend
     let Some(method_name) = &assertion.method else {
         panic!("Go e2e generator: method_result assertion missing 'method' field");
     };
-    let info = build_go_method_call(context.result_var, method_name, assertion.args.as_ref(), context.import_alias);
+    let info = build_go_method_call(
+        context.effective_result_var,
+        method_name,
+        assertion.args.as_ref(),
+        context.import_alias,
+    );
     let check = assertion.check.as_deref().unwrap_or("is_true");
     let deref_expr = if info.is_pointer {
         format!("*{}", info.call_expr)

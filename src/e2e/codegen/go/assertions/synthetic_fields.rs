@@ -30,7 +30,7 @@ pub(super) fn render_synthetic_field_assertion(
     let Some(f) = &assertion.field else {
         return false;
     };
-    let result_var = context.result_var;
+    let result_var = context.effective_result_var;
     let field_resolver = context.field_resolver;
     let embed_deref = format!("(*{result_var})");
     if let Some(reason) = crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) {
@@ -152,9 +152,8 @@ pub(super) fn render_synthetic_field_assertion(
             return true;
         }
         "embedding_dimensions" => {
-            let expr = format!(
-                "func() int {{ if len({embed_deref}) == 0 {{ return 0 }}; return len({embed_deref}[0]) }}()"
-            );
+            let expr =
+                format!("func() int {{ if len({embed_deref}) == 0 {{ return 0 }}; return len({embed_deref}[0]) }}()");
             match assertion.assertion_type.as_str() {
                 "equals" => {
                     if let Some(val) = &assertion.value

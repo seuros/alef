@@ -31,7 +31,7 @@ fn contains_assertion(field: &str, value: &str) -> Assertion {
 fn render_with_resolver(assertion: &Assertion, resolver: &FieldResolver) -> String {
     let mut out = String::new();
     let context = AssertionRenderContext {
-        result_var: "result",
+        effective_result_var: "result",
         import_alias: "pkg",
         field_resolver: resolver,
         optional_locals: &HashMap::new(),

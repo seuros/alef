@@ -618,7 +618,7 @@ pub(super) fn render_test_function_with_facts(
     // Call-invariant across every assertion in this fixture's loop below -- built once
     // rather than threaded as separate parameters through each `render_assertion` call.
     let assertion_context = super::assertions::AssertionRenderContext {
-        result_var: &effective_result_var,
+        effective_result_var: &effective_result_var,
         import_alias,
         field_resolver,
         optional_locals: &optional_locals,
