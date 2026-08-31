@@ -191,7 +191,10 @@ fn a_constructor_that_mutates_before_returning_is_read_through_the_delegation() 
                 }
             "#,
         "Prefs",
-        &[("limit", TypeRef::Unit), ("tags", TypeRef::Vec(Box::new(TypeRef::String)))],
+        &[
+            ("limit", TypeRef::Unit),
+            ("tags", TypeRef::Vec(Box::new(TypeRef::String))),
+        ],
     );
 
     assert_eq!(
@@ -331,5 +334,43 @@ fn a_preceding_unrelated_let_before_a_tail_literal_is_unaffected() {
         resolved,
         vec![("max_depth".to_string(), DefaultValue::IntLiteral(1))],
         "the tail expression is what the function returns, whatever precedes it"
+    );
+}
+
+/// A `return` inside a closure exits the closure, not `fn default()`, so it must not poison the
+/// whole body. The closure itself is still an unreadable *value*, so its own field is
+/// `Unresolved` — but the scalar assignment beside it is unaffected. This is the guard against
+/// fixing the early-return gap by refusing every body that contains the token `return`.
+#[test]
+fn a_return_inside_a_closure_does_not_poison_the_rest_of_the_body() {
+    let resolved = defaults_for_typed(
+        r#"
+                pub struct Prefs { pub max_depth: u32, pub hook: Hook }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { max_depth: 0, hook: Hook::None };
+                        prefs.max_depth = 9;
+                        prefs.hook = || { return 1; };
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &[
+            ("max_depth", TypeRef::Unit),
+            ("hook", TypeRef::Named("Hook".to_string())),
+        ],
+    );
+
+    assert_eq!(
+        resolved[0],
+        ("max_depth".to_string(), DefaultValue::IntLiteral(9)),
+        "a closure's own `return` is not an early return of `fn default()`"
+    );
+    assert!(
+        matches!(resolved[1].1, DefaultValue::Unresolved(_)),
+        "the closure is still an unreadable value, got {:?}",
+        resolved[1].1
     );
 }

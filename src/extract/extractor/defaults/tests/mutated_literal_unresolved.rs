@@ -317,3 +317,221 @@ fn a_mutated_literal_with_a_rest_base_is_unresolved() {
 
     assert_every_field_unresolved(&resolved, "the literal's `..base` was never read");
 }
+
+/// Whether a `cfg`-gated mutation runs depends on the features the *consumer* enables, which is
+/// not knowable from the source alef reads. Both directions of the gate are tested because a
+/// rule that refuses every attribute is easy to write and a rule that refuses the right ones has
+/// to be shown. This is the cfg-TRUE direction: with the feature on, the real default is `9`.
+#[test]
+fn a_cfg_gated_assignment_is_unresolved_when_the_feature_would_be_on() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { max_depth: 0 };
+                        #[cfg(feature = "extras")]
+                        prefs.max_depth = 9;
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "a cfg-gated mutation may or may not exist in a build");
+}
+
+/// The cfg-FALSE direction. With the feature off the mutation is compiled out and the real
+/// default is the literal's `0` — but recording `0` would be right by accident, and wrong in
+/// every build that enables the feature. The extractor sees one source text for both builds, so
+/// the only honest answer is that it does not know.
+#[test]
+fn a_cfg_gated_push_is_unresolved_when_the_feature_would_be_off() {
+    let resolved = defaults_for_typed(
+        r#"
+                pub struct Prefs { pub tags: Vec<String> }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { tags: Vec::new() };
+                        #[cfg(not(feature = "extras"))]
+                        prefs.tags.push("alpha".to_string());
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &[("tags", TypeRef::Vec(Box::new(TypeRef::String)))],
+    );
+
+    assert_every_field_unresolved(&resolved, "a cfg-gated push may or may not exist in a build");
+}
+
+/// `cfg_attr` expands to arbitrary attributes under the same unknown condition.
+#[test]
+fn a_cfg_attr_gated_mutation_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { max_depth: 0 };
+                        #[cfg_attr(feature = "extras", deprecated)]
+                        prefs.max_depth = 9;
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "cfg_attr hides an arbitrary attribute behind a feature");
+}
+
+/// An attribute this pass has never heard of may be a macro that rewrites or deletes the
+/// statement. Refusing every attribute rather than allowlisting the inert ones is deliberate:
+/// the allowlist is the part that goes stale.
+#[test]
+fn an_unrecognized_attribute_on_a_mutation_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let mut prefs = Self { max_depth: 0 };
+                        #[some_crate::rewrite]
+                        prefs.max_depth = 9;
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "an attribute macro may rewrite or delete the statement");
+}
+
+/// The attribute may equally sit on the binding itself.
+#[test]
+fn an_attributed_local_binding_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        #[cfg(feature = "extras")]
+                        let mut prefs = Self { max_depth: 7 };
+                        prefs.max_depth = 9;
+                        prefs
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "the binding itself is cfg-gated");
+}
+
+/// A `cfg` on one initializer of the struct literal is the same lie one level down: the
+/// initializer exists only in some builds.
+#[test]
+fn a_cfg_gated_struct_literal_initializer_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32, pub width: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        Self {
+                            #[cfg(feature = "extras")]
+                            max_depth: 9,
+                            width: 2,
+                        }
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "the initializer is supplied only in some builds");
+}
+
+/// The tail literal is only *the* answer when nothing before it can return instead. A
+/// conditional early return gives the body two exits, and the tail is merely one of them.
+#[test]
+fn a_tail_literal_after_a_conditional_early_return_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        if compact() {
+                            return Self { max_depth: 1 };
+                        }
+                        Self { max_depth: 2 }
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "an earlier exit returns a different value");
+}
+
+/// The same gap reached through a binding rather than a second literal.
+#[test]
+fn a_tail_literal_after_a_conditional_early_return_of_a_binding_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        let fallback = Self { max_depth: 1 };
+                        if compact() {
+                            return fallback;
+                        }
+                        Self { max_depth: 2 }
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "an earlier exit returns a different value");
+}
+
+/// A macro before the tail literal is read *past* without being understood, and its expansion
+/// may contain the early return the scan would otherwise catch.
+#[test]
+fn a_macro_statement_before_a_tail_literal_is_unresolved() {
+    let resolved = defaults_for(
+        r#"
+                pub struct Prefs { pub max_depth: u32 }
+
+                impl Default for Prefs {
+                    fn default() -> Self {
+                        return_if_configured!(compact());
+                        Self { max_depth: 2 }
+                    }
+                }
+            "#,
+        "Prefs",
+        &["max_depth"],
+    );
+
+    assert_every_field_unresolved(&resolved, "a macro's expansion is not parsed");
+}
