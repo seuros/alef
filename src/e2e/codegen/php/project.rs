@@ -120,11 +120,17 @@ pub(super) fn render_composer_json(
 
 /// Render the `install.sh` script placed next to `composer.json` in registry mode.
 ///
-/// The script bootstraps `php/pie` globally (if absent or older than 1.3.7),
-/// runs `pie install <pkg>:<version>`, and verifies the extension binary loads.
-/// The pinned version is baked in at generate time; callers run `bash install.sh`
-/// with no arguments. The default `alef test-apps run` command for PHP invokes
-/// this script before `composer install`.
+/// The script downloads the exact `php/pie` release alef pins, verifies its SHA-256 before
+/// executing it, runs `pie install <pkg>:<version>`, and verifies the extension binary
+/// loads. It does this unconditionally: an already-installed `pie` on `PATH` is never
+/// reused, however new it claims to be. It used to be reused whenever it reported >= 1.3.7,
+/// which meant the pin and the digest only ever applied on a machine that happened to have
+/// no PIE -- everywhere else an arbitrary unverified binary ran instead, and two machines
+/// executed two different PIEs. Do not reintroduce a version-sniffing fast path. ~keep
+///
+/// The package version is baked in at generate time; callers run `bash install.sh` with no
+/// arguments. The default `alef test-apps run` command for PHP invokes this script before
+/// `composer install`.
 /// Strip leading composer-style version constraints (^, >=, ~, etc.) from a version string.
 /// Accepts "1.2.3", ">=1.2.3", "^1.2.3", "~1.2", or any constraint and returns the base version.
 pub(super) fn strip_version_constraint(version: &str) -> &str {
@@ -148,7 +154,7 @@ pub(super) fn render_install_sh(pkg_name: &str, extension_name: &str, pkg_versio
     format!(
         r#"#!/usr/bin/env bash
 {header}# Installs the configured extension via PIE before `composer install` runs.
-# Requires `php` on PATH; downloads and runs PIE if needed.
+# Requires `php` on PATH; always downloads and checksum-verifies its own PIE.
 # Version is alef-injected at generate time so the script is self-contained.
 set -euo pipefail
 
@@ -167,51 +173,43 @@ VERSION="${{1:-$PINNED_VERSION}}"
 PIE_VERSION={pie_version}
 PIE_PHAR_SHA256={pie_sha256}
 
-# PIE >= 1.3.7 supports the array-form `php-ext.download-url-method`
-# our composer.json emits; 1.4.0+ is preferred. Download PIE if we don't
-# already have a recent enough version.
-need_pie_install=true
-if command -v pie >/dev/null 2>&1; then
-  current="$(pie --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo '0.0.0')"
-  if printf '%s\n%s\n' "1.3.7" "$current" | sort -V -C; then
-    need_pie_install=false
-  fi
-fi
-if [[ "$need_pie_install" == "true" ]]; then
-  # Download the pinned PIE PHAR from its GitHub release into a temp file, verify its
-  # SHA-256, and only then install it. Nothing downloaded here is executed before the
-  # digest matches.
-  pie_dir="${{HOME}}/.local/bin"
-  mkdir -p "$pie_dir"
-  pie_tmp="$(mktemp "${{TMPDIR:-/tmp}}/pie.phar.XXXXXX")"
-  trap 'rm -f "$pie_tmp"' EXIT
-  # stderr is NOT discarded: the previous `2>/dev/null` hid the actual reason (404, TLS,
-  # proxy) behind a generic message every time this failed in CI.
-  curl -fL --output "$pie_tmp" "https://github.com/php/pie/releases/download/$PIE_VERSION/pie.phar" || {{
-    echo "::error::Failed to download PIE $PIE_VERSION from GitHub; ensure network access or pre-install PIE." >&2
-    exit 1
-  }}
-  if command -v sha256sum >/dev/null 2>&1; then
-    pie_actual_sha256="$(sha256sum "$pie_tmp" | awk '{{print $1}}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    pie_actual_sha256="$(shasum -a 256 "$pie_tmp" | awk '{{print $1}}')"
-  else
-    # Hard failure, not a skip: a verification step that silently passes when its tool is
-    # missing verifies nothing, and every supported platform ships one of these two.
-    echo "::error::No sha256 tool (sha256sum or shasum) found; refusing to run an unverified PIE PHAR." >&2
-    exit 1
-  fi
-  if [[ "$pie_actual_sha256" != "$PIE_PHAR_SHA256" ]]; then
-    echo "::error::PIE $PIE_VERSION checksum mismatch: expected $PIE_PHAR_SHA256, got $pie_actual_sha256" >&2
-    exit 1
-  fi
-  install -m 0755 "$pie_tmp" "$pie_dir/pie"
-  PIE="$pie_dir/pie"
-  # Ensure newly downloaded PIE is on PATH for this script.
-  export PATH="$pie_dir:$PATH"
+# The downloaded, digest-verified PHAR is the ONLY PIE this script ever runs. There is
+# deliberately no "an installed `pie` already looks new enough, reuse it" branch: that
+# branch made the pin and the digest apply only on machines that happened to have no PIE,
+# so an arbitrary preinstalled binary ran unverified everywhere else and two machines
+# executed two different PIEs. PATH is never consulted to choose the interpreter.
+#
+# The PHAR lands in an alef-owned, version-scoped cache directory rather than
+# `~/.local/bin`, so an unconditional install cannot clobber a PIE the developer installed
+# themselves. That directory is prepended to PATH so anything downstream that shells `pie`
+# by name also gets the verified PHAR and not a preinstalled one further down PATH.
+pie_dir="${{HOME}}/.cache/alef/pie/$PIE_VERSION"
+mkdir -p "$pie_dir"
+pie_tmp="$(mktemp "${{TMPDIR:-/tmp}}/pie.phar.XXXXXX")"
+trap 'rm -f "$pie_tmp"' EXIT
+# stderr is NOT discarded: the previous `2>/dev/null` hid the actual reason (404, TLS,
+# proxy) behind a generic message every time this failed in CI.
+curl -fL --output "$pie_tmp" "https://github.com/php/pie/releases/download/$PIE_VERSION/pie.phar" || {{
+  echo "::error::Failed to download PIE $PIE_VERSION from GitHub; ensure network access." >&2
+  exit 1
+}}
+if command -v sha256sum >/dev/null 2>&1; then
+  pie_actual_sha256="$(sha256sum "$pie_tmp" | awk '{{print $1}}')"
+elif command -v shasum >/dev/null 2>&1; then
+  pie_actual_sha256="$(shasum -a 256 "$pie_tmp" | awk '{{print $1}}')"
 else
-  PIE="pie"
+  # Hard failure, not a skip: a verification step that silently passes when its tool is
+  # missing verifies nothing, and every supported platform ships one of these two.
+  echo "::error::No sha256 tool (sha256sum or shasum) found; refusing to run an unverified PIE PHAR." >&2
+  exit 1
 fi
+if [[ "$pie_actual_sha256" != "$PIE_PHAR_SHA256" ]]; then
+  echo "::error::PIE $PIE_VERSION checksum mismatch: expected $PIE_PHAR_SHA256, got $pie_actual_sha256" >&2
+  exit 1
+fi
+install -m 0755 "$pie_tmp" "$pie_dir/pie"
+PIE="$pie_dir/pie"
+export PATH="$pie_dir:$PATH"
 
 # Install the extension binary into the running PHP's extension dir.
 # Always run PIE — an existence-only skip leaves a stale .so from a prior rc
